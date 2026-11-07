@@ -18,11 +18,21 @@ from __future__ import annotations
 import copy
 import json
 import time
-from typing import Any, Literal, get_args, get_origin
+from typing import Annotated, Any, Literal, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from app.music import DERIVED_WARNS, MAX_FRET, STRINGS, TECHS, WARN_CODES, derive_warns, tuning_midi
+from app.music import (
+    DERIVED_WARNS,
+    MAX_FRET,
+    STRINGS,
+    TECHS,
+    WARN_CODES,
+    clean_time_signature,
+    derive_warns,
+    parse_dur,
+    tuning_midi,
+)
 
 SourceType = Literal["image", "pdf", "gp", "musicxml"]
 Status = Literal["queued", "parsing", "ready", "error", "cancelled", "imported"]
@@ -68,6 +78,18 @@ class Event(_M):
     )
     notes: list[Note] = Field(default_factory=list, description="empty for a rest")
 
+    @field_validator("dur")
+    @classmethod
+    def _positive_fraction(cls, v: str) -> str:
+        """时值必须是大于 0 的分数（"1/0"、"-1"、"abc" 之类会让读取时的计算出错）。"""
+        try:
+            ok = parse_dur(v) > 0
+        except (ValueError, ZeroDivisionError, TypeError):
+            ok = False
+        if not ok:
+            raise ValueError(f"时值必须是大于 0 的分数：{v!r}")
+        return v
+
 
 _JSON_TYPES = {int: "integer", float: "number", str: "string", bool: "boolean"}
 
@@ -102,6 +124,15 @@ def llm_schema(cls: type[BaseModel]) -> dict:
 # ---------------------------------------------------------------------------
 # song.json
 # ---------------------------------------------------------------------------
+def _check_ts(v: list[int]) -> list[int]:
+    if clean_time_signature(v) is None:
+        raise ValueError(f"拍号不对：{v!r}（分子 1–32，分母是 1–32 里 2 的幂）")
+    return v
+
+
+TimeSignature = Annotated[list[int], AfterValidator(_check_ts)]
+
+
 class Warn(_M):
     code: WarnCode
     msg: str
@@ -137,8 +168,8 @@ class Bar(_M):
     orig: Orig | None = Field(None, alias="_orig")
     placeholder: bool = False  # 识别失败、按整小节休止占位
     qa: list[QA] = Field(default_factory=list)
-    time_signature: list[int] | None = None  # 和全曲拍号不同时才有
-    ts_change: list[int] | None = None  # 图片谱子：谱上这一小节写了变拍号
+    time_signature: TimeSignature | None = None  # 和全曲拍号不同时才有
+    ts_change: TimeSignature | None = None  # 图片谱子：谱上这一小节写了变拍号
     repeat_start: bool | None = None
     repeat_end: int | None = None
     endings: list[int] | None = None
@@ -165,7 +196,7 @@ class Meta(_M):
     arranger: str = ""
     tuning: list[str]
     capo: int = 0
-    time_signature: list[int]
+    time_signature: TimeSignature
     tempo: int = 0
     notes: str = ""
 
@@ -231,6 +262,46 @@ class Song(_M):
     tags: list[str] = Field(default_factory=list)
     track: int = 0
     derived: Derived | None = None
+
+
+# ---------------------------------------------------------------------------
+# practice.jsonl 的一行（见 app/practice.py）
+# ---------------------------------------------------------------------------
+class _Rec(BaseModel):
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
+
+
+class PracticeRecord(_Rec):
+    """一段练习。"""
+
+    at: str = ""
+    ids: list[str] = Field(min_length=1)
+    loops: int = Field(0, ge=0)
+    bpm: int = Field(0, ge=0)
+    seconds: float = Field(0, ge=0)
+
+
+class SeedBar(_Rec):
+    loops: int = Field(0, ge=0)
+    seconds: float = Field(0, ge=0)
+    best_bpm: int = Field(0, ge=0)
+    last: str = ""
+
+
+class SeedLast(_Rec):
+    a: str
+    b: str | None = None
+    bpm: int = Field(0, ge=0)
+    at: str = ""
+
+
+class PracticeSeed(_Rec):
+    """旧版本 song.json 里的练习聚合结果（升级时变成 practice.jsonl 的第一行）。"""
+
+    seed: Literal[True]
+    bars: dict[str, SeedBar] = Field(default_factory=dict)
+    last: SeedLast | None = None
+    total_seconds: float = Field(0, ge=0)
 
 
 def now() -> str:

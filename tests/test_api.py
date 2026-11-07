@@ -49,7 +49,7 @@ def test_domain_errors_map_to_status_codes(client):
     assert r.status_code == 404 and "小节不存在" in r.json()["detail"]
     bar_id = client.get(f"/api/songs/{img}").json()["bars"][0]["id"]
     r = client.put(f"/api/songs/{img}/bars/{bar_id}", json={"events": [{"dur": "x"}]})
-    assert r.status_code == 400 and r.json()["detail"].startswith("小节数据格式不对")
+    assert r.status_code == 400 and "时值必须是大于 0 的分数" in r.json()["detail"]  # model.Event 检查
     assert client.put(f"/api/songs/{sid}/meta", json={"capo": 99}).status_code == 400
     assert client.post(f"/api/songs/{sid}/practice", json={}).status_code == 400
     assert client.post(f"/api/songs/{sid}/cancel").status_code == 409

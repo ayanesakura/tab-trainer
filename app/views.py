@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app import practice, state, store
 from app.errors import CorruptSong
 from app.jobs import jobs
 from app.llm import DEFAULT_MODEL, price_of
+
+log = logging.getLogger("tab_trainer.views")
 
 # 存储里有、但不给前端的字段
 _HIDDEN = ("meta_user", "schema_version")
@@ -90,9 +93,8 @@ def library_item(s: dict) -> dict:
     }
 
 
-def corrupt_item(sid: str, e: CorruptSong) -> dict:
+def corrupt_item(sid: str, msg: str) -> dict:
     """数据坏了的曲子：一首坏了不能让整个曲库打不开，列出来，可以删除。"""
-    msg = str(e)
     return {
         "id": sid,
         "title": sid,
@@ -113,9 +115,12 @@ def list_library() -> list[dict]:
         try:
             out.append(library_item(store.load(sid)))
         except CorruptSong as e:
-            out.append(corrupt_item(sid, e))
+            out.append(corrupt_item(sid, str(e)))
         except LookupError:  # 刚被删掉
             continue
+        except Exception as e:  # 内容不对（手改坏的文件之类）算到这一首上，曲库照常能打开
+            log.exception("song=%s 无法列进曲库", sid)
+            out.append(corrupt_item(sid, f"曲子数据格式不对，无法显示（{type(e).__name__}: {e}）"[:300]))
     return out
 
 

@@ -7,6 +7,7 @@
 
 读取时按小节 id 聚合成接口里 practice 的形状（见 aggregate）。小节被重新识别 / 换音轨后对不上的 id 直接忽略，
 记录本身不删（以后 id 对得上时也不会丢）。解析结果按文件的修改时间和大小缓存。
+格式不对的行（手改坏的、外来曲子包里的）读取时跳过（见 clean_record），不会让曲子打不开。
 """
 
 from __future__ import annotations
@@ -14,11 +15,25 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from app import store
-from app.model import now
+from app.model import PracticeRecord, PracticeSeed, now
 
 _cache: dict[Path, tuple[int, int, list[dict]]] = {}
 _cache_lock = threading.Lock()
+
+
+def clean_record(rec: object) -> dict | None:
+    """一行练习记录按 model.PracticeRecord / PracticeSeed 检查并整理；格式不对返回 None（这一行不要）。"""
+    if not isinstance(rec, dict):
+        return None
+    try:
+        if rec.get("seed"):
+            return PracticeSeed.model_validate(rec).model_dump()
+        return PracticeRecord.model_validate(rec).model_dump()
+    except ValidationError:
+        return None
 
 
 def records(song_id: str, song: dict | None = None) -> list[dict]:
@@ -36,10 +51,10 @@ def records(song_id: str, song: dict | None = None) -> list[dict]:
         if hit and hit[:2] == sig:
             out = hit[2]
         else:
-            out = store.read_jsonl(path)
+            out = [r for r in map(clean_record, store.read_jsonl(path)) if r]
             with _cache_lock:
                 _cache[path] = (*sig, out)
-    seed = (song or {}).get("_practice_seed")
+    seed = clean_record((song or {}).get("_practice_seed"))
     if seed and not any(r.get("seed") for r in out):
         out = [seed, *out]
     return out

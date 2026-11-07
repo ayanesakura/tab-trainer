@@ -220,3 +220,82 @@ def test_import_rejects_songs_that_do_not_match_the_model(data_dir):
     r = bundles.import_bundles([("x.zip", _bundle(song, {}))])
     assert r["imported"] == [] and "格式不对" in r["skipped"][0]["reason"]
     assert not store.exists("bad-00001")
+
+
+# ---------------------------------------------------------------------------
+# 外来数据：时值、拍号、练习记录要按模型检查；读取一侧也不能因为一首坏数据让整个曲库 500
+# ---------------------------------------------------------------------------
+_META = {"tuning": ["E4", "B3", "G3", "D3", "A2", "E2"], "time_signature": [4, 4]}
+
+
+def _v2(sid: str, **over) -> dict:
+    return {
+        "schema_version": 2,
+        "id": sid,
+        "source_type": "image",
+        "status": "ready",
+        "meta": _META,
+        "bars": [{"id": "b1", "events": [{"dur": "4", "notes": []}]}],
+        **over,
+    }
+
+
+@pytest.mark.parametrize(
+    ("over", "reason"),
+    [
+        ({"bars": [{"id": "b1", "events": [{"dur": "1/0", "notes": []}]}]}, "时值"),
+        ({"bars": [{"id": "b1", "events": [{"dur": "-1", "notes": []}]}]}, "时值"),
+        ({"bars": [{"id": "b1", "events": [{"dur": "abc", "notes": []}]}]}, "时值"),
+        ({"meta": {**_META, "time_signature": [4, 0]}}, "time_signature"),
+        ({"meta": {**_META, "time_signature": [3, 3]}}, "time_signature"),
+        ({"bars": [{"id": "b1", "events": [], "time_signature": [0, 4]}]}, "time_signature"),
+        ({"bars": [{"id": "b1", "events": [], "ts_change": [7, 6]}]}, "ts_change"),
+    ],
+)
+def test_import_rejects_bad_durations_and_time_signatures(client, over, reason):
+    """reviewer 的 bad_dur / bad_more：以前这些能导入（200），之后曲库和曲子都 500。"""
+    buf = _bundle(_v2("bad-song", **over), {})
+    r = client.post("/api/import", files={"files": ("b.zip", buf.getvalue())})
+    assert r.status_code == 200 and r.json()["imported"] == []
+    assert reason in r.json()["skipped"][0]["reason"]
+    assert client.get("/api/songs").status_code == 200 and not store.exists("bad-song")
+
+
+def test_import_drops_malformed_practice_lines(client):
+    lines = [
+        {"ids": ["b1"], "loops": "x", "seconds": 1},
+        {"ids": "b1", "loops": 1},
+        {"ids": [], "loops": 1},
+        {"ids": ["b1"], "loops": 1, "seconds": -5},
+        {"seed": True, "bars": {"b1": {"loops": "many"}}},
+        [1, 2],
+        {"at": "2026-01-01 10:00", "ids": ["b1"], "loops": 2, "bpm": 60, "seconds": 30},
+    ]
+    text = "\n".join(json.dumps(x) for x in lines) + "\nnot json\n"
+    buf = _bundle(_v2("ok-song"), {"songs/ok-song/practice.jsonl": text.encode()})
+    r = client.post("/api/import", files={"files": ("b.zip", buf.getvalue())})
+    assert [s["id"] for s in r.json()["imported"]] == ["ok-song"]
+    kept = store.read_jsonl(store.practice_path("ok-song"))
+    assert [x["loops"] for x in kept] == [2]
+    assert client.get("/api/songs").status_code == 200
+    v = client.get("/api/songs/ok-song").json()
+    assert v["practice"]["bars"]["b1"]["loops"] == 2 and v["practice"]["total_seconds"] == 30
+
+
+def test_bad_data_on_disk_does_not_break_the_library(client):
+    """读取一侧：song.json 被改坏（时值 1/0）只让这一首显示成“数据损坏”；practice.jsonl 的坏行跳过。"""
+    good = _gp_song()
+    d = store.SONGS / "20260101-000000-baddur"
+    d.mkdir(parents=True)
+    (d / "song.json").write_text(
+        json.dumps(_v2(d.name, bars=[{"id": "b1", "events": [{"dur": "1/0", "notes": []}]}]))
+    )
+    bad_practice = '{"ids": ["x"], "loops": "x"}\n{"ids": "abc"}\n{"seed": true, "bars": []}\n'
+    store.practice_path(good).write_text(bad_practice)
+    r = client.get("/api/songs")
+    assert r.status_code == 200
+    rows = {x["id"]: x for x in r.json()}
+    assert rows[d.name]["status"] == "corrupt" and "格式不对" in rows[d.name]["notice"]["msg"]
+    assert rows[good]["status"] == "ready" and rows[good]["practice"] is None
+    assert client.get(f"/api/songs/{good}").json()["practice"]["total_seconds"] == 0
+    assert client.delete(f"/api/songs/{d.name}").status_code == 200

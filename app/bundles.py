@@ -30,7 +30,7 @@ from typing import BinaryIO
 from PIL import Image
 from pydantic import ValidationError
 
-from app import migrate, model, songs, state, store
+from app import migrate, model, practice, songs, state, store
 from app.config import settings
 from app.errors import CorruptSong, Invalid, NotFound
 from app.model import now
@@ -259,18 +259,19 @@ def _check_shape(song: dict) -> None:
     except ValidationError as e:
         err = e.errors()[0]
         where = ".".join(str(x) for x in err.get("loc", ()))
-        raise Invalid(f"song.json 格式不对（{where}）") from None
+        why = (err.get("ctx") or {}).get("error") if err.get("type") == "value_error" else None
+        raise Invalid(f"song.json 格式不对（{where}{'：' + str(why) if why else ''}）") from None
 
 
 def _clean_jsonl(data: bytes) -> bytes:
-    """包里的练习记录：只留每行都是 JSON 对象的行。"""
+    """包里的练习记录：只留格式对的行（practice.clean_record），坏行丢掉。"""
     lines = []
     for line in data.decode("utf-8", "replace").splitlines():
         try:
-            rec = json.loads(line)
+            rec = practice.clean_record(json.loads(line))
         except ValueError:
             continue
-        if isinstance(rec, dict):
+        if rec:
             lines.append(json.dumps(rec, ensure_ascii=False))
     return ("\n".join(lines) + "\n").encode() if lines else b""
 
