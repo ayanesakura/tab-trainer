@@ -27,8 +27,8 @@ def migrate(song: dict, song_id: str) -> dict:
     for k, default in (("bars", []), ("systems", []), ("pages", [])):
         if not isinstance(song.get(k), type(default)):
             song[k] = default
-    if not isinstance(song.get("meta"), dict):
-        song["meta"] = None
+    if not isinstance(song.get("meta"), dict) or not song["meta"]:
+        song["meta"] = None  # 早期版本还没读出谱头时存的是 {}（model.Meta 要求有调弦，{} 导出后导不回来）
     song.setdefault("title", "")
     song.setdefault("rev", 0)
     song.setdefault("meta_rev", 0)  # 按对象的版本号：旧数据（和新识别出来的小节）没有的视为 0
@@ -39,6 +39,8 @@ def migrate(song: dict, song_id: str) -> dict:
     if ver < 2:
         _to_v2(song)
         song["_migrated"] = True
+    if not song["meta"]:  # 去掉 title / tuning_midi 之后什么都不剩的
+        song["meta"] = None
     for b in song["bars"]:
         if isinstance(b, dict):
             b.setdefault("rev", 0)

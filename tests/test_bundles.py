@@ -299,3 +299,47 @@ def test_bad_data_on_disk_does_not_break_the_library(client):
     assert rows[good]["status"] == "ready" and rows[good]["practice"] is None
     assert client.get(f"/api/songs/{good}").json()["practice"]["total_seconds"] == 0
     assert client.delete(f"/api/songs/{d.name}").status_code == 200
+
+
+def test_old_songs_with_empty_meta_roundtrip(data_dir):
+    """reviewer 的 bundle_meta：早期版本没读出谱头时存的是 meta: {}（排队中、识别失败、GP 还没打开过），
+    升级后应变成 None，导出再导入不会因为 Meta 缺调弦被跳过。"""
+    from PIL import Image
+
+    old = {
+        "20250101-000000-aaaaaa": {"status": "queued", "error": None},
+        "20250101-000000-bbbbbb": {"status": "error", "error": "识别失败"},
+        "20250101-000000-cccccc": {"status": "imported", "kind": "score", "source": "source.gp5"},
+    }
+    for sid, extra in old.items():
+        d = store.SONGS / sid
+        (d / "pages").mkdir(parents=True)
+        song = {"id": sid, "title": sid[-6:], "created": "2025", "progress": None, "pages": [], "meta": {}}
+        song |= {"systems": [], "bars": [], "plan": None, "usage": {}, "schema_version": 1, **extra}
+        if "source" in extra:
+            (d / "source.gp5").write_bytes(GP5)
+        else:
+            Image.new("RGB", (10, 10), "white").save(d / "pages" / "p1.png")
+            song["pages"] = [{"file": "p1.png", "width": 10, "height": 10}]
+        (d / "song.json").write_text(json.dumps(song, ensure_ascii=False))
+    songs.recover_interrupted()
+    for sid in old:
+        assert json.loads((store.SONGS / sid / "song.json").read_text())["meta"] is None
+    before = {sid: views.song_view(store.load(sid)) for sid in old}
+    path, _ = bundles.export_bundle([])
+    _wipe()
+    with open(path, "rb") as f:
+        r = bundles.import_bundles([("b.zip", f)])
+    assert r["skipped"] == [] and {s["id"] for s in r["imported"]} == set(old)
+    for sid, v in before.items():
+        after = views.song_view(store.load(sid))
+        assert {k: x for k, x in after.items() if k not in ("rev", "imported")} == {
+            k: x for k, x in v.items() if k not in ("rev", "imported")
+        }, sid
+    assert before["20250101-000000-bbbbbb"]["notice"]["msg"] == "识别失败"
+
+
+def test_import_accepts_empty_meta_from_older_bundles(data_dir):
+    song = _v2("old-meta-1", meta={}, bars=[], status="error")
+    r = bundles.import_bundles([("x.zip", _bundle(song, {}))])
+    assert [s["id"] for s in r["imported"]] == ["old-meta-1"] and store.load("old-meta-1")["meta"] is None
