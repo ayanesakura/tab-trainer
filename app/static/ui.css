@@ -259,7 +259,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
 /* 标签条（chips）：一行可横向滚动的小圆角按钮，选中 aria-pressed / .on */
 .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
 .chips::-webkit-scrollbar { display: none; }
-.chips.wrap { flex-wrap: wrap; overflow: visible; }
+.chips.multi { flex-wrap: wrap; overflow: visible; }
 .chip, .chips button { height: 26px; padding: 0 10px; border-radius: 13px; background: var(--pill); color: var(--ctl-fg); font-size: var(--fs-1); white-space: nowrap; flex: none; display: inline-flex; align-items: center; gap: var(--sp-1); transition: background .15s, color .15s; font-variant-numeric: tabular-nums; }
 .chip:hover, .chips button:hover { background: var(--pill-hover); color: var(--fg); }
 .chip.on, .chip[aria-pressed="true"], .chips button.on, .chips button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
