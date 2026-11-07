@@ -123,10 +123,14 @@ def recover(s: dict) -> bool:
     a = s.get("activity")
     kind = (a or {}).get("kind")
     if kind == "explain":
-        finish(s, notice=("warn", "服务重启，讲解生成中断，已完成的部分会保留，可以重新生成。"), source="explain")
+        finish(
+            s, notice=("warn", "服务重启，讲解生成中断，已完成的部分会保留，可以重新生成。"), source="explain"
+        )
         changed = True
     elif kind == "parse" and a.get("restaging"):  # 重新识别时原来的结果没动过，只是新结果丢了
-        finish(s, status="ready", notice=("warn", "服务重启，重新识别中断，原来的结果保留不变。"), source="parse")
+        finish(
+            s, status="ready", notice=("warn", "服务重启，重新识别中断，原来的结果保留不变。"), source="parse"
+        )
         changed = True
     elif kind == "reparse_row":
         finish(s)

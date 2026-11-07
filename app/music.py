@@ -179,7 +179,8 @@ def clean_events(events) -> list[dict]:
 DIRECTIONS = tuple(d["code"] for d in VOCAB["directions"])
 # 模型提示词里允许的子集（llm.py 的 schema 用），按 prompt_order 排（和以前写死的顺序一致，schema 逐字不变）
 PROMPT_DIRECTIONS = [
-    d["code"] for d in sorted((d for d in VOCAB["directions"] if d["prompt"]), key=lambda d: d["prompt_order"])
+    d["code"]
+    for d in sorted((d for d in VOCAB["directions"] if d["prompt"]), key=lambda d: d["prompt_order"])
 ]
 
 

@@ -67,7 +67,10 @@ def fix_mojibake(text: str) -> str:
 
 def fix_meta_text(meta: dict) -> dict:
     """GP 文件里读出来的曲名、艺人、编配：修复乱码。"""
-    return {**meta, **{k: fix_mojibake(meta[k]) for k in ("title", "artist", "arranger") if isinstance(meta.get(k), str)}}
+    return {
+        **meta,
+        **{k: fix_mojibake(meta[k]) for k in ("title", "artist", "arranger") if isinstance(meta.get(k), str)},
+    }
 
 
 def _to_v2(s: dict) -> None:
@@ -79,7 +82,7 @@ def _to_v2(s: dict) -> None:
         if meta:
             meta = s["meta"] = fix_meta_text(meta)
     if meta is not None:
-        s["title"] = (str(s.get("title") or "").strip() or str(meta.get("title") or "").strip())
+        s["title"] = str(s.get("title") or "").strip() or str(meta.get("title") or "").strip()
         meta.pop("title", None)
         meta.pop("tuning_midi", None)
     s.setdefault("status", "ready" if s["bars"] else "error")
@@ -96,7 +99,9 @@ def _to_v2(s: dict) -> None:
     if isinstance(s.get("plan"), dict):
         s["plan"].pop("stale", None)
     practice = s.pop("practice", None)
-    if isinstance(practice, dict) and (practice.get("bars") or practice.get("total_seconds") or practice.get("last")):
+    if isinstance(practice, dict) and (
+        practice.get("bars") or practice.get("total_seconds") or practice.get("last")
+    ):
         s["_practice_seed"] = {"seed": True, **practice}
 
 
@@ -112,7 +117,11 @@ def _state_to_v2(s: dict) -> None:
             s["status"] = prev.get("status") or "ready"
         activity = {"kind": "explain", "restaging": False, "systems": []}
     elif job == "pages":
-        rows = [i for i, x in enumerate(s["systems"]) if isinstance(x, dict) and x.get("status") in ("parsing", "pending")]
+        rows = [
+            i
+            for i, x in enumerate(s["systems"])
+            if isinstance(x, dict) and x.get("status") in ("parsing", "pending")
+        ]
         activity = {"kind": "reparse_row", "restaging": False, "systems": rows}
     elif restaging:
         activity = {"kind": "parse", "restaging": True, "systems": []}

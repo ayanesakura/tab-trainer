@@ -2,8 +2,12 @@
 
 import pytest
 
-from app import music, recognize, songs, store
+from app import errors, music, practice, recognize, songs, store
 from tests.fakes import FakeClaude, derived_bars, score_png
+
+
+def W(code, msg):
+    return {"code": code, "msg": msg}
 
 
 def test_edit_bar_and_meta(data_dir):
@@ -13,7 +17,8 @@ def test_edit_bar_and_meta(data_dir):
     bar_id = store.load(sid)["bars"][1]["id"]
     song = songs.edit_bar(sid, bar_id, [{"dur": "3", "notes": []}], tip="改过")
     bar = song["bars"][1]
-    assert bar["tip"] == "改过" and bar["warn"] == ["时值合计 3 拍，应为 4 拍"]
+    assert bar["tip"] == "改过" and bar["warn"] == [W("length", "时值合计 3 拍，应为 4 拍")]
+    assert bar["edited"] and bar["_orig"]["events"] != bar["events"]
 
     with pytest.raises(ValueError):
         songs.edit_bar(sid, bar_id, [{"dur": "abc", "notes": []}], tip=None)
@@ -27,7 +32,8 @@ def test_edit_bar_and_meta(data_dir):
 def test_edit_meta_rejects_bad_values(data_dir):
     sid = songs.create_song([("p1.png", score_png())])
     recognize.run_parse(sid)
-    for bad in ({"time_signature": [None, 4]}, {"capo": 20}, {"tuning": ["E4", "B3", "G3", "D3", "A2", "Q"]}):
+    # 变调夹的范围在 schemas.MetaIn 里检查（见 test_api）
+    for bad in ({"time_signature": [None, 4]}, {"tuning": ["E4", "B3", "G3", "D3", "A2", "Q"]}):
         with pytest.raises(ValueError):
             songs.edit_meta(sid, bad)
 
@@ -38,21 +44,22 @@ def test_recover_interrupted_parse(data_dir):
 
     def stuck(s):
         s["status"] = "parsing"
+        s["activity"] = {"kind": "parse", "restaging": False, "systems": []}
         s["systems"][1]["status"] = "parsing"
-        s["bars"][0].pop("id")
 
     store.update(sid, stuck)
     songs.recover_interrupted()
     song = store.load(sid)
-    assert song["status"] == "error" and "中断" in song["error"]
+    assert song["status"] == "error" and "中断" in song["notice"]["msg"] and song["notice"]["kind"] == "error"
+    assert song["activity"] is None
     assert song["systems"][1]["status"] == "error"
-    assert song["bars"][0]["id"]
 
 
 def test_guitar_pro_upload_skips_ai_and_keeps_file(data_dir):
     sid = songs.create_song([("我的曲子.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
     song = store.load(sid)
-    assert song["kind"] == "score" and song["status"] == "imported" and song["title"] == "我的曲子"
+    assert song["source_type"] == "gp" and song["status"] == "imported" and song["title"] == "我的曲子"
+    assert "kind" not in song
     assert (store.song_dir(sid) / song["source"]).read_bytes() == b"\x18FICHIER GUITAR PRO v5.10"
     assert not FakeClaude.calls
     with pytest.raises(ValueError):
@@ -83,9 +90,9 @@ def test_score_upload_checks_file_header(data_dir, name, data, ok):
 def test_import_lifecycle(data_dir):
     sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
     song = songs.import_failed(sid, "Unsupported format")  # 浏览器解析失败
-    assert song["status"] == "error" and song["error"] == "Unsupported format"
+    assert song["status"] == "error" and song["notice"]["msg"] == "Unsupported format"
     song = songs.set_derived(sid, {"tuning": music.STANDARD}, derived_bars(2))  # 之后成功解析（比如换了音轨）
-    assert song["status"] == "ready" and song["error"] is None
+    assert song["status"] == "ready" and song["notice"] is None
     with pytest.raises(ValueError):
         songs.import_failed(songs.create_song([("p1.png", score_png())]), "x")
 
@@ -111,17 +118,29 @@ def test_set_derived_per_bar_time_signature(data_dir):
     assert [x.get("time_signature") for x in b] == [None, [3, 4], [6, 8], None]
     assert all(not x["warn"] for x in b), [x["warn"] for x in b]  # 按各自的拍号检查时值
     assert b[1]["events"][0]["notes"][0]["fret"] == 27
-    # 改音、改全曲拍号时也按小节自己的拍号检查
-    song = songs.edit_bar(sid, b[1]["id"], [{"dur": "4", "notes": []}], None)
-    assert song["bars"][1]["warn"] == ["时值合计 4 拍，应为 3 拍"]
+    # GP 曲子的小节来自原文件（只读的缓存），不能手改；拍号也来自原文件
+    with pytest.raises(errors.Invalid, match="来自原文件"):
+        songs.edit_bar(sid, b[1]["id"], [{"dur": "4", "notes": []}], None)
     with pytest.raises(ValueError, match="来自原文件"):
-        songs.edit_meta(sid, {"time_signature": [2, 4]})  # GP 曲子的拍号来自原文件
-    # 清空的小节按它自己的长度补休止；AI 看到的文字里带拍号
-    song = songs.edit_bar(sid, b[2]["id"], [], None)
-    assert song["bars"][2]["events"] == [{"dur": "3", "notes": []}]
+        songs.edit_meta(sid, {"time_signature": [2, 4]})
+    # 按小节自己的拍号算时值提示（读取时算）；AI 看到的文字里带拍号
+    store.update(sid, lambda s: s["bars"][1].update(events=[{"dur": "4", "notes": []}]))
+    song = store.load(sid)
+    assert song["bars"][1]["warn"] == [W("length", "时值合计 4 拍，应为 3 拍")]
     from app.llm import bar_text
 
     assert bar_text(song["bars"][2]).startswith("第3小节（6/8 拍）:")
+
+
+def test_image_bar_with_its_own_time_signature(data_dir):
+    """图片曲子：清空的小节按它自己的拍号补休止。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    store.update(sid, lambda s: s["bars"][2].update(ts_change=[6, 8]))
+    store.update(sid, lambda s: music.apply_time_signatures(s["bars"], s["meta"]))
+    bar = store.load(sid)["bars"][2]
+    song = songs.edit_bar(sid, bar["id"], [], None)
+    assert song["bars"][2]["events"] == [{"dur": "3", "notes": []}] and not song["bars"][2]["warn"]
 
 
 def test_rederive_keeps_unchanged_bars(data_dir):
@@ -137,9 +156,9 @@ def test_rederive_keeps_unchanged_bars(data_dir):
             b["tip"] = f"提示 {i}"
             b["qa"] = [{"q": "问", "a": "答"}]
         s["plan"] = {"overview": "ok", "steps": []}
-        s["practice"] = {"bars": {i: {"loops": 3} for i in ids}}
 
     store.update(sid, seed)
+    practice.record(sid, ids, 3, 60, 30)
     songs.edit_meta(sid, {"title": "我改的名字"})
     bars = derived_bars(3)
     bars[1]["events"][0]["notes"][0]["fret"] = 9  # 新的转换规则读出来不一样
@@ -149,14 +168,15 @@ def test_rederive_keeps_unchanged_bars(data_dir):
     assert b[0]["tip"] == "提示 0" and not b[0]["qa"][0].get("stale")
     assert b[1]["tip"] == "" and b[1]["qa"][0]["stale"]
     assert song["plan"]["stale"] and song["plan"]["changed_bars"] == [ids[1]]
-    assert set(song["practice"]["bars"]) == set(ids)
-    assert song["meta"]["title"] == "我改的名字"
+    assert set(practice.aggregate(sid, song)["bars"]) == set(ids)
+    assert song["meta"]["title"] == song["title"] == "我改的名字"
     assert song["derived"] == {"version": 2, "alphatab": "1.9.0"}
 
     # 换音轨：是另一份谱子，全部重来
     song = songs.set_derived(sid, meta, bars, track=1, derived={"version": 2, "alphatab": "1.9.0"})
     assert not {x["id"] for x in song["bars"]} & set(ids)
-    assert song["plan"] is None and not song["practice"]["bars"]
+    assert song["plan"] is None and not practice.aggregate(sid, song)["bars"]
+    assert practice.aggregate(sid, song)["total_seconds"] == 30  # 记录本身还在，只是小节对不上
     assert all(x["tip"] == "" for x in song["bars"])
 
 
@@ -169,27 +189,10 @@ def test_import_error_is_ignored_once_the_song_was_parsed(data_dir):
 def test_recover_interrupted_explain_keeps_score_song_playable(data_dir):
     sid = songs.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
     songs.set_derived(sid, {}, derived_bars(2))
-    store.update(sid, lambda s: s.update(status="parsing"))
+    store.update(sid, lambda s: s.update(activity={"kind": "explain", "restaging": False, "systems": []}))
     songs.recover_interrupted()
     song = store.load(sid)
-    assert song["status"] == "ready" and "中断" in song["error"]
-
-
-def test_restart_during_explain_restores_previous_status(data_dir):
-    sid = songs.create_song([("p1.png", score_png())])
-    recognize.run_parse(sid)
-    store.update(
-        sid,
-        lambda s: s.update(
-            status="parsing",
-            job="explain",
-            job_prev={"status": "cancelled", "error": "已取消"},
-            progress={"stage": "生成讲解"},
-        ),
-    )
-    songs.recover_interrupted()
-    song = store.load(sid)
-    assert song["status"] == "cancelled" and "讲解生成中断" in song["error"] and "job" not in song
+    assert song["status"] == "ready" and "中断" in song["notice"]["msg"] and song["activity"] is None
 
 
 def test_score_song_settings_come_from_the_file(data_dir):
@@ -218,9 +221,9 @@ def test_rederive_with_a_different_bar_count_keeps_matching_bars(data_dir):
         for i, b in enumerate(s["bars"]):
             b["tip"] = f"提示 {i}"
         s["plan"] = {"overview": "ok", "steps": []}
-        s["practice"] = {"bars": {i: {"loops": 3} for i in ids}}
 
     store.update(sid, seed)
+    practice.record(sid, ids, 3, 60, 30)
     # 新的转换：第 2 小节后面多了一个小节，第 4 小节没了，第 3 小节内容变了
     song = songs.set_derived(sid, meta, [bar(f) for f in (1, 2, 9, 7)], derived={"version": 2})
     b = song["bars"]
@@ -231,11 +234,11 @@ def test_rederive_with_a_different_bar_count_keeps_matching_bars(data_dir):
     b = song["bars"]
     assert [x["id"] for x in b] == [ids[0], ids[1], b[2]["id"], ids[2], ids[3]] and b[2]["id"] not in ids
     assert b[0]["tip"] == "提示 0" and b[2]["tip"] == ""
-    assert set(song["practice"]["bars"]) == set(ids)
+    assert set(practice.aggregate(sid, song)["bars"]) == set(ids)
     assert song["plan"]["stale"] and song["plan"].get("stale_all")  # 小节号整体移动了
 
 
-def test_source_type_is_recorded_and_guessed_for_old_songs(data_dir):
+def test_source_type_is_recorded(data_dir):
     import fitz  # pymupdf
 
     with fitz.open() as doc:  # 一页 PDF，内容就是那张谱子图片
@@ -254,9 +257,7 @@ def test_source_type_is_recorded_and_guessed_for_old_songs(data_dir):
         sid = songs.create_song(uploads)
         assert store.load(sid)["source_type"] == want
         listed[sid] = want
-    assert {s["id"]: s["source_type"] for s in store.list_songs()} == listed
-    # 早期的曲子没有 source_type：GP / MusicXML 按文件扩展名，图片和 PDF 算图片
-    for sid, want in listed.items():
-        s = store.load(sid)
-        del s["source_type"]
-        assert store.source_type(s) == ("image" if want == "pdf" else want)
+    from app import views
+
+    assert {s["id"]: s["source_type"] for s in views.list_library()} == listed
+    # 早期的曲子没有 source_type：迁移时推断（见 test_migrate）

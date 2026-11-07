@@ -52,7 +52,13 @@ def record(song_id: str, bar_ids: list[str], loops: int, bpm: float, seconds: fl
     known = {b.get("id") for b in song["bars"]}
     valid = list(dict.fromkeys(str(i) for i in bar_ids if str(i) in known))  # 保持顺序去重
     if valid:
-        rec = {"at": now(), "ids": valid, "loops": int(loops), "bpm": int(bpm), "seconds": round(float(seconds), 1)}
+        rec = {
+            "at": now(),
+            "ids": valid,
+            "loops": int(loops),
+            "bpm": int(bpm),
+            "seconds": round(float(seconds), 1),
+        }
         store.append_practice(song_id, rec)
     return aggregate(song_id, song)
 
@@ -79,7 +85,9 @@ def aggregate(song_id: str, song: dict) -> dict:
         loops, secs = int(r.get("loops") or 0), float(r.get("seconds") or 0)
         bpm = int(r.get("bpm") or 0)
         for bid in ids:
-            _add(bars, bid, loops, secs / len(ids), {"best_bpm": bpm if loops else 0, "last": r.get("at", "")})
+            _add(
+                bars, bid, loops, secs / len(ids), {"best_bpm": bpm if loops else 0, "last": r.get("at", "")}
+            )
         total += secs
         last = {"a": ids[0], "b": ids[-1], "bpm": bpm, "at": r.get("at", "")}
     return {

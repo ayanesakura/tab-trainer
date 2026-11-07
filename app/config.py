@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from app import store
 from app.llm import DEFAULT_MODEL, LLM, Claude, LLMConfig, friendly
 
+
 @dataclass
 class Settings:
     row_concurrency: int = 4  # 一首曲子同时识别几行

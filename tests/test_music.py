@@ -51,4 +51,42 @@ def test_check_bar_flags_durations_the_player_cannot_write():
     assert music.check_bar(ok, meta) == []
     quint = [{"dur": "1/5", "notes": []}] * 5 + [{"dur": "3", "notes": []}]
     probs = music.check_bar(quint, meta)
-    assert len(probs) == 1 and "1/5" in probs[0] and "近似" in probs[0]
+    assert len(probs) == 1 and probs[0]["code"] == "off_grid" and "1/5" in probs[0]["msg"]
+    assert "近似" in probs[0]["msg"]
+
+
+def test_warn_codes_and_old_string_warnings():
+    meta = music.normalize_meta({})
+    probs = music.check_bar([{"dur": "3", "notes": [{"string": 7, "fret": 31}]}], meta)
+    assert [p["code"] for p in probs] == ["length", "string_range", "string_range"]
+    assert music.check_bar([], meta)[-1] == {"code": "empty", "msg": "没有任何音符"}
+    assert all(p["code"] in music.WARN_CODES for p in probs)
+    # 旧数据里的一句话按开头的文字认出 code
+    old = {
+        "时值合计 3 拍，应为 4 拍": "length",
+        "时值 1/5 拍不在播放器支持的节奏网格上": "off_grid",
+        "本地数字识别和 AI 结果不一致：谱上读到 1弦3品": "ocr_mismatch",
+        "没有识别出可用的音符，暂按整小节休止处理": "placeholder",
+        "弦号 7 超出 1–6": "string_range",
+        "品数 31 不合理": "string_range",
+        "没有任何音符": "empty",
+        "导入时这一小节的数据无法使用：x": "other",
+    }
+    for text, code in old.items():
+        assert music.warn_code_of(text) == code
+        assert music.as_warn(text) == {"code": code, "msg": text}
+    assert music.as_warn({"code": "nope", "msg": "x"}) == {"code": "other", "msg": "x"}
+
+
+def test_derived_warnings_are_recomputed_and_recorded_ones_kept():
+    meta = music.normalize_meta({})
+    bar = {
+        "events": [{"dur": "3", "notes": []}],
+        "placeholder": True,
+        "warn": [{"code": "length", "msg": "旧的"}, {"code": "ocr_mismatch", "msg": "OCR"}],
+    }
+    music.derive_warns(bar, meta)
+    assert [w["code"] for w in bar["warn"]] == ["length", "placeholder", "ocr_mismatch"]
+    assert bar["warn"][0]["msg"] == "时值合计 3 拍，应为 4 拍"
+    music.refresh_length_warn(bar, {**meta, "time_signature": [3, 4]})
+    assert [w["code"] for w in bar["warn"]] == ["placeholder", "ocr_mismatch"]

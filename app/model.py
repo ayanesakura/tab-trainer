@@ -295,7 +295,9 @@ def strip(song: dict) -> dict:
     for b in song.get("bars") or []:
         nb = {k: v for k, v in b.items() if k != "n" and not (k.startswith("_") and k != "_orig")}
         if "warn" in nb:
-            nb["warn"] = [w for w in nb["warn"] if not (isinstance(w, dict) and w.get("code") in DERIVED_WARNS)]
+            nb["warn"] = [
+                w for w in nb["warn"] if not (isinstance(w, dict) and w.get("code") in DERIVED_WARNS)
+            ]
         bars.append(nb)
     out["bars"] = bars
     if isinstance(song.get("plan"), dict):

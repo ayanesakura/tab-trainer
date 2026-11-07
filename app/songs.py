@@ -162,9 +162,7 @@ def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
             yield img
 
 
-def save_pages(
-    uploads: list[tuple[str, bytes]], pages_dir, existing: list[dict] | None = None
-) -> list[dict]:
+def save_pages(uploads: list[tuple[str, bytes]], pages_dir, existing: list[dict] | None = None) -> list[dict]:
     """把上传的图片 / PDF 存成 pages/pN.png。补页时 existing 是已有的页：编号接着往后排，页数上限算上它们。"""
     pages_dir.mkdir(parents=True, exist_ok=True)
     taken = {pg["file"] for pg in existing or []}
@@ -234,8 +232,6 @@ def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
     )
     store.save(song, create=True)
     return sid
-
-
 
 
 # ---------------------------------------------------------------------------
