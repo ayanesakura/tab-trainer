@@ -29,9 +29,11 @@ class FakeClaude:
             "notes": "",
         }
 
-    def transcribe(self, img, meta, first_bar, spans, hint="", previous=None, problems=None, tab_lines=None):
+    def transcribe(
+        self, img, meta, first_bar, spans, hint="", previous=None, problems=None, labeled_strings=False
+    ):
         FakeClaude.calls.append({"first_bar": first_bar, "retry": previous is not None, "hint": hint})
-        FakeClaude.tab_lines.append((first_bar, tab_lines))
+        FakeClaude.tab_lines.append((first_bar, labeled_strings))
         bad = first_bar == 1 and previous is None
         bars = []
         for i in range(len(spans)):
@@ -55,6 +57,18 @@ class FakeClaude:
     def explain_bars(self, meta, bars):
         FakeClaude.calls.append({"explain": [b["n"] for b in bars]})
         return {"bars": [{"number": b["n"], "tip": f"讲解 {b['n']}"} for b in bars]}
+
+    def coach(self, meta, bar, neighbours, question, history, practice="", image=None):
+        FakeClaude.calls.append(
+            {
+                "coach": bar["n"],
+                "neighbours": [b["n"] for b in neighbours],
+                "history": len(history),
+                "practice": practice,
+                "image": image.size if image else None,
+            }
+        )
+        return f"回答：{question}"
 
     def practice_plan(self, meta, bars):
         return {"overview": "ok", "steps": [{"bars": "1-6", "title": "全曲", "advice": "慢练"}]}
@@ -313,18 +327,82 @@ def test_set_derived_keeps_repeats(data_dir):
     assert song["bars"][1]["repeat_end"] == 3 and song["bars"][1]["directions"] == ["fine"]
 
 
-def test_tab_line_positions_are_passed_in_crop_coordinates(data_dir):
+def test_tab_lines_are_found_and_strings_labelled(data_dir):
     sid = pipeline.create_song([("p1.png", _png())])
     pipeline._run_parse(sid)
     song = store.load(sid)
+    assert all(labeled for _, labeled in FakeClaude.tab_lines)
     # 合成谱子的六线谱：第一行从 y=230 开始、第二行从 y=630 开始，线距 14
-    sent = dict(FakeClaude.tab_lines)  # 起始小节号 -> 传给模型的弦线位置
-    for sysinfo, first in zip(song["systems"], (1, 4), strict=True):
-        lines, top = sent[first], sysinfo["crop"][2]
+    for sysinfo in song["systems"]:
         assert sysinfo["lines"][0] in (230, 630)
-        assert lines == [y - top for y in sysinfo["lines"]]
+        lines = pipeline._tab_lines(sid, song, sysinfo)
+        assert lines == [y - sysinfo["crop"][2] for y in sysinfo["lines"]]
         assert [round(b - a) for a, b in itertools.pairwise(lines)] == [14] * 5
-    # 旧曲子没存 lines：在裁剪图上重新检测
+    # 旧曲子没存 lines：对整页重新检测
     s0 = dict(song["systems"][0])
     lines0 = s0.pop("lines")
     assert pipeline._tab_lines(sid, song, s0) == [y - s0["crop"][2] for y in lines0]
+    # 标出来的弦号是红色的，画在第一个小节左边
+    x0, x1, y0, y1 = s0["crop"]
+    img = pipeline._page_image(sid, song["pages"][0]).crop((x0, y0, x1, y1))
+    out = pipeline._label_strings(img, pipeline._tab_lines(sid, song, s0), s0["spans"][0][0] - x0)
+    px = out.load()
+    reds = [
+        (x, y) for x in range(out.width) for y in range(out.height) if px[x, y][0] > 180 and px[x, y][1] < 90
+    ]
+    assert reds and max(x for x, _ in reds) < s0["spans"][0][0] - x0
+
+
+def test_ask_bar_keeps_history_and_sends_context(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    bar = store.load(sid)["bars"][1]
+    pipeline.record_practice(sid, {"bar_ids": [bar["id"]], "loops": 3, "bpm": 50, "seconds": 60})
+    r = pipeline.ask_bar(sid, bar["id"], "  这里左手怎么按？ ")
+    assert r["answer"] == "回答：这里左手怎么按？" and len(r["qa"]) == 1
+    call = FakeClaude.calls[-1]
+    assert call["coach"] == 2 and call["neighbours"] == [1, 3] and call["image"]  # 图片曲子带上原谱截图
+    assert "3 遍" in call["practice"] and "50 BPM" in call["practice"]
+    pipeline.ask_bar(sid, bar["id"], "第二个问题")
+    assert FakeClaude.calls[-1]["history"] == 1
+    assert [q["q"] for q in store.load(sid)["bars"][1]["qa"]] == ["这里左手怎么按？", "第二个问题"]
+    with pytest.raises(ValueError):
+        pipeline.ask_bar(sid, bar["id"], "   ")
+    with pytest.raises(pipeline.BarNotFound):
+        pipeline.ask_bar(sid, "nope", "问题")
+
+
+def test_ask_bar_without_key_is_a_user_error(data_dir, monkeypatch):
+    from app import llm  # 用真正的客户端（没有 key 时构造就会失败）
+
+    monkeypatch.setattr(pipeline, "Claude", llm.Claude)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sid = pipeline.create_song([("曲子.gp", b"x")])
+    pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, _derived_bars(2))
+    bar_id = store.load(sid)["bars"][0]["id"]
+    with pytest.raises(ValueError, match="API key"):
+        pipeline.ask_bar(sid, bar_id, "怎么练？")
+
+
+def test_practice_log_accumulates_per_bar(data_dir):
+    sid = pipeline.create_song([("曲子.gp", b"x")])
+    pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, _derived_bars(4))
+    ids = [b["id"] for b in store.load(sid)["bars"]]
+    pipeline.record_practice(sid, {"bar_ids": ids[1:3], "loops": 4, "bpm": 48, "seconds": 120})
+    p = pipeline.record_practice(sid, {"bar_ids": ids[1:3] + ["gone"], "loops": 2, "bpm": 56, "seconds": 40})
+    assert p["bars"][ids[1]]["loops"] == 6 and p["bars"][ids[1]]["best_bpm"] == 56
+    assert p["bars"][ids[2]]["seconds"] == 80  # 时间平摊到两个小节
+    assert ids[0] not in p["bars"]
+    assert p["last"]["a"] == ids[1] and p["last"]["b"] == ids[2] and p["last"]["bpm"] == 56
+    assert p["total_seconds"] == 160
+    # 只听了一会儿没循环完：记时间，不更新最快速度
+    p = pipeline.record_practice(sid, {"bar_ids": [ids[3]], "loops": 0, "bpm": 90, "seconds": 10})
+    assert p["bars"][ids[3]]["best_bpm"] == 0 and p["bars"][ids[3]]["seconds"] == 10
+    for bad in (
+        {},
+        {"bar_ids": ids, "bpm": 0},
+        {"bar_ids": ids, "bpm": 60, "loops": -1},
+        {"bar_ids": ids, "bpm": "x"},
+    ):
+        with pytest.raises(ValueError):
+            pipeline.record_practice(sid, bad)

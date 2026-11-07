@@ -46,6 +46,15 @@
 .detail .body { padding: 12px 16px 14px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
 .tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .tip { line-height: 1.7; color: var(--fg); }
+.coach { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+.coach .qa { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.coach .qa .q { font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
+.coach .qa .q .t { font-weight: 400; color: var(--muted); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
+.coach .qa .a { white-space: pre-wrap; line-height: 1.7; color: var(--fg-2); }
+.coach .qa-list { display: flex; flex-direction: column; gap: 12px; max-height: 320px; overflow-y: auto; }
+.coach .ask { display: flex; gap: 6px; }
+.coach .ask .input { flex: 1; }
+.practice-line { color: var(--muted); font-size: 12px; }
 .warns { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 9px; background: var(--amber-soft); font-size: 12.5px; white-space: pre-wrap; }
 .tools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
 .tools .input { flex: 1; min-width: 160px; }
@@ -132,6 +141,7 @@ table.tune td b { font-variant-numeric: tabular-nums; }
     <div class="notice info" id="progressBox" style="display:none"></div>
     <div class="notice err" id="errorBox" style="display:none"></div>
     <div class="notice" id="metaNote" style="display:none"></div>
+    <div class="notice info" id="resumeNote" style="display:none"></div>
   </div>
 
   <!-- ============ 练习 ============ -->
@@ -179,10 +189,18 @@ table.tune td b { font-variant-numeric: tabular-nums; }
         <div class="body">
           <div class="tip" id="tipText"></div>
           <div class="warns" id="tipWarn" style="display:none"></div>
+          <div class="practice-line" id="practiceLine"></div>
           <div class="tools">
             <button class="btn sm" id="editBtn" data-ic="edit">修改本小节</button>
             <input class="input" id="hintInput" placeholder="告诉 AI 哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
             <button class="btn sm" id="reparseBtn" data-ic="refresh">重新识别这一行</button>
+          </div>
+          <div class="coach" id="coachBox">
+            <div class="qa-list" id="qaList"></div>
+            <div class="ask">
+              <input class="input" id="askInput" maxlength="500" placeholder="问 AI 这一小节，如“左手怎么安排指法”“这个泛音总弹不响怎么办”">
+              <button class="btn sm" id="askBtn" data-ic="sparkle">问 AI</button>
+            </div>
           </div>
           <div class="tools" id="explainBox" hidden>
             <button class="btn sm primary" id="explainBtn" data-ic="sparkle">让 AI 讲解这首曲子</button>
@@ -568,6 +586,8 @@ function showBar(bi) {
   $('tipWarn').style.display = warn.length ? '' : 'none';
   $('tipWarn').innerHTML = warn.map(w => `<div>${UI.icon('alert', 13)} ${esc(w)}</div>`).join('');
   updateBarTools();
+  renderCoach();
+  renderPracticeLine();
   if (sb.id !== editorBarId) closeEditor();
   const tags = new Set();
   BARS[bi].forEach(e => {
@@ -634,7 +654,10 @@ async function ensureApi() {
     state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格键播放');
   });
   api.playerStateChanged.on(e => {
+    const was = state.playing;
     state.playing = e.state === 1;
+    if (state.playing && !was) practiceStart();
+    if (!state.playing && was) practiceFlush(false);
     setPlayBtn(state.playing);
     if (!state.playing) setStatus('已暂停', '空格键继续');
   });
@@ -798,7 +821,9 @@ function setTempo(bpm) {
   if (api) api.playbackSpeed = bpm / baseTempo;
 }
 function setLoop(a, b, restart = true, show = true) {
+  if (state.playing) practiceFlush(false); // 换段之前，把上一段弹了的时间记下来
   state.a = Math.max(0, Math.min(a, b)); state.b = Math.min(BARS.length - 1, Math.max(a, b));
+  if (state.playing) practiceStart();
   updateLoopUI();
   const range = applyLoopRange();
   if (show) showBar(state.a);
@@ -811,6 +836,7 @@ function setLoop(a, b, restart = true, show = true) {
 function onPosition(tick) {
   if (state.playing && state.lastTick >= 0 && tick < state.lastTick - 10) {
     state.loops++;
+    practiceFlush(true); // 先按提速前的速度记下刚弹完的这一遍
     if ($('auto').checked) {
       const every = Math.max(1, +$('autoEvery').value || 1), step = +$('autoStep').value || 0, target = +$('autoTarget').value || state.bpm;
       if (state.loops % every === 0 && state.bpm < target) setTempo(Math.min(target, state.bpm + step));
@@ -1104,12 +1130,90 @@ async function refresh(force) {
   try {
     const song = await fetchSong();
     applySong(song); render(force);
+    if (song.bars.length) renderResume();
     const busy = song.running || song.status === 'parsing' || song.status === 'queued' || song.systems.some(s => s.status === 'parsing');
     clearTimeout(pollTimer);
     if (busy) pollTimer = setTimeout(() => refresh(false), 2500);
   } catch (e) {
     $('songTitle').textContent = e.message;
   }
+}
+
+// ---------------------------------------------------------------------
+// 小节 AI 教练
+// ---------------------------------------------------------------------
+let asking = null; // 正在等回答的小节 id
+function renderCoach() {
+  if (shownBar < 0 || !SONG || !SONG.bars[shownBar]) return;
+  const bar = SONG.bars[shownBar], qa = bar.qa || [];
+  $('qaList').innerHTML = qa.map(x => `<div class="qa"><div class="q">${UI.icon('sparkle', 13)}<span>${esc(x.q)}</span><span class="t">${esc(x.at || '')}</span></div><div class="a">${esc(x.a)}</div></div>`).join('');
+  $('qaList').hidden = !qa.length;
+  $('qaList').scrollTop = $('qaList').scrollHeight;
+  const busy = asking === bar.id;
+  $('askBtn').disabled = busy;
+  $('askBtn').innerHTML = busy ? '<span class="spinner"></span>思考中…' : UI.icon('sparkle') + '问 AI';
+}
+async function askBar() {
+  if (shownBar < 0 || asking) return;
+  const q = $('askInput').value.trim();
+  if (!q) { $('askInput').focus(); return; }
+  const bar = SONG.bars[shownBar];
+  asking = bar.id; renderCoach();
+  try {
+    const r = await fetch(`/api/songs/${SONG_ID}/bars/${encodeURIComponent(bar.id)}/ask`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { UI.toast(d.detail || '提问失败', 'err', 6000); return; }
+    const b = SONG.bars.find(x => x.id === bar.id);
+    if (b) b.qa = d.qa;
+    $('askInput').value = '';
+  } finally {
+    asking = null; renderCoach();
+  }
+}
+$('askBtn').onclick = askBar;
+$('askInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); askBar(); } });
+
+// ---------------------------------------------------------------------
+// 练习记录：每弹完一遍记一次（循环的小节、速度、用时），停下或换段时把零头时间也记上
+// ---------------------------------------------------------------------
+const practice = { ids: [], t: 0 };
+function practiceStart() {
+  practice.ids = SONG.bars.slice(state.a, state.b + 1).map(b => b.id);
+  practice.t = performance.now();
+}
+function practiceFlush(loopDone) {
+  if (!practice.t || !practice.ids.length) return;
+  const now = performance.now(), seconds = (now - practice.t) / 1000;
+  practice.t = state.playing ? now : 0;
+  if (!loopDone && seconds < 2) return; // 点一下就停的不算
+  const body = JSON.stringify({ bar_ids: practice.ids, loops: loopDone ? 1 : 0, bpm: state.bpm, seconds: Math.round(seconds) });
+  if (!state.playing) practice.ids = [];
+  fetch(`/api/songs/${SONG_ID}/practice`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true })
+    .then(r => (r.ok ? r.json() : null)).then(p => { if (p) { SONG.practice = p; renderPracticeLine(); } }).catch(() => {});
+}
+addEventListener('pagehide', () => { if (state.playing) practiceFlush(false); });
+
+function renderPracticeLine() {
+  if (shownBar < 0 || !SONG || !SONG.bars[shownBar]) return;
+  const p = ((SONG.practice || {}).bars || {})[SONG.bars[shownBar].id];
+  $('practiceLine').textContent = p
+    ? `练习记录：循环 ${p.loops} 遍 · 累计 ${Math.max(1, Math.round(p.seconds / 60))} 分钟${p.best_bpm ? ` · 最快 ${p.best_bpm} BPM` : ''} · 上次 ${p.last}`
+    : '还没练过这一小节';
+}
+let resumeShown = false;
+function renderResume() {
+  if (resumeShown) return;
+  resumeShown = true;
+  const last = (SONG.practice || {}).last;
+  if (!last) return;
+  const a = SONG.bars.findIndex(b => b.id === last.a), z = SONG.bars.findIndex(b => b.id === last.b);
+  if (a < 0 || z < 0) return;
+  const label = a === z ? `第 ${a + 1} 小节` : `第 ${a + 1}–${z + 1} 小节`;
+  $('resumeNote').innerHTML = `${UI.icon('repeat', 14)}<div style="flex:1">上次（${esc(last.at)}）练到 <b>${label}</b>，${last.bpm} BPM。</div><button class="btn sm primary" id="resumeBtn">接着练</button><button class="icon-btn sm" id="resumeClose" data-ic="x" title="关闭"></button>`;
+  UI.hydrate($('resumeNote'));
+  $('resumeNote').style.display = '';
+  $('resumeBtn').onclick = () => { setLoop(a, z); setTempo(last.bpm); $('resumeNote').style.display = 'none'; };
+  $('resumeClose').onclick = () => { $('resumeNote').style.display = 'none'; };
 }
 
 // 修改小节

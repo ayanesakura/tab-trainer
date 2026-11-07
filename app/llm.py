@@ -129,6 +129,8 @@ EXPLAIN_SCHEMA = _obj(
     {"bars": {"type": "array", "items": _obj({"number": {"type": "integer"}, "tip": {"type": "string"}})}}
 )
 
+COACH_SCHEMA = _obj({"answer": {"type": "string"}})
+
 PLAN_SCHEMA = _obj(
     {
         "overview": {"type": "string"},
@@ -199,6 +201,27 @@ def _image_block(img: Image.Image, min_width: int = 0) -> tuple[dict, float]:
             "data": base64.standard_b64encode(buf.getvalue()).decode(),
         },
     }, scale
+
+
+def _note_text(n: dict) -> str:
+    s = f"{n['string']}弦{n['fret']}品"
+    if n.get("grace", -1) >= 0:
+        s = f"(倚音{n['grace']}品)" + s
+    return s + (f"[{','.join(n['tech'])}]" if n.get("tech") else "")
+
+
+def bar_text(b: dict) -> str:
+    """一个小节的文字版：'第N小节: <时值>拍 <音> | ...'，给只发文字的调用用。"""
+    return f"第{b['n']}小节: " + " | ".join(
+        f"{e['dur']}拍 " + (" ".join(_note_text(n) for n in e["notes"]) or "休止") for e in b["events"]
+    )
+
+
+NOTATION_KEY = (
+    "each event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), "
+    "techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, "
+    "nh natural harmonic, ah artificial harmonic, roll arpeggio, x dead note, vib vibrato, bend)"
+)
 
 
 class Claude:
@@ -300,7 +323,7 @@ class Claude:
         hint: str = "",
         previous: dict | None = None,
         problems: list[str] | None = None,
-        tab_lines: list[float] | None = None,
+        labeled_strings: bool = False,
     ) -> dict:
         block, scale = _image_block(img, min_width=1800)
         ts = meta["time_signature"]
@@ -322,14 +345,13 @@ class Claude:
                 f"This image is one line (system) of the score with {len(bar_spans)} bars, numbered {first_bar}-{last}. "
                 f"Horizontal extent of each bar in this image (pixels): {spans}. Return exactly these bars."
             )
-            if tab_lines and len(tab_lines) == 6:
-                ys = ", ".join(f"string {i + 1} at y={round(y * scale)}" for i, y in enumerate(tab_lines))
+            if labeled_strings:
                 lines.append(
-                    f"The six tab lines in this image (pixels from the top): {ys}. A fret number sits on the line "
-                    "of its string. Decide each number's string from its vertical position against these lines "
-                    "rather than by counting lines by eye: a common mistake is putting a number one line too low "
-                    "(string 5 read as string 6, string 4 as string 5), especially bass notes and open strings (0) "
-                    "on the lower lines."
+                    "The small red numbers 1-6 at the left edge of the tab staff were added by the app, not part of "
+                    "the score: they label the six tab lines (1 = top line, 6 = bottom line). Never transcribe them. "
+                    "For every fret number, follow its line to the left to the red label to decide its string, instead "
+                    "of counting lines by eye: a common mistake is putting a number one line too low (string 5 read "
+                    "as string 6), especially bass notes and open strings (0) on the lower lines."
                 )
         else:
             lines.append(
@@ -351,31 +373,60 @@ class Claude:
     def explain_bars(self, meta: dict, bars: list[dict]) -> dict:
         """给已经有精确数据的小节（GTP / MusicXML 导入）写练习提示，只发文字。"""
 
-        def note(n):
-            s = f"{n['string']}弦{n['fret']}品"
-            if n.get("grace", -1) >= 0:
-                s = f"(倚音{n['grace']}品)" + s
-            return s + (f"[{','.join(n['tech'])}]" if n.get("tech") else "")
-
-        lines = [
-            f"第{b['n']}小节: "
-            + " | ".join(
-                f"{e['dur']}拍 " + (" ".join(note(n) for n in e["notes"]) or "休止") for e in b["events"]
-            )
-            for b in bars
-        ]
+        lines = [bar_text(b) for b in bars]
         text = (
             f"Tuning (string 1 -> 6): {' '.join(meta['tuning'])}; capo {meta['capo']}; time signature "
-            f"{meta['time_signature'][0]}/{meta['time_signature'][1]}. Below is exact tablature data for some bars: each "
-            "event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), "
-            "techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, "
-            "nh natural harmonic, ah artificial harmonic, roll arpeggio, x dead note, vib vibrato, bend).\n"
+            f"{meta['time_signature'][0]}/{meta['time_signature'][1]}. Below is exact tablature data for some bars: "
+            + NOTATION_KEY
+            + ".\n"
             + "\n".join(lines)
             + "\n\nFor every bar, write a tip in Chinese: 1-4 sentences of practical guidance naming strings and frets "
             "the way a teacher would (what to play together, what is fretted vs open, which technique and how to do it, "
             "what is hard and how to practise it). Return one entry per bar with its number."
         )
         return self._call([{"type": "text", "text": text}], EXPLAIN_SCHEMA, effort="medium", max_tokens=32000)
+
+    def coach(
+        self,
+        meta: dict,
+        bar: dict,
+        neighbours: list[dict],
+        question: str,
+        history: list[dict],
+        practice: str = "",
+        image: Image.Image | None = None,
+    ) -> str:
+        """针对一个小节回答练习问题（指法、技巧、怎么练）。"""
+        parts = [
+            f"A guitarist is practising {meta.get('title') or 'a piece'} (tuning string 1 -> 6: {' '.join(meta['tuning'])}, "
+            f"capo {meta['capo']}, time signature {meta['time_signature'][0]}/{meta['time_signature'][1]}) and asks about "
+            f"bar {bar['n']}. Tablature data, " + NOTATION_KEY + ":",
+            "This bar: " + bar_text(bar),
+            "Neighbouring bars for context:\n" + "\n".join(bar_text(b) for b in neighbours)
+            if neighbours
+            else "",
+            f"Practice tip already shown for this bar: {bar['tip']}" if bar.get("tip") else "",
+            f"Their practice log for this bar: {practice}" if practice else "",
+            (
+                "The image is this bar cut from the original score; the data above was transcribed from it and "
+                "may contain mistakes - if the image clearly disagrees, say so."
+                if image is not None
+                else ""
+            ),
+        ]
+        for h in history[-4:]:
+            parts.append(f"Earlier question: {h['q']}\nYour answer: {h['a']}")
+        parts.append(
+            f"Their question (in Chinese): {question}\n\nAnswer in Simplified Chinese like a patient guitar teacher: "
+            "concrete fingering (which left-hand finger on which string/fret, right-hand p i m a where useful), what "
+            "to listen for, and a short practice routine if it helps. Refer to notes as 'N 弦 M 品'. Be concise: "
+            "a few short paragraphs or a short list, no headings."
+        )
+        content: list = []
+        if image is not None:
+            content.append(_image_block(image, min_width=900)[0])
+        content.append({"type": "text", "text": "\n\n".join(p for p in parts if p)})
+        return self._call(content, COACH_SCHEMA, effort="medium", max_tokens=8000).get("answer", "")
 
     def practice_plan(self, meta: dict, bars: list[dict]) -> dict:
         summary = [

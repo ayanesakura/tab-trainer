@@ -22,6 +22,7 @@ from app.llm import TECHS, Claude, LLMConfig, LLMError
 log = logging.getLogger("tab_trainer.pipeline")
 
 CONCURRENCY = 4
+LABEL_STRINGS = True  # 在裁剪图上标弦号（见 _label_strings）
 PDF_DPI = 200
 STANDARD = ["E4", "B3", "G3", "D3", "A2", "E2"]
 _NOTE = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
@@ -504,6 +505,25 @@ def _tab_lines(sid: str, song: dict, sysinfo: dict) -> list[float] | None:
     return [y - y0 for y in lines] if lines else None
 
 
+def _label_strings(img: Image.Image, lines: list[float], x_start: float) -> Image.Image:
+    """在六线谱左边每根弦线旁标上红色的弦号 1–6。模型数线时容易把低音弦的数字往下错一根，
+    直接看图对照弦号比数线可靠（只告诉它坐标没有用，评测里错误照旧）。"""
+    from PIL import ImageDraw, ImageFont
+
+    img = img.convert("RGB").copy()
+    sp = (lines[-1] - lines[0]) / 5
+    size = max(9, round(sp * 0.85))
+    try:
+        font = ImageFont.load_default(size=size)
+    except TypeError:  # 老版本 Pillow
+        font = ImageFont.load_default()
+    d = ImageDraw.Draw(img)
+    x = max(1, x_start - size * 1.6)
+    for i, y in enumerate(lines):
+        d.text((x, y), str(i + 1), fill=(220, 30, 30), font=font, anchor="lm")
+    return img
+
+
 def _transcribe_system(
     claude: Claude,
     sid: str,
@@ -519,13 +539,23 @@ def _transcribe_system(
     img = _page_image(sid, page).crop((x0, y0, x1, y1))
     spans = [(a - x0, b - x0) for a, b in sysinfo["spans"]] if sysinfo["spans"] else None
     lines = _tab_lines(sid, song, sysinfo) if spans else None
+    labeled = bool(lines and LABEL_STRINGS)
+    if labeled:
+        img = _label_strings(img, lines, spans[0][0])
     meta = song["meta"]
 
     def run(previous=None, problems=None):
         if cancel is not None and cancel.is_set():
             raise Cancelled()
         raw = claude.transcribe(
-            img, meta, first_bar, spans, hint=hint, previous=previous, problems=problems, tab_lines=lines
+            img,
+            meta,
+            first_bar,
+            spans,
+            hint=hint,
+            previous=previous,
+            problems=problems,
+            labeled_strings=labeled,
         )
         bars, issues = [], []
         for i, b in enumerate(raw.get("bars", [])):
@@ -817,3 +847,111 @@ def edit_meta(sid: str, raw: dict) -> dict:
             b["warn"] = check_bar(b["events"], s["meta"])
 
     return store.update(sid, apply)
+
+
+# ---------------------------------------------------------------------------
+# 小节 AI 教练
+# ---------------------------------------------------------------------------
+QA_KEEP = 20  # 每个小节保留最近几条问答
+
+
+class CoachError(RuntimeError):
+    pass
+
+
+def practice_summary(song: dict, bar_id: str) -> str:
+    """给 AI 看的练习记录（中文一句话）；没练过返回空串。"""
+    p = ((song.get("practice") or {}).get("bars") or {}).get(bar_id)
+    if not p:
+        return ""
+    mins = round(p.get("seconds", 0) / 60)
+    return f"已循环 {p.get('loops', 0)} 遍，累计约 {mins} 分钟，最快练到 {p.get('best_bpm', 0)} BPM，上次练习 {p.get('last', '')}"
+
+
+def ask_bar(sid: str, bar_id: str, question: str) -> dict:
+    """问一个小节的练习问题，回答存进这个小节的 qa 里。返回 {"answer", "qa"}。"""
+    question = (question or "").strip()
+    if not question:
+        raise ValueError("问题不能为空")
+    if len(question) > 500:
+        raise ValueError("问题太长了（最多 500 字）")
+    song = store.load(sid)
+    idx = next((i for i, b in enumerate(song["bars"]) if b.get("id") == bar_id), None)
+    if idx is None:
+        raise BarNotFound(bar_id)
+    bar = song["bars"][idx]
+    neighbours = [song["bars"][j] for j in (idx - 1, idx + 1) if 0 <= j < len(song["bars"])]
+    image = None
+    if bar.get("region") and bar.get("page") is not None:
+        x0, x1, y0, y1 = bar["region"]
+        image = _page_image(sid, song["pages"][bar["page"]]).crop((x0, y0, x1, y1))
+    try:
+        claude = Claude(llm_config())
+    except LLMError as e:
+        raise ValueError(str(e)) from None  # 没配 key：用户能自己解决的问题，返回 400
+    try:
+        answer = claude.coach(
+            song["meta"],
+            bar,
+            neighbours,
+            question,
+            bar.get("qa") or [],
+            practice_summary(song, bar_id),
+            image,
+        )
+    except LLMError as e:
+        raise CoachError(str(e)) from None
+    except Exception as e:  # noqa: BLE001 - 网络 / API 错误统一转成中文说明
+        raise CoachError(_friendly(e)) from None
+    if not answer.strip():
+        raise CoachError("模型没有给出回答，换个问法再试一次")
+    entry = {"q": question, "a": answer.strip(), "at": time.strftime("%Y-%m-%d %H:%M")}
+
+    def apply(s):
+        b = next((x for x in s["bars"] if x.get("id") == bar_id), None)
+        if b is not None:  # 等回答期间小节被重新识别掉了，就不存
+            b["qa"] = [*(b.get("qa") or []), entry][-QA_KEEP:]
+        s["usage"] = {
+            k: s.get("usage", {}).get(k, 0) + claude.usage[k] for k in ("input_tokens", "output_tokens")
+        }
+
+    s = store.update(sid, apply)
+    b = next((x for x in s["bars"] if x.get("id") == bar_id), None)
+    return {"answer": entry["a"], "qa": (b or {}).get("qa", [entry])}
+
+
+# ---------------------------------------------------------------------------
+# 练习记录
+# ---------------------------------------------------------------------------
+def record_practice(sid: str, body: dict) -> dict:
+    """记一段练习：循环了哪几个小节（bar_ids，按顺序）、几遍、多少 BPM、多少秒。
+    按小节累计到 practice.bars，最近一次记在 practice.last（下次打开时提示接着练）。"""
+    try:
+        ids = [str(x) for x in body.get("bar_ids") or []]
+        loops = int(body.get("loops") or 0)
+        bpm = int(body.get("bpm") or 0)
+        seconds = float(body.get("seconds") or 0)
+    except (TypeError, ValueError):
+        raise ValueError("练习记录格式不对") from None
+    if not ids or not 0 <= loops <= 10000 or not 0 < bpm <= 400 or not 0 <= seconds <= 6 * 3600:
+        raise ValueError("练习记录格式不对")
+    now = time.strftime("%Y-%m-%d %H:%M")
+
+    def apply(s):
+        known = {b.get("id") for b in s["bars"]}
+        valid = [i for i in ids if i in known]
+        if not valid:
+            return
+        p = s.setdefault("practice", {})
+        bars = p.setdefault("bars", {})
+        for i in valid:
+            r = bars.setdefault(i, {"loops": 0, "seconds": 0, "best_bpm": 0, "last": ""})
+            r["loops"] += loops
+            r["seconds"] = round(r["seconds"] + seconds / len(valid), 1)  # 时间平摊到每个小节
+            if loops:
+                r["best_bpm"] = max(r["best_bpm"], bpm)
+            r["last"] = now
+        p["last"] = {"a": valid[0], "b": valid[-1], "bpm": bpm, "at": now}
+        p["total_seconds"] = round(p.get("total_seconds", 0) + seconds, 1)
+
+    return store.update(sid, apply).get("practice") or {}

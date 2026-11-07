@@ -215,6 +215,28 @@ def put_bar(sid: str, bar_id: str, body: Annotated[dict, Body()]):
         raise HTTPException(400, f"小节数据格式不对：{e}") from None
 
 
+@app.post("/api/songs/{sid}/bars/{bar_id}/ask")
+def ask_bar(sid: str, bar_id: str, body: Annotated[dict, Body()]):
+    _song(sid)
+    try:
+        return pipeline.ask_bar(sid, bar_id, str(body.get("question") or ""))
+    except pipeline.BarNotFound:
+        raise HTTPException(404, "小节不存在（可能刚被重新识别，请刷新页面）") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    except pipeline.CoachError as e:
+        raise HTTPException(502, str(e)) from None
+
+
+@app.post("/api/songs/{sid}/practice")
+def practice(sid: str, body: Annotated[dict, Body()]):
+    _song(sid)
+    try:
+        return pipeline.record_practice(sid, body)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @app.post("/api/songs/{sid}/systems/{si}/reparse")
 def reparse_line(sid: str, si: int, body: Annotated[dict | None, Body()] = None):
     s = _song(sid)
