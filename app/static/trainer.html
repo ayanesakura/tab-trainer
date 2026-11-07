@@ -112,6 +112,7 @@
             <div class="np-row"><label class="lbl" for="npFret">品</label><button class="icon-btn sm" id="npFretDown" data-ic="minus" aria-label="品位减 1"></button><input class="input num np-fret" type="number" id="npFret" min="0" max="30"><button class="icon-btn sm" id="npFretUp" data-ic="plus" aria-label="品位加 1"></button><span class="hint">从变调夹算起</span></div>
             <div class="np-row align-top"><span class="lbl" id="npTechLbl">技巧</span><div class="chips multi" id="npTech" role="group" aria-labelledby="npTechLbl"></div></div>
             <div class="np-row align-top"><span class="lbl" id="npDurLbl" title="这一拍到下一个音的时长，整拍的音一起改">时值</span><div class="chips multi" id="npDur" role="group" aria-labelledby="npDurLbl"></div></div>
+            <div class="np-row"><label class="lbl" for="npChord" title="这一拍开始的和弦名和扫弦方向，整拍一起改">和弦</label><input class="input np-chord" id="npChord" maxlength="24" placeholder="无" autocomplete="off" spellcheck="false"><div class="seg sm" id="npStrum" aria-label="扫弦"><button data-v="">不扫</button><button data-v="down" title="从低音弦扫向高音弦">↓ 下扫</button><button data-v="up" title="从高音弦扫向低音弦">↑ 上扫</button></div></div>
             <div class="np-msg" id="npMsg"></div>
             <div class="np-actions"><button class="btn sm danger" id="npDel" data-ic="trash">删除</button><button class="btn sm ghost" id="npAdd" data-ic="plus" title="在同一拍上再加一个音">同一拍加音</button><div class="grow"></div><button class="btn sm primary" id="npSave">保存</button></div>
           </div>
@@ -128,6 +129,7 @@
           </div>
           <div class="body">
             <div class="tags" id="barTags"></div>
+            <div class="bar-chords" id="barChords" hidden></div>
             <div class="tip" id="tipText"></div>
             <div class="warns" id="tipWarn" hidden></div>
             <button class="paper" id="cropBox" title="点开看这一整行的原谱" hidden><canvas id="crop"></canvas><span class="paper-msg" id="cropMsg" hidden></span><span class="paper-cap">原谱</span></button>

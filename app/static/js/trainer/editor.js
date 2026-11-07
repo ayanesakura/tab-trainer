@@ -87,7 +87,7 @@ const LEGEND_PLAY = legend(['点小节：循环这一小节', '<kbd>Shift</kbd> 
 const LEGEND_EDIT = legend(['改音：点音符改弦、品、技巧和时值', '点休止符：加音', '<kbd>Enter</kbd> 保存', '<kbd>Esc</kbd> 关闭', `<kbd>${UNDO_KEY}</kbd> 撤销`]);
 // 改音面板里的技巧（推弦不在面板里，原样保留）
 const NP_TECH = ['h', 'p', 'sl', 'si', 'pm', 'x', 'nh', 'ah', 'vib', 'roll'];
-let np = null, npLayer = null, pendingClick = null, setNpStr = null;
+let np = null, npLayer = null, pendingClick = null, setNpStr = null, setNpStrum = null;
 const pointer = { x: 0, y: 0 };
 
 export function setEditMode(v) {
@@ -124,10 +124,11 @@ export function openNotePop(beat, note) {
   const ni = note ? ev.notes.findIndex(n => n.string === STRINGS + 1 - note.string) : -1; // alphaTab 的弦号 1 = 最低音弦
   const cur = ni >= 0 ? ev.notes[ni] : null;
   if (npLayer) npLayer.close('replaced'); // 点了另一个音：换成新的
-  np = { bi, ei, ni, barId: s.bars[bi].id, rev: s.bars[bi].rev, snap: s.bars[bi].events, string: cur ? cur.string : freeString(ev, note ? STRINGS + 1 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []), dur: ev.dur };
+  np = { bi, ei, ni, barId: s.bars[bi].id, rev: s.bars[bi].rev, snap: s.bars[bi].events, string: cur ? cur.string : freeString(ev, note ? STRINGS + 1 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []), dur: ev.dur, chord: ev.chord || '', strum: ev.strum || '' };
   set('ui.bar', bi);
   renderNotePop();
   $('npFret').value = np.fret;
+  $('npChord').value = np.chord;
   const card = $('scoreCard').getBoundingClientRect(), pop = $('notePop');
   pop.hidden = false;
   npLayer = UI.layer(pop, { ignore: [$('score')], focus: $('npFret'), onClose: () => { npLayer = null; np = null; pop.hidden = true; } });
@@ -158,6 +159,7 @@ function renderNotePop() {
   $('npTitle').textContent = add ? '在这一拍加一个音' : '修改这个音';
   $('npSub').textContent = `第 ${np.bi + 1} 小节 · 第 ${np.ei + 1} 个音`;
   setNpStr(String(np.string));
+  setNpStrum(np.strum);
   $('npTech').querySelectorAll('button').forEach(b => { const v = np.tech.has(b.dataset.t); b.classList.toggle('on', v); b.setAttribute('aria-pressed', v); });
   $('npDel').hidden = $('npAdd').hidden = add;
   const curT = durToTicks(np.dur);
@@ -184,7 +186,11 @@ async function saveNotePop() {
   if (old.tech && old.tech.includes('bend')) tech.push('bend'); // 推弦不在面板里，原样保留
   const n = { ...old, string: np.string, fret, tech };
   const retimed = durToTicks(np.dur) !== durToTicks(ev.dur);
-  const same = !retimed && np.ni >= 0 && old.string === n.string && old.fret === n.fret && [...(old.tech || [])].sort().join() === [...tech].sort().join();
+  const chord = $('npChord').value.trim().slice(0, 24);
+  const beatSame = chord === (ev.chord || '') && np.strum === (ev.strum || '');
+  const same = beatSame && !retimed && np.ni >= 0 && old.string === n.string && old.fret === n.fret && [...(old.tech || [])].sort().join() === [...tech].sort().join();
+  if (chord) ev.chord = chord; else delete ev.chord;
+  if (np.strum) ev.strum = np.strum; else delete ev.strum;
   if (same) { closeNotePop(); return; } // 没改就不保存（保存会清掉这一小节的 AI 不确定说明）
   if (np.ni >= 0) ev.notes[np.ni] = n; else ev.notes.push(n);
   ev.notes.sort((a, b) => a.string - b.string);
@@ -249,6 +255,10 @@ export function initEditor() {
   $('npTech').innerHTML = NP_TECH.map(k => `<button data-t="${k}" aria-pressed="false">${TECH_NAME[k]}</button>`).join('');
   $('npDur').innerHTML = DUR_CHOICES.map(([d, l]) => `<button data-d="${d}" aria-pressed="false">${l}</button>`).join('');
   setNpStr = UI.seg($('npStr'), '1', v => { np.string = +v; renderNotePop(); });
+  setNpStrum = UI.seg($('npStrum'), '', v => { np.strum = v; });
+  $('npChord').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); saveNotePop(); }
+  });
   $('editModeBtn').onclick = () => setEditMode(!get('ui.editMode'));
   $('npClose').onclick = closeNotePop;
   $('npSave').onclick = saveNotePop;

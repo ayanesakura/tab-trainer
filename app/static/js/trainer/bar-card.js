@@ -1,10 +1,11 @@
-// 侧栏的小节卡片：编号、技巧标签、提示、待核对说明、原谱截图。正在看的小节是 store 的 ui.bar。
+// 侧栏的小节卡片：编号、技巧标签、这一小节的和弦（弹唱谱）、提示、待核对说明、原谱截图。正在看的小节是 store 的 ui.bar。
 // 敲节奏打开时（rhythm.on）这张卡片收起来，位置让给节奏卡片。
 
 import { get, on } from './store.js';
 import { $, UI, esc } from './dom.js';
 import { barTags, warnText, isScore } from './view.js';
 import { images, loadImages } from './page-images.js';
+import { barChords, chordShapes, chordSVG } from './chords.js';
 
 function renderCard() {
   const bi = get('ui.bar'), s = get('song'), v = get('view');
@@ -12,6 +13,10 @@ function renderCard() {
   const sb = s.bars[bi];
   $('barNo').textContent = bi + 1;
   $('barTags').innerHTML = barTags(v.bars[bi] || []).map(t => `<span class="badge accent">${esc(t)}</span>`).join('');
+  const chords = barChords(s.bars, bi), shapes = chords.length ? chordShapes(s.bars) : {};
+  $('barChords').hidden = !chords.length;
+  $('barChords').innerHTML = chords.map(c => `<div class="bar-chord${c.carried ? ' carried' : ''}" title="${c.carried ? '从前面延续下来的和弦' : ''}">${
+    shapes[c.name] ? chordSVG(c.name, shapes[c.name]) : `<span class="cd-only">${esc(c.name)}</span>`}</div>`).join('');
   $('tipText').textContent = v.tips[bi] || '';
   const warn = [...(sb.warn || []).map(warnText), sb.uncertain].filter(Boolean);
   $('tipWarn').hidden = !warn.length;

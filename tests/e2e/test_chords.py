@@ -1,0 +1,100 @@
+"""弹唱谱：和弦名、和弦图、扫弦在谱面上画出来，播放时按扫弦处理。"""
+
+import os
+
+import pytest
+
+from tests.e2e.conftest import _seed
+
+pytestmark = pytest.mark.e2e
+
+C, D11 = [0, 1, 0, 2, 3, -1], [0, 3, 0, 4, 5, -1]
+
+
+def _strum(frets, direction, chord=None):
+    ev = {
+        "dur": "1",
+        "strum": direction,
+        "notes": [
+            {"string": i + 1, "fret": f, "tech": [], "grace": -1, "bend": 0}
+            for i, f in enumerate(frets)
+            if f >= 0
+        ],
+    }
+    return {**ev, "chord": chord} if chord else ev
+
+
+@pytest.fixture
+def chord_song(server):
+    """一首弹唱谱（曲库是整个会话共用的：测完删掉，不影响按曲子数量检查的测试）。"""
+    sid = _chord_song(server)
+    yield sid
+    server["store"].delete(sid)
+
+
+def _chord_song(server):
+    store = server["store"]
+    sid = _seed()
+
+    def apply(s):
+        for i, b in enumerate(s["bars"]):
+            first, second = (C, "C"), (D11, "D11")
+            b["events"] = [
+                _strum(first[0], "down", first[1] if i % 2 == 0 else None),
+                _strum(first[0], "up"),
+                _strum(second[0], "down", second[1]),
+                _strum(second[0], "up"),
+            ]
+            b["shapes"] = {"C": C, "D11": D11}
+
+    store.update(sid, apply)
+    return sid
+
+
+def test_chord_names_diagrams_and_strums_are_drawn(chord_song, trainer):
+    b = trainer(chord_song)
+    beats = b.js(
+        """tt.api.score.tracks[0].staves[0].bars[0].voices[0].beats.map(x => [x.chord ? x.chord.name : '', x.brushType])"""
+    )
+    assert beats == [["C", 2], ["", 1], ["D11", 2], ["", 1]]
+    names = b.js("""[...document.querySelectorAll('#score text')].map(t => t.textContent)""")
+    assert "C" in names and "D11" in names
+    if os.environ.get("E2E_SHOTS"):
+        b.screenshot(os.path.join(os.environ["E2E_SHOTS"], "chords.png"))
+    assert not b.errors, b.errors
+
+
+def test_bar_card_shows_the_bars_chords_and_the_editor_changes_them(server, chord_song, trainer):
+    import json
+    import urllib.request
+
+    sid = chord_song
+    b = trainer(sid)
+    b.js("tt.set('ui.bar', 1)")
+    b.wait_for("!document.getElementById('barChords').hidden")
+    names = b.js(
+        "[...document.querySelectorAll('#barChords .bar-chord')].map(x => [x.querySelector('.cd-name').textContent, x.classList.contains('carried')])"
+    )
+    # 第 2 小节开头没写和弦：延续第 1 小节最后的 D11（后面写的 D11 和它一样，不重复列）
+    assert names == [["D11", True]]
+    b.js("tt.set('ui.bar', 2)")
+    b.wait_for("document.querySelector('#barChords .cd-name').textContent === 'C'")
+    assert b.js("document.querySelectorAll('#barChords .bar-chord').length") == 2
+    if os.environ.get("E2E_SHOTS"):
+        b.screenshot(os.path.join(os.environ["E2E_SHOTS"], "chords-card.png"))
+
+    b.js("""(() => { tt.setEditMode(true);
+      const beat = tt.api.score.tracks[0].staves[0].bars[0].voices[0].beats[1];
+      tt.openNotePop(beat, beat.notes[0]); })()""")
+    b.wait_for("!document.getElementById('notePop').hidden")
+    assert b.js("document.getElementById('npChord').value") == ""
+    b.js("""(() => { document.getElementById('npChord').value = 'Am7';
+      document.querySelector('#npStrum button[data-v=""]').click();
+      document.getElementById('npSave').click(); })()""")
+    b.wait_for(
+        "(() => { const e = tt.get('song').bars[0].events[1]; return e.chord === 'Am7' && !e.strum; })()",
+        timeout=10,
+    )
+    saved = json.load(urllib.request.urlopen(f"{server['base']}/api/songs/{sid}"))["bars"][0]["events"][1]
+    assert saved.get("chord") == "Am7" and "strum" not in saved
+    assert not b.errors, b.errors

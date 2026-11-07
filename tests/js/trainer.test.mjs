@@ -150,3 +150,25 @@ test('GBK mojibake from Guitar Pro 3-5 / GPX files is recognised, Western titles
   assert.equal(scoreNeedsGbk({ title: 'Romance', artist: 'Anon', tracks: [{ name: 'Guitar' }] }, GP5), false);
   assert.equal(scoreNeedsGbk({ title: 'Canção do Mar', artist: 'Mötley Crüe', tracks: [{ name: 'Größe' }] }, GP5), false);
 });
+
+test('chord sheets: chords per bar (with the one carried in) and the diagram SVG', async () => {
+  const { barChords, chordShapes, chordSVG } = await import('../../app/static/js/trainer/chords.js');
+  const ev = (chord) => ({ dur: '1', notes: [], ...(chord ? { chord } : {}) });
+  const bars = [
+    { events: [ev('C'), ev(), ev('D11'), ev()], shapes: { C: [0, 1, 0, 2, 3, -1], D11: [0, 3, 0, 4, 5, -1] } },
+    { events: [ev(), ev(), ev('Em'), ev('Em')], shapes: { Em: [0, 0, 0, 2, 2, 0] } },
+    { events: [ev('G')] },
+    { events: [ev()] },
+  ];
+  assert.deepEqual(barChords(bars, 0), [{ name: 'C', carried: false }, { name: 'D11', carried: false }]);
+  assert.deepEqual(barChords(bars, 1), [{ name: 'D11', carried: true }, { name: 'Em', carried: false }]);
+  assert.deepEqual(barChords(bars, 2), [{ name: 'G', carried: false }]);
+  assert.deepEqual(barChords([{ events: [ev()] }], 0), []);
+  assert.deepEqual(Object.keys(chordShapes(bars)), ['C', 'D11', 'Em']);
+  const svg = chordSVG('C<x>', [0, 1, 0, 2, 3, -1]);
+  assert.match(svg, /C&lt;x&gt;/);
+  assert.equal((svg.match(/class="cd-dot"/g) || []).length, 3);
+  assert.equal((svg.match(/class="cd-open"/g) || []).length, 2);
+  assert.match(svg, />×</);
+  assert.match(chordSVG('Bm7', [7, 7, 7, 9, 9, 7]), /class="cd-base">7</);
+});
