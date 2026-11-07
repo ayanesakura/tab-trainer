@@ -3,7 +3,9 @@
 // 麦克风调音器（tuner.js）也共用这里的 AudioContext。
 
 import { get } from './store.js';
-import { mtof, noteMidi, T3 } from './view.js';
+import { mtof, noteMidi, T3, STD_MIDI } from './view.js';
+
+const STD_VIEW = { open: Object.fromEntries(STD_MIDI.map((m, i) => [i + 1, m])), capo: 0 };
 
 export let ac = null;
 let bus, gtGain;
@@ -108,7 +110,7 @@ function slideTo(s, midi, when) {
   v.rate = newRate;
 }
 function playEvent(e, when) {
-  const v = get('view') || { open: { 1: 64, 2: 59, 3: 55, 4: 50, 5: 45, 6: 40 }, capo: 0 }; // 按曲子的调弦和变调夹
+  const v = get('view') || STD_VIEW; // 按曲子的调弦和变调夹
   const ns = [...e.notes].sort((a, b) => b.s - a.s);
   ns.forEach((n, i) => {
     const tk = n.tech, t = when + (tk.has('roll') ? i * 0.045 : 0), m = noteMidi(n, v);

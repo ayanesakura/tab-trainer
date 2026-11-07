@@ -2,7 +2,7 @@
 // 小节详情里显示这一小节的记录。
 
 import { get, set, on } from './store.js';
-import { $, SONG_ID } from './dom.js';
+import { $, songUrl } from './dom.js';
 import { practiceText } from './view.js';
 
 const practice = { ids: [], t: 0 };
@@ -18,7 +18,7 @@ function flush(loopDone) {
   if (!get('play.playing')) practice.ids = [];
   if (!loopDone && seconds < 2) return; // 点一下就停的不算
   const body = JSON.stringify({ bar_ids: ids, loops: loopDone ? 1 : 0, bpm: get('play.bpm'), seconds: Math.round(seconds) });
-  fetch(`/api/songs/${SONG_ID}/practice`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true })
+  fetch(songUrl('/practice'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true })
     .then(r => (r.ok ? r.json() : null)).then(p => { if (p) set('song.practice', p); }).catch(() => {});
 }
 

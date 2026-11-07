@@ -2,7 +2,7 @@
 // 不碰 DOM、不读 store，Node 测试直接导入（tests/js/trainer.test.mjs）。
 
 import { toAlphaTex, durToTicks } from '../score.js';
-import vocab from '../vocab.json' with { type: 'json' };
+import { STRINGS, STANDARD, TECH_NAME, WARN_CODES, parseDur } from '../vocab.js';
 
 export const NN = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 export const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
@@ -10,17 +10,21 @@ export const mname = m => NN[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
 /** 音名的显示写法：F#3 → F♯3（输入框里两种都认，见 tuningInput） */
 export const showNote = s => String(s ?? '').replace(/#/g, '♯');
 export const tuningInput = s => String(s ?? '').trim().replace(/♯/g, '#').replace(/♭/g, 'b');
-const frac = s => { const [a, b] = String(s).split('/'); return b === undefined ? +a : +a / +b; };
 export const T3 = 1 / 3, S6 = 1 / 6; // 三连音、六连音的时值（拍）
-export const TECH_NAME = Object.fromEntries(vocab.techs.map(t => [t.code, t.name]));
-export const STRINGS = vocab.instrument.strings;
-const STD_MIDI = [64, 59, 55, 50, 45, 40];
+const NOTE_PC = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+/** 音名 → MIDI（E4 → 64、F#3 / F♯3 → 54），读不懂返回 NaN */
+export function nameToMidi(name) {
+  const m = /^([A-G])([#♯b♭]?)(-?\d)$/.exec(String(name ?? '').trim());
+  if (!m) return NaN;
+  return NOTE_PC[m[1]] + ({ '#': 1, '♯': 1, b: -1, '♭': -1 }[m[2]] || 0) + (+m[3] + 1) * 12;
+}
+export const STD_MIDI = STANDARD.map(nameToMidi); // 标准调弦，1 弦 → 6 弦
 const HARM = { 12: 12, 24: 24, 7: 19, 19: 19, 5: 24, 4: 28, 9: 28, 16: 28, 3: 31, 2: 36 }; // 自然泛音品位 → 比空弦高几个半音
 
 /** 小节要不要核对：后端给了 needs_review 就用它，旧数据按 warn / uncertain 推。 */
 export const needsReview = b => (b.needs_review !== undefined ? !!b.needs_review : !!((b.warn && b.warn.length) || b.uncertain));
 /** 警告的文字：新格式 {code, msg}，旧格式是字符串 */
-export const warnText = w => (w && typeof w === 'object' ? w.msg || vocab.warn_codes[w.code] || '' : String(w ?? ''));
+export const warnText = w => (w && typeof w === 'object' ? w.msg || WARN_CODES[w.code] || '' : String(w ?? ''));
 
 /** 原谱的一行是一段：[{sys, a, z}]（小节下标） */
 export function sectionsOf(bars) {
@@ -52,7 +56,7 @@ export function deriveView(song) {
         .filter(n => n.string >= 1 && n.string <= STRINGS && Number.isFinite(n.fret)) // 非法弦号会让音高变成 NaN，播放卡死
         .map(n => ({ s: n.string, f: n.fret, tech: new Set(n.tech || []), grace: n.grace >= 0 ? n.grace : null, bend: Number.isFinite(n.bend) ? n.bend : 0 }));
       const tech = new Set(); notes.forEach(n => n.tech.forEach(k => tech.add(k)));
-      const d = frac(e.dur), r = { t, d, notes, tech, bar: bi, idx: 0 };
+      const d = parseDur(e.dur), r = { t, d, notes, tech, bar: bi, idx: 0 };
       t += d;
       return r;
     }).filter(e => e.t < barLens[bi] - 1e-9); // 时值超出小节长度的部分不播放（会在提示里标出）

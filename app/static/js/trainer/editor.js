@@ -1,12 +1,12 @@
 // 修改谱子（只对识别出来的曲子）：小节的 JSON 编辑器、重新识别一行、在谱面上点音符改音，以及撤销。
 
 import { get, set, on } from './store.js';
-import { $, UI, setButton, request, withBusy, SONG_ID } from './dom.js';
+import { $, UI, setButton, songUrl } from './dom.js';
+import { put, post, withBusy } from '../lib/api.js';
 import { DUR_CHOICES, durToTicks, eventIndexAt, retimeEvent } from '../score.js';
-import { TECH_NAME, STRINGS } from './view.js';
+import { TECH_NAME, STRINGS } from '../vocab.js';
 import { stop, setPlayerHooks } from './player.js';
 import { refresh } from './song.js';
-import { openLayer, closeLayer } from './layer.js';
 
 // ---------------------------------------------------------------------
 // 修改小节（JSON）、重新识别这一行
@@ -45,7 +45,7 @@ async function putBar(barId, events, msg, isUndo = false) {
   try {
     const body = { events };
     if (s.rev !== undefined) body.rev = s.rev;
-    await request('PUT', `/api/songs/${SONG_ID}/bars/${encodeURIComponent(barId)}`, body);
+    await put(songUrl(`/bars/${encodeURIComponent(barId)}`), body);
   } catch (e) {
     if (entry) undoStack.splice(undoStack.lastIndexOf(entry), 1);
     UI.toast(e.message || '保存失败', 'err', 4000);
@@ -72,7 +72,7 @@ const LEGEND_PLAY = '点小节 = 循环这一小节 · <kbd>Shift</kbd> + 点 = 
 const LEGEND_EDIT = '改音：点音符改弦、品、技巧和时值 · 点休止符加音 · <kbd>Enter</kbd> 保存 · <kbd>Esc</kbd> 关闭 · <kbd>' + UNDO_KEY + '</kbd> 撤销';
 // 改音面板里的技巧（推弦不在面板里，原样保留）
 const NP_TECH = ['h', 'p', 'sl', 'si', 'pm', 'x', 'nh', 'ah', 'vib', 'roll'];
-let np = null, pendingClick = null, setNpStr = null;
+let np = null, npLayer = null, pendingClick = null, setNpStr = null;
 const pointer = { x: 0, y: 0 };
 
 export function setEditMode(v) {
@@ -105,12 +105,14 @@ export function openNotePop(beat, note) {
   if (!ev) return;
   const ni = note ? ev.notes.findIndex(n => n.string === STRINGS + 1 - note.string) : -1; // alphaTab 的弦号 1 = 最低音弦
   const cur = ni >= 0 ? ev.notes[ni] : null;
+  if (npLayer) npLayer.close('replaced'); // 点了另一个音：换成新的
   np = { bi, ei, ni, barId: s.bars[bi].id, snap: s.bars[bi].events, string: cur ? cur.string : freeString(ev, note ? STRINGS + 1 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []), dur: ev.dur };
   set('ui.bar', bi);
   renderNotePop();
   $('npFret').value = np.fret;
   const card = $('scoreCard').getBoundingClientRect(), pop = $('notePop');
-  openLayer(pop, { onClose: () => { np = null; }, inside: el => !!el.closest('#score'), focus: $('npFret') });
+  pop.hidden = false;
+  npLayer = UI.layer(pop, { ignore: [$('score')], focus: $('npFret'), onClose: () => { npLayer = null; np = null; pop.hidden = true; } });
   const x = Math.max(8, Math.min(pointer.x - card.left + 14, card.width - pop.offsetWidth - 8));
   const y = pointer.y - card.top + 14;
   pop.style.left = x + 'px'; pop.style.top = y + 'px';
@@ -142,7 +144,7 @@ function renderNotePop() {
   $('npMsg').textContent = msg;
   $('npSave').disabled = clash || !durOk;
 }
-function closeNotePop() { closeLayer($('notePop')); np = null; }
+function closeNotePop() { if (npLayer) npLayer.close(); np = null; $('notePop').hidden = true; }
 const npStep = d => { if (!np) return; np.fret = Math.max(0, Math.min(30, (parseInt($('npFret').value, 10) || 0) + d)); $('npFret').value = np.fret; };
 
 async function saveNotePop() {
@@ -200,10 +202,11 @@ export function initEditor() {
     const bar = curBar();
     if (!bar) return;
     const si = bar.system, row = get('song').bars.filter(b => b.system === si).map(b => b.n);
-    if (!confirm(`重新识别第 ${row[0]}–${row[row.length - 1]} 小节？\n\n这一行的手工修改、提示和问答都会被替换。`)) return;
+    const ok = await UI.confirm('这一行的手工修改、提示和问答都会被替换。', { title: `重新识别第 ${row[0]}–${row[row.length - 1]} 小节？`, ok: '重新识别' });
+    if (!ok) return;
     await withBusy($('reparseBtn'), async () => {
       try {
-        await request('POST', `/api/songs/${SONG_ID}/systems/${si}/reparse`, { hint: $('hintInput').value });
+        await post(songUrl(`/systems/${si}/reparse`), { hint: $('hintInput').value });
         UI.toast('已开始重新识别这一行', 'info');
         $('hintInput').value = '';
       } catch (e) { UI.toast(e.message, 'err', 5000); }

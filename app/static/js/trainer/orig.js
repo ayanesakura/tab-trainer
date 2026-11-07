@@ -5,9 +5,9 @@ import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
 import { barBox } from './player.js';
 import { images } from './bar-card.js';
-import { openLayer, closeLayer } from './layer.js';
 import { needsReview } from './view.js';
 
+let origLayer = null;
 const hasOrig = bi => { const s = get('song'), v = get('view'); return !!(s && v && s.kind !== 'score' && v.regions[bi]); };
 
 function placeBtn() {
@@ -74,11 +74,10 @@ export function initOrig() {
     if (k) { e.preventDefault(); e.stopPropagation(); k(); }
   });
   on('ui.orig', (bi, old) => {
-    if (bi >= 0 && old < 0) openLayer(modal, { onClose: () => set('ui.orig', -1), outside: false, focus: $('origClose') });
-    if (bi < 0) closeLayer(modal);
+    if (bi >= 0 && old < 0) origLayer = UI.layer(modal, { modal: true, focus: $('origClose'), onClose: () => { origLayer = null; set('ui.orig', -1); } });
+    if (bi < 0 && origLayer) origLayer.close();
     draw();
   });
-  modal.addEventListener('mousedown', e => { if (e.target === modal) set('ui.orig', -1); });
   on(['ui.pick', 'play.playing', 'ui.renderGen', 'view'], placeBtn);
   document.addEventListener('tt-images', draw);
   addEventListener('resize', draw);

@@ -1,7 +1,8 @@
 // 小节 AI 教练：针对正在看的小节向 AI 提问，问答记在小节上。
 
 import { get, set, on } from './store.js';
-import { $, UI, esc, setButton, request, SONG_ID } from './dom.js';
+import { $, UI, esc, setButton, songUrl } from './dom.js';
+import { post } from '../lib/api.js';
 
 let asking = null; // 正在等回答的小节 id
 
@@ -27,7 +28,7 @@ async function ask() {
   const bar = get('song').bars[bi];
   asking = bar.id; render();
   try {
-    const d = await request('POST', `/api/songs/${SONG_ID}/bars/${encodeURIComponent(bar.id)}/ask`, { question: q });
+    const d = await post(songUrl(`/bars/${encodeURIComponent(bar.id)}/ask`), { question: q });
     const k = get('song').bars.findIndex(x => x.id === bar.id);
     if (k >= 0) set(`song.bars.${k}.qa`, d.qa);
     // 还停在这个小节、输入框里也还是刚才的问题时才清空（换到别的小节新打的字不能丢）
