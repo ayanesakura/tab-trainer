@@ -75,3 +75,16 @@ def test_two_columns_split_and_read_left_column_first():
     assert [s["x0"] < 700 for s in systems] == [True, True, False, False]  # 先左栏再右栏
     assert systems[0]["top"] < systems[1]["top"]
     assert all(b[1] - b[0] < 400 for s in systems for b in s["bars"])  # 栏间空白没有变成假小节
+
+
+def test_dashed_let_ring_line_above_tab_is_not_a_seventh_string():
+    # GP / alphaTab 导出的谱子：六线谱上方一线距处有一条 “let ring - - -” 虚线，覆盖率和谱线差不多
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        y = top + 110 - 14
+        for x in range(70, 1130, 12):
+            d.line([(x, y), (x + 9, y)], fill=120)
+    r = detect_page(img)
+    assert len(r["systems"]) == 2
+    assert all(len(s["bars"]) == 3 for s in r["systems"])

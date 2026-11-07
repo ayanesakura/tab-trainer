@@ -142,6 +142,7 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
                     "duration_ok": bool(pb) and not any("时值" in w for w in pb.get("warn", [])),
                     "pred_events": pb["events"] if pb else None,
                     "pred_uncertain": pb.get("uncertain", "") if pb else "",
+                    "pred_warn": pb.get("warn", []) if pb else [],
                 }
             )
     price = PRICES.get(price_model or cfg.model, (0, 0))
@@ -265,7 +266,8 @@ def main() -> None:
         return
 
     rep = run(a.song, cfg, systems, a.concurrency, price_model)
-    out = store.DATA / "evals" / f"{time.strftime('%Y%m%d-%H%M%S')}-{a.song}"
+    model_tag = (a.model or cfg.model or "").split("/")[-1]
+    out = store.DATA / "evals" / f"{time.strftime('%Y%m%d-%H%M%S')}-{a.song}-{model_tag}"
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.json").write_text(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
     md = to_markdown(rep)

@@ -85,7 +85,18 @@ def _group_staves(lines: list[float], h: int) -> list[list[float]]:
             cur = [y]
     if cur:
         staves.append(cur)
-    return [s for s in staves if len(s) in (5, 6)]
+    return [t for t in (_trim(s) for s in staves) if len(t) in (5, 6)]
+
+
+def _trim(group: list[float]) -> list[float]:
+    """一组超过 6 根“线”：多出来的通常是贴着谱表的虚线标记（let ring、P.M. 的延续线）。
+    从两端去掉和中位线距差得最多的那根，直到剩 6 根。"""
+    g = list(group)
+    while len(g) > 6:
+        gaps = np.diff(g)
+        med = float(np.median(gaps))
+        g = g[1:] if abs(gaps[0] - med) >= abs(gaps[-1] - med) else g[:-1]
+    return g
 
 
 def detect_page(img: Image.Image) -> dict:
