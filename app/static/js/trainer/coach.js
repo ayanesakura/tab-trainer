@@ -3,6 +3,7 @@
 import { get, set, on } from './store.js';
 import { $, UI, esc, setButton, songUrl } from './dom.js';
 import { post } from '../lib/api.js';
+import { holdBarWhile } from './player.js';
 
 let asking = null; // 正在等回答的小节 id
 
@@ -47,4 +48,6 @@ export function initCoach() {
   $('askBtn').onclick = ask;
   $('askInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); ask(); } });
   on(['ui.bar', 'song.bars'], render);
+  // 播放中打字提问：侧栏停在正在看的小节，问题不会挂到按回车那一刻光标走到的小节上
+  holdBarWhile(() => document.activeElement === $('askInput'));
 }

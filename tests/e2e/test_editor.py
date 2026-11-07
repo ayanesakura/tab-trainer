@@ -147,3 +147,17 @@ def test_quick_second_edit_waits_for_the_first_save(server, trainer, image_song)
     assert frets == [7, 5] and b.js("tt.editor.undoBars") == ["bar3", "bar3"]
     assert not b.js(CONFLICT)
     assert not b.errors, b.errors
+
+
+def test_typing_a_question_keeps_the_bar_while_playing(trainer):
+    """播放中在“问 AI”里打字：侧栏停在正在看的小节，问题不会挂到光标后来走到的小节上。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 2); tt.setTempo(240); tt.set('ui.bar', 0); true")
+    b.js("document.getElementById('askInput').focus(); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    b.wait_for("tt.api.tickPosition > tt.api.playbackRange.startTick + 4 * 960 + 100", timeout=8)
+    assert b.js("tt.get('ui.bar')") == 0
+    b.js("document.getElementById('askInput').blur(); true")
+    b.wait_for("tt.get('ui.bar') > 0", timeout=8)  # 不在输入了就照常跟着播放
+    b.js("tt.stop(); true")
+    assert not b.errors, b.errors

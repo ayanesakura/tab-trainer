@@ -32,6 +32,9 @@ export const getApi = () => api;
 // 曲子相关的处理由 song.js / editor.js 注册，敲节奏由 rhythm-drill.js 注册 drill: {start, stop, loopChanged}（播放模块不反过来依赖它们）
 const hooks = { scoreLoaded: null, error: null, editClick: null, drill: null };
 export function setPlayerHooks(h) { Object.assign(hooks, h); }
+// 侧栏正在用的时候（小节编辑器开着、正在输入问 AI 的问题）播放光标不切换侧栏的小节，点谱面照常切换
+const holds = [];
+export function holdBarWhile(fn) { holds.push(fn); }
 
 const playing = () => get('play.playing');
 const nBars = () => (get('view') ? get('view').bars.length : 0);
@@ -365,7 +368,7 @@ function onBeat(beat, clicked) {
   const bi = beat.voice.bar.index, evs = v.bars[bi];
   if (!clicked) updateFollowBtn();
   if (!clicked) setStatus(`第 ${bi + 1} 小节 · 第 ${Math.floor(beat.playbackStart / TICKS) + 1} 拍`, `第 ${get('play.loops') + 1} 遍`);
-  if (bi < v.bars.length && (clicked || !(hooks.holdBar && hooks.holdBar()))) set('ui.bar', bi);
+  if (bi < v.bars.length && (clicked || !holds.some(f => f()))) set('ui.bar', bi);
   if (!evs || !evs.length) return;
   const cur = evs[eventIndexAt(v.beatMap[bi] || [0], beat.playbackStart)];
   if (!cur) return;
