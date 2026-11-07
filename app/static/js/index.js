@@ -158,6 +158,7 @@ function rangeText(s) {
   if (l.a_n === 1 && l.b_n === s.bars && s.bars > 1) return '全曲';
   return l.a_n === l.b_n ? `第 ${l.a_n} 小节` : `第 ${l.a_n}–${l.b_n} 小节`;
 }
+// 纯文本（ago() 遇到认不出的时间会原样返回），拼进 HTML 时要 esc
 function practiceText(s) {
   const p = s.practice;
   if (!p || !p.last_at) return '';
@@ -165,7 +166,8 @@ function practiceText(s) {
   return [ago(p.last_at), range && (range === '全曲' ? '练全曲' : `练到${range}`), p.total_seconds > 0 && `累计 ${duration(p.total_seconds)}`].filter(Boolean).join(' · ');
 }
 
-// 需要注意的状态（忙、出错、待核对、警告）；一切正常时返回 ''，小节数放在说明行里
+// 需要注意的状态（忙、出错、待核对、警告）；一切正常时返回 ''，小节数放在说明行里。
+// 下面拼 HTML 的函数里，后端来的字段（包括数字）一律 esc：曲子包、练习记录可能被改过
 function stateHTML(s) {
   const n = s.notice;
   if (s.status === 'corrupt') return `<span class="dot err"></span><span class="err-text">${esc(n && n.msg)}（可在“…”菜单删除）</span>`;
@@ -173,10 +175,10 @@ function stateHTML(s) {
     const p = s.progress || {};
     const pct = p.total ? Math.round(100 * p.done / p.total) : 6;
     const unit = s.recognizing ? '行' : '批';
-    return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${p.done}/${p.total} ${unit}` : ''}</span><span class="progress" role="progressbar" aria-label="进度" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></span>`;
+    return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${esc(p.done)}/${esc(p.total)} ${unit}` : ''}</span><span class="progress" role="progressbar" aria-label="进度" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></span>`;
   }
   if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">${isScore(s) ? '曲谱读取失败' : '识别失败'}${n ? `：${esc(n.msg)}` : ''}</span>`;
-  if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${s.bars} 小节` : ''}</span>`;
+  if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${esc(s.bars)} 小节` : ''}</span>`;
   const review = s.needs_review_bars || 0;
   const parts = [];
   if (review) parts.push(`<span class="badge warn" title="有 ${review} 个小节需要对照原谱核对">${review} 小节待核对</span>`);
@@ -185,7 +187,7 @@ function stateHTML(s) {
 }
 function barsText(s) {
   if (s.status === 'corrupt' || s.busy || s.status === 'error' || s.status === 'cancelled') return '';
-  return s.bars ? `${s.bars} 小节` : isScore(s) ? '已导入' : '';
+  return s.bars ? `${esc(s.bars)} 小节` : isScore(s) ? '已导入' : '';
 }
 
 // AI 花费：早期曲子只记了 token，按 Opus 价格估算
@@ -196,7 +198,7 @@ function costText(s) {
   if (s.unpriced_tokens) tip.push(`其中 ${s.unpriced_tokens.toLocaleString()} token 用的是自定义模型，没算进金额`);
   const usd = s.cost_usd >= 0.005 ? '$' + s.cost_usd.toFixed(2) : s.cost_usd > 0 ? '<$0.01' : '';
   const text = usd ? `AI 花费${s.cost_estimated ? '约' : ''} ${usd}` : `AI 用量 ${s.tokens.toLocaleString()} token`;
-  return `<span class="cost" title="${esc(tip.join('；'))}">${text}${s.unpriced_tokens && usd ? ' +' : ''}</span>`;
+  return `<span class="cost" title="${esc(tip.join('；'))}">${esc(text)}${s.unpriced_tokens && usd ? ' +' : ''}</span>`;
 }
 
 function rowHTML(s) {
@@ -217,7 +219,7 @@ function rowHTML(s) {
     <span class="src-ic" title="${esc(src ? `来源：${src}` : '')}">${icon(SOURCE_ICON[s.source_type] || 'music', 18)}</span>
     <div class="who"><div class="name">${title}${tags}</div>
       ${state ? `<div class="state">${state}</div>` : ''}
-      ${prac ? `<div class="sub practice">${icon('clock', 12)}<span>${prac}</span></div>` : ''}
+      ${prac ? `<div class="sub practice">${icon('clock', 12)}<span>${esc(prac)}</span></div>` : ''}
       ${sub ? `<div class="sub">${sub}</div>` : ''}</div>
     <div class="ctl"${selecting ? ' hidden' : ''}>${action}
       <button class="icon-btn sm" data-more="${esc(s.id)}" data-k="more" title="更多" aria-label="${esc(s.title)}：更多操作" aria-haspopup="menu">${icon('more')}</button></div>

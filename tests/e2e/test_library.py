@@ -259,3 +259,33 @@ def test_practice_line_and_resume_link(server, browser):
     b.js("document.querySelector('#sortSeg [data-v=practiced]').click(); true")
     assert b.js("document.querySelector('.song-row').dataset.id") == img
     assert not b.errors, b.errors
+
+
+def _patch_songs_response(b, fn_js):
+    """把页面里 /api/songs 的返回改一下（fn_js：songs => void），不动真实数据。"""
+    b.js(f"""(() => {{ const of = window.fetch; window.fetch = async (u, init) => {{
+      const r = await of(u, init);
+      if (!String(u).endsWith('/api/songs')) return r;
+      const songs = await r.json(); ({fn_js})(songs);
+      return new Response(JSON.stringify(songs), {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }});
+    }}; return true; }})()""")
+
+
+def test_practice_line_escapes_backend_text(server, browser):
+    # 练习时间认不出时 ago() 原样返回：不能当 HTML 插进去
+    img = server["image"]
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{img}\"]')")
+    evil = '<img src=x onerror="window.__xss=true">'  # 不能带数字，否则 Date 能“认出”它
+    _patch_songs_response(
+        b,
+        f"songs => songs.forEach(s => {{ if (s.id === '{img}') {{ s.practice = {{ last_at: {json.dumps(evil)}, total_seconds: 60, last: null }}; }} }})",
+    )
+    b.js("tt.reload().then(() => true)")
+    row = f"document.querySelector('.song-row[data-id=\"{img}\"]')"
+    b.wait_for(f"!!{row}.querySelector('.practice')")
+    assert b.js(f"{row}.querySelector('.practice img')") is None
+    assert evil in b.js(f"{row}.querySelector('.practice').textContent")
+    assert not b.js("window.__xss")
+    assert not b.errors, b.errors
