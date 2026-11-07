@@ -1,5 +1,7 @@
 """曲库：上传、Guitar Pro / MusicXML 导入与重新转换、手工修改、启动恢复。"""
 
+import json
+
 import pytest
 
 from app import errors, music, practice, recognize, songs, store
@@ -53,6 +55,22 @@ def test_recover_interrupted_parse(data_dir):
     assert song["status"] == "error" and "中断" in song["notice"]["msg"] and song["notice"]["kind"] == "error"
     assert song["activity"] is None
     assert song["systems"][1]["status"] == "error"
+
+
+def _bad_song(data_dir, sid: str, content: dict) -> None:
+    d = data_dir / "songs" / sid
+    d.mkdir(parents=True)
+    (d / "song.json").write_text(json.dumps({"schema_version": 2, "source_type": "image", **content}))
+
+
+def test_recover_interrupted_skips_structurally_bad_songs(data_dir):
+    """song.json 是合法 JSON、但结构不对（手改坏了）：跳过这一首，不能让服务起不来。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    store.update(sid, lambda s: s.update(status="parsing"))
+    _bad_song(data_dir, "20260101-000000-aaaaaa", {"status": "ready", "bars": [None]})
+    _bad_song(data_dir, "20260101-000000-aaaaab", {"status": "parsing", "systems": [1]})
+    songs.recover_interrupted()
+    assert store.load(sid)["status"] == "error"  # 别的曲子照常恢复
 
 
 def test_guitar_pro_upload_skips_ai_and_keeps_file(data_dir):

@@ -389,3 +389,20 @@ def test_old_bundle_with_a_single_warning_string_imports(data_dir):
     assert (
         s["title"] == "a" and s["meta"] is None and s["bars"][0]["warn"] == [{"code": "other", "msg": "oops"}]
     )
+
+
+def test_export_whole_library_skips_a_structurally_bad_song(data_dir):
+    """曲库里有一首 song.json 结构不对（合法 JSON）：导出整个曲库时跳过它，其余照常导出。"""
+    sid = _image_song()
+    d = data_dir / "songs" / "20260101-000000-aaaaaa"
+    d.mkdir(parents=True)
+    (d / "song.json").write_text(json.dumps({"schema_version": 2, "source_type": "image", "bars": [None]}))
+    path, _ = bundles.export_bundle([])
+    try:
+        names = _zip(path).namelist()
+        assert f"songs/{sid}/song.json" in names
+        assert not any("aaaaaa" in n for n in names)
+    finally:
+        path.unlink()
+    with pytest.raises(Invalid):
+        bundles.export_bundle(["20260101-000000-aaaaaa"])

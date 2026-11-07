@@ -407,10 +407,9 @@ def recover_interrupted() -> None:
     for sid in store.song_ids():
         try:
             song = store.load(sid)
-        except (LookupError, ValueError):  # 不存在 / 数据坏了
-            continue
-        if state.recover(song) or song.get("_migrated"):
-            try:
+            if state.recover(song) or song.get("_migrated"):
                 store.save(song)
-            except LookupError:
-                continue
+        except (LookupError, ValueError):  # 不存在 / 刚被删掉 / 数据坏了
+            continue
+        except Exception:  # 合法 JSON 但结构不对（手改坏了之类）：只跳过这一首，服务照常启动
+            log.exception("song=%s 启动恢复时跳过：曲子数据格式不对", sid)

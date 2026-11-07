@@ -73,6 +73,9 @@ def _all_ids() -> list[str]:
             store.load(sid)
         except (CorruptSong, NotFound):
             continue
+        except Exception:  # 合法 JSON 但结构不对（手改坏了之类）：只跳过这一首，其余照常导出
+            log.exception("song=%s 导出时跳过：曲子数据格式不对", sid)
+            continue
         out.append(sid)
     return out
 
@@ -92,6 +95,9 @@ def export_bundle(ids: list[str]) -> tuple[Path, str]:
             raise Invalid(f"曲子不存在：{sid}") from None
         except CorruptSong:
             raise Invalid(f"曲子 {sid} 的数据已损坏，不能导出") from None
+        except Exception:
+            log.exception("song=%s 无法导出：曲子数据格式不对", sid)
+            raise Invalid(f"曲子 {sid} 的数据格式不对，不能导出") from None
 
     fd, tmp = tempfile.mkstemp(prefix="tab-trainer-export-", suffix=".zip")
     os.close(fd)
