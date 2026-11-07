@@ -103,12 +103,32 @@ def add_usage(s: dict, usage: dict, before: dict | None = None) -> None:
     s["usage"] = {k: old.get(k, 0) + usage[k] - (before or {}).get(k, 0) for k in USAGE_KEYS}
 
 
+REASON_MAX = 200
+
+
+def upstream_reason(e: anthropic.APIStatusError) -> str:
+    """服务端给的错误说明（只取 error.message 字段，截断），不带请求内容和 key。
+    经过网关时 403 不一定是 key 的问题——例如网关把请求转给了只接受某种客户端的上游渠道，原因只在这里。"""
+    body = e.body
+    msg = None
+    if isinstance(body, dict):
+        err = body.get("error")
+        msg = err.get("message") if isinstance(err, dict) else body.get("message")
+    if not isinstance(msg, str) or not msg.strip():
+        return ""
+    msg = " ".join(msg.split())
+    return msg if len(msg) <= REASON_MAX else msg[: REASON_MAX - 1] + "…"
+
+
 def friendly(e: Exception) -> str:
     """把模型调用的异常翻译成用户能看懂、知道怎么处理的说明。"""
     if isinstance(e, anthropic.AuthenticationError):
         return "API key 无效，请在首页“模型设置”里检查。"
     if isinstance(e, anthropic.PermissionDeniedError):
-        return "API key 没有调用该模型的权限。"
+        reason = upstream_reason(e)
+        return "模型服务拒绝了这次请求（403）" + (
+            f"：{reason}" if reason else "，可能是 API key 没有调用该模型的权限。"
+        )
     if isinstance(e, anthropic.NotFoundError):
         return "模型不存在或无权访问，请检查“模型设置”里的模型名。"
     if isinstance(e, anthropic.RateLimitError):
