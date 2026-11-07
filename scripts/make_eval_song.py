@@ -286,8 +286,11 @@ def main() -> None:
         for x_a, x_b in s["spans"]:
             tb = truth["bars"][k]
             events = pipeline.clean_events(tb["events"])
+            ts = pipeline.clean_time_signature(tb.get("time_signature") or meta["time_signature"])
+            own = {"time_signature": ts} if ts and ts != meta["time_signature"] else {}
             bars.append(
                 {
+                    **own,
                     "id": pipeline.new_bar_id(),
                     "n": k + 1,
                     "system": si,
@@ -296,7 +299,7 @@ def main() -> None:
                     "events": events,
                     "tip": "",
                     "uncertain": "",
-                    "warn": pipeline.check_bar(events, meta),
+                    "warn": pipeline.check_bar(events, meta, bar=own),
                     **pipeline.clean_repeats(tb),
                 }
             )
