@@ -64,6 +64,11 @@ function renderHeader() {
     m.tuning.forEach((n, i) => { $('mT' + (i + 1)).value = n; });
     $('mCapo').value = CAPO; $('mTs').value = (m.time_signature || [4, 4]).join('/');
   }
+  // GP / MusicXML：调弦、变调夹、拍号来自原文件（播放也按原文件），这里只能改曲名
+  const scoreSong = SONG.kind === 'score';
+  document.querySelectorAll('.meta-setting').forEach(el => { el.hidden = scoreSong; });
+  $('metaHead').textContent = scoreSong ? '曲名' : '识别的调弦 / 变调夹 / 拍号不对？';
+  if (scoreSong) $('metaMsg').textContent = '调弦、变调夹和拍号来自原文件，不能在这里改。';
 }
 
 function renderSections() {
@@ -184,7 +189,8 @@ function initSong() {
   $('metaSave').onclick = async () => {
     const tuning = [1, 2, 3, 4, 5, 6].map(i => $('mT' + i).value.trim());
     const ts = $('mTs').value.split('/').map(x => parseInt(x, 10));
-    const body = { title: $('mTitle').value, tuning, capo: parseInt($('mCapo').value || '0', 10), time_signature: ts };
+    const body = SONG.kind === 'score' ? { title: $('mTitle').value }
+      : { title: $('mTitle').value, tuning, capo: parseInt($('mCapo').value || '0', 10), time_signature: ts };
     const r = await fetch(`/api/songs/${SONG_ID}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (r.ok) UI.toast('已保存'); else UI.toast('保存失败：' + ((await r.json()).detail || r.status), 'err', 4000);
     if (r.ok) await refresh(true);

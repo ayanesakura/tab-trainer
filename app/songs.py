@@ -231,9 +231,9 @@ def set_derived(
     sid: str, meta_raw: dict, bars_raw: list, track: int = 0, derived: dict | None = None
 ) -> dict:
     """保存练习页从 GTP / MusicXML 解析出的调弦和小节。
-    derived 记下转换器和 alphaTab 的版本：它们升级后练习页会重新转换一次，这时同一音轨、小节数不变的话
-    按位置对上原来的小节，内容没变的保留 id、提示、问答和练习记录，变了的按“改过音”处理。
-    换音轨（或小节数变了）就是一首新的谱子，旧的讲解和练习记录都清掉。"""
+    derived 记下转换器和 alphaTab 的版本：它们升级后练习页会重新转换一次，这时同一音轨的话
+    把新旧小节对上（见 _carry_over），内容没变的保留 id、提示、问答和练习记录，变了的按“改过音”处理。
+    换音轨就是一首新的谱子，旧的讲解和练习记录都清掉。"""
 
     def apply(s):
         if not is_score(s):
@@ -241,7 +241,7 @@ def set_derived(
         meta = normalize_meta(meta_raw or {}, s.get("title", ""))
         bars = [_derived_bar(i, b or {}, meta) for i, b in enumerate(bars_raw or [])]
         old, track_n = s.get("bars") or [], int(track or 0)
-        if old and len(old) == len(bars) and int(s.get("track") or 0) == track_n:
+        if old and int(s.get("track") or 0) == track_n:
             _carry_over(s, meta, bars)
         else:
             s["plan"] = None
@@ -282,22 +282,37 @@ def _derived_bar(i: int, b: dict, meta: dict) -> dict:
 
 
 def _carry_over(s: dict, meta: dict, bars: list[dict]) -> None:
-    """重新转换同一个音轨：按位置把原来小节的 id 和 AI 内容搬到新小节上。"""
+    """重新转换同一个音轨：把原来小节的 id 和 AI 内容搬到新小节上。
+    按内容做序列比对（小节数变了也能对上，比如转换器改了反复记号的展开方式）：
+    内容一样的原样保留；对不上但位置相当的（比对里的“替换”段）保留 id 和练习记录，提示清掉、问答标成过时；
+    新多出来的是新小节，没了的小节连同它的练习记录一起去掉。"""
+    import difflib
+    import json
+
     old_meta = s.get("meta") or {}
     meta["title"] = old_meta.get("title") or meta["title"]  # 用户可能改过曲名
     setting_changed = staleness.setting_changed(old_meta, meta)
-    for prev, new in zip(s["bars"], bars, strict=True):
+    old = s["bars"]
+
+    def key(b):
+        return json.dumps([b["events"], b.get("time_signature")], sort_keys=True)
+
+    pairs = []  # (原来的小节, 新小节, 内容是否一样)
+    sm = difflib.SequenceMatcher(None, [key(b) for b in old], [key(b) for b in bars], autojunk=False)
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op in ("equal", "replace"):
+            pairs += [(old[i], bars[j], op == "equal") for i, j in zip(range(i1, i2), range(j1, j2))]
+    for prev, new, same in pairs:
         new["id"] = prev["id"]
         new["tip"], new["uncertain"] = prev.get("tip", ""), prev.get("uncertain", "")
         if prev.get("qa"):
             new["qa"] = prev["qa"]
-        same = prev["events"] == new["events"] and prev.get("time_signature") == new.get("time_signature")
         if setting_changed or not same:
             new["tip"] = ""
             staleness.mark_qa_stale(new)
             if not setting_changed:
                 staleness.invalidate_plan(s, new["id"])
-    if setting_changed:
+    if setting_changed or len(old) != len(bars):  # 小节编号整体移动了，练习建议里的小节号对不上
         staleness.invalidate_plan(s)
 
 
@@ -350,6 +365,11 @@ def edit_meta(sid: str, raw: dict) -> dict:
     def apply(s):
         old = s.get("meta") or {}
         s["meta"] = normalize_meta({**old, **raw}, strict=True)
+        if is_score(s) and staleness.setting_changed(old, s["meta"]):
+            # 播放用的是原文件：这里改了只会让指板、示范音和听到的对不上，重新转换时还会被文件里的设定覆盖
+            raise Invalid(
+                "Guitar Pro / MusicXML 曲子的调弦、变调夹和拍号来自原文件，不能在这里改（可以改曲名）"
+            )
         if staleness.setting_changed(old, s["meta"]) and (
             _recognizing(s) or any(x.get("status") == "parsing" for x in s.get("systems") or [])
         ):

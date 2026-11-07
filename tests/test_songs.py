@@ -114,8 +114,8 @@ def test_set_derived_per_bar_time_signature(data_dir):
     # 改音、改全曲拍号时也按小节自己的拍号检查
     song = songs.edit_bar(sid, b[1]["id"], [{"dur": "4", "notes": []}], None)
     assert song["bars"][1]["warn"] == ["时值合计 4 拍，应为 3 拍"]
-    song = songs.edit_meta(sid, {"time_signature": [2, 4]})
-    assert not song["bars"][2]["warn"] and song["bars"][0]["warn"]
+    with pytest.raises(ValueError, match="来自原文件"):
+        songs.edit_meta(sid, {"time_signature": [2, 4]})  # GP 曲子的拍号来自原文件
     # 清空的小节按它自己的长度补休止；AI 看到的文字里带拍号
     song = songs.edit_bar(sid, b[2]["id"], [], None)
     assert song["bars"][2]["events"] == [{"dur": "3", "notes": []}]
@@ -190,3 +190,46 @@ def test_restart_during_explain_restores_previous_status(data_dir):
     songs.recover_interrupted()
     song = store.load(sid)
     assert song["status"] == "cancelled" and "讲解生成中断" in song["error"] and "job" not in song
+
+
+def test_score_song_settings_come_from_the_file(data_dir):
+    """GP 曲子播放用的是原文件：调弦、变调夹、拍号不能改（改了指板和听到的对不上），曲名可以。"""
+    sid = songs.create_song([("曲子.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    songs.set_derived(sid, {"tuning": music.STANDARD, "capo": 2}, derived_bars(2))
+    for change in ({"capo": 5}, {"tuning": ["D4", "B3", "G3", "D3", "A2", "D2"]}, {"time_signature": [3, 4]}):
+        with pytest.raises(ValueError, match="来自原文件"):
+            songs.edit_meta(sid, change)
+    song = songs.edit_meta(sid, {"title": "新名字", "capo": 2})  # 设定没变，只改曲名
+    assert song["title"] == "新名字" and song["meta"]["capo"] == 2
+
+
+def test_rederive_with_a_different_bar_count_keeps_matching_bars(data_dir):
+    """转换器升级后小节数变了（比如反复记号展开方式变了）：按内容对上，没变的小节保留讲解和练习记录。"""
+    sid = songs.create_song([("曲子.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    meta = {"tuning": music.STANDARD}
+
+    def bar(f):
+        return {"events": [{"dur": "4", "notes": [{"string": 2, "fret": f}]}]}
+
+    song = songs.set_derived(sid, meta, [bar(f) for f in (1, 2, 3, 4)], derived={"version": 1})
+    ids = [b["id"] for b in song["bars"]]
+
+    def seed(s):
+        for i, b in enumerate(s["bars"]):
+            b["tip"] = f"提示 {i}"
+        s["plan"] = {"overview": "ok", "steps": []}
+        s["practice"] = {"bars": {i: {"loops": 3} for i in ids}}
+
+    store.update(sid, seed)
+    # 新的转换：第 2 小节后面多了一个小节，第 4 小节没了，第 3 小节内容变了
+    song = songs.set_derived(sid, meta, [bar(f) for f in (1, 2, 9, 7)], derived={"version": 2})
+    b = song["bars"]
+    assert [x["id"] for x in b[:2]] == ids[:2] and [x["tip"] for x in b[:2]] == ["提示 0", "提示 1"]
+    # 1 2 3 4 → 1 2 9 7：后两个是“替换”段，位置相当，保留 id 但提示清掉
+    assert [x["id"] for x in b[2:]] == ids[2:] and [x["tip"] for x in b[2:]] == ["", ""]
+    song = songs.set_derived(sid, meta, [bar(f) for f in (1, 2, 5, 9, 7)], derived={"version": 3})
+    b = song["bars"]
+    assert [x["id"] for x in b] == [ids[0], ids[1], b[2]["id"], ids[2], ids[3]] and b[2]["id"] not in ids
+    assert b[0]["tip"] == "提示 0" and b[2]["tip"] == ""
+    assert set(song["practice"]["bars"]) == set(ids)
+    assert song["plan"]["stale"] and song["plan"].get("stale_all")  # 小节号整体移动了

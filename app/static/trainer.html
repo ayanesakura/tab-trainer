@@ -150,14 +150,14 @@
       </div>
     </div>
 
-    <div class="section-title">识别的调弦 / 变调夹 / 拍号不对？</div>
+    <div class="section-title" id="metaHead">识别的调弦 / 变调夹 / 拍号不对？</div>
     <div class="card">
       <div class="meta-grid">
         <label>曲名<input class="input" id="mTitle"></label>
-        <label>1 弦（最细）<input class="input" id="mT1"></label><label>2 弦<input class="input" id="mT2"></label><label>3 弦<input class="input" id="mT3"></label>
-        <label>4 弦<input class="input" id="mT4"></label><label>5 弦<input class="input" id="mT5"></label><label>6 弦（最粗）<input class="input" id="mT6"></label>
-        <label>变调夹（品）<input class="input" id="mCapo" type="number" min="0" max="12"></label>
-        <label>拍号<input class="input" id="mTs" placeholder="4/4"></label>
+        <label class="meta-setting">1 弦（最细）<input class="input" id="mT1"></label><label class="meta-setting">2 弦<input class="input" id="mT2"></label><label class="meta-setting">3 弦<input class="input" id="mT3"></label>
+        <label class="meta-setting">4 弦<input class="input" id="mT4"></label><label class="meta-setting">5 弦<input class="input" id="mT5"></label><label class="meta-setting">6 弦（最粗）<input class="input" id="mT6"></label>
+        <label class="meta-setting">变调夹（品）<input class="input" id="mCapo" type="number" min="0" max="12"></label>
+        <label class="meta-setting">拍号<input class="input" id="mTs" placeholder="4/4"></label>
       </div>
       <div class="card-h" style="border-top:1px solid var(--line-2);border-bottom:0"><span class="hint" id="metaMsg">音名写法如 D2、F#3、C♯3。保存后示范音、指板、调弦表都会跟着变。</span><button class="btn primary sm" id="metaSave">保存</button></div>
     </div>
