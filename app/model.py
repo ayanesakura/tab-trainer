@@ -370,6 +370,8 @@ class SongView(_M):
     # 兼容旧前端，保留一版
     error: str | None = None  # = notice.msg
     running: bool = False  # = busy
+    kind: Literal["score", "image"] = "image"  # = source_type 是 gp / musicxml
+    job: Literal["explain", "pages"] | None = None  # = activity
 
 
 class LibraryPractice(_M):
@@ -405,3 +407,5 @@ class LibraryItem(_M):
     error: str | None = None
     warn_bars: int = 0
     last_practiced: str = ""
+    kind: Literal["score", "image"] = "image"
+    job: Literal["explain", "pages"] | None = None

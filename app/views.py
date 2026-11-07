@@ -12,6 +12,7 @@ from app import practice, state, store
 from app.errors import CorruptSong
 from app.jobs import jobs
 from app.llm import DEFAULT_MODEL, price_of
+from app.model import is_score
 
 # 存储里有、但不给前端的字段
 _HIDDEN = ("meta_user", "schema_version")
@@ -24,6 +25,17 @@ def _public(x: Any) -> Any:
     if isinstance(x, list):
         return [_public(v) for v in x]
     return x
+
+
+def _legacy(s: dict) -> dict:
+    """旧前端还在读的字段（kind / job），从 source_type / activity 算出来，保留一版。"""
+    a = s.get("activity") or {}
+    job = None
+    if a.get("kind") == "explain":
+        job = "explain"
+    elif a.get("kind") == "reparse_row" and s.get("progress"):  # 补页（单行重新识别以前也没有 job）
+        job = "pages"
+    return {"kind": "score" if is_score(s) else "image", "job": job}
 
 
 def needs_review(bar: dict) -> bool:
@@ -58,6 +70,7 @@ def song_view(s: dict) -> dict:
         # 兼容旧前端，保留一版
         error=notice["msg"] if notice else None,
         running=flags["busy"],
+        **_legacy(s),
     )
     return out
 
@@ -92,6 +105,7 @@ def library_item(s: dict) -> dict:
         "error": notice["msg"] if notice else None,
         "warn_bars": review,
         "last_practiced": (p or {}).get("last_at", ""),
+        **_legacy(s),
     }
 
 
