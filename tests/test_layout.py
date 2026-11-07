@@ -353,3 +353,20 @@ def test_split_just_above_the_next_rows_chord_diagrams():
     (a, b) = detect_page(img)["systems"]
     assert a["bottom"] >= 120 + 60 + 78 + 11  # 第一行的歌词完整
     assert b["top"] <= 350 - 65  # 第二行的和弦名、和弦图都在第二行里
+
+
+def test_clef_and_time_signature_before_a_heavy_double_bar_are_not_a_bar():
+    """行首“TAB 4/4”后面是加粗双线（‖、‖:）：这一段 7–10 个线距宽，也不是小节（弱起小节后面不会是加粗双线）。"""
+    img = Image.new("L", (1200, 400), 255)
+    d = ImageDraw.Draw(img)
+    tab_top = 150
+    for i in range(6):
+        d.line([(60, tab_top + i * 14), (1140, tab_top + i * 14)], fill=170)
+    d.line([(60, tab_top), (60, tab_top + 70)], fill=40, width=2)
+    d.text((70, tab_top + 20), "TAB 4/4", fill=0)
+    d.line([(170, tab_top), (170, tab_top + 70)], fill=0, width=5)  # 粗线
+    d.line([(178, tab_top), (178, tab_top + 70)], fill=0, width=1)  # 细线（谱号后约 8 个线距）
+    for x in (660, 1140):
+        d.line([(x, tab_top), (x, tab_top + 70)], fill=40, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2]

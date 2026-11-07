@@ -344,19 +344,26 @@ def detect_page(img: Image.Image) -> dict:
             ends = np.minimum(
                 dark[int(tab[0]) : y_a + 1].mean(0), dark[y_b : int(np.ceil(tab[-1])) + 1].mean(0)
             )
-            bl = [
-                (a + b - 1) / 2
+            runs_bl = [
+                (a, b)
                 for a, b in _runs(colfrac >= 0.93)
                 if x0 - 6 <= a <= x1 + 6 and _is_barline(dark, a, b, tab, sp, ends)
             ]
+            bl = [(a + b - 1) / 2 for a, b in runs_bl]
+            heavy = {round((a + b - 1) / 2) for a, b in runs_bl if b - a >= max(3, sp * 0.25)}  # 加粗的线
             if len(bl) >= 8 and float(np.median(np.diff(bl))) < sp * 2:
                 continue  # 一排和弦图：格子的竖线一个线距左右一根，也是 6 根等距横线，不是六线谱
             merged: list[float] = []
+            double: set[int] = set()  # 双线（‖、‖:、:‖、终止线）合并后的位置
             for x in bl:  # 双小节线、终止线合并成一条
                 if merged and x - merged[-1] < sp * 1.2:
+                    if round(x) in heavy or round(merged[-1]) in heavy:
+                        double.add(round(x))
                     merged[-1] = x
                 else:
                     merged.append(x)
+                    if round(x) in heavy:
+                        double.add(round(x))
             if not merged or merged[0] - x0 > sp * 1.5:
                 merged.insert(0, float(x0))
             if x1 - merged[-1] > sp * 1.5:
@@ -368,9 +375,12 @@ def detect_page(img: Image.Image) -> dict:
                 if b - a > sp * 3 and on[int(a) : int(b) + 1].mean() >= 0.5
             ]
             # 行首是反复开始记号（‖:）时，谱号到它之间会多出一段（只有 TAB 谱号、拍号），不是小节：
-            # 这一段窄（不到 6 个线距；真正的小节、包括弱起小节都宽得多）就去掉
-            if len(bars) > 1 and bars[0][1] - bars[0][0] < sp * 6:
-                bars = bars[1:]
+            # 这一段窄（不到 6 个线距；真正的小节、包括弱起小节都宽得多），或者不到 10 个线距、右边又是加粗的
+            # 双线（行首的弱起小节后面不会是反复记号），就去掉
+            if len(bars) > 1:
+                w0 = bars[0][1] - bars[0][0]
+                if w0 < sp * 6 or (w0 < sp * 10 and any(abs(bars[0][1] - x) <= 2 for x in double)):
+                    bars = bars[1:]
             if bars:
                 systems.append(
                     {
