@@ -130,6 +130,26 @@ def test_strum_arrows_are_not_barlines():
     assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
 
 
+def test_dense_strum_arrows_inside_the_staff_are_not_barlines():
+    """弹唱谱的扫弦行：一小节 8 个箭头，从 6 弦贯穿到 1 弦、箭头停在谱线以内（伸出去不到 0.3 个线距）。
+    以前被当成小节线，一行里“小节线”太密又被当成一排和弦图，整行丢掉。"""
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        t = top + 110
+        for k in range(8 * 3):
+            x = 75 + k * 45
+            if any(abs(x - b) < 8 for b in (60, 420, 780, 1140)):
+                continue
+            d.line([(x, t), (x, t + 70)], fill=0, width=1)
+            if k % 2:  # 向下的箭头：箭头在 6 弦一端
+                d.polygon([(x - 5, t + 58), (x + 5, t + 58), (x, t + 70)], fill=0)
+            else:  # 向上的箭头：箭头在 1 弦一端
+                d.polygon([(x - 5, t + 12), (x + 5, t + 12), (x, t)], fill=0)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
+
+
 def test_dashed_line_further_above_does_not_eat_string_one():
     """let ring 虚线离 1 弦 1.6–2 个线距：不能和 1 弦配成一组、把六线谱拆成 5 根。"""
     img = _score()

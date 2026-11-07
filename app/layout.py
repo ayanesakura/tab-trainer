@@ -142,7 +142,46 @@ def _is_barline(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float, e
       小节线正好停在谱线上（和五线谱连通的小节线、左边的谱表括号伸得远，不受影响）。"""
     if ends[max(0, a - 1) : b + 1].max() < 0.8:
         return False
+    if _arrowhead(dark, a, b, tab, sp):
+        return False
     return not 0.3 <= _overhang(dark, a, b, tab, sp) <= 2.5
+
+
+def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) -> bool:
+    """扫弦箭头：竖线一端有个三角形的箭头（停在谱线以内、几乎不伸出去，靠伸出长度分不出来）。
+    沿着竖线逐行量它的宽度（避开谱线本身那几行）：连续 3 行以上比竖线本身宽出 2 像素以上就是箭头。
+    小节线（包括加粗的终止线）从头到尾一样宽；连线、弧线横穿过去只占一两行。"""
+    c = (a + b) // 2
+    w = dark.shape[1]
+    lines = [round(y) for y in tab]
+    col = dark[:, max(0, c - 1) : c + 2].any(1)
+    # 只看和竖线连着的那一段：谱线外面不相连的记号（小节号、文字）不算
+    y0, y1 = int(tab[0]), int(tab[-1])
+    while y0 > max(0, tab[0] - sp * 0.8) and col[y0 - 1]:
+        y0 -= 1
+    while y1 < min(dark.shape[0] - 1, tab[-1] + sp * 0.8) and col[y1 + 1]:
+        y1 += 1
+    widths = []
+    for y in range(y0, y1 + 1):
+        if any(abs(y - ly) <= 1 for ly in lines):
+            continue
+        row = dark[y]
+        if not row[c]:
+            widths.append(0)
+            continue
+        lo = hi = c
+        while lo > 0 and row[lo - 1] and c - lo < sp:
+            lo -= 1
+        while hi < w - 1 and row[hi + 1] and hi - c < sp:
+            hi += 1
+        widths.append(hi - lo + 1)
+    stem = float(np.median([x for x in widths if x])) if any(widths) else 1.0
+    run = 0
+    for x in widths:
+        run = run + 1 if stem + 2 <= x < sp else 0
+        if run >= 3:
+            return True
+    return False
 
 
 def _trim(group: list[float]) -> list[float]:
