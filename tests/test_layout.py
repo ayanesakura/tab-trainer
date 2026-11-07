@@ -320,7 +320,7 @@ def test_gap_before_a_coda_section_is_not_a_bar():
     img = Image.new("L", (1200, 400), 255)
     d = ImageDraw.Draw(img)
     tab_top = 150
-    for x0, x1 in ((60, 640), (680, 1140)):
+    for x0, x1 in ((60, 640), (690, 1140)):  # 断开 50 像素（3.6 个线距）
         for i in range(6):
             d.line([(x0, tab_top + i * 14), (x1, tab_top + i * 14)], fill=170)
         for x in (x0, (x0 + x1) // 2, x1):
