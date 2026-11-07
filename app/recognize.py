@@ -528,6 +528,13 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
     used, errors = _recognize_rows(
         claude, sid, work, [(i, None) for i in range(len(systems))], cancel, on_row
     )
+    if _fix_header_time_signature(work, song.get("meta_user") or {}):
+        # 谱头的拍号读错了：改成第 1 小节上写的。后面按旧拍号识别的行，下面按“开头实际拍号”重做；
+        # 第 1 行自己是按图上的拍号读的，不用重做
+        meta = work["meta"]
+        used[0] = meta["time_signature"]
+        if not restage:
+            store.update(sid, lambda s: _fix_header_time_signature(s, song.get("meta_user") or {}))
 
     # 各行是并行识别的，前面某行写的变拍号后面的行看不到，模型会把小节硬凑成全曲拍号（每小节一样长，查不出来）。
     # 按第一遍的结果算出每行开头实际的拍号，和识别时用的不同的行带上它再识别一次（没有变拍号的曲子不多花钱）。
@@ -658,6 +665,22 @@ def _recognize_rows(
                 for f in futs:
                     f.cancel()  # 还没开始的行不再发请求；正在进行的请求会跑完
     return {si: ts for si, _, ts, *_ in plan}, errors
+
+
+def _fix_header_time_signature(s: dict, meta_user: dict) -> bool:
+    """第 1 小节就写着“变拍号”：其实是读谱头时把拍号读错了（例如 3/4 读成 4/4）。全曲拍号改成它，
+    第 1 小节不再算变拍号。用户手动设过拍号的不动。返回有没有改。"""
+    if "time_signature" in meta_user or not s.get("meta"):
+        return False
+    first = next((b for b in s.get("bars") or [] if b.get("system") == 0), None)
+    ts = (first or {}).get("ts_change")
+    if not ts or ts == s["meta"]["time_signature"]:
+        return False
+    s["meta"] = {**s["meta"], "time_signature": ts}
+    first.pop("ts_change", None)
+    first.pop("time_signature", None)
+    apply_time_signatures(s["bars"], s["meta"])
+    return True
 
 
 def _row_start_ts(bars: list[dict], meta: dict, si: int) -> list[int]:

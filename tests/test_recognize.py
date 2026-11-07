@@ -974,3 +974,41 @@ def test_double_check_votes_bars_that_two_reads_disagree_on(data_dir, monkeypatc
     assert bars[0]["events"][0]["notes"][0]["fret"] == 0  # 第二、三遍一致
     assert bars[1]["events"][0]["notes"][0]["fret"] == 1 and "三次识别" in bars[1]["uncertain"]
     assert not bars[2].get("uncertain")
+
+
+def test_header_time_signature_misread_is_fixed_from_the_first_bar(data_dir, monkeypatch):
+    """读谱头时把 3/4 读成了 4/4，第一行的第 1 小节写着变拍号 3/4：全曲改成 3/4，第 1 小节不算变拍号；
+    后面按 4/4 识别的行按 3/4 重做。"""
+    monkeypatch.setattr(
+        FakeClaude,
+        "read_meta",
+        lambda self, page: {
+            "title": "",
+            "tuning": music.STANDARD,
+            "capo": 0,
+            "time_signature": [4, 4],
+            "tempo": 0,
+        },
+    )
+    real = FakeClaude.transcribe
+    starts = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        starts.append((first_bar, kw.get("start_ts") or meta["time_signature"]))
+        out = real(self, img, meta, first_bar, spans, *a, **kw)
+        for b in out["bars"]:
+            b["events"] = b["events"][:3]  # 每小节 3 拍
+        if first_bar == 1:
+            out["bars"][0]["time_signature"] = [3, 4]
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    s = store.load(sid)
+    assert s["meta"]["time_signature"] == [3, 4]
+    assert "ts_change" not in s["bars"][0] and all("time_signature" not in b for b in s["bars"])
+    assert (4, [3, 4]) in starts  # 第二行按 3/4 重做了
+    assert starts.count((1, None)) == starts.count((1, None)) and not any(
+        f == 1 and t == [3, 4] for f, t in starts
+    )
