@@ -18,6 +18,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
+from pathlib import Path
 
 from app import pipeline, store
 from app.llm import Claude, LLMConfig
@@ -164,6 +165,15 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
     }
 
 
+def rescore(rep: dict, truth: dict) -> dict:
+    """标准答案修正后，用报告里保存的识别结果重新计分（不调用模型）。"""
+    by_n = {b["n"]: b for b in truth["bars"]}
+    for r in rep["bars"]:
+        r["cmp"] = compare_bar(by_n[r["bar"]]["events"], r["pred_events"])
+    rep["summary"] = summarize(rep["bars"])
+    return rep
+
+
 def to_markdown(rep: dict, worst: int = 12) -> str:
     s = rep["summary"]
     lines = [
@@ -217,6 +227,9 @@ def main() -> None:
     ap.add_argument("--base-url", help="覆盖设置里的 Base URL（key 用设置里的或环境变量 ANTHROPIC_API_KEY）")
     ap.add_argument("--price-as", help="按这个模型的价格估算费用（模型名不在价格表里时用）")
     ap.add_argument("--concurrency", type=int, default=4)
+    ap.add_argument(
+        "--rescore", metavar="REPORT", help="用已有的 report.json 按当前标准答案重新计分，不调用模型"
+    )
     a = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
@@ -224,6 +237,10 @@ def main() -> None:
         truth = store.load(a.song)
     except KeyError:
         sys.exit(f"找不到曲子 {a.song}")
+    if a.rescore:
+        rep = rescore(json.loads(Path(a.rescore).read_text()), truth)
+        print(to_markdown(rep))
+        return
     systems = [int(x) for x in a.systems.split(",")] if a.systems else None
     n_sys = len(systems) if systems is not None else len(truth["systems"])
     cfg = pipeline.llm_config()

@@ -34,3 +34,9 @@ def test_run_end_to_end_with_fake_model(data_dir, monkeypatch):  # noqa: F811
     assert s["notes"]["f1"] == 1.0 and s["bar_exact_rate"] == 1.0
     assert "识别评测" in evaluate.to_markdown(rep)
     assert store.load(sid)["bars"][0]["tip"] == "tip 1"  # 评测不改动曲库里的数据
+
+
+def test_rescore_uses_current_truth():
+    truth = {"bars": [{"n": 1, "events": [ev("4", (2, 0))]}]}
+    rep = {"bars": [{"bar": 1, "pred_events": [ev("4", (2, 0))], "cmp": {}, "duration_ok": True}]}
+    assert evaluate.rescore(rep, truth)["summary"]["bar_exact_rate"] == 1.0
