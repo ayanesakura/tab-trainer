@@ -199,5 +199,6 @@ def _keep_edit(prev: dict, new: dict, setting_changed_: bool = False) -> None:
     new["_orig"] = {"events": new["events"], "tip": new.get("tip", ""), "uncertain": new.get("uncertain", "")}
     new["edited"] = True
     new["events"] = prev["events"]
+    new.pop("placeholder", None)  # 这次没识别出来、按休止占位的：保留的是用户的音，不能再被当成占位休止换掉
     new["tip"], new["uncertain"] = "" if setting_changed_ else prev.get("tip", ""), ""
     new["warn"] = [w for w in new.get("warn") or [] if w.get("code") != "ocr_mismatch"]  # OCR 比的是识别结果
