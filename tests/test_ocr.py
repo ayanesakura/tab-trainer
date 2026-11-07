@@ -156,4 +156,5 @@ def test_chord_sheet_rows_judge_ocr_by_what_it_read():
     ocr = [[(5, 3)], [(4, 2), (3, 0), (3, 0)]]  # 只读到写出来的几个数字：AI 第 2 小节的 3 弦 1 品，谱上是 0
     assert recognize.ocr_disagreements(ai, ocr) == {}  # 普通谱：OCR 只读到 AI 的 3/10，不判断
     out = recognize.ocr_disagreements(ai, ocr, chord_sheet=True)
-    assert list(out) == [1]
+    # 只有 AI 有的音（× 换算出来的）调用方会忽略；OCR 读到、AI 没写的才算：第 2 小节的 3 弦 0 品
+    assert {i: dict(o) for i, (o, _) in out.items() if o} == {1: {(3, 0): 1}}
