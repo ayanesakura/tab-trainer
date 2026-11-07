@@ -215,3 +215,80 @@ def test_reparse_line_marks_plan_stale_and_drops_practice_of_replaced_bars(data_
     assert set(song["practice"]["bars"]) == {bars[0]["id"]}
     assert "last" not in song["practice"]  # 最近一次练的是被替换的小节
     assert song["practice"]["total_seconds"] == 20
+
+
+def _parsed_song_with_user_data():
+    """识别完的曲子，带上用户的手改、改过的曲名和调弦、练习记录。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bars = store.load(sid)["bars"]
+    songs.edit_bar(sid, bars[1]["id"], [{"dur": "4", "notes": [{"string": 2, "fret": 7}]}], None)
+    songs.edit_meta(sid, {"title": "我起的名字", "capo": 3})
+    songs.record_practice(sid, {"bar_ids": [bars[0]["id"]], "loops": 2, "bpm": 60, "seconds": 30})
+    return sid, store.load(sid)
+
+
+@pytest.mark.parametrize("how", ["row fails", "cancel", "crash"])
+def test_failed_or_cancelled_reparse_keeps_the_old_result(data_dir, sync_jobs, monkeypatch, how):
+    sid, before = _parsed_song_with_user_data()
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, *a, **kw):
+        if first_bar > 1:  # 第二行
+            if how == "row fails":
+                raise RuntimeError("网络断了")
+            if how == "cancel":
+                jobs.jobs.cancel(sid)
+        return real(self, img, meta, first_bar, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    if how == "crash":
+        monkeypatch.setattr(FakeClaude, "read_meta", lambda self, page: 1 / 0)
+    monkeypatch.setattr(recognize, "CONCURRENCY", 1)
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    assert after["status"] == "ready" and "原来的结果保留不变" in after["error"]
+    for k in ("bars", "meta", "systems", "practice", "plan"):
+        assert after[k] == before[k], k
+    assert not after.get("restaging")
+    songs.edit_bar(sid, after["bars"][0]["id"], [{"dur": "4", "notes": []}], None)  # 之后照常能改
+
+
+def test_successful_reparse_replaces_everything_but_the_title(data_dir, sync_jobs):
+    sid, before = _parsed_song_with_user_data()
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    assert after["status"] == "ready" and not after["error"] and not after.get("restaging")
+    assert not {b["id"] for b in after["bars"]} & {b["id"] for b in before["bars"]}
+    assert after["meta"]["capo"] == 2 and after["meta"]["title"] == "我起的名字"
+    assert after["plan"]["overview"] == "ok" and not after["practice"]["bars"]
+
+
+def test_edits_that_recognition_would_overwrite_are_refused(data_dir, monkeypatch):
+    sid, song = _parsed_song_with_user_data()
+    bar0, bar4 = song["bars"][0]["id"], song["bars"][4]["id"]
+    # 单行重新识别第 2 行时：这一行的小节、调弦拍号不能改；别的行、曲名照常
+    store.update(sid, lambda s: s["systems"][1].update(status="parsing"))
+    with pytest.raises(errors.Busy, match="这一行正在重新识别"):
+        songs.edit_bar(sid, bar4, [{"dur": "4", "notes": []}], None)
+    with pytest.raises(errors.Busy, match="调弦"):
+        songs.edit_meta(sid, {"capo": 5})
+    songs.edit_bar(sid, bar0, [{"dur": "4", "notes": []}], None)
+    songs.edit_meta(sid, {"title": "又改名"})
+    # 整首重新识别时：所有小节都不能改
+    store.update(
+        sid, lambda s: (s["systems"][1].update(status="done"), s.update(status="parsing", restaging=True))
+    )
+    with pytest.raises(errors.Busy, match="重新识别整首"):
+        songs.edit_bar(sid, bar0, [{"dur": "1", "notes": []}], None)
+    with pytest.raises(errors.Busy):
+        songs.edit_meta(sid, {"time_signature": [3, 4]})
+
+
+def test_restart_during_reparse_keeps_the_old_result(data_dir):
+    sid, before = _parsed_song_with_user_data()
+    store.update(sid, lambda s: s.update(status="parsing", restaging=True, progress={"stage": "逐行识别"}))
+    songs.recover_interrupted()
+    after = store.load(sid)
+    assert after["status"] == "ready" and "原来的结果保留不变" in after["error"]
+    assert after["bars"] == before["bars"] and "restaging" not in after

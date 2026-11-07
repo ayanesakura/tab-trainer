@@ -33,22 +33,27 @@ def start_explain(sid: str) -> None:
     jobs.check_llm_ready()
     cancel = jobs.claim_or_busy(sid, "这首曲子正在处理中")
     chunks = [todo[k : k + EXPLAIN_CHUNK] for k in range(0, len(todo), EXPLAIN_CHUNK)]
-    prev = {
-        "status": song.get("status", "ready"),
-        "error": song.get("error"),
-    }  # 结束后恢复（比如“已取消”的识别）
 
+    # 进度记在 job / progress 里，不动 status：讲解期间曲子照常能练，曲库也不会显示成“识别中”
     def begin(s):
-        s.update(status="parsing", job="explain", job_prev=prev)
+        s["job"] = "explain"
         s["progress"] = {"stage": "生成讲解", "done": 0, "total": len(chunks)}
+        if s.get("error_kind") == "explain":  # 上次讲解失败的提示
+            s.pop("error_kind")
+            s["error"] = None
 
-    store.update(sid, begin)
+    try:
+        store.update(sid, begin)
+    except Exception:
+        jobs.jobs.release(sid)
+        raise
 
     def end(error=None):
         def apply(s):
             s.pop("job", None)
-            p = s.pop("job_prev", None) or prev
-            s.update(status=p["status"], progress=None, error=error or p["error"])
+            s["progress"] = None
+            if error:
+                s.update(error=error, error_kind="explain")
 
         store.update(sid, apply)
 

@@ -32,17 +32,25 @@ def start_parse(sid: str) -> bool:
     cancel = jobs.jobs.claim(sid)
     if cancel is None:
         return False
-    store.patch(sid, status="queued", error=None, progress={"stage": "排队中", "done": 0, "total": 0})
+    try:
+        store.patch(sid, status="queued", error=None, progress={"stage": "排队中", "done": 0, "total": 0})
+    except Exception:
+        jobs.jobs.release(sid)  # 登记了却没启动：不释放的话这首曲子会一直显示“忙”
+        raise
 
     def run():
         try:
             run_parse(sid, cancel)
         except Cancelled:
-            store.patch(sid, status="cancelled", error="识别已取消，已完成的行会保留。")
+            if not _end_restage(sid, "重新识别已取消"):
+                store.patch(sid, status="cancelled", error="识别已取消，已完成的行会保留。")
+        except RestageFailed as e:
+            _end_restage(sid, f"重新识别没有全部成功（{e}）")
         except Exception as e:
             rid = request_id_of(e)
             log.exception("request_id=%s song=%s parse failed", rid, sid)
-            store.patch(sid, status="error", error=jobs.friendly(e))
+            if not _end_restage(sid, "重新识别失败：" + jobs.friendly(e)):
+                store.patch(sid, status="error", error=jobs.friendly(e))
 
     jobs.spawn(sid, run)
     return True
@@ -297,21 +305,35 @@ def _replace_system_bars(s: dict, si: int, bars: list[dict]) -> None:
 # 整首
 # ---------------------------------------------------------------------------
 def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
+    """识别整首。
+
+    第一次识别（还没有小节）：一行识别完就写进曲子，练习页能边识别边看。
+    重新识别已有结果的曲子：新结果先放在内存里，原来的小节、调弦、手改、提示和练习记录都不动；
+    每一行都成功才一次性替换。有行失败、被取消或服务中断，原来的结果原样保留。
+    """
     cancel = cancel or threading.Event()
     claude = jobs.new_claude()
     song = store.load(sid)
-    store.patch(sid, status="parsing", error=None, progress={"stage": "读取谱头", "done": 0, "total": 0})
+    restage = bool(song.get("bars"))
+    store.patch(
+        sid,
+        status="parsing",
+        error=None,
+        restaging=restage or None,
+        progress={"stage": "读取谱头", "done": 0, "total": 0},
+    )
     meta = normalize_meta(claude.read_meta(store.page_image(sid, song["pages"][0])), song.get("title", ""))
-    store.patch(sid, meta=meta, progress={"stage": "分析版面", "done": 0, "total": 0})
+    if not restage:
+        store.patch(sid, meta=meta)
+    store.patch(sid, progress={"stage": "分析版面", "done": 0, "total": 0})
 
     if cancel.is_set():
         raise Cancelled()
-    song = store.load(sid)
     systems = plan_systems(sid, song)
-    store.patch(
-        sid, systems=systems, bars=[], progress={"stage": "逐行识别", "done": 0, "total": len(systems)}
-    )
-    song = store.load(sid)
+    work = {**song, "meta": meta, "systems": systems, "bars": []}  # 重新识别时新结果攒在这里
+    if not restage:
+        store.patch(sid, systems=systems, bars=[])
+    store.patch(sid, progress={"stage": "逐行识别", "done": 0, "total": len(systems)})
 
     # 先按检测到的小节数预估每行的起始小节号；整页识别的页面数量未知，最后统一重新编号
     starts, n = [], 1
@@ -322,7 +344,7 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     errors = []
     with ThreadPoolExecutor(CONCURRENCY) as pool:
         futs = {
-            pool.submit(transcribe_queued, claude, sid, song, i, starts[i], "", cancel=cancel): i
+            pool.submit(transcribe_queued, claude, sid, work, i, starts[i], "", cancel=cancel): i
             for i in range(len(systems))
         }
         for fut in as_completed(futs):
@@ -338,12 +360,16 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
                 bars, status, err = [], "error", jobs.friendly(e)
                 errors.append(f"第 {i + 1} 行：{err}")
 
+            _replace_system_bars(work, i, bars)
+            work["systems"][i].update(status=status, error=err)
+
             def apply(s, i=i, bars=bars, status=status, err=err):
-                _replace_system_bars(s, i, bars)
-                s["systems"][i].update(status=status, error=err)
+                if not restage:
+                    _replace_system_bars(s, i, bars)
+                    s["systems"][i].update(status=status, error=err)
+                    staleness.prune_practice(s)
                 s["progress"]["done"] += 1
                 s["usage"] = dict(claude.usage)
-                staleness.prune_practice(s)
 
             store.update(sid, apply)
             if cancel.is_set():
@@ -352,11 +378,25 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
 
     if cancel.is_set():
         raise Cancelled()
-    song = store.load(sid)
-    if not song["bars"]:
+    if restage and errors:
+        raise RestageFailed("；".join(errors))
+    if not work["bars"]:
+        if restage:
+            raise RestageFailed("没有识别出任何小节")
         store.patch(sid, status="error", error="；".join(errors) or "没有识别出任何小节（可能不是六线谱）")
         return
+    if restage:
 
+        def swap(s):
+            # 一次性换成新结果；曲名保留用户改过的。小节 id 全换了，旧提示、问答、练习记录随之作废
+            work["meta"]["title"] = (s.get("meta") or {}).get("title") or work["meta"]["title"]
+            s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"], plan=None)
+            s.pop("restaging", None)
+            staleness.prune_practice(s)
+
+        store.update(sid, swap)
+
+    song = store.load(sid)
     store.patch(sid, progress={"stage": "生成练习建议", "done": len(systems), "total": len(systems)})
     seen = {b["id"]: b["events"] for b in song["bars"]}
     try:
@@ -375,6 +415,23 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
         )
 
     store.update(sid, finish)
+
+
+class RestageFailed(Exception):
+    """重新识别没有全部成功：不替换原来的结果。"""
+
+
+def _end_restage(sid: str, why: str) -> bool:
+    """重新识别没完成（失败 / 取消）：原来的结果没动过，恢复成可练习的状态。不是重新识别时返回 False。"""
+    done = []
+
+    def apply(s):
+        if s.pop("restaging", None):
+            s.update(status="ready", error=f"{why}，原来的结果保留不变。", progress=None)
+            done.append(True)
+
+    store.update(sid, apply)
+    return bool(done)
 
 
 # ---------------------------------------------------------------------------

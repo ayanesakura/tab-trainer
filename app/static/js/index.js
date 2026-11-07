@@ -61,9 +61,10 @@ const tileColor = s => TILE_COLORS[[...s].reduce((a, c) => a + c.codePointAt(0),
 
 function songState(s) {
   const p = s.progress || {};
-  if (s.status === 'parsing' || s.status === 'queued') {
+  if (s.status === 'parsing' || s.status === 'queued' || s.job === 'explain') {
     const pct = p.total ? Math.round(100 * p.done / p.total) : 6;
-    return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${p.done}/${p.total} 行` : ''}</span><span class="progress"><i style="width:${pct}%"></i></span>`;
+    const unit = s.job === 'explain' ? '批' : '行';
+    return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${p.done}/${p.total} ${unit}` : ''}</span><span class="progress"><i style="width:${pct}%"></i></span>`;
   }
   if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">${s.kind === 'score' ? '曲谱读取失败' : '识别失败'}：${esc(s.error)}</span>`;
   if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${s.bars} 小节` : ''}</span>`;
@@ -96,7 +97,7 @@ async function loadSongs() {
     }).join('');
   }
   clearTimeout(pollTimer);
-  if (songs.some(s => s.status === 'parsing' || s.status === 'queued')) pollTimer = setTimeout(loadSongs, 2500);
+  if (songs.some(s => s.status === 'parsing' || s.status === 'queued' || s.job)) pollTimer = setTimeout(loadSongs, 2500);
 }
 $('songs').addEventListener('click', e => {
   const more = e.target.closest('[data-more]');

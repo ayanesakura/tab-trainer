@@ -45,8 +45,14 @@ function renderHeader() {
   $('metaNote').innerHTML = m.notes ? `<span class="dot" style="background:var(--accent)"></span><div><b>AI 读谱时注意到：</b>${esc(m.notes)}</div>` : '';
   const running = SONG.running || SONG.status === 'parsing' || SONG.status === 'queued';
   const pr = SONG.progress || {};
+  const explaining = SONG.job === 'explain';
+  const what = explaining
+    ? `正在生成讲解${pr.total ? `（${pr.done}/${pr.total} 批）` : ''}。可以照常练习，写好的提示会自动出现。`
+    : SONG.restaging
+      ? `正在重新识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}。全部完成后才替换现在的结果，这期间不能改谱。`
+      : `正在识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}。已识别的小节可以先练，页面会自动刷新。`;
   $('progressBox').style.display = running ? '' : 'none';
-  $('progressBox').innerHTML = running ? `<span class="spinner" style="margin-top:2px"></span><div style="flex:1">正在识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}。已识别的小节可以先练，页面会自动刷新。</div><button class="btn sm" id="cancelBtn">取消识别</button>` : '';
+  $('progressBox').innerHTML = running ? `<span class="spinner" style="margin-top:2px"></span><div style="flex:1">${what}</div><button class="btn sm" id="cancelBtn">${explaining ? '取消' : '取消识别'}</button>` : '';
   if (running) $('cancelBtn').onclick = async () => {
     const r = await fetch(`/api/songs/${SONG_ID}/cancel`, { method: 'POST' });
     UI.toast(r.ok ? '正在取消，进行中的那几行完成后停止' : ((await r.json()).detail || '取消失败'), r.ok ? 'info' : 'err');

@@ -4,6 +4,14 @@
 // 修改小节（JSON）、重新识别这一行
 // ---------------------------------------------------------------------
 let editorBarId = null;
+// 这个小节现在不能改的原因（和后端 songs._bar_locked 一致）：改了会被正在进行的识别结果覆盖
+function barLocked(bi) {
+  const bar = SONG && SONG.bars[bi];
+  if (!bar) return '';
+  if (SONG.restaging) return '正在重新识别整首，完成后再改（识别失败或取消时原来的结果会保留）';
+  const sys = SONG.systems[bar.system];
+  return sys && sys.status === 'parsing' ? '这一行正在重新识别，完成后再改' : '';
+}
 function closeEditor() { $('editor').style.display = 'none'; $('edMsg').textContent = ''; editorBarId = null; }
 function updateBarTools() {
   if (shownBar < 0 || !SONG || !SONG.bars[shownBar]) return;
@@ -70,6 +78,8 @@ const barEvents = bi => { const b = SONG.bars[bi]; return b.events && b.events.l
 function openNotePop(beat, note) {
   const bi = beat.voice.bar.index;
   if (bi >= SONG.bars.length) return;
+  const locked = barLocked(bi);
+  if (locked) { UI.toast(locked, 'info'); return; }
   if (beat.graceType) { UI.toast('倚音请在小节说明里的“识别有误？→ 修改本小节”里改', 'info'); return; }
   const ei = scoreConv.eventIndexAt(beatMap[bi] || [0], beat.playbackStart);
   const ev = barEvents(bi)[ei];
@@ -154,6 +164,8 @@ async function deleteNotePop() {
 function initEditor() {
   $('editBtn').onclick = () => {
     if (shownBar < 0) return;
+    const locked = barLocked(shownBar);
+    if (locked) { UI.toast(locked, 'info'); return; }
     const evs = SONG.bars[shownBar].events;
     $('edText').value = '[\n' + evs.map(e => '  ' + JSON.stringify(e)).join(',\n') + '\n]';
     editorBarId = SONG.bars[shownBar].id;

@@ -89,6 +89,7 @@ def list_songs() -> list[dict]:
                     "artist": meta.get("artist", ""),
                     "status": s["status"],
                     "progress": s.get("progress"),
+                    "job": s.get("job"),
                     "error": s.get("error"),
                     "bars": len(s.get("bars", [])),
                     "warn_bars": sum(1 for b in s.get("bars", []) if b.get("warn")),

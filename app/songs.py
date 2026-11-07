@@ -13,7 +13,7 @@ import time
 from PIL import Image, ImageOps
 
 from app import staleness, store
-from app.errors import BarNotFound, Invalid
+from app.errors import BarNotFound, Busy, Invalid
 from app.music import (
     check_bar,
     clean_events,
@@ -304,6 +304,22 @@ def _carry_over(s: dict, meta: dict, bars: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # 手工修改
 # ---------------------------------------------------------------------------
+def _recognizing(s: dict) -> bool:
+    """整首识别（或重新识别）正在进行（生成讲解也借用 parsing 状态，但不改谱面，不算）。"""
+    return s.get("status") in ("parsing", "queued") and s.get("job") != "explain"
+
+
+def _bar_locked(s: dict, bar: dict) -> str | None:
+    """这个小节现在不能改的原因：改了会被正在进行的识别结果覆盖。"""
+    if s.get("restaging"):
+        return "正在重新识别整首，完成后再改（识别失败或取消时原来的结果会保留）"
+    systems = s.get("systems") or []
+    si = bar.get("system")
+    if isinstance(si, int) and 0 <= si < len(systems) and systems[si].get("status") == "parsing":
+        return "这一行正在重新识别，完成后再改"
+    return None
+
+
 def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
     """按小节的稳定 id 修改（编号在识别过程中会变，按编号改可能改到别的小节）。"""
     try:
@@ -313,6 +329,8 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
 
     def apply(s):
         bar = find_bar(s, bar_id)
+        if why := _bar_locked(s, bar):
+            raise Busy(why)
         new = cleaned or rest_bar(s["meta"], bar)
         if "_orig" in bar and new == bar["_orig"]["events"]:
             staleness.restore_bar(bar)
@@ -332,6 +350,11 @@ def edit_meta(sid: str, raw: dict) -> dict:
     def apply(s):
         old = s.get("meta") or {}
         s["meta"] = normalize_meta({**old, **raw}, strict=True)
+        if staleness.setting_changed(old, s["meta"]) and (
+            _recognizing(s) or any(x.get("status") == "parsing" for x in s.get("systems") or [])
+        ):
+            # 识别时按调弦、拍号检查和返修，改了会和正在写回的结果对不上（曲名之类随时能改）
+            raise Busy("正在识别，完成后再改调弦、变调夹和拍号")
         if staleness.setting_changed(old, s["meta"]):
             staleness.invalidate_tips_for_setting(s)
         if "title" in raw:
@@ -404,11 +427,13 @@ def recover_interrupted() -> None:
 
 def _recover(song: dict) -> bool:
     changed = False
-    if song.get("status") in ("parsing", "queued") and song.get("job") == "explain":
-        prev = song.pop("job_prev", None) or {"status": "ready", "error": None}
-        song.pop("job", None)
-        song["status"], song["progress"] = prev["status"], None
-        song["error"] = "服务重启，讲解生成中断，已完成的部分会保留，可以重新生成。"
+    if song.get("job") == "explain":
+        song.pop("job")
+        prev = song.pop("job_prev", None)  # 旧版本：讲解期间借用了 status="parsing"
+        if prev and song.get("status") in ("parsing", "queued"):
+            song["status"] = prev["status"]
+        song.update(progress=None, error="服务重启，讲解生成中断，已完成的部分会保留，可以重新生成。")
+        song["error_kind"] = "explain"
         changed = True
     elif song.get("status") in ("parsing", "queued"):
         if is_score(song):
@@ -416,6 +441,9 @@ def _recover(song: dict) -> bool:
         else:
             song["status"] = "error"
             song["error"] = "服务重启，识别中断。可以在曲库的“…”菜单里重新识别。"
+        changed = True
+    if song.pop("restaging", None):  # 重新识别时原来的结果没动过，只是新结果丢了
+        song.update(status="ready", error="服务重启，重新识别中断，原来的结果保留不变。", progress=None)
         changed = True
     for s in song.get("systems", []):
         if s.get("status") in ("parsing", "pending"):

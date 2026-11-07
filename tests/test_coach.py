@@ -107,3 +107,48 @@ def test_practice_ignores_duplicate_bar_ids(data_dir):
         sid, {"bar_ids": [ids[0], ids[0], ids[1]], "loops": 1, "bpm": 60, "seconds": 20}
     )
     assert p["bars"][ids[0]] == {**p["bars"][ids[0]], "loops": 1, "seconds": 10}
+
+
+def test_explain_runs_beside_the_song_status(data_dir, sync_jobs, monkeypatch):
+    """讲解期间不动 status（曲子照常能练、曲库不会显示成识别中），进度记在 job / progress。"""
+    sid = songs.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    songs.set_derived(sid, {"tuning": music.STANDARD}, derived_bars(3))
+    seen = []
+    real = FakeClaude.explain_bars
+
+    def explain(self, meta, bars):
+        s = store.load(sid)
+        seen.append((s["status"], s.get("job"), [x["job"] for x in store.list_songs()]))
+        if len(seen) == 1:
+            raise RuntimeError("网络断了")
+        return real(self, meta, bars)
+
+    monkeypatch.setattr(FakeClaude, "explain_bars", explain)
+    coach.start_explain(sid)
+    s = store.load(sid)
+    assert seen[0] == ("ready", "explain", ["explain"])
+    assert s["status"] == "ready" and "job" not in s and s["error"].startswith("生成讲解失败")
+    coach.start_explain(sid)  # 再试一次成功：上次失败的提示清掉
+    s = store.load(sid)
+    assert s["status"] == "ready" and not s["error"] and s["bars"][0]["tip"]
+
+
+def test_restart_during_explain_clears_the_job(data_dir):
+    sid = songs.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    songs.set_derived(sid, {"tuning": music.STANDARD}, derived_bars(2))
+    store.update(sid, lambda s: s.update(job="explain", progress={"stage": "生成讲解"}))
+    songs.recover_interrupted()
+    s = store.load(sid)
+    assert s["status"] == "ready" and "job" not in s and not s["progress"] and "讲解生成中断" in s["error"]
+
+
+def test_claim_is_released_when_the_job_cannot_start(data_dir, monkeypatch):
+    sid = songs.create_song([("p1.png", score_png())])
+
+    def broken(*a, **kw):
+        raise OSError("磁盘满了")
+
+    monkeypatch.setattr(store, "patch", broken)
+    with pytest.raises(OSError):
+        recognize.start_parse(sid)
+    assert not jobs.jobs.running(sid)
