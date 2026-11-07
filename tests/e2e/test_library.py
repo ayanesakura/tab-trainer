@@ -225,3 +225,18 @@ def test_keyboard_overlays_and_focus(server, browser):
     b.js("tt.reload().then(() => true)")
     assert b.js(f"document.activeElement === {more} && window.__row === {more}.closest('.song-row')")
     assert not b.errors, b.errors
+
+
+def test_rows_show_source_and_no_initial_tiles(server, browser):
+    # 取代 test_trainer.py 里的 test_library_lists_songs 的来源部分：来源是图标 + 说明行里的文字，不再是曲名旁的徽章
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for("document.querySelectorAll('.song-row').length >= 3")
+    src = b.js(
+        "Object.fromEntries([...document.querySelectorAll('.song-row')].map(r => [r.dataset.id, r.querySelector('.src-ic').title]))"
+    )
+    assert src[server["image"]] == "来源：图片" and src[server["gp"]] == "来源：GP"
+    assert b.js("document.querySelectorAll('.song-row .tile').length") == 0
+    sub = b.js(f"document.querySelector('.song-row[data-id=\"{server['gp']}\"] .sub').textContent")
+    assert sub.startswith("GP")
+    assert not b.errors, b.errors
