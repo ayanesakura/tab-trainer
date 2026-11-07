@@ -20,7 +20,7 @@ export const TIMBRES = { steel: 25, nylon: 24 };
 
 let pendingBeat = null; // 谱面上一次点击里先到的拍（见 beatMouseDown）
 let api = null, baseTempo = 60, soundFontsLoaded = 0, playerReadyOnce = false, lastTick = -1, shiftDown = false, warnedUnplayed = '';
-// tempoSet：速度已经由用户 / 接着练定下来了（setTempo 调过）。谱子加载好以后只在还没定的时候才用默认速度（原速六成）。
+// tempoSet：速度已经由用户 / 接着练定下来了（setTempo 调过）。谱子加载好以后只在还没定的时候才用默认速度（谱上标的原速）。
 // scoreTempoDone：第一次加载谱子时按原速放宽滑块上限这件事做过了。cursorPending：谱子没加载好时设了循环范围，加载好后把光标放到段首。
 let tempoSet = false, scoreTempoDone = false, cursorPending = false, scoreBytes = null;
 // 预备拍：alphaTab 1.9 在预备拍里停下以后状态清不干净：只 pause() 的话下次 play() 会一直停在“播放中”却不前进
@@ -213,8 +213,8 @@ async function onScoreLoaded(score) {
       const bpm = get('play.bpm');
       set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10, Math.ceil(bpm / 10) * 10)), 'play.autoTarget': t });
     }
-    // 默认用原速的六成练习；没有标速度就 50。接着练 / 用户在谱子加载好之前已经定了速度的，不覆盖
-    if (!tempoSet) setTempo(t ? Math.round(t * 0.6) : 50);
+    // 默认就用谱上标的速度（识别出来的 / GP 文件里的）；没有标速度就 50。接着练 / 用户在谱子加载好之前已经定了速度的，不覆盖
+    if (!tempoSet) setTempo(t || 50);
   }
   if (api) api.playbackSpeed = get('play.bpm') / baseTempo;
 }

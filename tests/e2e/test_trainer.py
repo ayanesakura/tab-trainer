@@ -328,7 +328,7 @@ def test_background_writes_do_not_cause_false_conflicts(server, trainer):
 
 
 def test_resume_applies_tempo_to_guitar_pro_songs(server, browser):
-    """GP 曲子的谱面是异步加载的：接着练定下的速度不能被“原速六成”的默认值盖掉（地址带 resume=1 和点“接着练”都一样）。"""
+    """GP 曲子的谱面是异步加载的：接着练定下的速度不能被“谱上原速”的默认值盖掉（地址带 resume=1 和点“接着练”都一样）。"""
     gp, b = server["gp"], browser
     ready = (
         "!!(window.tt && tt.state.ready && tt.song && tt.song.bars.length === 3 && tt.api && tt.api.score)"
