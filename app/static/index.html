@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>吉他谱练习器</title>
+<style>
+:root{--bg:#14161a;--panel:#1d2026;--panel2:#252931;--line:#4a505a;--text:#e6e6e6;--muted:#9aa0a8;--accent:#e8b04f;--accent2:#5fb3d9;--good:#7cc47f;--bad:#e06c6c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:16px 16px 60px}
+h1{font-size:24px;margin:8px 0 2px}
+h2{font-size:18px;margin:0 0 10px}
+.sub,.muted{color:var(--muted)}
+section{background:var(--panel);border-radius:10px;padding:16px 18px;margin:14px 0}
+button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:5px 12px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:#1a1a1a;border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+input,select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:5px 8px;font:inherit}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
+.row label{display:flex;flex-direction:column;gap:3px;color:var(--muted);font-size:12px}
+.drop{border:2px dashed var(--line);border-radius:10px;padding:26px;text-align:center;color:var(--muted);cursor:pointer}
+.drop.over{border-color:var(--accent);color:var(--text)}
+.files{margin:6px 0;color:var(--text)}
+.song{display:flex;gap:14px;align-items:center;background:var(--panel2);border-radius:8px;padding:10px 14px;margin:8px 0}
+.song .info{flex:1;min-width:0}
+.song .title{font-size:16px;font-weight:600}
+.song a.title{color:var(--text);text-decoration:none}
+.song a.title:hover{color:var(--accent)}
+.bar{height:6px;background:#14161a;border-radius:3px;overflow:hidden;margin-top:6px;max-width:320px}
+.bar>div{height:100%;background:var(--accent2);transition:width .3s}
+.ok{color:var(--good)} .err{color:var(--bad)} .warn{color:var(--accent)}
+.msg{margin-left:4px}
+code{background:#2a2e36;border-radius:4px;padding:0 5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>吉他谱练习器</h1>
+  <div class="sub">上传六线谱图片或 PDF，AI 识别后生成可播放、可循环、带指板显示的练习页面。数据都保存在本机。</div>
+
+  <section>
+    <h2>上传谱子</h2>
+    <div class="drop" id="drop">把谱子图片 / PDF 拖到这里，或点击选择文件<br><span class="muted">多页谱子请一次选中所有页面，按文件名顺序排列</span></div>
+    <input type="file" id="file" multiple accept="image/*,application/pdf" hidden>
+    <div class="files" id="fileList"></div>
+    <div class="row">
+      <input id="title" placeholder="曲名（可不填，AI 会从谱子上读）" style="flex:1;min-width:220px">
+      <button class="primary" id="uploadBtn" disabled>上传并识别</button>
+      <span class="msg" id="uploadMsg"></span>
+    </div>
+    <div class="muted">识别方式：自动找出每一行六线谱，逐行交给 AI 识读，并检查每小节时值是否凑满，凑不满会让 AI 返修一次。一首 30–40 小节的曲子大约需要 1–3 分钟。</div>
+  </section>
+
+  <section>
+    <h2>曲库</h2>
+    <div id="songs" class="muted">加载中…</div>
+  </section>
+
+  <section>
+    <h2>模型设置</h2>
+    <div id="keyState" class="muted"></div>
+    <div class="row">
+      <label>Anthropic API key<input id="apiKey" type="password" placeholder="sk-ant-…（留空则不修改）" style="width:320px" autocomplete="off"></label>
+      <label>模型<input id="model" style="width:180px"></label>
+      <label>识别精细度
+        <select id="effort">
+          <option value="medium">medium（省一些）</option>
+          <option value="high">high（推荐）</option>
+          <option value="xhigh">xhigh（更仔细，更贵）</option>
+          <option value="max">max（最仔细，最贵）</option>
+        </select>
+      </label>
+      <label>Base URL（一般不用填）<input id="baseUrl" placeholder="https://api.anthropic.com" style="width:240px"></label>
+    </div>
+    <div class="row">
+      <button id="saveSettings">保存</button>
+      <button id="testSettings">测试连接</button>
+      <button id="clearKey">清除已保存的 key</button>
+      <span class="msg" id="settingsMsg"></span>
+    </div>
+    <div class="muted">API key 只保存在本机 <code>data/config.json</code>（仅本人可读）。也可以不在这里填，改为启动服务前设置环境变量 <code>ANTHROPIC_API_KEY</code>。默认模型 <code>claude-opus-5-5</code>；想省钱可以改成 <code>claude-sonnet-5-5</code>，识别准确率会低一些。</div>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || `请求失败 ${r.status}`);
+  return data;
+}
+
+// ---------------- 上传 ----------------
+let picked = [];
+function setFiles(list) {
+  picked = [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  $('fileList').textContent = picked.length ? '已选择：' + picked.map(f => f.name).join('、') : '';
+  $('uploadBtn').disabled = !picked.length;
+}
+$('drop').onclick = () => $('file').click();
+$('file').onchange = e => setFiles(e.target.files);
+$('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('over'); };
+$('drop').ondragleave = () => $('drop').classList.remove('over');
+$('drop').ondrop = e => { e.preventDefault(); $('drop').classList.remove('over'); setFiles(e.dataTransfer.files); };
+$('uploadBtn').onclick = async () => {
+  const fd = new FormData();
+  picked.forEach(f => fd.append('files', f));
+  fd.append('title', $('title').value);
+  $('uploadBtn').disabled = true; $('uploadMsg').textContent = '上传中…';
+  try {
+    await api('/api/songs', { method: 'POST', body: fd });
+    $('uploadMsg').textContent = '已开始识别';
+    setFiles([]); $('title').value = ''; $('file').value = '';
+    loadSongs();
+  } catch (e) {
+    $('uploadMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    $('uploadBtn').disabled = !picked.length;
+  }
+};
+
+// ---------------- 曲库 ----------------
+let pollTimer = null;
+async function loadSongs() {
+  const songs = await api('/api/songs');
+  if (!songs.length) { $('songs').textContent = '还没有曲子，先上传一份谱子吧。'; return; }
+  $('songs').innerHTML = songs.map(s => {
+    const p = s.progress || {};
+    const busy = s.status === 'parsing' || s.status === 'queued';
+    const pct = p.total ? Math.round(100 * p.done / p.total) : 5;
+    let state = '';
+    if (busy) state = `<span>正在识别：${esc(p.stage || '')}${p.total ? `（${p.done}/${p.total} 行）` : ''}</span><div class="bar"><div style="width:${pct}%"></div></div>`;
+    else if (s.status === 'error') state = `<span class="err">识别失败：${esc(s.error)}</span>`;
+    else state = `<span class="ok">${s.bars} 小节</span>` + (s.warn_bars ? ` · <span class="warn">${s.warn_bars} 个小节可能有误</span>` : '') + (s.error ? ` · <span class="err">${esc(s.error)}</span>` : '');
+    return `<div class="song">
+      <div class="info"><a class="title" href="/trainer?id=${s.id}">${esc(s.title)}</a> <span class="muted">${esc(s.artist)} · ${esc(s.created || '')}</span><div>${state}</div></div>
+      ${busy || !s.bars ? '' : `<a href="/trainer?id=${s.id}"><button class="primary">练习</button></a>`}
+      ${busy ? '' : `<button data-reparse="${s.id}">重新识别</button><button data-del="${s.id}">删除</button>`}
+    </div>`;
+  }).join('');
+  $('songs').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('删除这首曲子（包括上传的谱子图片和识别结果）？')) return;
+    await api(`/api/songs/${b.dataset.del}`, { method: 'DELETE' }).catch(e => alert(e.message));
+    loadSongs();
+  });
+  $('songs').querySelectorAll('[data-reparse]').forEach(b => b.onclick = async () => {
+    if (!confirm('整首重新识别会覆盖现有结果（包括手工修改），并再次产生模型调用费用。继续？')) return;
+    await api(`/api/songs/${b.dataset.reparse}/parse`, { method: 'POST' }).catch(e => alert(e.message));
+    loadSongs();
+  });
+  clearTimeout(pollTimer);
+  if (songs.some(s => s.status === 'parsing' || s.status === 'queued')) pollTimer = setTimeout(loadSongs, 2500);
+}
+
+// ---------------- 设置 ----------------
+function showSettings(c) {
+  $('keyState').innerHTML = c.api_key_masked ? `已保存 API key：<code>${esc(c.api_key_masked)}</code>`
+    : c.env_key ? '使用环境变量 <code>ANTHROPIC_API_KEY</code> 中的 key。'
+    : '<span class="warn">还没有设置 API key，识别前请先填写。</span>';
+  $('model').value = c.model; $('effort').value = c.effort; $('baseUrl').value = c.base_url;
+}
+async function saveSettings(extra = {}) {
+  const body = { model: $('model').value, effort: $('effort').value, base_url: $('baseUrl').value, ...extra };
+  if ($('apiKey').value.trim()) body.api_key = $('apiKey').value.trim();
+  const c = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  $('apiKey').value = ''; showSettings(c);
+}
+$('saveSettings').onclick = async () => { await saveSettings(); $('settingsMsg').innerHTML = '<span class="ok">已保存</span>'; };
+$('clearKey').onclick = async () => { await saveSettings({ clear_api_key: true }); $('settingsMsg').textContent = '已清除'; };
+$('testSettings').onclick = async () => {
+  await saveSettings();
+  $('settingsMsg').textContent = '测试中…';
+  const r = await api('/api/settings/test', { method: 'POST' });
+  $('settingsMsg').innerHTML = r.ok ? '<span class="ok">✓ 连接正常</span>' : `<span class="err">${esc(r.error)}</span>`;
+};
+
+api('/api/settings').then(showSettings);
+loadSongs().catch(e => { $('songs').textContent = e.message; });
+</script>
+</body>
+</html>
