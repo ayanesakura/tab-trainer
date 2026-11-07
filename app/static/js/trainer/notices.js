@@ -31,8 +31,10 @@ export function notice(id, spec) {
     el.dataset.id = id;
     cur = { el, sig: null, html: null, spec };
     els.set(id, cur);
-    const after = [...els.keys()].filter(k => ORDER.indexOf(k) > ORDER.indexOf(id)).map(k => els.get(k).el).find(x => x.isConnected);
-    host.insertBefore(el, after || null);
+    // 插在排在它后面的通知里最靠前的那一条前面（els 是按出现先后排的，不能直接取第一个）
+    const rank = k => ORDER.indexOf(k);
+    const next = [...els.keys()].filter(k => rank(k) > rank(id) && els.get(k).el.isConnected).sort((a, b) => rank(a) - rank(b))[0];
+    host.insertBefore(el, next ? els.get(next).el : null);
   }
   cur.spec = spec; // 按钮点下去时用最新的回调
   const sig = shape(spec), html = spec.html ?? '';
