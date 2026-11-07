@@ -58,28 +58,18 @@
 .legend { color: var(--muted); font-size: 12px; margin: 4px 4px 0; display: flex; gap: 14px; flex-wrap: wrap; }
 .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
 
-/* ---- 六线谱 ---- */
-.tabs { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; margin-top: 12px; }
-.barbox.wide { grid-column: span 2; }
-@media (max-width: 700px) { .barbox.wide { grid-column: auto; } }
-.barbox { position: relative; border-radius: 10px; cursor: pointer; background: var(--card); border: 1px solid var(--line); transition: border-color .15s, box-shadow .15s, background .15s; }
-.barbox:hover { border-color: var(--faint); }
-.barbox.sel { background: color-mix(in srgb, var(--accent-soft) 55%, var(--card)); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
-.barbox.cur { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.barbox.warn::after { content: ""; position: absolute; top: 8px; right: 9px; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
-.barbox svg { display: block; width: 100%; height: auto; }
-.barbox .tl { stroke: var(--tab-line); }
-.barbox .bl { stroke: var(--tab-lab); }
-.barbox .bd { fill: var(--faint); }
-.barbox .bn { fill: var(--muted); font: 600 11px var(--font); }
-.barbox .ph { stroke: var(--accent); }
-.barbox .bgr { fill: var(--card); transition: fill .15s; }
-.barbox.sel .bgr { fill: color-mix(in srgb, var(--accent-soft) 55%, var(--card)); }
-.ev text.f { fill: var(--tab-num); font: 500 12px var(--code); }
-.ev text.lab { fill: var(--tab-lab); font: 10px var(--font); }
-.ev.on text.f { fill: var(--tab-on); font-weight: 800; }
-.ev.next text.f { fill: var(--tab-next); }
-.ev:hover text.f { fill: var(--accent); }
+/* ---- 谱面（alphaTab） ---- */
+.score-card { margin-top: 12px; }
+.score-card .card-h { flex-wrap: wrap; }
+.score-legend { padding: 8px 14px 0; margin: 0; }
+#score { position: relative; padding: 4px 8px 16px; min-height: 200px; }
+#score .at-surface { margin: 0 auto; }
+.at-cursor-bar { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.at-cursor-beat { background: var(--accent); width: 3px; }
+.at-selection div { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.at-highlight * { fill: var(--accent); stroke: var(--accent); }
+.info.nocrop { grid-template-columns: 1fr; }
+.grow { flex: 1; }
 
 /* ---- 调弦 ---- */
 table.tune { width: 100%; border-collapse: collapse; }
@@ -165,8 +155,8 @@ table.tune td b { font-variant-numeric: tabular-nums; }
       </div>
     </div>
 
-    <div class="info">
-      <div class="card">
+    <div class="info" id="infoGrid">
+      <div class="card" id="cropCard">
         <div class="card-h"><span class="card-title">原谱 · 第 <span id="cropNo">1</span> 小节</span><span class="hint">点下方任一小节切换</span></div>
         <div class="paper"><canvas id="crop"></canvas><div id="cropMsg" style="display:none;color:#555;padding:20px"></div></div>
       </div>
@@ -179,6 +169,10 @@ table.tune td b { font-variant-numeric: tabular-nums; }
             <button class="btn sm" id="editBtn" data-ic="edit">修改本小节</button>
             <input class="input" id="hintInput" placeholder="告诉 AI 哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
             <button class="btn sm" id="reparseBtn" data-ic="refresh">重新识别这一行</button>
+          </div>
+          <div class="tools" id="explainBox" hidden>
+            <button class="btn sm primary" id="explainBtn" data-ic="sparkle">让 AI 讲解这首曲子</button>
+            <span class="hint">根据谱子数据给每个小节写练习提示，并生成练习建议（只发文字，费用很低）。</span>
           </div>
           <div class="editor" id="editor" style="display:none">
             <textarea class="input" id="edText" spellcheck="false"></textarea>
@@ -193,8 +187,17 @@ table.tune td b { font-variant-numeric: tabular-nums; }
       <div class="legend"><span><i style="background:#e8b04f"></i>正在弹</span><span><i style="border:2px solid #8fc6e0"></i>下一个</span><span>◆ 泛音点：轻触品丝正上方</span><span>品格数字从变调夹算起，和谱上一致；圆点按真实品位标出</span></div>
     </div>
 
-    <div class="legend" style="margin-top:14px">点击小节 = 只循环这一小节 · <kbd>Shift</kbd> + 点击 = 扩展循环范围 · 点击某个音 = 试听并在指板上显示 · 右上角橙点 = 可能识别有误</div>
-    <div class="tabs" id="tabs"></div>
+    <div class="card score-card">
+      <div class="card-h">
+        <span class="card-title" data-ic="music">谱面</span>
+        <span class="hint" id="trackName"></span>
+        <div class="grow"></div>
+        <div class="seg sm" id="notationSeg"><button data-v="both">五线谱 + 六线谱</button><button data-v="tab">只看六线谱</button></div>
+        <button class="btn sm" id="exportBtn" data-ic="upload" title="导出为 Guitar Pro 文件（.gp）">导出 GP</button>
+      </div>
+      <div class="legend score-legend">点击小节 = 只循环这一小节 · <kbd>Shift</kbd> + 点击 = 扩展循环范围 · 点击音符 = 试听 · 橙色小节号 = 可能识别有误</div>
+      <div id="score"></div>
+    </div>
   </section>
 
   <!-- ============ 调弦 ============ -->
@@ -254,6 +257,14 @@ table.tune td b { font-variant-numeric: tabular-nums; }
   </section>
 </main>
 
+<script type="module">
+  // alphaTab 和数据转换模块是 ES 模块；加载好后挂到 window 上，下面的普通脚本等它们就绪再用
+  import * as alphaTab from '/static/vendor/alphatab/alphaTab.min.mjs';
+  import * as scoreConv from '/static/js/score.js';
+  window.alphaTab = alphaTab;
+  window.scoreConv = scoreConv;
+  window.dispatchEvent(new Event('alphatab-ready'));
+</script>
 <script>
 // =====================================================================
 // 谱面数据（第 1–37 小节）
@@ -449,88 +460,12 @@ function click(when, accent) {
 // 六线谱渲染
 // ---------------------------------------------------------------------
 const SVGNS = 'http://www.w3.org/2000/svg';
-const BW = 340, BH = 124, PADL = 24, PADR = 12, TOP = 36, SG = 13, MINGAP = 24;
 const LAB = { h: 'H', p: 'P', sl: 'sl.', si: 'sl.', pm: 'P.M.', nh: '泛音', ah: 'AH', roll: '琶音', x: 'x', vib: '~', bend: 'bend' };
 function el(tag, attrs = {}, parent) {
   const n = document.createElementNS(SVGNS, tag);
   for (const k in attrs) n.setAttribute(k, attrs[k]);
   if (parent) parent.appendChild(n);
   return n;
-}
-const layouts = [];
-function layoutBar(bi) {
-  const evs = BARS[bi], W = Math.max(BW, PADL + PADR + 30 + evs.length * MINGAP), inner = W - PADL - PADR - 10, xs = [];
-  let last = -1e9;
-  for (const e of evs) { let x = PADL + 6 + e.t / BL * inner; if (x < last + MINGAP) x = last + MINGAP; xs.push(x); last = x; }
-  const maxX = W - PADR - 10;
-  if (last > maxX) { const k = (maxX - PADL - 6) / (last - PADL - 6); for (let i = 0; i < xs.length; i++) xs[i] = PADL + 6 + (xs[i] - PADL - 6) * k; }
-  const knots = [];
-  if (!evs.length || evs[0].t > 0) knots.push([0, PADL]);
-  evs.forEach((e, i) => knots.push([e.t, xs[i]]));
-  knots.push([BL, W - PADR]);
-  return { xs, knots, W };
-}
-function beatX(bi, t) {
-  const k = layouts[bi].knots;
-  for (let i = 0; i < k.length - 1; i++) {
-    const [t0, x0] = k[i], [t1, x1] = k[i + 1];
-    if (t >= t0 && t <= t1) return t1 === t0 ? x0 : x0 + (x1 - x0) * (t - t0) / (t1 - t0);
-  }
-  return k[k.length - 1][1];
-}
-const barBoxes = [], playheads = [], evNodes = [];
-function renderTabs() {
-  const host = document.getElementById('tabs');
-  host.innerHTML = ''; barBoxes.length = playheads.length = evNodes.length = layouts.length = 0;
-  BARS.forEach((evs, bi) => {
-    layouts[bi] = layoutBar(bi);
-    const W = layouts[bi].W;
-    const box = document.createElement('div'); box.className = 'barbox' + (SONG.bars[bi].warn?.length || SONG.bars[bi].uncertain ? ' warn' : '');
-    const svg = el('svg', { width: W, height: BH, viewBox: `0 0 ${W} ${BH}` });
-    el('text', { x: 8, y: 15, class: 'bn' }, svg).textContent = bi + 1;
-    for (let s = 1; s <= 6; s++) el('line', { x1: PADL - 8, x2: W - PADR, y1: TOP + (s - 1) * SG, y2: TOP + (s - 1) * SG, stroke: '#555c66', 'stroke-width': 1, class: 'tl' }, svg);
-    el('line', { x1: W - PADR, x2: W - PADR, y1: TOP, y2: TOP + 5 * SG, stroke: '#888', 'stroke-width': 1.2, class: 'bl' }, svg);
-    for (let b = 0; b < BL; b++) el('circle', { cx: beatX(bi, b), cy: TOP + 5 * SG + 14, r: b === 0 ? 2.4 : 1.6, fill: '#6b727c', class: 'bd' }, svg);
-    const ph = el('line', { x1: 0, x2: 0, y1: TOP - 8, y2: TOP + 5 * SG + 8, stroke: '#5fb3d9', 'stroke-width': 2, opacity: 0, class: 'ph' }, svg);
-    playheads[bi] = ph;
-    let lastLab = { y: 0, right: -1e9 };
-    evs.forEach((e, i) => {
-      const x = layouts[bi].xs[i];
-      const g = el('g', { class: 'ev' }, svg);
-      el('rect', { x: x - 10, y: 4, width: 20, height: BH - 8, fill: 'transparent', class: 'evhit' }, g).dataset.idx = e.idx;
-      const labs = [...new Set([...e.tech].map(k => LAB[k]).filter(Boolean))];
-      if (labs.length) {
-        const txt = labs.join(' '), half = txt.length * 3.2 + 4;
-        const up = lastLab.y === TOP - 12 && x - half < lastLab.right;
-        const y = up ? TOP - 23 : TOP - 12;
-        el('text', { x, y, 'text-anchor': 'middle', class: 'lab' }, g).textContent = txt;
-        lastLab = { y, right: x + half };
-      }
-      for (const n of e.notes) {
-        let txt = String(n.f);
-        if (n.tech.has('x')) txt = 'x';
-        else if (n.tech.has('nh')) txt = `<${n.f}>`;
-        else if (n.tech.has('ah')) txt = `${n.f}<${n.f + 12}>`;
-        else if (e.prefix[n.s]) txt = e.prefix[n.s] + txt;
-        if (n.grace != null) txt = `(${n.grace})` + txt;
-        if (n.bend > 0) txt += 'b';
-        const y = TOP + (n.s - 1) * SG, w = txt.length * 7 + 4;
-        el('rect', { x: x - w / 2, y: y - 6.5, width: w, height: 13, fill: '#1a1d22', class: 'bgr' }, g);
-        el('text', { x, y: y + 4, 'text-anchor': 'middle', class: 'f' }, g).textContent = txt;
-      }
-      g.querySelector('.evhit').style.pointerEvents = 'all';
-      evNodes[e.idx] = g;
-    });
-    if (W > 420) box.classList.add('wide');
-    box.appendChild(svg);
-    box.addEventListener('click', evt => {
-      const hit = evt.target.closest('.evhit');
-      if (hit) { previewEvent(ALL[+hit.dataset.idx]); return; }
-      if (evt.shiftKey) setLoop(Math.min(state.a, bi), Math.max(state.b, bi));
-      else setLoop(bi, bi);
-    });
-    host.appendChild(box); barBoxes[bi] = box;
-  });
 }
 
 // ---------------------------------------------------------------------
@@ -621,6 +556,7 @@ function showBar(bi) {
   drawCrop(bi);
 }
 function drawCrop(bi) {
+  if (!REG[bi]) return;
   const [p, x0, x1, y0, y1] = REG[bi], im = imgs[p], c = $('crop'), msg = $('cropMsg');
   if (!im || im.bad) { c.style.display = 'none'; msg.style.display = ''; msg.textContent = '原谱图片加载失败'; return; }
   c.style.display = ''; msg.style.display = 'none';
@@ -635,99 +571,197 @@ function drawCrop(bi) {
 // ---------------------------------------------------------------------
 // 播放控制
 // ---------------------------------------------------------------------
-const state = { playing: false, bpm: 50, a: 0, b: 0, anchorTime: 0, anchorBeat: 0, cursor: 0, timer: null, lastLoop: 0, loops: 0 };
+const state = { playing: false, ready: false, bpm: 50, a: 0, b: 0, loops: 0, lastTick: -1, tempoSet: false };
 const $ = id => document.getElementById(id);
-const loopLen = () => (state.b - state.a + 1) * BL;
-const beatToTime = b => state.anchorTime + (b - state.anchorBeat) * 60 / state.bpm;
-const nowBeat = () => state.anchorBeat + (ac.currentTime - state.anchorTime) * state.bpm / 60;
-function loopEvents() { return ALL.filter(e => e.bar >= state.a && e.bar <= state.b).map(e => ({ e, lb: e.abs - state.a * BL })); }
-let LE = [];
+const AT_BASE = '/static/vendor/alphatab/';
+const atReady = new Promise(r => (window.alphaTab ? r() : addEventListener('alphatab-ready', r, { once: true })));
+let api = null, baseTempo = 60, beatMap = [], scoreKey = '', shiftDown = false;
+addEventListener('keydown', e => { if (e.key === 'Shift') shiftDown = true; });
+addEventListener('keyup', e => { if (e.key === 'Shift') shiftDown = false; });
 
-function schedule() {
-  const endBeat = state.anchorBeat + (ac.currentTime + 0.12 - state.anchorTime) * state.bpm / 60;
-  if (endBeat <= state.cursor) return;
-  const L = loopLen();
-  for (let k = Math.floor(state.cursor / L); k * L < endBeat; k++) {
-    const a = Math.max(state.cursor, k * L) - k * L, b = Math.min(endBeat, (k + 1) * L) - k * L;
-    for (const { e, lb } of LE) if (lb >= a - 1e-9 && lb < b - 1e-9) playEvent(e, beatToTime(k * L + lb));
-    if ($('metro').checked) for (let i = Math.ceil(a - 1e-9); i < b - 1e-9; i++) click(beatToTime(k * L + i), Math.abs(i % BL) < 1e-9);
-  }
-  state.cursor = endBeat;
+function themeColors() {
+  const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
+  return { mainGlyphColor: v('--fg'), secondaryGlyphColor: v('--muted'), staffLineColor: v('--tab-line'), barSeparatorColor: v('--tab-lab'), barNumberColor: v('--muted'), scoreInfoColor: v('--fg') };
 }
+const staveProfile = () => ($('notationSeg').dataset.value === 'tab' ? 'Tab' : 'ScoreTab');
+
+async function ensureApi() {
+  if (api) return api;
+  await atReady;
+  api = new alphaTab.AlphaTabApi($('score'), {
+    core: { fontDirectory: AT_BASE + 'font/' },
+    display: { scale: 0.9, layoutMode: 'Page', staveProfile: staveProfile(), resources: themeColors() },
+    notation: { rhythmMode: 'ShowWithBars' },
+    player: {
+      playerMode: 'EnabledSynthesizer', soundFont: AT_BASE + 'soundfont/sonivox.sf2',
+      enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true,
+      enablePlaybackRangeSelection: false, scrollOffsetY: -230,
+    },
+  });
+  api.soundFontLoad.on(e => { if (!state.ready) setStatus('加载音色…', `${Math.round(100 * e.loaded / Math.max(1, e.total))}%`); });
+  api.playerReady.on(() => { state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格键播放'); });
+  api.playerStateChanged.on(e => {
+    state.playing = e.state === 1;
+    setPlayBtn(state.playing);
+    if (!state.playing) setStatus('已暂停', '空格键继续');
+  });
+  api.playerPositionChanged.on(e => onPosition(e.currentTick));
+  api.playedBeatChanged.on(beat => onBeat(beat, false));
+  api.beatMouseDown.on(onBeatClick);
+  api.noteMouseDown.on(n => { if (!state.playing && state.ready) api.playNote(n); });
+  api.scoreLoaded.on(onScoreLoaded);
+  api.renderFinished.on(() => { if (BARS.length) applyLoopRange(); markWarnBars(); });
+  api.error.on(e => UI.toast('谱面出错：' + (e && e.message ? e.message : e), 'err', 6000));
+  return api;
+}
+
+async function loadScore() {
+  await ensureApi();
+  if (SONG.kind === 'score') {
+    const key = 'score:' + (SONG.track || 0);
+    if (key === scoreKey) return;
+    scoreKey = key;
+    const r = await fetch(`/files/${SONG.id}/source`);
+    if (!r.ok) { UI.toast('曲谱文件加载失败', 'err'); return; }
+    api.load(new Uint8Array(await r.arrayBuffer()), [SONG.track || 0]);
+  } else {
+    if (!BARS.length) return;
+    const { tex, beatMap: bm } = scoreConv.toAlphaTex(SONG, { tempo: 60 });
+    beatMap = bm;
+    if ('tex:' + tex === scoreKey) return;
+    scoreKey = 'tex:' + tex;
+    api.tex(tex);
+  }
+}
+
+async function onScoreLoaded(score) {
+  baseTempo = score.tempo || 60;
+  if (SONG.kind === 'score') {
+    // 第一次打开（或换了音轨）：把谱子转成我们的小节数据存起来，指板、提示和 AI 讲解都靠它
+    const six = score.tracks.findIndex(t => t.staves[0] && t.staves[0].tuning.length === 6);
+    const track = SONG.bars.length ? (SONG.track || 0) : Math.max(0, six);
+    $('trackName').textContent = score.tracks[track] ? `音轨：${score.tracks[track].name}` : '';
+    if (!SONG.bars.length || track !== (SONG.track || 0)) {
+      try {
+        const d = scoreConv.deriveSong(score, track);
+        const r = await fetch(`/api/songs/${SONG_ID}/derived`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meta: d.meta, bars: d.bars, track }) });
+        if (!r.ok) throw new Error((await r.json()).detail || r.status);
+        await refresh(true);
+      } catch (e) { UI.toast('读取曲谱失败：' + e.message, 'err', 6000); }
+      return;
+    }
+  }
+  if (!state.tempoSet) { // 默认用原速的六成练习；没有标速度就 50
+    state.tempoSet = true;
+    const t = (SONG.meta && SONG.meta.tempo) || (SONG.kind === 'score' ? baseTempo : 0);
+    setTempo(t ? Math.round(t * 0.6) : 50);
+    if (t) $('autoTarget').value = t;
+  }
+  setTempo(state.bpm);
+}
+
+function applyAudio() {
+  if (!api) return;
+  api.masterVolume = $('gtVol').value / 100;
+  api.metronomeVolume = $('metro').checked ? $('metroVol').value / 100 * 1.5 : 0;
+  api.countInVolume = $('countIn').checked ? 1 : 0;
+}
+
+function applyLoopRange() {
+  if (!api || !api.score || !api.tracks.length) return;
+  const mbs = api.score.masterBars;
+  if (!mbs[state.a] || !mbs[state.b]) return;
+  const range = new alphaTab.synth.PlaybackRange();
+  range.startTick = mbs[state.a].start;
+  range.endTick = mbs[state.b].start + mbs[state.b].calculateDuration();
+  api.playbackRange = range;
+  api.isLooping = true;
+  const bars = api.tracks[0].staves[0].bars;
+  const first = bars[state.a].voices[0].beats[0];
+  const lastBeats = bars[state.b].voices[0].beats, last = lastBeats[lastBeats.length - 1];
+  if (state.b - state.a + 1 < mbs.length) api.highlightPlaybackRange(first, last);
+  else api.clearPlaybackRangeHighlight();
+  return range;
+}
+
+function markWarnBars() {
+  // 可能识别有误的小节：把 alphaTab 画的小节号染成橙色
+  // （小节号是 SVG 文字，内容就是小节号；只在本页面的谱面里找）
+  const warn = new Set(SONG.bars.filter(b => b.warn && b.warn.length || b.uncertain).map(b => String(b.n)));
+  if (!warn.size) return;
+  $('score').querySelectorAll('text').forEach(t => { if (warn.has(t.textContent.trim()) && t.getAttribute('font-size')) t.style.fill = 'var(--amber)'; });
+}
+
 function play() {
-  initAudio();
-  LE = loopEvents();
-  state.anchorBeat = 0; state.cursor = 0; state.loops = 0; state.lastLoop = 0;
-  state.anchorTime = ac.currentTime + 0.12;
-  if ($('countIn').checked) {
-    const spb = 60 / state.bpm;
-    const nCount = Math.max(2, Math.round(BL));
-    for (let i = 0; i < nCount; i++) click(state.anchorTime + i * spb, i === 0);
-    state.anchorTime += nCount * spb;
-  }
-  state.playing = true;
-  state.timer = setInterval(schedule, 25);
-  schedule();
-  setPlayBtn(true);
+  if (!api || !state.ready) { UI.toast('音色还在加载，稍等一下', 'info'); return; }
+  state.loops = 0; state.lastTick = -1;
+  api.play();
 }
-function stop() {
-  state.playing = false; clearInterval(state.timer);
-  if (ac) stopAllVoices();
-  setPlayBtn(false); setStatus('已停止', '空格键播放');
-  clearHighlights();
-  playheads.forEach(p => p.setAttribute('opacity', 0));
-  barBoxes.forEach(b => b.classList.remove('cur'));
-}
+function stop() { if (api) api.pause(); }
 function setTempo(bpm) {
-  bpm = Math.max(30, Math.min(140, Math.round(bpm)));
-  if (state.playing && ac.currentTime >= state.anchorTime) { state.anchorBeat = nowBeat(); state.anchorTime = ac.currentTime; }
+  bpm = Math.max(20, Math.min(240, Math.round(bpm)));
   state.bpm = bpm;
-  $('bpm').value = bpm; $('bpmVal').textContent = bpm + ' BPM'; UI.fillRange($('bpm'));
+  $('bpm').value = Math.min(bpm, +$('bpm').max); $('bpmVal').textContent = bpm + ' BPM'; UI.fillRange($('bpm'));
+  if (api) api.playbackSpeed = bpm / baseTempo;
 }
 function setLoop(a, b, restart = true, show = true) {
-  state.a = Math.min(a, b); state.b = Math.max(a, b);
+  state.a = Math.max(0, Math.min(a, b)); state.b = Math.min(BARS.length - 1, Math.max(a, b));
   updateLoopUI();
-  const partial = state.b - state.a + 1 < BARS.length; // 循环全曲时不高亮，免得满屏都是选中色
-  barBoxes.forEach((box, i) => box.classList.toggle('sel', partial && i >= state.a && i <= state.b));
+  const range = applyLoopRange();
   if (show) showBar(state.a);
-  if (state.playing && restart) { stop(); play(); }
+  if (range && api) {
+    if (state.playing && restart) { api.stop(); state.loops = 0; api.play(); }
+    else if (!state.playing) api.tickPosition = range.startTick;
+  }
 }
-function previewEvent(e) {
-  initAudio();
-  playEvent(e, ac.currentTime + 0.03);
-  showBar(e.bar);
-  clearHighlights(); evNodes[e.idx].classList.add('on');
-  showFb(e, ALL[e.idx + 1]);
-}
-let lit = [];
-function clearHighlights() { lit.forEach(n => n.classList.remove('on', 'next')); lit = []; }
 
-function frame() {
-  requestAnimationFrame(frame);
-  if (!state.playing) return;
-  const b = nowBeat();
-  if (b < 0) { setStatus(`预备 ${Math.ceil(-b)}`, '准备好…'); return; }
-  const L = loopLen(), k = Math.floor(b / L), local = b - k * L;
-  if (k > state.lastLoop) {
-    state.lastLoop = k; state.loops++;
+function onPosition(tick) {
+  if (state.playing && state.lastTick >= 0 && tick < state.lastTick - 10) {
+    state.loops++;
     if ($('auto').checked) {
       const every = Math.max(1, +$('autoEvery').value || 1), step = +$('autoStep').value || 0, target = +$('autoTarget').value || state.bpm;
       if (state.loops % every === 0 && state.bpm < target) setTempo(Math.min(target, state.bpm + step));
     }
   }
-  const scoreBeat = state.a * BL + local, bi = Math.min(BARS.length - 1, Math.floor(scoreBeat / BL + 1e-9)), t = scoreBeat - bi * BL;
-  setStatus(`第 ${bi + 1} 小节 · 第 ${Math.floor(t) + 1} 拍`, `第 ${state.loops + 1} 遍`);
-  barBoxes.forEach((box, i) => box.classList.toggle('cur', i === bi));
-  playheads.forEach((p, i) => { if (i === bi) { const x = beatX(bi, t); p.setAttribute('x1', x); p.setAttribute('x2', x); p.setAttribute('opacity', 0.9); } else p.setAttribute('opacity', 0); });
-  showBar(bi);
-  let cur = null;
-  for (const { e } of LE) if (e.abs <= scoreBeat + 1e-6) cur = e;
-  const ci = cur ? LE.findIndex(x => x.e === cur) : -1;
-  const next = LE.length ? LE[(ci + 1) % LE.length].e : null;
-  clearHighlights();
-  if (cur) { evNodes[cur.idx].classList.add('on'); lit.push(evNodes[cur.idx]); }
-  if (next && next !== cur) { evNodes[next.idx].classList.add('next'); lit.push(evNodes[next.idx]); }
+  state.lastTick = tick;
+}
+
+function eventAt(beat) {
+  const bi = beat.voice.bar.index, evs = BARS[bi];
+  if (!evs || !evs.length) return { bi, cur: null };
+  return { bi, cur: evs[scoreConv.eventIndexAt(beatMap[bi] || [0], beat.playbackStart)] };
+}
+function onBeat(beat, clicked) {
+  const { bi, cur } = eventAt(beat);
+  if (!clicked) setStatus(`第 ${bi + 1} 小节 · 第 ${Math.floor(beat.playbackStart / scoreConv.TICKS) + 1} 拍`, `第 ${state.loops + 1} 遍`);
+  if (bi < BARS.length) showBar(bi);
+  if (!cur) return;
+  let next = ALL[cur.idx + 1];
+  if (!next || next.bar > state.b) next = BARS[state.a] && BARS[state.a][0];
   showFb(cur, next);
+}
+function onBeatClick(beat) {
+  const bi = beat.voice.bar.index;
+  if (bi >= BARS.length) return;
+  if (shiftDown) setLoop(Math.min(state.a, bi), Math.max(state.b, bi));
+  else setLoop(bi, bi);
+  onBeat(beat, true);
+}
+
+function exportGp() {
+  if (!api || !api.score) return;
+  const bytes = new alphaTab.exporter.Gp7Exporter().export(api.score, api.settings);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  a.download = ((SONG.title || (SONG.meta && SONG.meta.title) || 'tab').replace(/[\\/:*?"<>|]/g, '_')) + '.gp';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function refreshScoreTheme() {
+  if (!api) return;
+  const res = api.settings.display.resources, c = themeColors();
+  for (const k in c) res[k] = alphaTab.model.Color.fromJson(c[k]);
+  api.updateSettings(); api.render();
 }
 
 // ---------------------------------------------------------------------
@@ -800,15 +834,18 @@ async function startMic() {
 // 初始化
 // ---------------------------------------------------------------------
 setTempo(50);
-$('playBtn').onclick = () => state.playing ? stop() : play();
-$('demoBarBtn').onclick = () => { if (state.playing) stop(); setLoop(state.a, state.a); play(); };
+$('playBtn').onclick = () => (state.playing ? stop() : play());
+$('demoBarBtn').onclick = () => { const b = shownBar >= 0 ? shownBar : state.a; setLoop(b, b, false); if (!state.playing) play(); };
+UI.seg($('notationSeg'), 'both', () => { if (!api) return; api.settings.display.staveProfile = alphaTab.StaveProfile[staveProfile()]; api.updateSettings(); api.render(); });
+$('exportBtn').onclick = exportGp;
+['metro', 'countIn'].forEach(id => $(id).addEventListener('change', applyAudio));
 $('bpm').oninput = e => setTempo(+e.target.value);
 $('bpmDown').onclick = () => setTempo(state.bpm - 4);
 $('bpmUp').onclick = () => setTempo(state.bpm + 4);
 $('loopPrev').onclick = () => { const n = state.b - state.a + 1, a = Math.max(0, state.a - n); setLoop(a, a + n - 1); };
 $('loopNext').onclick = () => { const n = state.b - state.a + 1, a = Math.min(BARS.length - n, state.a + n); setLoop(a, a + n - 1); };
-$('gtVol').oninput = e => { if (gtGain) gtGain.gain.value = e.target.value / 100; };
-$('metroVol').oninput = () => { if (metroGain) metroGain.gain.value = metroLevel(); };
+$('gtVol').oninput = applyAudio;
+$('metroVol').oninput = applyAudio;
 $('micBtn').onclick = startMic;
 $('tuneRows').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; initAudio(); pluck(0, +b.dataset.m, ac.currentTime + 0.02); });
 const DEMOS = {
@@ -825,6 +862,7 @@ const DEMOS = {
 };
 document.querySelectorAll('button.demo').forEach(b => b.onclick = () => {
   initAudio(); if (state.playing) stop(); stopAllVoices();
+  if (gtGain) gtGain.gain.value = 0.8;
   const spb = 60 / 72, t0 = ac.currentTime + 0.05;
   for (const e of DEMOS[b.dataset.demo]) playEvent(e, t0 + e.t * spb);
 });
@@ -832,7 +870,6 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Space' && !e.target.closest('input, textarea, select, button, [contenteditable]')) { e.preventDefault(); state.playing ? stop() : play(); }
 });
 window.addEventListener('resize', () => { if (shownBar < 0) return; const b = shownBar; shownBar = -1; showBar(b); });
-requestAnimationFrame(frame);
 
 // ---------------------------------------------------------------------
 // 加载曲子 / 修改 / 重新识别
@@ -865,7 +902,8 @@ function applySong(song) {
     }).filter(e => e.t < BL - 1e-9); // 时值超出小节长度的部分不播放（会在提示里标出）
   });
   TIPS = song.bars.map(b => b.tip);
-  REG = song.bars.map(b => [b.page, ...b.region]);
+  REG = song.bars.map(b => (b.region ? [b.page, ...b.region] : null));
+  if (song.kind === 'score') beatMap = song.bars.map(b => { let t = 0; return b.events.map(e => { const o = t; t += scoreConv.durToTicks(e.dur); return o; }); });
 }
 
 function renderHeader() {
@@ -936,25 +974,26 @@ function render(force) {
   const prevIds = renderedIds, prevA = state.a, prevB = state.b;
   const wasAll = !prevIds.length || (prevA === 0 && prevB === prevIds.length - 1);
   const idA = prevIds[prevA], idB = prevIds[prevB], idShown = prevIds[shownBar];
-  const loopSig = bars => JSON.stringify(bars.map(b => b && [b.id, b.events]));
-  const oldLoop = state.playing ? loopSig(prevIds.slice(prevA, prevB + 1).map(id => prevSongBars.get(id))) : null;
-  buildAll(); renderTune(); renderFretboard(); renderTabs(); renderSections(); renderPlan();
+  buildAll(); renderTune(); renderFretboard(); renderSections(); renderPlan();
+  const isScore = SONG.kind === 'score';
+  $('cropCard').hidden = isScore; $('infoGrid').classList.toggle('nocrop', isScore);
+  $('explainBox').hidden = !isScore || !SONG.bars.length || SONG.bars.some(b => b.tip);
+  $('editBtn').hidden = $('reparseBtn').hidden = $('hintInput').hidden = isScore;
+  loadScore();
   if (!imgs.length || imgs.length !== PAGES.length) loadImages();
   renderedIds = SONG.bars.map(b => b.id);
-  prevSongBars = new Map(SONG.bars.map(b => [b.id, b]));
-  if (!BARS.length) { if (state.playing) stop(); $('tabs').innerHTML = '<div class="list" style="width:100%"><div class="empty-state"><b>还没有识别出的小节</b>识别完成后会出现在这里。</div></div>'; return; }
+  if (!BARS.length) {
+    if (!isScore) $('score').innerHTML = '<div class="empty-state"><b>还没有识别出的小节</b>识别完成后会出现在这里。</div>';
+    return;
+  }
   const n = BARS.length - 1, find = (id, fallback) => { const i = renderedIds.indexOf(id); return i >= 0 ? i : Math.min(fallback, n); };
   let a = wasAll ? 0 : find(idA, prevA), z = wasAll ? n : find(idB, prevB);
   if (z < a) z = a;
-  const sameLoop = oldLoop !== null && oldLoop === loopSig(SONG.bars.slice(a, z + 1));
-  if (state.playing && !sameLoop) stop();
   const keep = idShown ? renderedIds.indexOf(idShown) : -1;
   shownBar = -1;
   setLoop(a, z, false, keep < 0); // 正在看的小节还在就直接显示它，中途不跳到别的小节（否则编辑器会被关掉）
-  if (state.playing) LE = loopEvents(); // 循环里的小节没变：换成新的事件对象，继续播放
   if (keep >= 0) showBar(keep);
 }
-let prevSongBars = new Map();
 
 async function fetchSong() {
   const r = await fetch(`/api/songs/${encodeURIComponent(SONG_ID)}`);
@@ -1009,6 +1048,14 @@ $('reparseBtn').onclick = async () => {
   $('hintInput').value = '';
   await refresh(true);
 };
+$('explainBtn').onclick = async () => {
+  $('explainBtn').disabled = true;
+  const r = await fetch(`/api/songs/${SONG_ID}/explain`, { method: 'POST' });
+  if (!r.ok) UI.toast((await r.json()).detail || '请求失败', 'err', 5000);
+  else UI.toast('AI 正在写讲解，完成后提示会出现在每个小节里', 'info');
+  $('explainBtn').disabled = false;
+  await refresh(true);
+};
 $('metaSave').onclick = async () => {
   const tuning = [1, 2, 3, 4, 5, 6].map(i => $('mT' + i).value.trim());
   const ts = $('mTs').value.split('/').map(x => parseInt(x, 10));
@@ -1034,8 +1081,8 @@ function showView(v) {
 addEventListener('hashchange', () => showView(location.hash.slice(1)));
 const themeIcon = () => { $('themeBtn').innerHTML = UI.icon(UI.isDark() ? 'moon' : 'sun'); };
 $('themeBtn').onclick = () => UI.setTheme(UI.isDark() ? 'light' : 'dark');
-document.addEventListener('themechange', themeIcon);
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', themeIcon);
+document.addEventListener('themechange', () => { themeIcon(); setTimeout(refreshScoreTheme, 50); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { themeIcon(); setTimeout(refreshScoreTheme, 50); });
 themeIcon();
 function setPlayBtn(on) { $('playBtn').classList.toggle('on', on); $('playBtn').innerHTML = UI.icon(on ? 'stop' : 'play'); }
 function setStatus(l1, l2) { $('status').innerHTML = `<div class="l1">${l1}</div><div class="l2">${l2}</div>`; }

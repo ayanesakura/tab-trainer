@@ -1,0 +1,1 @@
+alphaTab 1.9.0 (npm @coderline/alphatab), MPL-2.0. Bravura font: SIL OFL 1.1. Sonivox soundfont: Apache-2.0 (soundfont/LICENSE).

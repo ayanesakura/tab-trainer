@@ -48,8 +48,8 @@
       <div>
         <label class="drop" id="drop">
           <span class="big" data-ic="upload"></span>
-          <span><span class="t">上传谱子</span><br><span class="hint">拖到这里或点击选择 · 图片或 PDF · 多页请一次选中，按文件名排序</span></span>
-          <input type="file" id="file" multiple accept="image/*,application/pdf" hidden>
+          <span><span class="t">上传谱子</span><br><span class="hint">拖到这里或点击选择 · 图片 / PDF（AI 识别），或 Guitar Pro / MusicXML 文件（直接导入，不花钱）</span></span>
+          <input type="file" id="file" multiple accept="image/*,application/pdf,.gp,.gpx,.gp3,.gp4,.gp5,.musicxml,.xml,.mxl" hidden>
         </label>
         <div id="pickedBox" hidden>
           <div class="picked" id="picked"></div>
@@ -180,6 +180,7 @@ function songState(s) {
   }
   if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">识别失败：${esc(s.error)}</span>`;
   if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${s.bars} 小节` : ''}</span>`;
+  if (s.kind === 'score' && !s.bars) return `<span class="dot ok"></span><span>已导入，打开练习页即可</span>`;
   const parts = [`<span class="dot ${s.warn_bars ? 'warn' : 'ok'}"></span><span>${s.bars} 小节</span>`];
   if (s.warn_bars) parts.push(`<span class="badge warn">${s.warn_bars} 处待核对</span>`);
   if (s.error) parts.push(`<span class="badge err">部分行识别失败</span>`);
@@ -196,11 +197,11 @@ async function loadSongs() {
   } else {
     $('songs').innerHTML = songs.map(s => {
       const busy = s.status === 'parsing' || s.status === 'queued';
-      const canPlay = !busy && s.bars > 0;
+      const canPlay = !busy && (s.bars > 0 || s.kind === 'score');
       const sub = [s.artist, s.created].filter(Boolean).map(esc).join(' · ');
       return `<div class="row song-row ${canPlay ? 'click' : ''}" data-id="${s.id}" data-play="${canPlay ? 1 : ''}">
         <div class="tile" style="background:${tileColor(s.title)}">${esc([...s.title][0] || '♪')}</div>
-        <div class="who"><div class="name">${esc(s.title)}</div><div class="state">${songState(s)}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
+        <div class="who"><div class="name">${esc(s.title)}${s.kind === 'score' ? ' <span class="badge accent">GP</span>' : ''}</div><div class="state">${songState(s)}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
         <div class="ctl">
           ${canPlay ? `<a class="btn primary sm" href="/trainer?id=${s.id}">${icon('play', 12)}练习</a>` : ''}
           <button class="icon-btn sm" data-more="${s.id}" data-busy="${busy ? 1 : ''}" title="更多">${icon('more')}</button>

@@ -1,13 +1,15 @@
 # tab-trainer
 
-本地部署的吉他谱练习器：上传任意六线谱（图片或 PDF），用 Claude 识别成可播放、可循环、带指板显示的练习页面。
+本地部署的吉他谱练习器：上传六线谱图片 / PDF（用 Claude 识别），或直接导入 Guitar Pro / MusicXML 文件，得到可播放、可循环、带指板显示和 AI 讲解的练习页面。
 
 ## 功能
 
+- **导入 Guitar Pro / MusicXML**：`.gp/.gpx/.gp3–5/.musicxml/.mxl` 本来就是精确数据，不用 AI 识别、不花钱；可以再让 AI 根据谱子数据给每个小节写练习提示（只发文字，费用很低）。
 - **上传识别**：支持多张图片或 PDF。自动找出每一行六线谱，逐行交给 Claude 识读，读出品位、节奏和演奏技巧（击弦、勾弦、滑音、泛音、闷音、琶音、倚音、推弦等），并为每个小节写练习要点。
 - **自动校验**：每个小节的时值加起来必须等于拍号，凑不满会把问题反馈给模型返修一次；仍有问题的小节在练习页用橙色框标出。
 - **练习页**：
-  - 逐小节六线谱，可播放示范音（合成吉他音色），带节拍器和预备拍；
+  - 谱面渲染和播放用 [alphaTab](https://github.com/CoderLine/alphaTab)：五线谱 + 六线谱（显示节奏），SoundFont 吉他音色，跟随光标，节拍器和预备拍；
+  - 可以导出 Guitar Pro 文件（`.gp`），在其他软件里继续用；
   - 可以循环任意小节，按原谱的每一行一键选段，支持自动提速；
   - 指板实时显示正在弹和下一个要弹的位置；
   - 显示当前小节的原谱截图，方便对照；
@@ -26,6 +28,11 @@
 - 选项用分段开关，状态用圆点（失败用 × 形状），操作结果用底部的轻提示。
 
 全部是原生 HTML/CSS/JS（`app/static/ui.css`、`ui.js` 为共用部分），不需要前端构建。
+
+## 第三方组件
+
+- alphaTab 1.9.0（`app/static/vendor/alphatab/`，MPL-2.0）：谱面渲染、播放和 Guitar Pro 读写。它要求渲染出的谱面上保留“♪ alphaTab.net”署名，不得去掉、隐藏或遮挡（见 https://alphatab.net/docs/attribution）。
+- Bravura 字体（SIL OFL 1.1）、Sonivox 音色库（Apache-2.0）：随 alphaTab 附带，许可证文件在同一目录。
 
 ## 快速开始
 
@@ -94,6 +101,7 @@ uv run python -m app.evaluate <曲子id> --yes --systems 0,5 --model claude-sonn
 
 ```bash
 uv run pytest tests/
+node --test tests/js/*.test.mjs     # 数据 ⇄ alphaTab 往返校验
 uvx ruff check app tests && uvx ruff format --check app tests
 ```
 

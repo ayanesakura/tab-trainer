@@ -51,6 +51,14 @@ def trainer():
     return FileResponse(STATIC / "trainer.html")
 
 
+@app.get("/files/{sid}/source")
+def source_file(sid: str):
+    s = _song(sid)
+    if not s.get("source"):
+        raise HTTPException(404)
+    return FileResponse(store.song_dir(sid) / s["source"])
+
+
 @app.get("/files/{sid}/{name}")
 def page_file(sid: str, name: str):
     _song(sid)
@@ -142,9 +150,38 @@ def delete_song(sid: str):
 
 @app.post("/api/songs/{sid}/parse")
 def reparse_all(sid: str):
-    _song(sid)
+    s = _song(sid)
+    if s.get("kind") == "score":
+        raise HTTPException(400, "Guitar Pro / MusicXML 曲子不需要识别")
+    try:
+        pipeline.check_llm_ready()
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
     if not pipeline.start_parse(sid):
         raise HTTPException(409, "已经在识别中")
+    return {"ok": True}
+
+
+@app.put("/api/songs/{sid}/derived")
+def put_derived(sid: str, body: Annotated[dict, Body()]):
+    _song(sid)
+    try:
+        return pipeline.set_derived(
+            sid, body.get("meta") or {}, body.get("bars") or [], body.get("track") or 0
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/songs/{sid}/explain")
+def explain(sid: str):
+    _song(sid)
+    try:
+        pipeline.start_explain(sid)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from None
     return {"ok": True}
 
 
@@ -186,6 +223,8 @@ def reparse_line(sid: str, si: int, body: Annotated[dict | None, Body()] = None)
     hint = str((body or {}).get("hint") or "").strip()
     try:
         pipeline.start_reparse(sid, si, hint)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
     except RuntimeError as e:
         raise HTTPException(409, str(e)) from None
     return {"ok": True}

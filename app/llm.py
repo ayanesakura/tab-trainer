@@ -102,6 +102,10 @@ META_SCHEMA = _obj(
     }
 )
 
+EXPLAIN_SCHEMA = _obj(
+    {"bars": {"type": "array", "items": _obj({"number": {"type": "integer"}, "tip": {"type": "string"}})}}
+)
+
 PLAN_SCHEMA = _obj(
     {
         "overview": {"type": "string"},
@@ -305,6 +309,35 @@ class Claude:
         if hint:
             lines.append(f"The user reviewed an earlier transcription and says (in Chinese): {hint}")
         return self._call([block, {"type": "text", "text": "\n\n".join(lines)}], TRANSCRIBE_SCHEMA)
+
+    def explain_bars(self, meta: dict, bars: list[dict]) -> dict:
+        """给已经有精确数据的小节（GTP / MusicXML 导入）写练习提示，只发文字。"""
+
+        def note(n):
+            s = f"{n['string']}弦{n['fret']}品"
+            if n.get("grace", -1) >= 0:
+                s = f"(倚音{n['grace']}品)" + s
+            return s + (f"[{','.join(n['tech'])}]" if n.get("tech") else "")
+
+        lines = [
+            f"第{b['n']}小节: "
+            + " | ".join(
+                f"{e['dur']}拍 " + (" ".join(note(n) for n in e["notes"]) or "休止") for e in b["events"]
+            )
+            for b in bars
+        ]
+        text = (
+            f"Tuning (string 1 -> 6): {' '.join(meta['tuning'])}; capo {meta['capo']}; time signature "
+            f"{meta['time_signature'][0]}/{meta['time_signature'][1]}. Below is exact tablature data for some bars: each "
+            "event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), "
+            "techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, "
+            "nh natural harmonic, ah artificial harmonic, roll arpeggio, x dead note, vib vibrato, bend).\n"
+            + "\n".join(lines)
+            + "\n\nFor every bar, write a tip in Chinese: 1-4 sentences of practical guidance naming strings and frets "
+            "the way a teacher would (what to play together, what is fretted vs open, which technique and how to do it, "
+            "what is hard and how to practise it). Return one entry per bar with its number."
+        )
+        return self._call([{"type": "text", "text": text}], EXPLAIN_SCHEMA, effort="medium", max_tokens=32000)
 
     def practice_plan(self, meta: dict, bars: list[dict]) -> dict:
         summary = [

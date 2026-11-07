@@ -49,6 +49,10 @@ class FakeClaude:
             )
         return {"bars": bars}
 
+    def explain_bars(self, meta, bars):
+        FakeClaude.calls.append({"explain": [b["n"] for b in bars]})
+        return {"bars": [{"number": b["n"], "tip": f"讲解 {b['n']}"} for b in bars]}
+
     def practice_plan(self, meta, bars):
         return {"overview": "ok", "steps": [{"bars": "1-6", "title": "全曲", "advice": "慢练"}]}
 
@@ -216,3 +220,67 @@ def test_reparse_failed_line_uses_real_bar_numbers(data_dir):
     )  # 第 2 行之前失败了
     pipeline.reparse_system(sid, 1)
     assert FakeClaude.calls[-1]["first_bar"] == 4
+
+
+def _derived_bars(n):
+    return [{"events": [{"dur": "4", "notes": [{"string": 2, "fret": i % 5, "tech": []}]}]} for i in range(n)]
+
+
+def test_guitar_pro_upload_skips_ai_and_keeps_file(data_dir):
+    sid = pipeline.create_song([("我的曲子.gp5", b"FICHIER GUITAR PRO")])
+    song = store.load(sid)
+    assert song["kind"] == "score" and song["status"] == "ready" and song["title"] == "我的曲子"
+    assert (store.song_dir(sid) / song["source"]).read_bytes() == b"FICHIER GUITAR PRO"
+    assert not FakeClaude.calls
+    with pytest.raises(ValueError):
+        pipeline.create_song([("a.gp5", b"x"), ("b.png", _png())])
+
+
+def test_set_derived_and_explain(data_dir, monkeypatch):
+    sid = pipeline.create_song([("x.gp", b"..")])
+    bars = _derived_bars(20)
+    bars[3] = {"events": [{"dur": "4", "notes": [{"string": 9, "fret": 0}]}]}  # 坏数据：弦号 9
+    meta = {"tuning": ["E4", "B3", "G3", "D3", "A2", "E2"], "capo": 0, "time_signature": [4, 4], "tempo": 90}
+    song = pipeline.set_derived(sid, meta, bars, track=1)
+    assert len(song["bars"]) == 20 and song["track"] == 1
+    assert song["bars"][3]["events"] == [{"dur": "4", "notes": []}] and song["bars"][3]["warn"]
+    assert song["bars"][5]["system"] == 1
+
+    monkeypatch.setattr(
+        pipeline.threading, "Thread", lambda target, daemon: type("T", (), {"start": lambda self: target()})()
+    )
+    pipeline.start_explain(sid)
+    song = store.load(sid)
+    assert (
+        song["status"] == "ready"
+        and song["bars"][19]["tip"] == "讲解 20"
+        and song["plan"]["overview"] == "ok"
+    )
+    assert [c["explain"] for c in FakeClaude.calls if "explain" in c] == [
+        list(range(1, 17)),
+        [17, 18, 19, 20],
+    ]
+
+    with pytest.raises(ValueError):
+        pipeline.set_derived(pipeline.create_song([("p1.png", _png())]), meta, bars)  # 图片曲子不能这样改
+
+
+def test_recover_interrupted_explain_keeps_score_song_playable(data_dir):
+    sid = pipeline.create_song([("x.gp", b"..")])
+    pipeline.set_derived(sid, {}, _derived_bars(2))
+    store.update(sid, lambda s: s.update(status="parsing"))
+    pipeline.recover_interrupted()
+    song = store.load(sid)
+    assert song["status"] == "ready" and "中断" in song["error"]
+
+
+def test_explain_without_key_fails_fast(data_dir, monkeypatch):
+    from app import llm
+
+    monkeypatch.setattr(pipeline, "Claude", llm.Claude)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sid = pipeline.create_song([("x.gp", b"..")])
+    pipeline.set_derived(sid, {}, _derived_bars(2))
+    with pytest.raises(ValueError, match="API key"):
+        pipeline.start_explain(sid)
+    assert store.load(sid)["status"] == "ready" and not pipeline.jobs.running(sid)

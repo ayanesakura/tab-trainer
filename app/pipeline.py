@@ -205,9 +205,19 @@ def _save_pages(uploads: list[tuple[str, bytes]], pages_dir) -> list[dict]:
     return pages
 
 
+SCORE_EXT = (".gp", ".gpx", ".gp3", ".gp4", ".gp5", ".musicxml", ".xml", ".mxl")
+
+
+def _score_ext(name: str) -> str | None:
+    low = name.lower()
+    return next((e for e in SCORE_EXT if low.endswith(e)), None)
+
+
 def create_song(uploads: list[tuple[str, bytes]], title: str = "") -> str:
     if not uploads:
         raise ValueError("没有上传文件")
+    if any(_score_ext(n) for n, _ in uploads):
+        return _create_score_song(uploads, title)
     sid = store.new_id()
     d = store.song_dir(sid)
     try:
@@ -236,6 +246,72 @@ def create_song(uploads: list[tuple[str, bytes]], title: str = "") -> str:
     )
     start_parse(sid)
     return sid
+
+
+def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
+    """Guitar Pro / MusicXML：本来就是精确数据，不用 AI 识别。原文件保存下来，
+    练习页用 alphaTab 打开后把小节数据回传（set_derived）。"""
+    if len(uploads) != 1:
+        raise ValueError("Guitar Pro / MusicXML 文件一次只能上传一个，也不能和图片混在一起")
+    name, data = uploads[0]
+    ext = _score_ext(name)
+    sid = store.new_id()
+    d = store.song_dir(sid)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"source{ext}").write_bytes(data)
+    stem = name.rsplit("/", 1)[-1][: -len(ext)]
+    store.save(
+        {
+            "id": sid,
+            "kind": "score",
+            "source": f"source{ext}",
+            "title": title.strip() or stem,
+            "created": time.strftime("%Y-%m-%d %H:%M"),
+            "status": "ready",
+            "progress": None,
+            "error": None,
+            "pages": [],
+            "meta": None,
+            "systems": [],
+            "bars": [],
+            "plan": None,
+            "track": 0,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+    )
+    return sid
+
+
+def set_derived(sid: str, meta_raw: dict, bars_raw: list, track: int = 0) -> dict:
+    """保存练习页从 GTP / MusicXML 解析出的调弦和小节（换音轨时也走这里，会清掉旧的讲解）。"""
+
+    def apply(s):
+        if s.get("kind") != "score":
+            raise ValueError("只有 Guitar Pro / MusicXML 曲子可以这样保存")
+        meta = normalize_meta(meta_raw or {}, s.get("title", ""))
+        bars = []
+        for i, b in enumerate(bars_raw or []):
+            try:
+                events = clean_events((b or {}).get("events", []))
+                warn = check_bar(events, meta) if events else []
+            except ValueError as e:
+                events, warn = [], [f"导入时这一小节的数据无法使用：{e}"]
+            bars.append(
+                {
+                    "id": new_bar_id(),
+                    "n": i + 1,
+                    "system": i // 4,  # 没有原谱图片，按每 4 小节一段
+                    "page": None,
+                    "region": None,
+                    "events": events or rest_bar(meta),
+                    "tip": "",
+                    "uncertain": "",
+                    "warn": warn,
+                }
+            )
+        s.update(meta=meta, bars=bars, track=int(track or 0), plan=None)
+
+    return store.update(sid, apply)
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +364,14 @@ def llm_config() -> LLMConfig:
     )
 
 
+def check_llm_ready() -> None:
+    """发请求前先确认 key 配好了，免得任务先显示“进行中”过一会儿才失败。"""
+    try:
+        Claude(llm_config())
+    except LLMError as e:
+        raise ValueError(str(e)) from None
+
+
 def start_parse(sid: str) -> bool:
     cancel = jobs.claim(sid)
     if cancel is None:
@@ -326,8 +410,15 @@ def recover_interrupted() -> None:
             continue
         changed = False
         if song.get("status") in ("parsing", "queued"):
-            song["status"] = "error"
-            song["error"] = "服务重启，识别中断。可以在曲库的“…”菜单里重新识别。"
+            if song.get("kind") == "score":
+                song["status"], song["error"], song["progress"] = (
+                    "ready",
+                    "服务重启，讲解生成中断，可以重新生成。",
+                    None,
+                )
+            else:
+                song["status"] = "error"
+                song["error"] = "服务重启，识别中断。可以在曲库的“…”菜单里重新识别。"
             changed = True
         for s in song.get("systems", []):
             if s.get("status") in ("parsing", "pending"):
@@ -550,8 +641,58 @@ def _run_parse(sid: str, cancel: threading.Event | None = None) -> None:
 # ---------------------------------------------------------------------------
 # 重新识别某一行 / 手工修改
 # ---------------------------------------------------------------------------
+EXPLAIN_CHUNK = 16
+
+
+def start_explain(sid: str) -> None:
+    """GTP / MusicXML 曲子：根据精确的小节数据生成每小节提示和练习建议（只发文字，费用很低）。"""
+    song = store.load(sid)
+    if song.get("kind") != "score" or not song.get("bars"):
+        raise ValueError("曲子还没有小节数据，请先打开练习页让它加载一次")
+    check_llm_ready()
+    cancel = jobs.claim(sid)
+    if cancel is None:
+        raise RuntimeError("这首曲子正在处理中")
+    total = (len(song["bars"]) + EXPLAIN_CHUNK - 1) // EXPLAIN_CHUNK
+    _set(sid, status="parsing", error=None, progress={"stage": "生成讲解", "done": 0, "total": total})
+
+    def run():
+        try:
+            claude = Claude(llm_config())
+            for k in range(total):
+                if cancel.is_set():
+                    raise Cancelled()
+                cur = store.load(sid)
+                chunk = cur["bars"][k * EXPLAIN_CHUNK : (k + 1) * EXPLAIN_CHUNK]
+                tips = {
+                    t["number"]: t["tip"] for t in claude.explain_bars(cur["meta"], chunk).get("bars", [])
+                }
+
+                def apply(s, tips=tips, k=k):
+                    for b in s["bars"]:
+                        if b["n"] in tips:
+                            b["tip"] = tips[b["n"]]
+                    s["progress"] = {"stage": "生成讲解", "done": k + 1, "total": total}
+                    s["usage"] = dict(claude.usage)
+
+                store.update(sid, apply)
+            cur = store.load(sid)
+            plan = claude.practice_plan(cur["meta"], cur["bars"])
+            _set(sid, plan=plan, status="ready", progress=None, usage=dict(claude.usage))
+        except Cancelled:
+            _set(sid, status="ready", progress=None, error="讲解生成已取消，已完成的部分会保留。")
+        except Exception as e:
+            log.exception("request_id=unknown song=%s explain failed", sid)
+            _set(sid, status="ready", progress=None, error="生成讲解失败：" + _friendly(e))
+        finally:
+            jobs.release(sid)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def start_reparse(sid: str, si: int, hint: str = "") -> None:
     """在请求里就登记任务（而不是等后台线程），连点两次或和整首识别撞上时直接拒绝。"""
+    check_llm_ready()
     cancel = jobs.claim(sid)
     if cancel is None:
         raise RuntimeError("这首曲子正在识别中")
