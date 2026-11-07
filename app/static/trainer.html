@@ -4,140 +4,154 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>吉他谱练习器</title>
+<script src="/static/js/lib/theme-boot.js"></script>
 <link rel="stylesheet" href="/static/ui.css">
-<script src="/static/ui.js"></script>
 <link rel="stylesheet" href="/static/css/trainer.css">
+<script type="module" src="/static/js/trainer/main.js"></script>
 </head>
 <body>
 <header class="top">
-  <a class="icon-btn" href="/" title="返回曲库" data-ic="back"></a>
-  <div class="crumb"><span class="t" id="songTitle">加载中…</span><span class="badge" id="songSource" hidden></span></div>
+  <a class="icon-btn" href="/" title="返回曲库" aria-label="返回曲库" data-ic="back"></a>
+  <div class="crumb">
+    <div class="crumb-text">
+      <div class="crumb-line"><h1 class="t" id="songTitle">加载中…</h1><span class="badge" id="songSource" hidden></span></div>
+      <div class="crumb-sub" id="songSub"></div>
+    </div>
+  </div>
   <div class="center">
-    <div class="seg" id="nav">
+    <nav class="seg" id="nav" aria-label="页面">
       <button data-v="practice">练习</button>
       <button data-v="tune">调弦</button>
       <button data-v="plan">练习建议</button>
       <button data-v="glossary">记号说明</button>
-    </div>
+    </nav>
   </div>
-  <div class="actions"><button class="icon-btn" id="themeBtn" title="切换外观"></button></div>
+  <div class="actions"><button class="icon-btn" id="themeBtn"></button></div>
 </header>
 
-<main class="wrap">
-  <div class="hint" id="songSub" style="margin:-8px 2px 12px"></div>
-  <div class="notices">
-    <div class="notice info" id="progressBox" style="display:none"></div>
-    <div class="notice err" id="errorBox" style="display:none"></div>
-    <div class="notice" id="metaNote" style="display:none"></div>
-    <div class="notice info" id="resumeNote" style="display:none"></div>
-    <div class="notice" id="explainBox" hidden>
-      <span class="dot" style="background:var(--accent);margin-top:6px"></span>
-      <div style="flex:1" class="hint" id="explainHint">为每个小节写练习提示，并生成练习建议。</div>
-      <button class="btn sm primary" id="explainBtn" data-ic="sparkle">让 AI 讲解这首曲子</button>
-    </div>
-  </div>
-
+<main class="wrap trainer">
   <!-- ============ 练习 ============ -->
   <section class="view" id="view-practice">
-    <div class="card transport">
-      <div class="t-row">
-        <button class="play" id="playBtn" title="播放 / 停止（空格）"></button>
-        <div class="status" id="status"><div class="l1">已停止</div><div class="l2">空格键播放</div></div>
-        <div class="t-sep"></div>
-        <div class="grp">
-          <span class="lbl">速度</span>
-          <button class="icon-btn sm" id="bpmDown" data-ic="minus" title="慢 4 BPM"></button>
-          <input type="range" id="bpm" min="20" max="140" value="50">
-          <button class="icon-btn sm" id="bpmUp" data-ic="plus" title="快 4 BPM"></button>
-          <span class="bpm" id="bpmVal">50 BPM</span>
-        </div>
-        <div class="t-sep"></div>
-        <div class="grp">
-          <span class="lbl" data-ic="repeat"></span>
-          <button class="icon-btn sm" id="loopPrev" data-ic="left" title="上一段"></button>
-          <span class="loop-label" id="loopLabel">第 1 小节</span>
-          <button class="icon-btn sm" id="loopNext" data-ic="right" title="下一段"></button>
-        </div>
-        <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="把循环换成当前这一小节并播放">只练这一小节</button>
-        <div class="spacer"></div>
-        <button class="btn sm ghost" id="optsBtn" data-ic="settings" title="节拍器、音色、自动提速">播放设置</button>
-      </div>
-      <div class="chips" id="secBtns"></div>
-      <div class="t-opts" id="tOpts">
-        <span class="grp"><label class="switch"><input type="checkbox" id="metro" checked>节拍器</label><input class="vol" type="range" id="metroVol" min="0" max="100" value="70" aria-label="节拍器音量" title="节拍器音量"></span>
-        <label class="switch"><input type="checkbox" id="countIn" checked>预备拍</label>
-        <span class="grp"><span class="lbl">示范音量</span><input class="vol" type="range" id="gtVol" min="0" max="100" value="80" aria-label="示范音量"></span>
-        <span class="grp"><span class="lbl">音色</span><div class="seg sm" id="timbreSeg"><button data-v="steel" title="民谣吉他">钢弦</button><button data-v="nylon" title="古典吉他，更柔和">尼龙</button></div></span>
-        <span class="grp"><label class="switch"><input type="checkbox" id="auto">自动提速</label>
-          <span class="lbl">每</span><input class="input num" type="number" id="autoEvery" value="2" min="1"><span class="lbl">遍 +</span><input class="input num" type="number" id="autoStep" value="4" min="1"><span class="lbl">到</span><input class="input num" type="number" id="autoTarget" value="72" min="20" max="140"></span>
-      </div>
-    </div>
+    <div class="practice-grid">
+      <div class="main-col">
+        <div class="notices" id="notices" hidden></div>
 
-    <div class="info-grid" id="infoGrid">
-      <div class="card" id="cropCard">
-        <div class="card-h"><span class="card-title">原谱 · 第 <span id="cropNo">1</span> 小节</span><span class="hint">点小节切换</span></div>
-        <div class="paper"><canvas id="crop"></canvas><div id="cropMsg" style="display:none;color:#555;padding:20px"></div></div>
-      </div>
-      <div class="card detail">
-        <div class="card-h"><span class="card-title" id="tipTitle">第 1 小节</span><div class="tags" id="tipTags"></div></div>
-        <div class="body">
-          <div class="tip" id="tipText"></div>
-          <div class="warns" id="tipWarn" style="display:none"></div>
-          <div class="coach" id="coachBox">
-            <div class="qa-list" id="qaList"></div>
-            <div class="ask">
-              <input class="input" id="askInput" maxlength="500" aria-label="问 AI 这一小节" placeholder="问 AI 这一小节，如“左手指法怎么安排”">
-              <button class="btn sm" id="askBtn" data-ic="sparkle">问 AI</button>
+        <div class="transport card" id="transport">
+          <div class="t-row">
+            <button class="play" id="playBtn" aria-label="播放（空格）" title="播放 / 停止（空格）"></button>
+            <div class="status" aria-live="polite"><div class="l1" id="statusL1">加载中…</div><div class="l2" id="statusL2"></div></div>
+            <div class="t-sep"></div>
+            <div class="grp" role="group" aria-label="速度">
+              <button class="icon-btn sm" id="bpmDown" data-ic="minus" title="慢 4 BPM（↓）" aria-label="慢 4 BPM"></button>
+              <input type="range" id="bpm" min="20" max="140" value="50" aria-label="速度（BPM）">
+              <button class="icon-btn sm" id="bpmUp" data-ic="plus" title="快 4 BPM（↑）" aria-label="快 4 BPM"></button>
+              <span class="bpm"><b id="bpmVal">50</b> BPM</span>
+            </div>
+            <div class="t-sep"></div>
+            <div class="grp" role="group" aria-label="循环范围">
+              <button class="icon-btn sm" id="loopPrev" data-ic="left" title="上一段（←）" aria-label="上一段"></button>
+              <span class="loop-label" id="loopLabel">—</span>
+              <button class="icon-btn sm" id="loopNext" data-ic="right" title="下一段（→）" aria-label="下一段"></button>
+            </div>
+            <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="把循环换成正在看的这一小节并播放">只练这一小节</button>
+            <div class="grow"></div>
+            <button class="btn sm ghost" id="fbBtn" data-ic="tuning" aria-pressed="true" title="显示 / 收起底部的指板">指板</button>
+            <button class="btn sm ghost" id="moreBtn" data-ic="settings" aria-haspopup="true" aria-expanded="false" aria-controls="morePop">更多</button>
+          </div>
+          <div class="chips sections" id="secBtns" role="group" aria-label="按原谱的行选段"></div>
+
+          <div class="more-pop" id="morePop" role="dialog" aria-label="播放设置" hidden>
+            <div class="mp-row">
+              <label class="switch"><input type="checkbox" id="metro">节拍器</label>
+              <input class="vol" type="range" id="metroVol" min="0" max="100" aria-label="节拍器音量">
+            </div>
+            <div class="mp-row"><label class="switch"><input type="checkbox" id="countIn">预备拍（开始前先数一小节）</label></div>
+            <div class="mp-row">
+              <label class="mp-lbl" for="gtVol">示范音量</label>
+              <input class="vol" type="range" id="gtVol" min="0" max="100">
+            </div>
+            <div class="mp-row">
+              <span class="mp-lbl" id="timbreLbl">音色</span>
+              <div class="seg sm" id="timbreSeg" aria-labelledby="timbreLbl"><button data-v="steel" title="民谣吉他">钢弦</button><button data-v="nylon" title="古典吉他，更柔和">尼龙</button></div>
+            </div>
+            <hr>
+            <div class="mp-row"><label class="switch"><input type="checkbox" id="auto">自动提速</label></div>
+            <div class="mp-row auto-row">
+              <label for="autoEvery">每循环</label><input class="input num" type="number" id="autoEvery" min="1"><span>遍提速</span>
+              <input class="input num" type="number" id="autoStep" min="1" aria-label="每次提速多少 BPM"><label for="autoStep">BPM，</label>
+              <label for="autoTarget">最高</label><input class="input num" type="number" id="autoTarget" min="20" max="140"><span>BPM</span>
             </div>
           </div>
-          <div class="practice-line" id="practiceLine"></div>
-          <details class="fix" id="fixBox">
-            <summary>识别有误？</summary>
-            <div class="tools">
-              <button class="btn sm" id="editBtn" data-ic="edit">修改本小节</button>
-              <input class="input" id="hintInput" aria-label="重新识别时告诉 AI 哪里不对" placeholder="哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
-              <button class="btn sm" id="reparseBtn" data-ic="refresh">重新识别这一行</button>
-            </div>
-          <div class="editor" id="editor" style="display:none">
-            <textarea class="input" id="edText" spellcheck="false"></textarea>
-            <div class="hint">每行一个事件：dur = 到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string 弦（1 最细）、fret 品；tech 可用 h p sl si pm nh ah roll x vib bend；grace 倚音品位（-1 表示没有）。</div>
-            <div class="bar"><button class="btn sm primary" id="edSave">保存</button><button class="btn sm ghost" id="edCancel">取消</button><span class="hint" id="edMsg"></span></div>
+        </div>
+
+        <div class="card score-card" id="scoreCard">
+          <div class="card-h">
+            <span class="card-title" data-ic="music">谱面</span>
+            <span class="hint" id="trackName"></span>
+            <div class="grow"></div>
+            <button class="btn sm" id="editModeBtn" data-ic="edit" aria-pressed="false" title="点击谱面上的音符修改弦、品和技巧">改音</button>
+            <div class="seg sm" id="notationSeg" aria-label="谱面样式"><button data-v="both">五线谱 + 六线谱</button><button data-v="tab">只看六线谱</button></div>
+            <button class="btn sm" id="exportBtn" data-ic="download" title="下载为 Guitar Pro 文件（.gp）">导出 GP</button>
           </div>
-          </details>
+          <div class="legend score-legend" id="scoreLegend"></div>
+          <div id="score"></div>
+          <div class="empty-state" id="scoreEmpty" hidden><b>还没有识别出的小节</b>识别完成后显示。</div>
+          <button class="btn sm orig-btn" id="origBtn" title="看这一小节的原谱" hidden></button>
+          <div class="note-pop" id="notePop" role="dialog" aria-labelledby="npTitle" hidden>
+            <div class="np-h"><span id="npTitle"></span><span class="hint" id="npSub"></span><div class="grow"></div><button class="icon-btn sm" id="npClose" data-ic="x" title="关闭（Esc）" aria-label="关闭"></button></div>
+            <div class="np-row"><span class="lbl" id="npStrLbl">弦</span><div class="seg sm" id="npStr" aria-labelledby="npStrLbl"><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button><button data-v="6">6</button></div><span class="hint">1 弦最细</span></div>
+            <div class="np-row"><label class="lbl" for="npFret">品</label><button class="icon-btn sm" id="npFretDown" data-ic="minus" aria-label="品位减 1"></button><input class="input num np-fret" type="number" id="npFret" min="0" max="30"><button class="icon-btn sm" id="npFretUp" data-ic="plus" aria-label="品位加 1"></button><span class="hint">从变调夹算起</span></div>
+            <div class="np-row top"><span class="lbl" id="npTechLbl">技巧</span><div class="chips multi" id="npTech" role="group" aria-labelledby="npTechLbl"></div></div>
+            <div class="np-row top"><span class="lbl" id="npDurLbl" title="这一拍到下一个音的时长，整拍的音一起改">时值</span><div class="chips multi" id="npDur" role="group" aria-labelledby="npDurLbl"></div></div>
+            <div class="np-msg" id="npMsg"></div>
+            <div class="np-actions"><button class="btn sm danger" id="npDel" data-ic="trash">删除</button><button class="btn sm ghost" id="npAdd" data-ic="plus" title="在同一拍上再加一个音">同一拍加音</button><div class="grow"></div><button class="btn sm primary" id="npSave">保存</button></div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="card fbwrap"><svg id="fb" viewBox="0 0 960 170"></svg>
-      <div class="legend"><span><i style="background:#e8b04f"></i>正在弹</span><span><i style="border:2px solid #8fc6e0"></i>下一个</span><span>◆ 泛音：轻触品丝正上方</span><span>数字从变调夹算起，圆点是实际品位</span></div>
-    </div>
-
-    <div class="card score-card">
-      <div class="card-h">
-        <span class="card-title" data-ic="music">谱面</span>
-        <span class="hint" id="trackName"></span>
-        <div class="grow"></div>
-        <button class="btn sm" id="editModeBtn" data-ic="edit" title="点击谱面上的音符修改弦、品和技巧">改音</button>
-        <div class="seg sm" id="notationSeg"><button data-v="both">五线谱 + 六线谱</button><button data-v="tab">只看六线谱</button></div>
-        <button class="btn sm" id="exportBtn" data-ic="upload" title="导出为 Guitar Pro 文件（.gp）">导出 GP</button>
-      </div>
-      <div class="legend score-legend" id="scoreLegend"></div>
-      <div id="score"></div>
-      <button class="btn follow-btn" id="followBtn" data-ic="locate" title="滚动到正在播放的小节" hidden>回到播放位置</button>
-      <div class="note-pop" id="notePop" hidden>
-        <div class="np-h"><span id="npTitle"></span><span class="hint" id="npSub"></span><div class="grow" style="flex:1"></div><button class="icon-btn sm" id="npClose" data-ic="x" title="关闭（Esc）"></button></div>
-        <div class="np-row"><span class="lbl">弦</span><div class="seg sm" id="npStr"><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button><button data-v="6">6</button></div><span class="hint">1 弦最细</span></div>
-        <div class="np-row"><span class="lbl">品</span><button class="icon-btn sm" id="npFretDown" data-ic="minus"></button><input class="input num np-fret" type="number" id="npFret" min="0" max="30"><button class="icon-btn sm" id="npFretUp" data-ic="plus"></button><span class="hint">从变调夹算起</span></div>
-        <div class="np-row" style="align-items:flex-start"><span class="lbl" style="line-height:26px">技巧</span><div class="chips" id="npTech"></div></div>
-        <div class="np-row" style="align-items:flex-start"><span class="lbl" style="line-height:26px" title="这一拍到下一个音的时长，整拍的音一起改">时值</span><div class="chips" id="npDur"></div></div>
-        <div class="np-msg hint" id="npMsg"></div>
-        <div class="np-actions"><button class="btn sm danger" id="npDel" data-ic="trash">删除</button><button class="btn sm ghost" id="npAdd" data-ic="plus" title="在同一拍上再加一个音">同一拍加音</button><div class="grow"></div><button class="btn sm primary" id="npSave">保存</button></div>
-      </div>
+      <aside class="side" id="side" aria-label="当前小节">
+        <div class="card bar-card">
+          <div class="card-h">
+            <span class="card-title">第 <span id="barNo">1</span> 小节</span>
+            <span class="badge warn" id="barReview" hidden>待核对</span>
+            <div class="grow"></div>
+            <span class="hint">点谱面上的小节切换</span>
+          </div>
+          <div class="body">
+            <div class="tags" id="barTags"></div>
+            <div class="tip" id="tipText"></div>
+            <div class="warns" id="tipWarn" hidden></div>
+            <button class="paper" id="cropBox" title="点开看这一整行的原谱" hidden><canvas id="crop"></canvas><span class="paper-msg" id="cropMsg" hidden></span><span class="paper-cap">原谱</span></button>
+            <div class="coach">
+              <div class="sec-h">问 AI</div>
+              <div class="qa-list" id="qaList" hidden></div>
+              <div class="ask">
+                <input class="input" id="askInput" maxlength="500" aria-label="问 AI 这一小节" placeholder="如“左手指法怎么安排”">
+                <button class="btn sm" id="askBtn" data-ic="sparkle">问 AI</button>
+              </div>
+            </div>
+            <div class="practice-line" id="practiceLine"></div>
+            <details class="fix" id="fixBox">
+              <summary>识别有误？</summary>
+              <div class="tools">
+                <button class="btn sm" id="editBtn" data-ic="edit">修改本小节</button>
+                <input class="input" id="hintInput" aria-label="重新识别时告诉 AI 哪里不对" placeholder="哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
+                <button class="btn sm" id="reparseBtn" data-ic="refresh">重新识别这一行</button>
+              </div>
+              <div class="editor" id="editor" hidden>
+                <textarea class="input" id="edText" spellcheck="false" aria-label="本小节的数据（JSON）"></textarea>
+                <div class="hint">每行一个事件：dur = 到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string 弦（1 最细）、fret 品；tech 可用 h p sl si pm nh ah roll x vib bend；grace 倚音品位（-1 表示没有）。</div>
+                <div class="ed-bar"><button class="btn sm primary" id="edSave">保存</button><button class="btn sm ghost" id="edCancel">取消</button><span class="hint" id="edMsg"></span></div>
+              </div>
+            </details>
+          </div>
+        </div>
+      </aside>
     </div>
   </section>
 
   <!-- ============ 调弦 ============ -->
-  <section class="view" id="view-tune" hidden>
+  <section class="view narrow" id="view-tune" hidden>
     <div class="head"><div><h1 id="tuneTitle">调弦</h1><p>先调弦再夹变调夹。改动较多时，调完稍等再复查一遍。</p></div></div>
     <div class="card"><table class="tune"><thead><tr><th>弦</th><th>标准音</th><th>目标音</th><th>怎么调</th><th></th></tr></thead><tbody id="tuneRows"></tbody></table></div>
 
@@ -160,68 +174,43 @@
         <label class="meta-setting">变调夹（品）<input class="input" id="mCapo" type="number" min="0" max="12"></label>
         <label class="meta-setting">拍号<input class="input" id="mTs" placeholder="4/4"></label>
       </div>
-      <div class="card-h" style="border-top:1px solid var(--line-2);border-bottom:0"><span class="hint" id="metaMsg">音名写法如 D2、F#3。</span><button class="btn primary sm" id="metaSave">保存</button></div>
+      <div class="card-f"><span class="hint" id="metaMsg"></span><button class="btn primary sm" id="metaSave">保存</button></div>
     </div>
   </section>
 
   <!-- ============ 练习建议 ============ -->
-  <section class="view" id="view-plan" hidden>
+  <section class="view narrow" id="view-plan" hidden>
     <div class="head"><div><h1>练习建议</h1><p>点“循环这段”直接去练。</p></div></div>
-    <div id="plan"><div class="list"><div class="empty-state"><b>还没有练习建议</b>识别完成后会自动生成。</div></div></div>
-    <div class="notice" style="margin-top:12px"><span class="dot"></span><div>弹不顺时：缩到那一小节，降到能连续弹对 3 遍的速度，再慢慢加速。</div></div>
+    <div class="stack" id="plan"></div>
+    <div class="notice plan-tip"><span class="dot"></span><div class="n-body">弹不顺时：缩到那一小节，降到能连续弹对 3 遍的速度，再慢慢加速。</div></div>
   </section>
 
   <!-- ============ 记号说明 ============ -->
-  <section class="view" id="view-glossary" hidden>
+  <section class="view narrow" id="view-glossary" hidden>
     <div class="head"><div><h1>记号说明</h1><p>谱上常见的演奏记号。</p></div></div>
-    <div class="list set">
-      <div class="row"><div class="who"><div class="name">P.M. · 闷音</div><div class="sub">右手掌根外侧轻轻搭在琴桥和琴弦交界处再拨弦，声音变短、变闷。</div></div><div class="ctl"><button class="btn sm demo" data-demo="pm" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">sl. · 滑音</div><div class="sub">只拨第一个音，左手保持按压滑到目标品，目标音不再拨弦。</div></div><div class="ctl"><button class="btn sm demo" data-demo="sl" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">H · 击弦（捶弦）</div><div class="sub">拨响前一个音后，另一根手指快速有力地砸到目标品发声。</div></div><div class="ctl"><button class="btn sm demo" data-demo="h" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">P · 勾弦</div><div class="sub">手指离弦时往下勾一下，把弦带响。H 和 P 连用时整组只拨一次。</div></div><div class="ctl"><button class="btn sm demo" data-demo="p" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">&lt;n&gt; · 自然泛音</div><div class="sub">左手轻触标注品丝的<b>正上方</b>，不要按下，拨弦后立刻离开。</div></div><div class="ctl"><button class="btn sm demo" data-demo="nh" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">AH · 人工泛音</div><div class="sub">左手正常按住（如 2 品），右手食指轻点高 12 品的品丝上方（14 品），拇指或无名指拨弦后食指离开。</div></div><div class="ctl"><button class="btn sm demo" data-demo="ah" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">竖波浪线 · 琶音</div><div class="sub">和弦从低音弦到高音弦快速依次拨开。</div></div><div class="ctl"><button class="btn sm demo" data-demo="roll" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">3 · 三连音</div><div class="sub">一拍平均放三个音，长度要一样。六连音同理。</div></div><div class="ctl"><button class="btn sm demo" data-demo="tri" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">(n) · 倚音</div><div class="sub">小一号的音符，在正式音之前极快地带过，随即击弦或滑到正式音。</div></div><div class="ctl"><button class="btn sm demo" data-demo="grace" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">/n · 从下方滑入</div><div class="sub">数字前只有斜线：从低一两品处拨弦，立刻滑进目标品。</div></div><div class="ctl"><button class="btn sm demo" data-demo="si" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">x · 死音</div><div class="sub">左手轻搭琴弦不按实，拨出没有音高的“哒”声。</div></div></div>
-      <div class="row"><div class="who"><div class="name">b · 推弦</div><div class="sub">按住后把弦推起，音高升半音（1/2）或全音（full）。</div></div></div>
-      <div class="row"><div class="who"><div class="name">连线 · 延音</div><div class="sub">同音之间的弧线表示延长，后面的音不再拨。</div></div></div>
-    </div>
+    <div class="list set glossary" id="glossaryList"></div>
   </section>
 </main>
 
-<div class="orig-modal" id="origModal" hidden>
-  <div class="orig-box" role="dialog" aria-labelledby="origTitle">
-    <div class="orig-h">
-      <span class="card-title" id="origTitle"></span><span class="hint" id="origHint"></span><div class="grow" style="flex:1"></div>
-      <button class="icon-btn sm" id="origPrev" data-ic="left" title="上一小节（←）"></button>
-      <button class="icon-btn sm" id="origNext" data-ic="right" title="下一小节（→）"></button>
-      <button class="icon-btn sm" id="origClose" data-ic="x" title="关闭（Esc）"></button>
-    </div>
-    <div class="orig-body"><canvas id="origCanvas"></canvas></div>
+<!-- 指板：底部停靠条，可折叠 -->
+<div class="fb-dock" id="fbDock">
+  <div class="fb-bar">
+    <button class="fb-toggle" id="fbToggle" aria-controls="fbBody" aria-expanded="true"><span class="chev" aria-hidden="true"></span>指板</button>
+    <div class="legend fb-legend"><span><i class="lg-cur"></i>正在弹</span><span><i class="lg-next"></i>下一个</span><span>◆ 泛音：轻触品丝正上方</span><span>数字从变调夹算起，圆点是实际品位</span></div>
   </div>
+  <div class="fb-body" id="fbBody"><svg id="fb" viewBox="0 0 960 146" role="img" aria-label="指板：正在弹和下一个要弹的位置"></svg></div>
 </div>
-<script type="module">
-  // alphaTab 和数据转换模块是 ES 模块；加载好后挂到 window 上，下面的普通脚本等它们就绪再用
-  import * as alphaTab from '/static/vendor/alphatab/alphaTab.min.mjs';
-  import * as scoreConv from '/static/js/score.js';
-  window.alphaTab = alphaTab;
-  window.scoreConv = scoreConv;
-  window.dispatchEvent(new Event('alphatab-ready'));
-</script>
-<!-- 练习页脚本：按顺序加载的普通脚本，共用全局作用域；main.js 最后加载，负责绑定事件和加载曲子 -->
-<script src="/static/js/trainer/core.js"></script>
-<script src="/static/js/trainer/synth.js"></script>
-<script src="/static/js/trainer/tuner.js"></script>
-<script src="/static/js/trainer/fretboard.js"></script>
-<script src="/static/js/trainer/bar-info.js"></script>
-<script src="/static/js/trainer/player.js"></script>
-<script src="/static/js/trainer/coach.js"></script>
-<script src="/static/js/trainer/practice-log.js"></script>
-<script src="/static/js/trainer/editor.js"></script>
-<script src="/static/js/trainer/song.js"></script>
-<script src="/static/js/trainer/main.js"></script>
+
+<button class="btn follow-btn" id="followBtn" data-ic="locate" title="滚动到正在播放的小节" hidden>回到播放位置</button>
+
+<dialog class="dlg orig-dlg" id="origModal" aria-labelledby="origTitle">
+  <div class="orig-h">
+    <span class="card-title" id="origTitle"></span><span class="badge warn" id="origHint"></span><div class="grow"></div>
+    <button class="icon-btn sm" id="origPrev" data-ic="left" title="上一小节（←）" aria-label="上一小节"></button>
+    <button class="icon-btn sm" id="origNext" data-ic="right" title="下一小节（→）" aria-label="下一小节"></button>
+    <button class="icon-btn sm" id="origClose" data-ic="x" title="关闭（Esc）" aria-label="关闭"></button>
+  </div>
+  <div class="orig-body"><canvas id="origCanvas"></canvas></div>
+</dialog>
 </body>
 </html>

@@ -36,8 +36,8 @@ function guitarsFailed() {
 }
 
 function themeColors() {
-  const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
-  return { mainGlyphColor: v('--fg'), secondaryGlyphColor: v('--muted'), staffLineColor: v('--tab-line'), barSeparatorColor: v('--tab-lab'), barNumberColor: v('--muted'), scoreInfoColor: v('--fg') };
+  const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim() || '#808080';
+  return { mainGlyphColor: v('--fg'), secondaryGlyphColor: v('--muted'), staffLineColor: v('--faint'), barSeparatorColor: v('--muted'), barNumberColor: v('--muted'), scoreInfoColor: v('--fg') };
 }
 const staveProfile = () => (get('ui.notation') === 'tab' ? 'Tab' : 'ScoreTab');
 
