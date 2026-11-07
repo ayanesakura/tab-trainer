@@ -29,6 +29,7 @@ test('program: onsets skip rests and ties, chords count once, beats follow time 
   assert.deepEqual(p.bars[1].beats.filter(b => b.accent).map(b => b.q), [4]);
   assert.equal(placeName(p.onsets[1]), '第 5 小节 · 第 2 拍的 &');
   assert.equal(placeName(p.onsets[2]), '第 5 小节 · 第 3 拍');
+  assert.equal(placeName({ bi: 0, beat: 1, label: '·' }), '第 1 小节 · 第 1 拍中间');
   // 同一时刻的两个事件（多声部）只敲一下；超出小节长度的事件不算
   const q = buildProgram([{ bi: 0, len: 2, ts: [2, 4], events: [{ t: 0, d: 0, notes: [{}] }, { t: 0, d: 1, notes: [{}] }, { t: 1, d: 1, notes: [{}] }, { t: 2, d: 1, notes: [{}] }] }]);
   assert.deepEqual(q.onsets.map(o => o.q), [0, 1]);

@@ -111,6 +111,7 @@ export function weakSpots(onsets, loops) {
 
 // “第 3 小节 · 第 2 拍的 &”
 export function placeName(o) {
-  const beat = /^\d+$/.test(o.label) ? `第 ${o.beat} 拍` : `第 ${o.beat} 拍的 ${o.label}`;
+  // 口令以外的位置（三十二分音符、五连音等，口令是 ·）没有名字可叫，只说在第几拍里
+  const beat = /^\d+$/.test(o.label) ? `第 ${o.beat} 拍` : o.label === '·' ? `第 ${o.beat} 拍中间` : `第 ${o.beat} 拍的 ${o.label}`;
   return `第 ${o.bi + 1} 小节 · ${beat}`;
 }
