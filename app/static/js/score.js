@@ -17,7 +17,7 @@ export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数�
 // 4：闷音的品格记 0；自然泛音的品格记谱上标的泛音点（<12> → 12）
 // 5：中文 GP3–5 文件按 GBK 重新导入（曲名、艺人不再是乱码）
 // 6：GBK 乱码判断收紧（Canção、Größe 这类西文曲名不再被误当成乱码），只看 GP3–5 / GPX 文件
-export const DERIVE_VERSION = 6;
+export const DERIVE_VERSION = 7;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -224,6 +224,9 @@ export function deriveSong(score, trackIndex = 0) {
 
   const bars = staff.bars.map((bar, bi) => {
     const length = score.masterBars[bi].calculateDuration();
+    // 最后一个音到哪里结束：一般是小节长度；GP 里的小节可以写得比拍号长（多出来的拍从小节长度处或更后面开始），
+    // 这时按拍自己的时值算到它结束，不能让最后一个音的时值变成 0 或负数（后端会拒收，整小节变成休止）
+    let end = length;
     const byTick = new Map();
     const pendingGrace = [];
     for (const voice of bar.voices) {
@@ -235,6 +238,7 @@ export function deriveSong(score, trackIndex = 0) {
           continue;
         }
         const start = beat.displayStart;
+        end = Math.max(end, start + (beat.displayDuration || 0));
         if (!byTick.has(start)) byTick.set(start, []);
         if (beat.isRest) continue;
         for (const n of beat.notes) {
@@ -267,8 +271,9 @@ export function deriveSong(score, trackIndex = 0) {
       const n = t !== undefined && byTick.get(t).find(n => n.string === g.s);
       if (n) n.grace = g.fret;
     }
+    if (end <= ticks[ticks.length - 1]) end = ticks[ticks.length - 1] + TICKS; // 拍没有时值（不会发生）时兜底：算一拍
     const events = ticks.map((t, i) => ({
-      dur: ticksToDur((i + 1 < ticks.length ? ticks[i + 1] : length) - t),
+      dur: ticksToDur((i + 1 < ticks.length ? ticks[i + 1] : end) - t),
       notes: byTick.get(t),
     }));
     const mb = score.masterBars[bi], out = { events };
