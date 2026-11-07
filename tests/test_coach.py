@@ -175,3 +175,54 @@ def test_claim_is_released_when_the_job_cannot_start(data_dir, monkeypatch):
     with pytest.raises(OSError):
         recognize.start_parse(sid)
     assert not jobs.jobs.running(sid)
+
+
+def test_renaming_during_explain_or_recognition_keeps_ai_content(data_dir, sync_jobs, monkeypatch):
+    """改曲名（派生的 meta.title 跟着变）不影响提示和练习建议；改调弦才算设定变了。"""
+    sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    meta = {"tuning": ["E4", "B3", "G3", "D3", "A2", "E2"], "time_signature": [4, 4]}
+    songs.set_derived(sid, meta, derived_bars(20))
+    real = FakeClaude.explain_bars
+
+    def rename_while_explaining(self, meta, bars):
+        songs.edit_meta(sid, {"title": f"新名字 {bars[0]['n']}"})
+        return real(self, meta, bars)
+
+    monkeypatch.setattr(FakeClaude, "explain_bars", rename_while_explaining)
+    real_plan = FakeClaude.practice_plan
+    monkeypatch.setattr(
+        FakeClaude,
+        "practice_plan",
+        lambda self, meta, bars: (
+            songs.edit_meta(sid, {"title": "最后的名字"}) and real_plan(self, meta, bars)
+        ),
+    )
+    coach.start_explain(sid)
+    song = store.load(sid)
+    assert all(b["tip"] for b in song["bars"]), [b["tip"] for b in song["bars"]]
+    assert song["title"] == "最后的名字" and not song["plan"]["stale"]
+
+    # 图片曲子整首识别：生成练习建议期间改了曲名，建议不算过时
+    img = songs.create_song([("p1.png", score_png())])
+    monkeypatch.setattr(
+        FakeClaude,
+        "practice_plan",
+        lambda self, meta, bars: songs.edit_meta(img, {"title": "改名"}) and real_plan(self, meta, bars),
+    )
+    recognize.run_parse(img)
+    assert not store.load(img)["plan"]["stale"]
+
+    # 改了变调夹：按旧设定写的这批提示作废（练习建议是之后按新设定生成的，不过时）
+    sid2 = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid2)
+    store.update(sid2, lambda s: [b.update(tip="") for b in s["bars"]])
+    monkeypatch.setattr(FakeClaude, "practice_plan", real_plan)
+
+    def retune_while_explaining(self, meta, bars):
+        songs.edit_meta(sid2, {"capo": 5})
+        return real(self, meta, bars)
+
+    monkeypatch.setattr(FakeClaude, "explain_bars", retune_while_explaining)
+    coach.start_explain(sid2)
+    song = store.load(sid2)
+    assert not any(b["tip"] for b in song["bars"]) and song["meta"]["capo"] == 5

@@ -14,7 +14,8 @@ from dataclasses import dataclass
 
 from app.model import touch_bar
 
-SETTING_KEYS = ("tuning_midi", "capo", "time_signature")  # 这些变了，所有小节的提示都按旧设定写的
+# 影响音的设定：这些变了，所有小节的提示都按旧设定写的。曲名、艺人、备注之类不算（派生的 meta.title 跟着曲名变）
+SETTING_KEYS = ("tuning_midi", "capo", "time_signature")
 
 
 def invalidate_bar(bar: dict) -> None:
@@ -73,7 +74,7 @@ def store_plan(s: dict, plan: dict | None, seen: dict, meta: dict) -> None:
     生成期间谱子被改过的话，新计划一出来就是过时的，照样保存但标成过时（改回原样还能撤销）。"""
     if plan:
         changed = sorted(b["id"] for b in s["bars"] if seen.get(b["id"]) != b["events"])
-        meta_changed = s["meta"] != meta
+        meta_changed = setting_changed(meta or {}, s["meta"] or {})  # 只看影响音的设定，改曲名不算
         if changed or meta_changed:
             plan.update(changed_bars=changed, stale_all=meta_changed, stale=True)
     s["plan"] = plan

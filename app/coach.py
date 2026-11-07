@@ -74,7 +74,7 @@ def _explain(sid: str, chunks: list[list[str]], cancel) -> None:
         tips = {t["number"]: t["tip"] for t in claude.explain_bars(cur["meta"], chunk).get("bars", [])}
 
         def apply(s, tips=tips, k=k, seen=seen, before=before, meta=cur["meta"]):
-            same_meta = s["meta"] == meta
+            same_meta = not staleness.setting_changed(meta or {}, s["meta"] or {})  # 改曲名、艺人不影响提示
             for b in s["bars"]:
                 if (
                     same_meta
