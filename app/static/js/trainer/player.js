@@ -239,11 +239,12 @@ function markWarnBars() {
 }
 
 function play() {
+  if (RH.on) { rhythmStart(); return; } // 敲节奏模式：开始的是敲节奏（rhythm-drill.js）
   if (!api || !state.ready) { UI.toast('音色加载中', 'info'); return; }
   state.loops = 0; state.lastTick = -1;
   api.play();
 }
-function stop() { if (api) api.pause(); }
+function stop() { if (RH.run) rhythmStop(); if (api) api.pause(); }
 function setTempo(bpm) {
   bpm = Math.max(20, Math.min(240, Math.round(bpm)));
   state.bpm = bpm;
@@ -262,6 +263,7 @@ function setLoop(a, b, restart = true, show = true) {
     if (state.playing && restart) { api.stop(); state.loops = 0; api.play(); }
     else if (!state.playing) api.tickPosition = range.startTick;
   }
+  if (RH.on) rhythmLoopChanged();
 }
 
 function onPosition(tick) {
@@ -385,7 +387,7 @@ function initPlayer() {
   addEventListener('keydown', e => { if (e.key === 'Shift') shiftDown = true; });
   addEventListener('keyup', e => { if (e.key === 'Shift') shiftDown = false; });
   setTempo(50);
-  $('playBtn').onclick = () => (state.playing ? stop() : play());
+  $('playBtn').onclick = () => (state.playing || RH.run ? stop() : play());
   $('demoBarBtn').onclick = () => { const b = shownBar >= 0 ? shownBar : state.a; setLoop(b, b, false); if (!state.playing) play(); };
   UI.seg($('timbreSeg'), TIMBRES[localStorage.getItem('tt.timbre')] ? localStorage.getItem('tt.timbre') : 'steel', switchTimbre);
   UI.seg($('notationSeg'), 'both', () => { if (!api) return; api.settings.display.staveProfile = alphaTab.StaveProfile[staveProfile()]; api.updateSettings(); api.render(); });

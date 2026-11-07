@@ -48,6 +48,7 @@ initCoach();
 initOrig();
 initPracticeLog();
 initEditor();
+initRhythm();
 initSong();
 initViews();
 

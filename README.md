@@ -20,6 +20,7 @@
   - 调弦表（含参考音）和麦克风调音器，调弦、变调夹、拍号都跟着曲子走；
   - AI 根据全曲生成的分段练习建议；
   - **问 AI**：在小节详情里直接问这一小节的问题（“左手怎么安排指法”“这个泛音总弹不响怎么办”），AI 会结合这个小节的数据、前后小节、原谱截图和你的练习记录回答，问答会保存下来；
+  - **敲节奏**：播放栏里点“敲节奏”，不拿琴、只练节奏：跟着示范（或只有节拍器）用空格 / F / J 键敲出循环段里每个音的时间。每个音按早晚上色（±40 ms 内算准），每遍打分，并指出问题：整体偏早还是偏晚、快慢稳不稳、哪个位置总是错。有三种练法：跟着示范、听一遍再敲、只有节拍器。音符下面标着口令（1 e & a、1 trip let）。节拍器和示范音由页面自己用 WebAudio 排程，敲击和声音用同一个音频时钟比较；用蓝牙耳机时可以先“校准”，补偿声音延迟。打开自动提速后，要连续几遍 90 分以上才加速；
   - **练习记录**：每循环完一遍自动记下速度和用时，小节详情里显示“循环几遍、最快多少 BPM、上次什么时候”；打开曲子时提示上次练到哪里，一键接着练。
 - **曲库**：
   - 按曲名、艺人、标签搜索，按标签筛选，按最近添加 / 最近练习 / 曲名排序；
@@ -183,7 +184,7 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/store.py` | `data/` 下的 JSON 读写（加锁的读-改-写、`.bak` 备份、坏文件回退、单实例锁） |
 | `app/evaluate.py` | 识别准确率评测 |
 
-前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`。练习页的脚本按功能拆在 `js/trainer/` 下（core → synth / tuner / fretboard / bar-info → player → coach / practice-log / editor → song → main），用普通 `<script>` 按顺序加载：前面的文件只做声明，事件绑定放在各自的 `initXxx()` 里，由 `main.js` 统一调用并在 alphaTab 模块就绪后第一次加载曲子。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`）。
+前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`。练习页的脚本按功能拆在 `js/trainer/` 下（core → synth / tuner / fretboard / bar-info → player → coach / practice-log / editor / rhythm-drill → song → main），用普通 `<script>` 按顺序加载：前面的文件只做声明，事件绑定放在各自的 `initXxx()` 里，由 `main.js` 统一调用并在 alphaTab 模块就绪后第一次加载曲子。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`）；`js/rhythm.js` 是敲节奏的打分逻辑（不碰 DOM 和音频，有单元测试）。
 
 测试和模块一一对应（`tests/test_<模块>.py`），替身模型和合成谱子在 `tests/fakes.py`，公共 fixture 在 `tests/conftest.py`。
 

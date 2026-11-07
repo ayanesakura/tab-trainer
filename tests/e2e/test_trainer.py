@@ -189,3 +189,63 @@ def test_library_lists_songs(server, browser):
     )
     assert badges == "GP,GP,图片"  # 导入渠道：一首图片曲、两首 GP（一首读取失败）
     assert not browser.errors, browser.errors
+
+
+def test_rhythm_drill_scores_taps(trainer):
+    """敲节奏：打开后代替原谱和指板；敲击按音频时钟配对，每遍打分；空格是敲击不是停止，Esc 停止；关掉后播放键回到 alphaTab。"""
+    b = trainer()
+    b.js("document.getElementById('countIn').checked = false; setLoop(0, 0); true")
+    b.js("document.getElementById('rhythmBtn').click(); true")
+    assert b.js("getComputedStyle(document.getElementById('rhythmCard')).display") == "block"
+    assert b.js("getComputedStyle(document.getElementById('infoGrid')).display") == "none"
+    assert b.js("document.querySelectorAll('#rhSvg .rh-note').length") == 4  # 第 1 小节四个四分音符
+    assert b.js("document.getElementById('rhRange').textContent") == "第 1 小节 · 4 个音"
+    assert "怎么练" in b.js("document.getElementById('rhResult').textContent")
+
+    # 开始（播放键 / 空格开始的是敲节奏，不是 alphaTab）
+    b.js("setTempo(120); play(); true")
+    b.wait_for("RH.run && RH.run.loops.some(l => l.kind === 'loop')")
+    assert not b.js("state.playing")
+    # 第一遍：前三个音敲准（晚 10 ms），第四个不敲，另外在两个音中间多敲一下
+    b.js(
+        "const L = RH.run.loops.find(l => l.kind === 'loop');"
+        "[0, 1, 2].forEach(i => rhythmTapAt(L.notes[i].T + 0.01)); rhythmTapAt((L.notes[1].T + L.notes[2].T) / 2); true"
+    )
+    b.wait_for("RH.last && RH.last.n === 1", timeout=10)
+    s = b.js("RH.last")
+    assert (s["good"], s["ok"], s["miss"], s["extra"], s["score"], s["mean"]) == (3, 0, 1, 1, 60, 10)
+    text = b.js("document.getElementById('rhResult').textContent")
+    assert "60" in text and "漏了" not in text and "多敲了 1 下" in text
+    # 空格是敲击，不会停下；Esc 才停
+    b.key(" ", code="Space", vk=32, text=" ")
+    assert b.js("!!RH.run")
+    b.key("Escape", vk=27)
+    b.wait_for("!RH.run")
+    # 换段：成绩清掉，节奏条换成新的段
+    b.js("setLoop(1, 2); true")
+    assert b.js("RH.last") is None and b.js("document.querySelectorAll('#rhSvg .rh-note').length") == 8
+    # 关掉：原谱和指板回来，播放键又是 alphaTab
+    b.js("document.getElementById('rhClose').click(); true")
+    assert b.js("getComputedStyle(document.getElementById('infoGrid')).display") != "none"
+    b.js("play(); true")
+    b.wait_for("state.playing")
+    b.js("stop(); true")
+    assert not b.errors, b.errors
+
+
+def test_rhythm_calibration_measures_latency(trainer):
+    b = trainer()
+    b.js("document.getElementById('rhythmBtn').click(); document.getElementById('rhCalib').click(); true")
+    b.wait_for("RH.run && RH.run.calib && RH.run.loops.some(l => l.kind === 'loop')")
+    # 每一下都晚 80 ms：补偿值就是 +80 ms
+    b.js(
+        "const L = RH.run.loops.find(l => l.kind === 'loop'); L.notes.forEach(n => rhythmTapAt(n.T + 0.08)); true"
+    )
+    b.wait_for("!RH.run", timeout=20)
+    assert b.js("RH.latency") == 80 and b.js("localStorage.getItem('tt.tapLatency')") == "80"
+    assert "+80 ms" in b.js("document.getElementById('rhCalib').textContent")
+    # 校准完回到原来的节奏条，校准那一遍不算成绩
+    assert b.js("RH.last") is None
+    assert b.js("document.querySelectorAll('#rhSvg .rh-note').length") == b.js("RH.prog.onsets.length")
+    b.js("localStorage.removeItem('tt.tapLatency'); true")
+    assert not b.errors, b.errors
