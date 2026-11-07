@@ -352,3 +352,19 @@ def test_drop_page_card_on_itself_is_noop(server, browser):
     b.js("document.getElementById('pagesCancel').click(); true")
     b.wait_for("!document.getElementById('pagesDlg').open")
     assert not b.errors, b.errors
+
+
+def test_mixed_zip_and_other_files_warns(server, browser):
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for("!!document.getElementById('file')")
+    b.js("""window.__imports = 0; const of = window.fetch;
+      window.fetch = (u, init) => { if (String(u).includes('/api/import')) window.__imports++; return of(u, init); };
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'a.zip', { type: 'application/zip' }));
+      dt.items.add(new File(['x'], 'b.png', { type: 'image/png' }));
+      const input = document.getElementById('file'); input.files = dt.files;
+      input.dispatchEvent(new Event('change')); true""")
+    b.wait_for("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('请单独导入'))")
+    assert b.js("window.__imports") == 0
+    assert not b.errors, b.errors

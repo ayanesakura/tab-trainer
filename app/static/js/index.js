@@ -24,13 +24,14 @@ document.addEventListener('themechange', e => setThemeSeg(e.detail));
 let picked = [];
 const isZip = f => /\.zip$/i.test(f.name);
 function setFiles(list) {
-  const zips = [...list].filter(isZip);
+  const files = [...list]; // 先拷出来：清空文件框时，它的 FileList 可能跟着变空
+  const zips = files.filter(isZip);
   if (zips.length) {  // 曲子包直接导入，不走“上传并识别”
     $('file').value = '';
-    if (zips.length < list.length) return toast('曲子包（.zip）请单独导入，不要和原谱图片、GP 文件混在一起', 'err', 4000);
+    if (zips.length < files.length) return toast('曲子包（.zip）请单独导入，不要和原谱图片、GP 文件混在一起', 'err', 4000);
     return importBundles(zips);
   }
-  picked = [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  picked = files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   $('pickedBox').hidden = !picked.length;
   $('picked').innerHTML = picked.map(f => `<span class="badge">${icon(fileIcon(f), 12)}${esc(f.name)}</span>`).join('');
   const score = picked.length && picked.every(f => /\.(gpx?|gp[345]|musicxml|xml|mxl)$/i.test(f.name));
