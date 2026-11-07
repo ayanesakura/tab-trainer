@@ -49,8 +49,11 @@ function calibProgram() {
   return core.buildProgram([bar, bar]);
 }
 function rebuild() {
-  const { a, b } = get('play'), v = get('view');
+  const v = get('view');
   if (!v || !v.bars.length) return;
+  // 曲子刚变短（重新识别、删页）时，这里可能先于 song.js 的 onView 收到新 view，循环范围还没夹进来：先自己夹一下，
+  // 免得读到不存在的小节（onView 随后 setLoop 时会再走 loopChanged 重建一次）
+  const n = v.bars.length, p = get('play'), a = Math.min(p.a, n - 1), b = Math.max(a, Math.min(p.b, n - 1));
   RH.prog = program(a, b);
   // 换了段或者谱改过：之前几遍的成绩对不上了，清掉
   const key = v.ids.slice(a, b + 1).join(',') + '|' + RH.prog.onsets.map(o => o.q.toFixed(4)).join(',');
@@ -93,12 +96,18 @@ function loopChanged() {
 // 计时和发声
 // ---------------------------------------------------------------------
 // 某个时刻（performance.now 的毫秒）耳朵里正在听到的音频时间：getOutputTimestamp 已经算上了输出延迟
+// （没算上的那部分是校准测出来的 RH.latency，见 heardAdj）
 function heardNow(perfMs = performance.now()) {
   if (ac.getOutputTimestamp) {
     const o = ac.getOutputTimestamp();
     if (o.performanceTime > 0) return o.contextTime + (perfMs - o.performanceTime) / 1000;
   }
   return ac.currentTime - (ac.outputLatency || ac.baseLatency || 0) - (performance.now() - perfMs) / 1000;
+}
+// 再扣掉校准测出的延迟补偿：敲击、判漏、判一遍结束、播放头都用它，几处用同一个时钟才对得上（校准那一遍不扣）
+function heardAdj(perfMs) {
+  const run = RH.run;
+  return heardNow(perfMs) - (run && !run.calib ? RH.latency / 1000 : 0);
 }
 function click(run, when, accent) {
   const o = ac.createOscillator(), g = ac.createGain();
@@ -173,7 +182,7 @@ function tick() {
       if (it.click) click(run, when, it.click === 2); else playEvent(it.ev, when);
     }
   }
-  const hn = heardNow(), slack = run.calib ? 0.4 : core.MAX_WIN + 0.05;
+  const hn = heardAdj(), slack = run.calib ? 0.4 : core.MAX_WIN + 0.05;
   for (const L of loops) {
     if (L.kind !== 'loop' || !L.graded || L.result) continue;
     for (const nt of L.notes) if (nt.err == null && !nt.missed && hn > nt.T + nt.win + 0.03) { nt.missed = true; run.dirty = true; }
@@ -190,9 +199,9 @@ function tick() {
 function tap(perfMs) {
   const run = RH.run;
   if (!run) return;
-  tapAt(heardNow(perfMs) - (run.calib ? 0 : RH.latency / 1000));
+  tapAt(heardAdj(perfMs));
 }
-function tapAt(t) { // t：耳朵听到的音频时间（秒）
+function tapAt(t) { // t：扣掉延迟补偿后的音频时间（秒，见 heardAdj）
   const run = RH.run;
   if (!run) return;
   const strip = $('rhStrip');
@@ -312,7 +321,7 @@ function paintMarks(L) {
   const { pos, ppq } = geom, dyn = $('rhDyn');
   if (!dyn) return;
   dyn.replaceChildren();
-  const notes = L.notes || [], hn = RH.run ? heardNow() : Infinity;
+  const notes = L.notes || [], hn = RH.run ? heardAdj() : Infinity;
   geom.prog.onsets.forEach((o, i) => {
     const c = $('rhn' + i), nt = notes[i];
     if (!c) return;
@@ -339,7 +348,7 @@ function frame() {
   const run = RH.run;
   if (!run) return;
   run.raf = requestAnimationFrame(frame);
-  const hn = heardNow();
+  const hn = heardAdj();
   let L = null;
   for (const x of run.loops) if (x.start <= hn) L = x;
   L = L || run.loops[0];
@@ -421,6 +430,7 @@ export function rhythmKey(e) {
 export const rhythmDebug = {
   get state() { return RH; },
   tapAt, start, stop: stopRun, toggle,
+  now: () => heardAdj(), // tapAt 用的时钟
 };
 
 // ---------------------------------------------------------------------
