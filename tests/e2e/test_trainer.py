@@ -48,6 +48,34 @@ def test_playback_records_completed_loops(server, trainer):
     assert not b.errors, b.errors
 
 
+def test_pause_during_count_in_then_play_again_plays(trainer):
+    """预备拍里暂停再播放：alphaTab 1.9 直接 pause() 会卡在“播放中”不前进（图标变了却没有声音）。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', true); tt.setLoop(1, 2); tt.setTempo(120); true")
+    start = b.js("tt.api.tickPosition")
+    b.js("tt.play(); true")
+    time.sleep(0.4)  # 120 BPM 一小节预备拍 2 秒：还在预备拍里
+    assert abs(b.js("tt.api.tickPosition") - start) <= 2
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
+    b.js("tt.play(); true")  # 马上再播放（连按两下空格）
+    # 预备拍之后真的从原来的位置往前走了
+    b.wait_for(f"tt.state.playing && tt.api.tickPosition > {start} + 200", timeout=8)
+    b.js("tt.stop(); true")
+    # 预备拍里停下、等一会再播放：停在原处，之后也能正常开始
+    b.wait_for("!tt.state.playing")
+    b.js("tt.setLoop(1, 2); true")
+    b.wait_for(f"Math.abs(tt.api.tickPosition - {start}) <= 2")  # alphaTab 设位置有 1 tick 的取整
+    b.js("tt.play(); true")
+    time.sleep(0.4)
+    b.js("tt.stop(); true")
+    time.sleep(1)
+    assert abs(b.js("tt.api.tickPosition") - start) <= 2 and not b.js("tt.state.playing")  # 停在原处
+    b.js("tt.play(); true")
+    b.wait_for(f"tt.state.playing && tt.api.tickPosition > {start} + 200", timeout=8)
+    b.js("tt.stop(); true")
+
+
 def test_playback_does_not_scroll_until_asked(trainer):
     b = trainer()
     # 页面加高，滚到最下面：播放光标在视野上方
@@ -70,8 +98,8 @@ def test_selected_bar_shows_original_image(trainer):
     assert b.js("document.getElementById('songSource').textContent") == "图片"
     b.wait_for("!!(tt.api.tracks && tt.api.tracks[0].staves[0].bars.length === 6 && tt.api.boundsLookup)")
     b.js("tt.onBeatClick(tt.api.tracks[0].staves[0].bars[1].voices[0].beats[0]); true")
-    b.wait_for("!document.getElementById('origBtn').hidden")
-    b.js("document.getElementById('origBtn').click(); true")
+    b.wait_for("!document.getElementById('cropBox').hidden")  # 点了小节，侧栏就显示这一小节的原谱截图
+    b.js("document.getElementById('cropBox').click(); true")
     assert b.js("document.getElementById('origModal').open")
     assert b.js("document.getElementById('origTitle').textContent") == "原谱 · 第 2 小节"
     b.wait_for("document.getElementById('origCanvas').width > 0")

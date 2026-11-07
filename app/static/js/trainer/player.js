@@ -21,6 +21,11 @@ let api = null, baseTempo = 60, soundFontsLoaded = 0, playerReadyOnce = false, l
 // tempoSet：速度已经由用户 / 接着练定下来了（setTempo 调过）。谱子加载好以后只在还没定的时候才用默认速度（原速六成）。
 // scoreTempoDone：第一次加载谱子时按原速放宽滑块上限这件事做过了。cursorPending：谱子没加载好时设了循环范围，加载好后把光标放到段首。
 let tempoSet = false, scoreTempoDone = false, cursorPending = false, scoreBytes = null;
+// 预备拍：alphaTab 1.9 在预备拍里停下以后状态清不干净：只 pause() 的话下次 play() 会一直停在“播放中”却不前进
+// （图标变了、没有声音），直接 stop() 又会被当成“预备拍弹完了”转入播放。所以预备拍里停就重新生成一次 MIDI 把它清掉，
+// 好了以后（midiLoaded）把位置放回去；这期间按了播放就等它好了再开始。
+let countInFrom = null; // 预备拍进行中：开始播放时的位置；不在预备拍里是 null
+let reloadTick = null, playAfterReload = false;
 export const getApi = () => api;
 
 // 曲子相关的处理由 song.js / editor.js 注册，敲节奏由 rhythm-drill.js 注册 drill: {start, stop, loopChanged}（播放模块不反过来依赖它们）
@@ -91,6 +96,11 @@ function ensureApi() {
     const range = applyLoopRange();
     if (range && cursorPending && !playing()) api.tickPosition = range.startTick;
     if (range) cursorPending = false;
+    if (reloadTick !== null) { // 预备拍里停下后的重新生成（见 pausePlayer）：放回原来的位置
+      api.tickPosition = reloadTick;
+      reloadTick = null;
+      if (playAfterReload) { playAfterReload = false; startPlayer(); }
+    }
   });
   api.error.on(e => {
     const msg = e && e.message ? e.message : String(e);
@@ -141,7 +151,7 @@ function applyTimbre(score, restore = false) {
 }
 function switchTimbre() {
   if (!api || !api.score) return;
-  if (playing()) api.pause();
+  if (playing()) pausePlayer();
   applyTimbre(api.score);
   api.loadMidiForScore();
   applyLoopRange();
@@ -256,11 +266,25 @@ export function play() {
   if (get('rhythm.on') && hooks.drill) { hooks.drill.start(); return; } // 敲节奏打开时：开始的是敲节奏，不是 alphaTab
   if (!api || !get('play.ready')) { UI.toast('音色加载中', 'info'); return; }
   set('play.loops', 0); lastTick = -1;
-  api.play();
+  if (reloadTick !== null) { playAfterReload = true; return; } // 预备拍里停过、MIDI 还在重新生成：好了再开始
+  startPlayer();
 }
 export function stop() {
   if (get('rhythm.running') && hooks.drill) hooks.drill.stop();
-  if (api) api.pause();
+  pausePlayer();
+}
+function startPlayer() {
+  countInFrom = api.countInVolume > 0 ? api.tickPosition : null;
+  api.play();
+}
+function pausePlayer() {
+  playAfterReload = false;
+  if (!api) return;
+  if (countInFrom === null) { api.pause(); return; }
+  reloadTick = countInFrom;
+  countInFrom = null;
+  api.pause();
+  api.loadMidiForScore();
 }
 export function setTempo(bpm) {
   tempoSet = true;
@@ -287,7 +311,7 @@ export function setLoop(a, b, restart = true, show = true) {
   if (show) set('ui.bar', na);
   if (!range) cursorPending = true; // 谱子还没加载好：加载好以后（midiLoaded）再把光标放到段首
   if (range && api) {
-    if (playing() && restart) { api.stop(); set('play.loops', 0); api.play(); }
+    if (playing() && restart) { api.stop(); set('play.loops', 0); startPlayer(); }
     else if (!playing()) api.tickPosition = range.startTick;
   }
   if (get('rhythm.on') && hooks.drill) hooks.drill.loopChanged(); // 敲节奏：换成新的段（敲着的话从头再来）
@@ -302,6 +326,8 @@ export function stepSection(dir) {
 }
 
 function onPosition(tick) {
+  // 预备拍期间位置停在开始处不动（拍子事件倒可能先来，不能拿它判断），位置往前走了才算预备拍结束
+  if (countInFrom !== null && tick > countInFrom + 5) countInFrom = null;
   // 只有从段尾跳回段首才算弹完一遍；重新设置循环范围、停止时也会跳回起点，那些不算（applyLoopRange 会重置 lastTick）
   const r = api && api.playbackRange, start = r ? r.startTick : 0;
   if (playing() && lastTick >= 0 && tick < lastTick - 10 && tick <= start + TICKS) {
@@ -361,7 +387,6 @@ export function onBeatClick(beat) {
   if (shiftDown) setLoop(Math.min(a, bi), Math.max(b, bi));
   else setLoop(bi, bi);
   onBeat(beat, true);
-  set('ui.pick', bi);
 }
 
 export function exportGp() {
