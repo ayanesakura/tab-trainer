@@ -4,7 +4,8 @@
     "name": "guitar",
     "strings": 6,
     "standard_tuning": ["E4", "B3", "G3", "D3", "A2", "E2"],
-    "max_fret": 24
+    "max_fret": 24,
+    "max_fret_written": 30
   },
   "ticks_per_quarter": 960,
   "grid_ticks": 20,
@@ -22,24 +23,24 @@
     { "code": "bend", "sym": "b",    "name": "推弦" }
   ],
   "directions": [
-    { "code": "fine",                     "prompt": true  },
-    { "code": "segno",                    "prompt": true  },
-    { "code": "segnosegno",               "prompt": true  },
-    { "code": "coda",                     "prompt": true  },
-    { "code": "doublecoda",               "prompt": true  },
-    { "code": "dacapo",                   "prompt": true  },
-    { "code": "dacapoalcoda",             "prompt": true  },
+    { "code": "fine",                     "prompt": true,  "prompt_order": 4 },
+    { "code": "segno",                    "prompt": true,  "prompt_order": 0 },
+    { "code": "segnosegno",               "prompt": true,  "prompt_order": 1 },
+    { "code": "coda",                     "prompt": true,  "prompt_order": 2 },
+    { "code": "doublecoda",               "prompt": true,  "prompt_order": 3 },
+    { "code": "dacapo",                   "prompt": true,  "prompt_order": 5 },
+    { "code": "dacapoalcoda",             "prompt": true,  "prompt_order": 6 },
     { "code": "dacapoaldoublecoda",       "prompt": false },
-    { "code": "dacapoalfine",             "prompt": true  },
-    { "code": "dalsegno",                 "prompt": true  },
-    { "code": "dalsegnoalcoda",           "prompt": true  },
+    { "code": "dacapoalfine",             "prompt": true,  "prompt_order": 7 },
+    { "code": "dalsegno",                 "prompt": true,  "prompt_order": 8 },
+    { "code": "dalsegnoalcoda",           "prompt": true,  "prompt_order": 9 },
     { "code": "dalsegnoaldoublecoda",     "prompt": false },
-    { "code": "dalsegnoalfine",           "prompt": true  },
+    { "code": "dalsegnoalfine",           "prompt": true,  "prompt_order": 10 },
     { "code": "dalsegnosegno",            "prompt": false },
     { "code": "dalsegnosegnoalcoda",      "prompt": false },
     { "code": "dalsegnosegnoaldoublecoda","prompt": false },
     { "code": "dalsegnosegnoalfine",      "prompt": false },
-    { "code": "dacoda",                   "prompt": true  },
+    { "code": "dacoda",                   "prompt": true,  "prompt_order": 11 },
     { "code": "dadoublecoda",             "prompt": false }
   ],
   "sources": { "image": "图片", "pdf": "PDF", "gp": "GP", "musicxml": "MusicXML" },
@@ -49,6 +50,7 @@
     "ocr_mismatch": "和本机 OCR 对不上",
     "placeholder": "这一行没识别出来，暂用休止占位",
     "string_range": "弦号 / 品位超出范围",
+    "empty": "没有任何音符",
     "other": "其他"
   }
 }
