@@ -194,11 +194,11 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/practice.py` | 练习记录：`practice.jsonl` 追加写，读取时按小节 id 聚合（按文件修改时间缓存；格式不对的行跳过），练习历史 |
 | `app/state.py` | 曲子的运行状态 `status` + `activity` + `notice`，以及由它们算出的忙 / 可改 / 锁定（唯一一处） |
 | `app/staleness.py` | 改谱后 AI 内容的失效与恢复；`reconcile_bars`：新旧两批小节按内容 + 位置对上（GP 重新转换、整首 / 单行重新识别共用） |
-| `app/model.py` | 唯一的数据定义（Pydantic）：song.json 的形状、派生字段“读时算、写时去”（`derive` / `strip`）、给模型的音符 schema、接口返回的模型 |
+| `app/model.py` | 唯一的数据定义（Pydantic）：song.json 的形状和字段间的不变量（`problems`，每次写盘前检查；测试里违反就报错）、派生字段“读时算、写时去”（`derive` / `strip`）、给模型的音符 schema、接口返回的模型 |
 | `app/migrate.py` | song.json 格式升级（`SCHEMA_VERSION = 2`），所有旧数据兼容都在这里，业务代码只认当前格式 |
 | `app/music.py` | 调弦、拍号、时值、事件和反复记号的整理与校验、小节警告 `{code, msg}`（纯函数）；常量来自 `app/static/js/vocab.json` |
 | `app/config.py` | 运行参数（并发数、上传 / 导入上限等，`config.settings`）和模型设置（读写、打码、建客户端） |
-| `app/jobs.py` | 后台任务登记 / 取消（每首曲子同时一个） |
+| `app/jobs.py` | 后台任务登记 / 取消（每首曲子同时一个）；`start`（登记 → 标开始 → 后台跑，标开始失败时释放）；`UsageMeter`（把模型用量记到曲子上，失败 / 取消时补记） |
 | `app/errors.py` | 错误类型：Invalid 400 / NotFound 404 / Busy、Conflict 409 / CorruptSong 500 / Upstream 502（`llm.LLMError` 也是） |
 | `app/llm.py`、`app/layout.py`、`app/ocr.py` | 模型调用（`LLM` 接口、错误说明 `friendly`）、版面检测、本机数字识别 |
 | `app/schemas.py` | 接口请求体的类型、长度和数值范围（只在这里检查），格式不对返回 400 和中文说明 |
@@ -218,7 +218,7 @@ uv run python -m app.evaluate eval-xxx --yes
 
 前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。练习页从 `js/trainer/main.js` 进入，按功能拆成模块：`store.js`（一个小 store：`song` 后端数据、`view` 派生结构、`play` 播放状态、`ui` 界面状态，按路径 `set` / `get` / `on`，值没变不通知）、`view.js`（纯函数：`deriveView(song)`、段落、换段、练习记录文案等，Node 测试直接用）、`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `setTempo` / `setStatus`）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息）、`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅 `ui.bar` 等状态，互不直接调用）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）、`rhythm-drill.js`（敲节奏：节奏条、WebAudio 排程的节拍器和示范音、敲击打分；状态在 store 的 `rhythm` 切片，播放键 / 空格 / 换段通过 `player.js` 的钩子交给它）。页面上 `window.tt` 是给端到端测试和调试用的句柄。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`），也负责认出中文 GP3–5 文件的 GBK 乱码（练习页和 `scripts/make_eval_song.py` 遇到时按 GBK 重新读）。`js/rhythm.js` 是敲节奏的打分逻辑（要敲的点和口令、配对、打分、诊断；不碰 DOM 和音频，`tests/js/rhythm.test.mjs` 直接测）。
 
-测试和模块一一对应（`tests/test_<模块>.py`），替身模型和合成谱子在 `tests/fakes.py`，公共 fixture 在 `tests/conftest.py`。`tests/fixtures/llm_schemas.json` 是重构前给模型的 schema（`test_model.py` 断言逐字不变）；`golden.gp` / `golden_derived.json` 是浏览器转换的金标准（`tests/js/fixture.test.mjs` 和 `tests/test_golden.py` 两边各查一遍）。
+测试基本按模块分（`tests/test_<模块>.py`；`service` / `views` / `state` / `jobs` 由 `test_api`、`test_pages` 等间接覆盖），替身模型和合成谱子在 `tests/fakes.py`，公共 fixture 在 `tests/conftest.py`。`tests/fixtures/llm_schemas.json` 是重构前给模型的 schema（`test_model.py` 断言逐字不变）；`golden.gp` / `golden_derived.json` 是浏览器转换的金标准（`tests/js/fixture.test.mjs` 和 `tests/test_golden.py` 两边各查一遍）。
 
 ## 开发
 

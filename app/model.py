@@ -268,6 +268,32 @@ class Song(_M):
     derived: Derived | None = None
 
 
+def problems(song: dict) -> list[str]:
+    """song.json 的不变量（写盘前检查）：形状符合 Song，以及字段之间的引用对得上——
+    小节 id 不重复；图片曲子的小节在存在的行上、页号和那一行一致；每一行都在存在的页上。"""
+    try:
+        Song.model_validate(song)
+    except Exception as e:  # noqa: BLE001 - 只报告
+        return [f"格式不对：{e}"[:500]]
+    out = []
+    pages, systems, bars = song.get("pages") or [], song.get("systems") or [], song.get("bars") or []
+    ids = [b.get("id") for b in bars]
+    if len(set(ids)) != len(ids):
+        out.append("小节 id 重复")
+    for si, x in enumerate(systems):
+        if not 0 <= x["page"] < len(pages):
+            out.append(f"第 {si} 行的页号 {x['page']} 不存在")
+    for b in [] if is_score(song) else bars:  # GP / MusicXML 的 system 是谱面排版的行，没有 systems
+        si = b.get("system")
+        if si is None:
+            continue
+        if not 0 <= si < len(systems):
+            out.append(f"小节 {b.get('id')} 的行号 {si} 不存在")
+        elif b.get("page") is not None and b["page"] != systems[si]["page"]:
+            out.append(f"小节 {b.get('id')} 的页号和第 {si} 行不一致")
+    return out
+
+
 def _dump(v):
     if isinstance(v, BaseModel):
         return v.model_dump(by_alias=True, exclude_none=True)
