@@ -178,3 +178,20 @@ test('on-beat grace notes do not shift the main note or add a rest', () => {
   const onsets = [0, 960, 1920];
   for (const b of beats) assert.equal(eventIndexAt(onsets, b.playbackStart), Math.min(2, Math.floor(b.displayStart / 960)));
 });
+
+// GP 文件里：闷音可能留着按弦时的品格（谱上只画 x）；自然泛音品格记 0、泛音点另存（谱上画 <12>）。
+// 我们的品格要和谱上写的一致
+test('dead notes get fret 0 and natural harmonics take their harmonic node', () => {
+  const score = gpRoundTrip(`\\track "G" \\staff {tabs} \\tuning (E4 B3 G3 D3 A2 E2) . 9.3.4 7.2.4 5.4.4 3.5.4`);
+  const [b0, b1, b2, b3] = score.tracks[0].staves[0].bars[0].voices[0].beats;
+  b0.notes[0].isDead = true; // 3 弦 9 品，画成 x
+  Object.assign(b1.notes[0], { fret: 0, harmonicType: 1, harmonicValue: 12 }); // 2 弦 <12>
+  Object.assign(b2.notes[0], { harmonicType: 1, harmonicValue: 5 }); // 4 弦 <5>（品格本来就是 5）
+  Object.assign(b3.notes[0], { fret: 3, harmonicType: 2, harmonicValue: 12 }); // 人工泛音：品格是按的那一品
+  const d = deriveSong(score, 0);
+  const sig = d.bars[0].events.map(e => e.notes.map(n => `${n.string}/${n.fret}${n.tech.join('')}`).join(','));
+  assert.deepEqual(sig, ['3/0x', '2/12nh', '4/5nh', '5/3ah']);
+  assert.equal(d.version, DERIVE_VERSION);
+  // 我们的数据 → alphaTex → alphaTab → 我们的数据：x / nh 的品格不变
+  assert.deepEqual(norm(deriveSong(parse(toAlphaTex(d).tex), 0).bars), norm(d.bars));
+});

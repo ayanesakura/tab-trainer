@@ -12,7 +12,8 @@ export const TICKS = 960; // 每个四分音符的 MIDI tick 数
 // 已经导入的曲子下次打开时会重新转换（alphaTab 升级也会）。
 // 2：每小节带自己的拍号；多声部同一根弦同时起拍的音只保留一个
 // 3：按谱面位置分起拍（拍上倚音不再在小节开头多出假休止）
-export const DERIVE_VERSION = 3;
+// 4：闷音的品格记 0；自然泛音的品格记谱上标的泛音点（<12> → 12）
+export const DERIVE_VERSION = 4;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -212,6 +213,14 @@ export function deriveSong(score, trackIndex = 0) {
     notes: '',
   };
   const ours = s => nStr + 1 - s; // 模型里 1 = 最低音弦，我们 1 = 最高音弦
+  // 我们的品格 = 谱上写的数字：闷音画成 x，GP 文件里却可能留着按弦时的品格，记 0；
+  // 自然泛音 GP 里品格常记 0、泛音点另存（谱上画 <12>），取泛音点（小数的四舍五入）
+  // （倚音只存一个品格、没有技巧，闷音倚音记 0 会变成空弦倚音，所以倚音不走这里）
+  const fretOf = n => {
+    if (n.isDead) return 0;
+    if (n.harmonicType === 1 && n.harmonicValue > 0) return Math.round(n.harmonicValue);
+    return n.fret;
+  };
 
   const bars = staff.bars.map((bar, bi) => {
     const length = score.masterBars[bi].calculateDuration();
@@ -243,7 +252,7 @@ export function deriveSong(score, trackIndex = 0) {
           let bend = 0;
           if (n.bendType && n.maxBendPoint) { tech.push('bend'); bend = n.maxBendPoint.value / 2; }
           if (beat.brushType === 3 || beat.brushType === 4) tech.push('roll');
-          byTick.get(start).push({ string: ours(n.string), fret: n.fret, tech, grace: -1, bend });
+          byTick.get(start).push({ string: ours(n.string), fret: fretOf(n), tech, grace: -1, bend });
         }
       }
     }
