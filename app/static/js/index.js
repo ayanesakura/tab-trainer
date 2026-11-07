@@ -105,23 +105,23 @@ function setSelecting(on) {
   renderSongs();
   (on ? $('selectAll') : $('selectBtn')).focus();
 }
+// 搜索 / 标签筛掉的曲子保留勾选（导出时一起导出），只去掉已经删除或不能选的
 function updateSelectBar() {
-  const all = visibleSongs().filter(selectable);
-  for (const id of [...selected]) if (!all.some(s => s.id === id)) selected.delete(id);  // 已被删除的
-  $('selectCount').textContent = `已选 ${selected.size} 首`;
-  $('selectAll').checked = all.length > 0 && selected.size === all.length;
-  $('selectAll').indeterminate = selected.size > 0 && selected.size < all.length;
+  for (const id of [...selected]) { const s = lastSongs.find(x => x.id === id); if (!s || !selectable(s)) selected.delete(id); }
+  const all = visibleSongs().filter(selectable), shown = all.filter(s => selected.has(s.id)).length, hidden = selected.size - shown;
+  $('selectCount').textContent = `已选 ${selected.size} 首` + (hidden ? `（${hidden} 首不在当前列表里）` : '');
+  $('selectAll').checked = all.length > 0 && shown === all.length;
+  $('selectAll').indeterminate = shown > 0 && shown < all.length;
   $('exportBtn').disabled = !selected.size;
 }
 $('selectBtn').onclick = () => setSelecting(true);
 $('selectCancel').onclick = () => setSelecting(false);
-$('selectAll').onchange = e => {
-  selected.clear();
-  if (e.target.checked) visibleSongs().filter(selectable).forEach(s => selected.add(s.id));
+$('selectAll').onchange = e => {  // 只管当前列表里的
+  visibleSongs().filter(selectable).forEach(s => (e.target.checked ? selected.add(s.id) : selected.delete(s.id)));
   renderSongs();
 };
 $('exportBtn').onclick = () => api.withBusy($('exportBtn'), async () => {
-  const ids = visibleSongs().filter(s => selected.has(s.id)).map(s => s.id);  // 按列表顺序
+  const ids = sortSongs(lastSongs.filter(s => selected.has(s.id))).map(s => s.id);  // 按列表顺序（包括筛掉的）
   if (await exportSongs(ids)) setSelecting(false);
 });
 addEventListener('keydown', e => { if (e.key === 'Escape' && selecting && !UI.hasLayer()) setSelecting(false); });
@@ -269,7 +269,9 @@ $('tagFilter').onclick = e => { const b = e.target.closest('button'); if (b) { l
 const byCreated = (a, b) => (b.created || '').localeCompare(a.created || '');
 function visibleSongs() {
   const hit = s => [s.title, s.artist, ...(s.tags || [])].some(x => (x || '').toLowerCase().includes(lib.q));
-  const list = lastSongs.filter(s => (!lib.tag || (s.tags || []).includes(lib.tag)) && (!lib.q || hit(s)));
+  return sortSongs(lastSongs.filter(s => (!lib.tag || (s.tags || []).includes(lib.tag)) && (!lib.q || hit(s))));
+}
+function sortSongs(list) {
   if (lib.sort === 'title') list.sort((a, b) => a.title.localeCompare(b.title, 'zh-CN', { numeric: true }));
   else if (lib.sort === 'practiced') { // 没练过的按添加时间排在后面
     const at = s => (s.practice && s.practice.last_at) || '';

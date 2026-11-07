@@ -303,3 +303,25 @@ def test_enter_while_composing_does_not_submit(server, browser):
       true""")
     assert b.js("window.__clicks") == ["uploadBtn", "saveKey"]
     assert not b.errors, b.errors
+
+
+def test_search_keeps_hidden_selection(server, browser):
+    img, gp = server["image"], server["gp"]
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{gp}\"]')")
+    b.js("document.getElementById('selectBtn').click(); true")
+    for sid in (img, gp):
+        b.js(f"document.querySelector('.song-row[data-id=\"{sid}\"] .who').click(); true")
+    assert b.js("document.getElementById('selectCount').textContent") == "已选 2 首"
+    search = "(s => {{ s.value = '{}'; s.dispatchEvent(new Event('input')); }})(document.getElementById('search')); true"
+    b.js(search.format("E2E 图片"))
+    assert "已选 2 首（1 首不在当前列表里）" == b.js("document.getElementById('selectCount').textContent")
+    assert b.js("document.getElementById('selectAll').checked") is True  # 当前列表里的都选了
+    b.js("tt.reload().then(() => true)")  # 轮询刷新也不丢
+    b.js(search.format(""))
+    assert b.js("[...document.querySelectorAll('.song-row.on')].map(r => r.dataset.id).sort()") == sorted(
+        [img, gp]
+    )
+    b.js("document.getElementById('selectCancel').click(); true")
+    assert not b.errors, b.errors
