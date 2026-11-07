@@ -91,15 +91,18 @@ def _segments(on: np.ndarray, sp: float, min_len: float) -> list[tuple[int, int]
 
 def _group_staves(lines: list[float], h: int, w: int) -> list[list[float]]:
     """按等间距把谱线分组。第一个线距要足够小：取页高的 3% 和页宽的 3% 中较大的
-    （只截了一两行的短图页高很小，只按页高算的话谱线永远组不起来）。"""
+    （只截了一两行的短图页高很小，只按页高算的话谱线永远组不起来）。
+
+    从某根线开始贪心地往下接；接出来的不够 5 根（成不了谱表）时，只丢掉第一根、从下一根重新开始，
+    而不是整组丢掉：谱表上方的虚线（let ring）、上一行的符杠横梁常和后面的线凑成一组，
+    整组丢掉会把真正的 1 弦一起丢了。"""
     first_gap = max(h, w) * 0.03
     staves: list[list[float]] = []
-    cur: list[float] = []
-    for y in lines:
-        while True:
-            if not cur:
-                cur = [y]
-                break
+    n, start = len(lines), 0
+    while start < n:
+        cur, j = [lines[start]], start + 1
+        while j < n:
+            y = lines[j]
             gap = y - cur[-1]
             sp = cur[1] - cur[0] if len(cur) > 1 else None
             tol = max(2.0, sp * 0.25) if sp else 0
@@ -108,18 +111,14 @@ def _group_staves(lines: list[float], h: int, w: int) -> list[list[float]]:
             elif sp is not None and len(cur) <= 4 and abs(gap - 2 * sp) <= tol:
                 # 中间一根线被一排数字挡得太多没检出来：补上
                 cur += [cur[-1] + gap / 2, y]
-            elif len(cur) == 2:
-                # 前两根的间距对不上后面的：第一根多半是谱表上方的虚线（let ring 等，离 1 弦一两个线距），
-                # 丢掉它、从第二根重新开始（否则 1 弦跟着它一起丢掉，六线谱只剩 5 根）
-                staves.append(cur[:1])
-                cur = cur[1:]
-                continue
             else:
-                staves.append(cur)
-                cur = [y]
-            break
-    if cur:
-        staves.append(cur)
+                break
+            j += 1
+        if len(cur) >= 5:
+            staves.append(cur)
+            start = j
+        else:
+            start += 1
     return [t for t in (_trim(s) for s in staves) if len(t) in (5, 6)]
 
 
@@ -139,11 +138,11 @@ def _overhang(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) -> 
 def _is_barline(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float, ends: np.ndarray) -> bool:
     """贯穿六线谱的竖线里分出小节线：
     - 两端要连到 1 弦和 6 弦（扫弦箭头的尾巴常常到不了最下面那根线）；
-    - 不能只在上下伸出去一点：扫弦箭头的箭头、尾巴会超出谱线半个线距左右，
+    - 不能只在上下伸出去一点：扫弦箭头的箭头、尾巴会超出谱线 0.4–0.5 个线距（小节线停在谱线上，被连线、弧线碰到也只有 0.1–0.2），
       小节线正好停在谱线上（和五线谱连通的小节线、左边的谱表括号伸得远，不受影响）。"""
     if ends[max(0, a - 1) : b + 1].max() < 0.8:
         return False
-    return not 0.2 <= _overhang(dark, a, b, tab, sp) <= 2.5
+    return not 0.3 <= _overhang(dark, a, b, tab, sp) <= 2.5
 
 
 def _trim(group: list[float]) -> list[float]:

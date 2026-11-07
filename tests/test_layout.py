@@ -177,3 +177,28 @@ def test_staff_with_ledger_lines_is_not_a_tab():
             d.line([(x + 12, top - 20), (x + 12, y + 4)], fill=0, width=2)  # 符干
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
+
+
+def test_beam_rows_above_do_not_eat_string_one():
+    """纯六线谱（不带五线谱）：上一行的符杠横梁又粗又长也像谱线，两条横梁和 1 弦间距差不多时会凑成一组，
+    不能因此把 1 弦丢掉、只剩 5 根线。"""
+    img = Image.new("L", (1200, 700), 255)
+    d = ImageDraw.Draw(img)
+    for tab_top in (150, 450):
+        _draw_tab(d, tab_top, 60, 1140, (60, 600, 1140))
+        for y in (tab_top - 60, tab_top - 30):  # 两条横梁，间距和到 1 弦的距离一样
+            d.rectangle([(70, y), (1130, y + 2)], fill=0)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2, 2]
+    assert all(abs(s["lines"][0] - t) <= 2 for s, t in zip(r["systems"], (150, 450)))
+
+
+def test_barline_touched_by_a_slur_is_still_a_barline():
+    """小节线顶上被连线 / 弧线碰到，伸出谱线一点点（0.2 个线距）：还是小节线（扫弦箭头伸出 0.4 以上）。"""
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        t = top + 110
+        d.line([(420, t - 5), (421, t)], fill=0, width=2)  # 连线的端点接在 420 处小节线顶上，伸出 4 像素
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
