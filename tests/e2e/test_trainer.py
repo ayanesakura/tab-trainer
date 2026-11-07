@@ -79,6 +79,8 @@ def test_pause_during_count_in_then_play_again_plays(trainer):
 def test_playback_does_not_scroll_when_follow_is_off(trainer):
     b = trainer()
     b.js("tt.set('play.follow', false); true")
+    # 开始播放会收起“上次练到…”的提示，页面变矮、滚动位置跟着变：先收起来，下面只比较播放本身
+    b.js("import('/static/js/trainer/notices.js').then(({ notice }) => { notice('resume', null); return true; })")
     # 页面加高，滚到最下面：播放光标在视野上方
     b.js("document.body.style.paddingBottom = '4000px'; scrollTo(0, document.body.scrollHeight); true")
     y = b.js("scrollY")
