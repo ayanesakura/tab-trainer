@@ -6,7 +6,7 @@
 :root { --top-h: 52px; --side-w: 360px; --dock-h: 0px; }
 
 /* ---- 顶栏：曲名 + 副标题 ---- */
-.top .seg button .ic { width: 14px; height: 14px; }
+.topbar .seg button .ic { width: 14px; height: 14px; }
 .crumb-text { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
 .crumb-line { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
 .crumb .t { font-size: var(--fs-3); font-weight: 600; max-width: min(32vw, calc(50vw - 260px)); }
@@ -74,7 +74,7 @@
 .np-h { display: flex; align-items: center; gap: var(--sp-2); font-weight: 600; font-size: var(--fs-2); }
 .np-h .hint { font-weight: 400; }
 .np-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.np-row.top { align-items: flex-start; }
+.np-row.align-top { align-items: flex-start; }
 .np-row > .lbl { width: 30px; flex: none; color: var(--muted); line-height: 26px; }
 .np-row .chips { flex: 1; }
 .np-fret { width: 64px; -moz-appearance: textfield; appearance: textfield; }

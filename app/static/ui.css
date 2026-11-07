@@ -137,14 +137,14 @@ code, kbd { font: var(--fs-1) var(--code); background: var(--pill); border-radiu
 .ic svg { width: 100%; height: 100%; display: block; }
 
 /* ---- 顶栏 ---- */
-.top { position: sticky; top: 0; z-index: 30; height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 var(--sp-4);
+.topbar { position: sticky; top: 0; z-index: 30; height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 var(--sp-4);
   background: color-mix(in srgb, var(--bg) 82%, transparent); -webkit-backdrop-filter: saturate(1.6) blur(18px); backdrop-filter: saturate(1.6) blur(18px);
   border-bottom: 1px solid var(--line-2); }
 .brand { display: flex; align-items: center; gap: var(--sp-2); font-weight: 600; font-size: var(--fs-3); letter-spacing: .005em; color: var(--fg); min-width: 0; }
 .brand .logo { width: 26px; height: 26px; border-radius: var(--r-md); display: grid; place-items: center; background: var(--fg); color: var(--bg); }
 .brand .logo .ic { width: 15px; height: 15px; }
-.top .center { position: absolute; left: 50%; transform: translateX(-50%); }
-.top .actions { margin-left: auto; display: flex; gap: var(--sp-1); align-items: center; }
+.topbar .center { position: absolute; left: 50%; transform: translateX(-50%); }
+.topbar .actions { margin-left: auto; display: flex; gap: var(--sp-1); align-items: center; }
 .crumb { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .crumb .t { font-weight: 600; font-size: var(--fs-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 32vw; }
 
@@ -154,7 +154,7 @@ code, kbd { font: var(--fs-1) var(--code); background: var(--pill); border-radiu
 .seg button:hover { color: var(--fg); }
 .seg button.on, .seg button[aria-pressed="true"], .seg button[aria-selected="true"] { color: var(--fg); background: var(--seg-thumb); box-shadow: var(--seg-edge); font-weight: 500; }
 .seg.sm button { height: 22px; padding: 0 9px; font-size: var(--fs-1); }
-.top .seg button .ic { width: 14px; height: 14px; }
+.topbar .seg button .ic { width: 14px; height: 14px; }
 
 /* ---- 页面布局 ---- */
 .wrap { max-width: 1120px; margin: 0 auto; padding: 22px 20px 80px; }
@@ -306,7 +306,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
 .set .row .sub { white-space: normal; }
 
 @media (max-width: 760px) {
-  .top .center { position: static; transform: none; }
+  .topbar .center { position: static; transform: none; }
   .brand .label { display: none; }
   .wrap { padding: 14px var(--sp-3) 60px; }
   .row { flex-wrap: wrap; }

@@ -10,7 +10,7 @@
 <script type="module" src="/static/js/trainer/main.js"></script>
 </head>
 <body>
-<header class="top">
+<header class="topbar">
   <a class="icon-btn" href="/" title="返回曲库" aria-label="返回曲库" data-ic="back"></a>
   <div class="crumb">
     <div class="crumb-text">
@@ -101,8 +101,8 @@
             <div class="np-h"><span id="npTitle"></span><span class="hint" id="npSub"></span><div class="grow"></div><button class="icon-btn sm" id="npClose" data-ic="x" title="关闭（Esc）" aria-label="关闭"></button></div>
             <div class="np-row"><span class="lbl" id="npStrLbl">弦</span><div class="seg sm" id="npStr" aria-labelledby="npStrLbl"><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button><button data-v="6">6</button></div><span class="hint">1 弦最细</span></div>
             <div class="np-row"><label class="lbl" for="npFret">品</label><button class="icon-btn sm" id="npFretDown" data-ic="minus" aria-label="品位减 1"></button><input class="input num np-fret" type="number" id="npFret" min="0" max="30"><button class="icon-btn sm" id="npFretUp" data-ic="plus" aria-label="品位加 1"></button><span class="hint">从变调夹算起</span></div>
-            <div class="np-row top"><span class="lbl" id="npTechLbl">技巧</span><div class="chips multi" id="npTech" role="group" aria-labelledby="npTechLbl"></div></div>
-            <div class="np-row top"><span class="lbl" id="npDurLbl" title="这一拍到下一个音的时长，整拍的音一起改">时值</span><div class="chips multi" id="npDur" role="group" aria-labelledby="npDurLbl"></div></div>
+            <div class="np-row align-top"><span class="lbl" id="npTechLbl">技巧</span><div class="chips multi" id="npTech" role="group" aria-labelledby="npTechLbl"></div></div>
+            <div class="np-row align-top"><span class="lbl" id="npDurLbl" title="这一拍到下一个音的时长，整拍的音一起改">时值</span><div class="chips multi" id="npDur" role="group" aria-labelledby="npDurLbl"></div></div>
             <div class="np-msg" id="npMsg"></div>
             <div class="np-actions"><button class="btn sm danger" id="npDel" data-ic="trash">删除</button><button class="btn sm ghost" id="npAdd" data-ic="plus" title="在同一拍上再加一个音">同一拍加音</button><div class="grow"></div><button class="btn sm primary" id="npSave">保存</button></div>
           </div>
