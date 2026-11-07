@@ -91,20 +91,21 @@ def write_json(path: Path, data: dict, private: bool = False) -> None:
 
 
 def _read_json(path: Path) -> dict:
-    """读正式文件，坏了或不见了就读备份。两份都不行时抛出第一个错误（文件都不存在时是 FileNotFoundError）。"""
-    first: Exception | None = None
+    """读正式文件，坏了或不见了就读备份。两份都不行时抛出读不出来的那个错误；
+    只有两份都不存在时才是 FileNotFoundError（正式文件不见了、备份是坏的，算坏了而不是不存在）。"""
+    errs: list[Exception] = []
     for p in (path, _bak(path)):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("内容不是 JSON 对象")  # noqa: TRY004 - 和 JSON 解析错误一样按“文件坏了”处理
         except (OSError, ValueError) as e:
-            first = first or e
+            errs.append(e)
             continue
         if p != path:
-            log.warning("%s 读不出来（%s），用了备份 %s", path, first, p.name)
+            log.warning("%s 读不出来（%s），用了备份 %s", path, errs[0], p.name)
         return data
-    raise first  # type: ignore[misc]
+    raise next((e for e in errs if not isinstance(e, FileNotFoundError)), errs[0])
 
 
 # ---------------------------------------------------------------------------

@@ -51,6 +51,18 @@ def test_corrupt_song_does_not_break_the_library(data_dir):
     assert c.delete(f"/api/songs/{bad}").status_code == 200 and not d.exists()
 
 
+def test_missing_song_json_with_corrupt_backup_is_corrupt_not_gone(data_dir):
+    """正式文件不在、备份又是坏的：是“数据损坏”（曲库里显示、可以删除），不能当成曲子不存在而从曲库里消失。"""
+    sid = _gp()
+    d = store.song_dir(sid)
+    (d / "song.json").unlink()
+    (d / "song.json.bak").write_text("{trunc")
+    with pytest.raises(errors.CorruptSong):
+        store.load(sid)
+    rows = {s["id"]: s for s in views.list_library()}
+    assert rows[sid]["status"] == "corrupt"
+
+
 def test_old_songs_get_missing_fields(data_dir):
     sid = _gp()
     path = store.song_dir(sid) / "song.json"
