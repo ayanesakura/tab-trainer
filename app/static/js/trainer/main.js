@@ -13,6 +13,7 @@ import { initPracticeLog } from './practice-log.js';
 import { initEditor, setEditMode, openNotePop, editorState } from './editor.js';
 import { initSong, startLoading, refresh } from './song.js';
 import { initTuner } from './tuner.js';
+import { initFollow, followDelta, followDebug } from './follow.js';
 import { initGlossary } from './glossary.js';
 import { initRhythm, rhythmKey, rhythmDebug } from './rhythm-drill.js';
 import { ac } from './audio.js';
@@ -124,6 +125,7 @@ window.tt = {
   DERIVE_VERSION,
   play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, setEditMode, openNotePop, refresh, player,
   rhythm: rhythmDebug,
+  followDelta, follow: followDebug,
 };
 
 // ---------------------------------------------------------------------
@@ -131,6 +133,7 @@ window.tt = {
 // ---------------------------------------------------------------------
 initViews();
 initPlayer();
+initFollow();
 initFretboard();
 initBarCard();
 initOrig();

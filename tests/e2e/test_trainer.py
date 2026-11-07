@@ -76,8 +76,9 @@ def test_pause_during_count_in_then_play_again_plays(trainer):
     b.js("tt.stop(); true")
 
 
-def test_playback_does_not_scroll_until_asked(trainer):
+def test_playback_does_not_scroll_when_follow_is_off(trainer):
     b = trainer()
+    b.js("tt.set('play.follow', false); true")
     # 页面加高，滚到最下面：播放光标在视野上方
     b.js("document.body.style.paddingBottom = '4000px'; scrollTo(0, document.body.scrollHeight); true")
     y = b.js("scrollY")
@@ -573,4 +574,82 @@ def test_tuner_mic_stops_when_leaving_tune_page(trainer):
     b.wait_for("__streams.length === 2 && document.getElementById('micBtn').textContent.includes('已开启')")
     b.js("document.getElementById('micBtn').click(); true")
     b.wait_for("__streams[1].getTracks().every(t => t.readyState === 'ended')")
+    assert not b.errors, b.errors
+
+
+def _viewport(b, w, h):
+    b._run(
+        b._send("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
+    )
+
+
+def test_follow_scrolls_cursor_row_into_view(trainer):
+    """自动跟随（默认开）：循环跨行时，光标走到下面看不见的那一行，谱面自己滚过去；手动滚动后停几秒不抢。"""
+    b = trainer()
+    _viewport(b, 1400, 640)
+    b.js("document.body.style.paddingBottom = '2000px'; true")  # 只有两行的曲子：页面加高，最后一行也能滚到控制条下面
+    time.sleep(1)  # 窗口变了，谱面重画
+    b.wait_for("tt.followDelta(4) !== null")
+    # 这个宽度下第 1–5 小节一行、第 6 小节在下一行
+    b.js("tt.set('play.countIn', false); tt.setLoop(4, 5); tt.setTempo(240); true")
+    b.js("scrollTo(0, Math.max(0, scrollY + tt.followDelta(4))); true")  # 第 5 小节那一行刚好在控制条下面
+    time.sleep(0.3)
+    assert b.js("tt.followDelta(4)") == 0 and b.js("tt.followDelta(5)") > 0  # 第 6 小节在下一行，看不见
+    y = b.js("scrollY")
+    b.js("tt.play(); true")
+    b.wait_for("tt.state.playing")
+    b.wait_for("tt.followDelta(5) === 0", timeout=8)  # 进了下一行：自己滚过去了
+    assert b.js("scrollY") > y
+    # 手动滚轮往上翻：停几秒，不会马上又被拽回去
+    b._run(b._send("Input.dispatchMouseEvent", type="mouseWheel", x=600, y=400, deltaX=0, deltaY=-2000))
+    b.wait_for("tt.follow.pausedUntil > Date.now()")
+    time.sleep(0.4)
+    y2 = b.js("scrollY")
+    time.sleep(1.5)
+    assert b.js("scrollY") == y2
+    b.js("tt.stop(); true")
+    assert not b.errors, b.errors
+
+
+def test_play_settings_survive_reload(trainer):
+    """节拍器、预备拍、音量、自动提速、自动跟随记在本机，换一首 / 重新打开还在；存坏了的值用默认值。"""
+    b = trainer()
+    b.js("""(() => { const ch = (id, v) => { const el = document.getElementById(id);
+        if (el.type === 'checkbox') { el.checked = v; el.dispatchEvent(new Event('change')); }
+        else { el.value = v; el.dispatchEvent(new Event('input')); } };
+      ch('metro', false); ch('countIn', false); ch('gtVol', 33); ch('metroVol', 12);
+      ch('auto', true); ch('autoEvery', 3); ch('autoStep', 6); ch('follow', false); return true; })()""")
+    b = trainer()
+    got = b.js(
+        "(({metro, countIn, gtVol, metroVol, auto, autoEvery, autoStep, follow}) => "
+        "({metro, countIn, gtVol, metroVol, auto, autoEvery, autoStep, follow}))(tt.state)"
+    )
+    assert got == {
+        "metro": False,
+        "countIn": False,
+        "gtVol": 33,
+        "metroVol": 12,
+        "auto": True,
+        "autoEvery": 3,
+        "autoStep": 6,
+        "follow": False,
+    }
+    assert (
+        not b.js("document.getElementById('follow').checked")
+        and b.js("document.getElementById('gtVol').value") == "33"
+    )
+    assert "flag" in b.js("document.getElementById('moreBtn').className")  # 自动提速开着：按钮上有点
+    b.js(
+        """localStorage.setItem('tt.playPrefs', '{"gtVol": "x", "metro": 1, "autoStep": 999, "follow": false}'); true"""
+    )
+    b = trainer()
+    assert b.js("[tt.state.gtVol, tt.state.metro, tt.state.autoStep, tt.state.follow]") == [
+        80,
+        True,
+        4,
+        False,
+    ]
+    b.js("localStorage.setItem('tt.playPrefs', 'not json'); true")
+    b = trainer()
+    assert b.js("tt.state.follow") is True and b.js("tt.state.gtVol") == 80
     assert not b.errors, b.errors
