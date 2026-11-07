@@ -23,8 +23,8 @@ let api = null, baseTempo = 60, soundFontsLoaded = 0, playerReadyOnce = false, l
 let tempoSet = false, scoreTempoDone = false, cursorPending = false, scoreBytes = null;
 export const getApi = () => api;
 
-// 曲子相关的处理由 song.js / editor.js 注册（播放模块不反过来依赖它们）
-const hooks = { scoreLoaded: null, error: null, editClick: null };
+// 曲子相关的处理由 song.js / editor.js 注册，敲节奏由 rhythm-drill.js 注册 drill: {start, stop, loopChanged}（播放模块不反过来依赖它们）
+const hooks = { scoreLoaded: null, error: null, editClick: null, drill: null };
 export function setPlayerHooks(h) { Object.assign(hooks, h); }
 
 const playing = () => get('play.playing');
@@ -253,11 +253,15 @@ function markReviewBars() {
 }
 
 export function play() {
+  if (get('rhythm.on') && hooks.drill) { hooks.drill.start(); return; } // 敲节奏打开时：开始的是敲节奏，不是 alphaTab
   if (!api || !get('play.ready')) { UI.toast('音色加载中', 'info'); return; }
   set('play.loops', 0); lastTick = -1;
   api.play();
 }
-export function stop() { if (api) api.pause(); }
+export function stop() {
+  if (get('rhythm.running') && hooks.drill) hooks.drill.stop();
+  if (api) api.pause();
+}
 export function setTempo(bpm) {
   tempoSet = true;
   setBpm(bpm);
@@ -286,6 +290,7 @@ export function setLoop(a, b, restart = true, show = true) {
     if (playing() && restart) { api.stop(); set('play.loops', 0); api.play(); }
     else if (!playing()) api.tickPosition = range.startTick;
   }
+  if (get('rhythm.on') && hooks.drill) hooks.drill.loopChanged(); // 敲节奏：换成新的段（敲着的话从头再来）
 }
 /** 上一段 / 下一段 */
 export function stepSection(dir) {
@@ -436,14 +441,18 @@ export function initPlayer() {
     if (api) api.playbackSpeed = bpm / baseTempo;
   });
   on('play.bpmMax', m => { $('bpm').max = m; $('autoTarget').max = m; UI.fillRange($('bpm')); });
-  on('play.playing', (now, was) => {
+  // 播放键：alphaTab 在放，或者敲节奏在进行，都显示成“停止”
+  on(['play.playing', 'rhythm.running'], () => {
+    const now = playing() || !!get('rhythm.running');
     $('playBtn').classList.toggle('on', now);
     $('playBtn').innerHTML = UI.icon(now ? 'stop' : 'play');
     $('playBtn').setAttribute('aria-label', now ? '停止（空格）' : '播放（空格）');
+  });
+  on('play.playing', (now, was) => {
     updateFollowBtn();
     if (!now && was) setStatus('已暂停', '空格继续 · ←→ 换段 · ↑↓ 调速');
   });
-  on('play.ready', r => { if (!r) return; applyAudio(); if (!playing()) setStatus('已停止', IDLE_HINT); });
+  on('play.ready', r => { if (!r) return; applyAudio(); if (!playing() && !get('rhythm.on')) setStatus('已停止', IDLE_HINT); });
   on(['play.a', 'play.b'], paintLoop);
   on('view', renderSections);
   on('view.source', loadSource);
@@ -451,7 +460,7 @@ export function initPlayer() {
   on('ui.notation', () => { if (!api) return; api.settings.display.staveProfile = alphaTab.StaveProfile[staveProfile()]; api.updateSettings(); api.render(); });
 
   setBpm(50); // 加载前的占位，不算“定下了速度”
-  $('playBtn').onclick = () => (playing() ? stop() : play());
+  $('playBtn').onclick = () => (playing() || get('rhythm.running') ? stop() : play());
   $('demoBarBtn').onclick = () => { const bi = get('ui.bar') >= 0 ? get('ui.bar') : get('play.a'); setLoop(bi, bi, !playing()); if (!playing()) play(); };
   UI.seg($('timbreSeg'), get('play.timbre'), v => set('play.timbre', v));
   UI.seg($('notationSeg'), 'both', v => set('ui.notation', v));

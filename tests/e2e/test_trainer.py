@@ -1,4 +1,4 @@
-"""练习页的冒烟测试：加载、播放和练习记录、改音和撤销、方向键换段、调弦和记号示范音、GP 导入（成功 / 失败）、曲库页。"""
+"""练习页的冒烟测试：加载、播放和练习记录、改音和撤销、方向键换段、调弦和记号示范音、GP 导入（成功 / 失败）、曲库页、敲节奏。"""
 
 import json
 import shutil
@@ -382,3 +382,84 @@ def test_corrupt_song_stops_polling(server, browser):
         assert b.js("document.getElementById('songTitle').textContent") == "加载失败"
     finally:
         shutil.rmtree(store.song_dir(sid), ignore_errors=True)
+
+
+def test_rhythm_drill_scores_taps(trainer):
+    """敲节奏：打开后节奏卡片代替侧栏的小节卡片（指板收起）；敲击按音频时钟配对，每遍打分；
+    空格是敲击不是停止，Esc 停止；关掉后小节卡片回来，播放键又是 alphaTab。"""
+    b = trainer()
+    rh = "tt.rhythm.state"
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); document.activeElement.blur(); true")
+    b.js("document.getElementById('rhythmBtn').click(); true")
+    assert b.js("tt.get('rhythm.on')")
+    assert b.js("document.getElementById('rhythmBtn').getAttribute('aria-pressed')") == "true"
+    assert b.js("getComputedStyle(document.getElementById('rhythmCard')).display") != "none"
+    assert b.js("document.getElementById('barCard').hidden")
+    assert b.js("document.getElementById('fbDock').hidden")
+    assert b.js("document.querySelectorAll('#rhSvg .rh-note').length") == 4  # 第 1 小节四个四分音符
+    assert b.js("document.getElementById('rhRange').textContent") == "第 1 小节 · 4 个音"
+    assert "怎么练" in b.js("document.getElementById('rhResult').textContent")
+
+    # 开始（播放键 / 空格开始的是敲节奏，不是 alphaTab）
+    b.js("tt.setTempo(120); tt.play(); true")
+    b.wait_for(f"{rh}.run && {rh}.run.loops.some(l => l.kind === 'loop')")
+    assert not b.js("tt.state.playing") and b.js("tt.get('rhythm.running')")
+    assert b.js("document.getElementById('playBtn').classList.contains('on')")  # 播放键显示成停止
+    # 第一遍：前三个音敲准（晚 10 ms），第四个不敲，另外在两个音中间多敲一下
+    b.js(
+        f"const L = {rh}.run.loops.find(l => l.kind === 'loop');"
+        "[0, 1, 2].forEach(i => tt.rhythm.tapAt(L.notes[i].T + 0.01)); tt.rhythm.tapAt((L.notes[1].T + L.notes[2].T) / 2); true"
+    )
+    b.wait_for(f"{rh}.last && {rh}.last.n === 1", timeout=10)
+    s = b.js(f"{rh}.last")
+    assert (s["good"], s["ok"], s["miss"], s["extra"], s["score"], s["mean"]) == (3, 0, 1, 1, 60, 10)
+    text = b.js("document.getElementById('rhResult').textContent")
+    assert "60" in text and "漏了" not in text and "多敲了 1 下" in text
+    # 空格是敲击，不会停下（也不会开始 alphaTab）；Esc 才停
+    b.key(" ", code="Space", vk=32, text=" ")
+    assert b.js(f"!!{rh}.run") and not b.js("tt.state.playing")
+    b.key("Escape", vk=27)
+    b.wait_for(f"!{rh}.run")
+    assert not b.js("tt.get('rhythm.running')") and b.js("tt.get('rhythm.on')")
+    assert not b.js("document.getElementById('playBtn').classList.contains('on')")
+    # 停着时空格开始的也是敲节奏
+    b.key(" ", code="Space", vk=32, text=" ")
+    b.wait_for(f"!!{rh}.run")
+    assert not b.js("tt.state.playing")
+    b.key("Escape", vk=27)
+    b.wait_for(f"!{rh}.run")
+    # 换段：成绩清掉，节奏条换成新的段
+    b.js("tt.setLoop(1, 2); true")
+    assert b.js(f"{rh}.last") is None and b.js("document.querySelectorAll('#rhSvg .rh-note').length") == 8
+    assert b.js("document.getElementById('rhRange').textContent") == "第 2–3 小节 · 8 个音"
+    # 关掉：小节卡片和指板回来，播放键又是 alphaTab
+    b.js("document.getElementById('rhClose').click(); true")
+    assert not b.js("tt.get('rhythm.on')")
+    assert b.js("document.getElementById('rhythmCard').hidden")
+    assert not b.js("document.getElementById('barCard').hidden") and not b.js(
+        "document.getElementById('fbDock').hidden"
+    )
+    b.js("tt.play(); true")
+    b.wait_for("tt.state.playing")
+    assert not b.js(f"!!{rh}.run")
+    b.js("tt.stop(); true")
+    assert not b.errors, b.errors
+
+
+def test_rhythm_calibration_measures_latency(trainer):
+    b = trainer()
+    rh = "tt.rhythm.state"
+    b.js("document.getElementById('rhythmBtn').click(); document.getElementById('rhCalib').click(); true")
+    b.wait_for(f"{rh}.run && {rh}.run.calib && {rh}.run.loops.some(l => l.kind === 'loop')")
+    # 每一下都晚 80 ms：补偿值就是 +80 ms
+    b.js(
+        f"const L = {rh}.run.loops.find(l => l.kind === 'loop'); L.notes.forEach(n => tt.rhythm.tapAt(n.T + 0.08)); true"
+    )
+    b.wait_for(f"!{rh}.run", timeout=20)
+    assert b.js(f"{rh}.latency") == 80 and b.js("localStorage.getItem('tt.tapLatency')") == "80"
+    assert "+80 ms" in b.js("document.getElementById('rhCalib').textContent")
+    # 校准完回到原来的节奏条，校准那一遍不算成绩
+    assert b.js(f"{rh}.last") is None
+    assert b.js("document.querySelectorAll('#rhSvg .rh-note').length") == b.js(f"{rh}.prog.onsets.length")
+    b.js("localStorage.removeItem('tt.tapLatency'); true")
+    assert not b.errors, b.errors

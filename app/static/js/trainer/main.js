@@ -14,6 +14,7 @@ import { initEditor, setEditMode, openNotePop, editorState } from './editor.js';
 import { initSong, startLoading, refresh } from './song.js';
 import { initTuner } from './tuner.js';
 import { initGlossary } from './glossary.js';
+import { initRhythm, rhythmKey, rhythmDebug } from './rhythm-drill.js';
 import { ac } from './audio.js';
 import { DERIVE_VERSION } from '../score.js';
 
@@ -35,11 +36,13 @@ function showView(v) {
 // ---------------------------------------------------------------------
 // 键盘：空格 播放 / 停止；← → 上一段 / 下一段；↑ ↓ 快 / 慢 4 BPM。
 // 在文字输入框里、有浮层（改音面板、原谱弹窗、“更多”）时不响应；滑块、按钮用过之后照样能用空格。
+// 敲节奏进行中：空格 / F / J 是敲击、Esc 停止（rhythmKey 先看，处理了就不再往下走）；没在敲时空格照常“开始”（play 交给敲节奏）。
 // ---------------------------------------------------------------------
 const typing = el => el && el.closest && el.closest('textarea, select, [contenteditable], input:not([type=range]):not([type=checkbox])');
 function initShortcuts() {
   document.addEventListener('keydown', e => {
     if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey || UI.hasLayer() || get('ui.view') !== 'practice') return;
+    if (rhythmKey(e)) return;
     const k = {
       Space: () => (get('play.playing') ? stop() : play()), ArrowLeft: () => stepSection(-1), ArrowRight: () => stepSection(1),
       ArrowUp: () => setTempo(get('play.bpm') + 4), ArrowDown: () => setTempo(get('play.bpm') - 4),
@@ -72,7 +75,7 @@ function initMore() {
 }
 
 // ---------------------------------------------------------------------
-// 指板停靠条：底部，可折叠（记住）
+// 指板停靠条：底部，可折叠（记住）；敲节奏打开时整条收起来
 // ---------------------------------------------------------------------
 function initDock() {
   let open = true;
@@ -97,6 +100,7 @@ function initDock() {
   const dock = $('fbDock');
   new ResizeObserver(() => document.documentElement.style.setProperty('--dock-h', (dock.offsetParent ? dock.offsetHeight : 0) + 'px')).observe(dock);
   $('fbBtn').onclick = toggle;
+  on('rhythm.on', v => { dock.hidden = v; $('fbBtn').disabled = v; });
 }
 
 function initViews() {
@@ -117,6 +121,7 @@ window.tt = {
   get editor() { return editorState; },
   DERIVE_VERSION,
   play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, setEditMode, openNotePop, refresh, player,
+  rhythm: rhythmDebug,
 };
 
 // ---------------------------------------------------------------------
@@ -130,6 +135,7 @@ initOrig();
 initCoach();
 initPracticeLog();
 initEditor();
+initRhythm();
 initSong();
 initTuner();
 initGlossary();

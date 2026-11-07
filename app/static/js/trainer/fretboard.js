@@ -10,6 +10,8 @@ function el(tag, attrs = {}, parent) {
   if (parent) parent.appendChild(n);
   return n;
 }
+/** 建 SVG 元素：敲节奏的节奏条（rhythm-drill.js）也用 */
+export { el as svgEl };
 
 const FB = { W: 960, L: 74, R: 14, T: 16, G: 20, MAXF: 17 };
 let capo = 0, dyn = null;

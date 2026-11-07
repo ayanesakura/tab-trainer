@@ -46,6 +46,7 @@ const P = {
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/>',
   score: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M11 18v-6l4-1"/><circle cx="9.5" cy="18" r="1.5"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  tap: '<circle cx="12" cy="13" r="2.5"/><path d="M7.8 8.8a6 6 0 0 0 0 8.4M16.2 8.8a6 6 0 0 1 0 8.4M4.9 5.9a10 10 0 0 0 0 14.2M19.1 5.9a10 10 0 0 1 0 14.2"/>',
 };
 export const icon = (name, size) => `<span class="ic" aria-hidden="true"${size ? ` style="width:${size}px;height:${size}px"` : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${P[name] || ''}</svg></span>`;
 // 把 data-ic="名字" 的元素补上图标（插在最前面），补完去掉 data-ic

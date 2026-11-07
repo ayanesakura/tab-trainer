@@ -1,6 +1,6 @@
 // 示范音：Karplus-Strong 拨弦合成。
-// 练习时的播放、节拍器都由 alphaTab 负责（player.js）；这里只给调弦表的“听”按钮和记号说明的“试听”发声，
-// 麦克风调音器（tuner.js）也共用这里的 AudioContext。
+// 练习时的播放、节拍器都由 alphaTab 负责（player.js）；这里给调弦表的“听”按钮、记号说明的“试听”和敲节奏的示范音
+// （rhythm-drill.js，自己排程，和敲击用同一个音频时钟）发声，麦克风调音器（tuner.js）也共用这里的 AudioContext。
 
 import { get } from './store.js';
 import { mtof, noteMidi, T3, STD_MIDI } from './view.js';
@@ -109,7 +109,14 @@ function slideTo(s, midi, when) {
   v.src.playbackRate.linearRampToValueAtTime(newRate, when);
   v.rate = newRate;
 }
-function playEvent(e, when) {
+/** 示范音的音量（0–1）；敲节奏开始时和拖“示范音量”时设 */
+export function setGuitarVolume(v) {
+  if (!gtGain) return;
+  gtGain.gain.cancelScheduledValues(ac.currentTime);
+  gtGain.gain.value = v;
+}
+/** 在音频时间 when 弹一个事件（deriveView 的事件：{notes: [{s, f, tech: Set, grace, bend}]}） */
+export function playEvent(e, when) {
   const v = get('view') || STD_VIEW; // 按曲子的调弦和变调夹
   const ns = [...e.notes].sort((a, b) => b.s - a.s);
   ns.forEach((n, i) => {

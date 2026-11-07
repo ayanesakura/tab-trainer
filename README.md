@@ -20,6 +20,7 @@
   - 调弦表（含参考音）和麦克风调音器，调弦、变调夹、拍号都跟着曲子走；
   - AI 根据全曲生成的分段练习建议；
   - **问 AI**：在小节详情里直接问这一小节的问题（“左手怎么安排指法”“这个泛音总弹不响怎么办”），AI 会结合这个小节的数据、前后小节、原谱截图和你的练习记录回答，问答会保存下来；
+  - **敲节奏**：控制条里点“敲节奏”，不拿琴、只练节奏：跟着示范（或只有节拍器）用空格 / F / J 键敲出循环段里每个音的时间。每个音按早晚上色（±40 ms 内算准），每遍打分，并指出问题：整体偏早还是偏晚、快慢稳不稳、哪个位置总是错。有三种练法：跟着示范、听一遍再敲、只有节拍器。音符下面标着口令（1 e & a、1 trip let）。节拍器和示范音由页面自己用 WebAudio 排程，敲击和声音用同一个音频时钟比较；用蓝牙耳机时可以先“校准”，补偿声音延迟。打开自动提速后，要连续几遍 90 分以上才加速；
   - **练习记录**：每循环完一遍自动记下速度和用时，小节详情里显示“循环几遍、最快多少 BPM、上次什么时候”；打开曲子时提示上次练到哪里，一键接着练。
 - **曲库**：
   - 按曲名、艺人、标签搜索，按标签筛选，按最近添加 / 最近练习 / 曲名排序；
@@ -215,7 +216,7 @@ uv run python -m app.evaluate eval-xxx --yes
 - 乐观锁按对象：`PUT /api/songs/{id}/bars/{bar_id}` 可以带 `rev` = 这个小节的 `rev`，`PUT /api/songs/{id}/meta` 可以带 `rev` = 曲子的 `meta_rev`；和当前不一致返回 409（“曲子在别处改过了，已刷新，请再改一次”），不带照旧。小节的 `rev` 只在它的内容变了时 +1（手改音符或提示、重新识别 / GP 重新转换换了内容、改调弦清掉了提示）；`meta_rev` 只在可改的谱头字段（曲名、艺人、调弦、变调夹、拍号）变了时 +1。问 AI、讲解补提示、练习记录、进度、识别别的行、改别的小节都不会让手里的版本号过期。旧数据没有的按 0 算。改 GP / MusicXML 曲子的小节返回 400。
 - `GET /api/songs/{id}/practice/history` → `{sessions: [{at, a, b, bpm, seconds, loops}]}`。
 
-前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。练习页从 `js/trainer/main.js` 进入，按功能拆成模块：`store.js`（一个小 store：`song` 后端数据、`view` 派生结构、`play` 播放状态、`ui` 界面状态，按路径 `set` / `get` / `on`，值没变不通知）、`view.js`（纯函数：`deriveView(song)`、段落、换段、练习记录文案等，Node 测试直接用）、`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `setTempo` / `setStatus`）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息）、`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅 `ui.bar` 等状态，互不直接调用）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）。页面上 `window.tt` 是给端到端测试和调试用的句柄。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`），也负责认出中文 GP3–5 文件的 GBK 乱码（练习页和 `scripts/make_eval_song.py` 遇到时按 GBK 重新读）。
+前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。练习页从 `js/trainer/main.js` 进入，按功能拆成模块：`store.js`（一个小 store：`song` 后端数据、`view` 派生结构、`play` 播放状态、`ui` 界面状态，按路径 `set` / `get` / `on`，值没变不通知）、`view.js`（纯函数：`deriveView(song)`、段落、换段、练习记录文案等，Node 测试直接用）、`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `setTempo` / `setStatus`）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息）、`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅 `ui.bar` 等状态，互不直接调用）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）、`rhythm-drill.js`（敲节奏：节奏条、WebAudio 排程的节拍器和示范音、敲击打分；状态在 store 的 `rhythm` 切片，播放键 / 空格 / 换段通过 `player.js` 的钩子交给它）。页面上 `window.tt` 是给端到端测试和调试用的句柄。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`），也负责认出中文 GP3–5 文件的 GBK 乱码（练习页和 `scripts/make_eval_song.py` 遇到时按 GBK 重新读）。`js/rhythm.js` 是敲节奏的打分逻辑（要敲的点和口令、配对、打分、诊断；不碰 DOM 和音频，`tests/js/rhythm.test.mjs` 直接测）。
 
 测试和模块一一对应（`tests/test_<模块>.py`），替身模型和合成谱子在 `tests/fakes.py`，公共 fixture 在 `tests/conftest.py`。`tests/fixtures/llm_schemas.json` 是重构前给模型的 schema（`test_model.py` 断言逐字不变）；`golden.gp` / `golden_derived.json` 是浏览器转换的金标准（`tests/js/fixture.test.mjs` 和 `tests/test_golden.py` 两边各查一遍）。
 

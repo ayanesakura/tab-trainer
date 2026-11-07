@@ -54,6 +54,7 @@
               <button class="icon-btn sm" id="loopNext" data-ic="right" title="下一段（→）" aria-label="下一段"></button>
             </div>
             <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="把循环换成正在看的这一小节并播放">只练这一小节</button>
+            <button class="btn sm ghost" id="rhythmBtn" data-ic="tap" aria-pressed="false" aria-controls="rhythmCard" title="只练节奏：不拿琴，跟着示范在键盘上敲出这一段的节奏，每个音判早晚、每遍打分">敲节奏</button>
             <div class="grow"></div>
             <button class="btn sm ghost" id="fbBtn" data-ic="tuning" aria-pressed="true" title="显示 / 收起底部的指板">指板</button>
             <button class="btn sm ghost" id="moreBtn" data-ic="settings" aria-haspopup="true" aria-expanded="false" aria-controls="morePop">更多</button>
@@ -110,7 +111,7 @@
       </div>
 
       <aside class="side" id="side" aria-label="当前小节">
-        <div class="card bar-card">
+        <div class="card bar-card" id="barCard">
           <div class="card-h">
             <span class="card-title">第 <span id="barNo">1</span> 小节</span>
             <span class="badge warn" id="barReview" hidden>待核对</span>
@@ -145,6 +146,28 @@
               </div>
             </details>
           </div>
+        </div>
+
+        <!-- 敲节奏（rhythm-drill.js）：打开后代替小节卡片 -->
+        <div class="card rh-card" id="rhythmCard" role="region" aria-labelledby="rhTitle" hidden>
+          <div class="card-h">
+            <span class="card-title" id="rhTitle" data-ic="tap">敲节奏</span>
+            <span class="hint rh-range" id="rhRange"></span>
+            <div class="grow"></div>
+            <button class="icon-btn sm" id="rhClose" data-ic="x" title="退出敲节奏" aria-label="退出敲节奏"></button>
+          </div>
+          <div class="rh-bar">
+            <div class="seg sm" id="rhMode" aria-label="练法"><button data-v="follow" title="每遍都放示范，跟着敲">跟着示范</button><button data-v="listen" title="第一遍只放示范、不打分；之后不放示范，自己敲">听一遍再敲</button><button data-v="blind" title="不放示范，只有节拍器">只有节拍器</button></div>
+            <div class="grow"></div>
+            <button class="btn sm ghost" id="rhCalib" title="用蓝牙耳机，或者觉得判定总是偏早 / 偏晚时校准：跟着咔哒声敲 8 下，测出声音延迟并补偿">校准</button>
+          </div>
+          <div class="rh-strip" id="rhStrip" title="敲：空格 / F / J，或点这里"><svg id="rhSvg" aria-hidden="true"></svg></div>
+          <div class="legend rh-keys">
+            <span><kbd>空格</kbd>开始 / 敲</span><span><kbd>F</kbd><kbd>J</kbd>也能敲</span><span><kbd>Esc</kbd>停止</span>
+            <span class="rh-legend"><i class="good"></i>准（±40 ms）<i class="ok"></i>偏<i class="miss"></i>漏</span>
+            <span>口令：1 e &amp; a（十六分）· 1 trip let（三连音）</span>
+          </div>
+          <div class="rh-result" id="rhResult" aria-live="polite"></div>
         </div>
       </aside>
     </div>
