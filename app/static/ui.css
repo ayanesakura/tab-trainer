@@ -108,7 +108,7 @@
   --blue: #7dd3fc;
   --knob: #f4f4f7;
   --knob-shadow: 0 0 0 .5px rgba(0, 0, 0, .4), 0 1px 3px rgba(0, 0, 0, .5);
-  --paper-bg: #1d1d21;
+  --paper-bg: #1f1f1f; /* 白底原谱经 invert(.88) 后的颜色：图片和周围的底连成一片，看不出方框 */
   --backdrop: rgba(0, 0, 0, .6);
   --pop-bg: rgba(38, 38, 43, .96);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, .4);
