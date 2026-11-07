@@ -93,6 +93,16 @@ def test_disagreements_rules():
     assert pipeline.ocr_disagreements(bars[:2], [[(3, 3)], [(4, 4)]]) == {}
 
 
+def test_high_frets_split_by_ocr_still_agree():
+    """OCR 把 24 以上的数拆成单个数字（多半是两个挨着的音）；AI 读的 25、30 能由这几位拼出来，不算不一致。"""
+
+    def ev(st, f):
+        return {"dur": "1", "notes": [{"string": st, "fret": f, "tech": [], "grace": -1}]}
+
+    bars = [{"events": [ev(1, 25), ev(2, 30), ev(3, 5), ev(4, 0)]}]
+    assert pipeline.ocr_disagreements(bars, [[(1, 2), (1, 5), (2, 3), (2, 0), (3, 5), (4, 0)]]) == {}
+
+
 def test_parse_retries_on_ocr_disagreement_and_warns_if_unresolved(data_dir, monkeypatch):  # noqa: F811
     monkeypatch.setattr(pipeline, "OCR_CHECK", True)
 

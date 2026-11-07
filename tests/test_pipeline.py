@@ -232,6 +232,47 @@ def test_cancel_stops_remaining_systems(data_dir, monkeypatch):
     assert any(s["error"] == "已取消" for s in song["systems"])
 
 
+def test_systems_share_a_global_limit_across_songs(data_dir, monkeypatch):
+    """两首曲子同时识别：同时在识别的行数不超过全局上限。"""
+    import threading
+    import time
+
+    monkeypatch.setattr(pipeline, "_system_slots", threading.BoundedSemaphore(1))
+    real = FakeClaude.transcribe
+    active, peak, lock = [0], [0], threading.Lock()
+
+    def slow(self, *a, **kw):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.05)
+        with lock:
+            active[0] -= 1
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", slow)
+    sids = [pipeline.create_song([(f"p{k}.png", _png())]) for k in range(2)]
+    threads = [threading.Thread(target=pipeline._run_parse, args=(sid,)) for sid in sids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert peak[0] == 1
+    assert all(store.load(sid)["status"] == "ready" for sid in sids)
+
+
+def test_cancel_while_waiting_for_a_slot(data_dir, monkeypatch):
+    import threading
+
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()  # 名额被别的曲子占着
+    monkeypatch.setattr(pipeline, "_system_slots", sem)
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(pipeline.Cancelled):
+        pipeline._transcribe_queued(None, "sid", {}, 0, 1, cancel=cancel)
+
+
 def test_reparse_failed_line_uses_real_bar_numbers(data_dir):
     sid = pipeline.create_song([("p1.png", _png())])
     pipeline._run_parse(sid)
@@ -567,6 +608,29 @@ def test_plan_built_from_old_notes_stays_stale(data_dir, monkeypatch):
     pipeline.start_explain(sid)
     plan = store.load(sid)["plan"]
     assert plan["stale"] and plan["changed_bars"] == [bar_id]
+
+
+def test_full_parse_plan_built_from_old_notes_stays_stale(data_dir, monkeypatch):
+    """整首识别最后生成计划期间用户改了音：计划还没写回（plan 为空）时改动标不上过时，写回时要补上。"""
+    sid = pipeline.create_song([("p1.png", _png())])
+    real = FakeClaude.practice_plan
+    edited = []
+
+    def plan_while_user_edits(self, meta, bars):
+        out = real(self, meta, bars)
+        edited.append(bars[2]["id"])
+        pipeline.edit_bar(sid, bars[2]["id"], [{"dur": "4", "notes": [{"string": 3, "fret": 5}]}], None)
+        return out
+
+    monkeypatch.setattr(FakeClaude, "practice_plan", plan_while_user_edits)
+    pipeline._run_parse(sid)
+    song = store.load(sid)
+    assert song["status"] == "ready"
+    assert song["plan"]["stale"] and song["plan"]["changed_bars"] == edited and not song["plan"]["stale_all"]
+    # 撤销回原样：计划又是最新的
+    orig = song["bars"][2]["_orig"]["events"]
+    song = pipeline.edit_bar(sid, edited[0], orig, None)
+    assert not song["plan"]["stale"]
 
 
 def test_undoing_an_edit_restores_tip_qa_and_plan(data_dir):

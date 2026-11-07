@@ -22,7 +22,8 @@ from app.llm import TECHS, Claude, LLMConfig, LLMError, request_id_of
 
 log = logging.getLogger("tab_trainer.pipeline")
 
-CONCURRENCY = 4
+CONCURRENCY = 4  # 一首曲子同时识别几行
+MAX_SYSTEMS = 4  # 所有曲子加起来同时识别几行（连续上传多首时不会成倍地发请求、跑 OCR）
 LABEL_STRINGS = True  # 在裁剪图上标弦号（见 _label_strings）
 OCR_CHECK = True  # 用本机数字识别校对 AI 读出的弦和品（见 app/ocr.py、ocr_disagreements）
 PDF_DPI = 200
@@ -446,6 +447,17 @@ def _restore_plan_bar(s: dict, bar_id: str) -> None:
         plan["stale"] = bool(plan.get("stale_all") or plan["changed_bars"])
 
 
+def _store_plan(s: dict, plan: dict | None, seen: dict, meta: dict) -> None:
+    """写回后台生成的练习建议。seen / meta 是生成时用的小节音符（按 id）和曲子设定：
+    生成期间谱子被改过的话，新计划一出来就是过时的，照样保存但标成过时（改回原样还能撤销）。"""
+    if plan:
+        changed = sorted(b["id"] for b in s["bars"] if seen.get(b["id"]) != b["events"])
+        meta_changed = s["meta"] != meta
+        if changed or meta_changed:
+            plan.update(changed_bars=changed, stale_all=meta_changed, stale=True)
+    s["plan"] = plan
+
+
 def _prune_practice(s: dict) -> None:
     """小节被重新识别 / 换了音轨以后 id 都变了：丢掉对不上的练习记录（累计总时长保留）。"""
     p = s.get("practice")
@@ -695,6 +707,20 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
     return {i: (got - ai, ai - got) for i, ai, got in pairs if got != ai}
 
 
+_system_slots = threading.BoundedSemaphore(MAX_SYSTEMS)
+
+
+def _transcribe_queued(*args, cancel: threading.Event | None = None, **kw) -> list[dict]:
+    """排队等全局名额再识别一行；排队期间点了取消就不再识别。"""
+    while not _system_slots.acquire(timeout=0.2):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+    try:
+        return _transcribe_system(*args, cancel=cancel, **kw)
+    finally:
+        _system_slots.release()
+
+
 def _transcribe_system(
     claude: Claude,
     sid: str,
@@ -868,7 +894,7 @@ def _run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     errors = []
     with ThreadPoolExecutor(CONCURRENCY) as pool:
         futs = {
-            pool.submit(_transcribe_system, claude, sid, song, i, starts[i], "", cancel): i
+            pool.submit(_transcribe_queued, claude, sid, song, i, starts[i], "", cancel=cancel): i
             for i in range(len(systems))
         }
         for fut in as_completed(futs):
@@ -907,19 +933,23 @@ def _run_parse(sid: str, cancel: threading.Event | None = None) -> None:
         return
 
     _set(sid, progress={"stage": "生成练习建议", "done": len(systems), "total": len(systems)})
+    seen = {b["id"]: b["events"] for b in song["bars"]}
     try:
         plan = claude.practice_plan(song["meta"], song["bars"])
     except Exception as e:  # noqa: BLE001 - 练习建议失败不影响使用
         log.warning("request_id=%s song=%s practice plan failed: %s", request_id_of(e), sid, e)
         plan = None
-    _set(
-        sid,
-        plan=plan,
-        status="ready",
-        error="；".join(errors) or None,
-        usage=dict(claude.usage),
-        progress={"stage": "完成", "done": len(systems), "total": len(systems)},
-    )
+
+    def finish(s, meta=song["meta"]):
+        _store_plan(s, plan, seen, meta)
+        s.update(
+            status="ready",
+            error="；".join(errors) or None,
+            usage=dict(claude.usage),
+            progress={"stage": "完成", "done": len(systems), "total": len(systems)},
+        )
+
+    store.update(sid, finish)
 
 
 # ---------------------------------------------------------------------------
@@ -1006,10 +1036,7 @@ def start_explain(sid: str) -> None:
             new_plan = claude.practice_plan(cur["meta"], cur["bars"])
 
             def finish(s, meta=cur["meta"]):
-                changed = sorted(b["id"] for b in s["bars"] if seen.get(b["id"]) != b["events"])
-                if changed or s["meta"] != meta:  # 生成计划期间谱子又改了：新计划一出来就是过时的
-                    new_plan.update(changed_bars=changed, stale_all=s["meta"] != meta, stale=True)
-                s["plan"] = new_plan
+                _store_plan(s, new_plan, seen, meta)
                 add_usage(s, claude, before)
 
             store.update(sid, finish)
@@ -1057,7 +1084,7 @@ def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | 
     song = store.load(sid)
     # 起始小节号：前面各行最后一个小节 + 1（这一行之前识别失败、没有小节时也对）
     first = max((b["n"] for b in song["bars"] if b["system"] < si), default=0) + 1
-    bars = _transcribe_system(claude, sid, song, si, first, hint=hint, cancel=cancel)
+    bars = _transcribe_queued(claude, sid, song, si, first, hint=hint, cancel=cancel)
 
     def apply(s):
         for k, b in enumerate(bars):
