@@ -435,13 +435,16 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
                     bars, status, err = [], "error", friendly(e)
                     errors.append(f"第 {i + 1} 行：{err}")
 
-                _replace_system_bars(work, i, [dict(b) for b in bars])
+                # 失败 / 取消的行只标状态、不动小节：按变拍号重做的行失败时，第一遍识别出的小节还留着
+                if status == "done":
+                    _replace_system_bars(work, i, [dict(b) for b in bars])
                 work["systems"][i].update(status=status, error=err)
 
                 def apply(s, i=i, bars=bars, status=status, err=err):
                     if not restage:
-                        _replace_system_bars(s, i, bars)
-                        apply_time_signatures(s["bars"], s["meta"])
+                        if status == "done":
+                            _replace_system_bars(s, i, bars)
+                            apply_time_signatures(s["bars"], s["meta"])
                         s["systems"][i].update(status=status, error=err)
                     s["progress"]["done"] += 1
                     charge(s)

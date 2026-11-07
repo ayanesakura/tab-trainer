@@ -642,3 +642,30 @@ def test_edit_just_before_the_carried_ts_rerun_is_not_overwritten(data_dir, monk
     assert bar["edited"] and bar["events"][0]["notes"][0]["fret"] == 9
     assert [c["start_ts"] for c in calls if c["first_bar"] == 4] == [None]  # 第 2 行没有重做
     assert all(s["status"] == "done" for s in song["systems"])
+
+
+@pytest.mark.parametrize("how", ["error", "cancel"])
+def test_failed_carried_ts_rerun_keeps_the_first_pass_bars(data_dir, monkeypatch, how):
+    """按变拍号重做的行失败 / 被取消：只标这一行的状态，第一遍识别出的小节留着（不能整行清空）。"""
+    transcribe, _ = _cramming_transcribe()
+    cancel = threading.Event()
+
+    def flaky(self, img, meta, first_bar, spans, **kw):
+        if kw.get("start_ts") == [3, 4]:
+            if how == "cancel":
+                cancel.set()
+                raise jobs.Cancelled()
+            raise RuntimeError("overloaded mid-stream")
+        return transcribe(self, img, meta, first_bar, spans, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", flaky)
+    sid = songs.create_song([("p1.png", score_png())])
+    if how == "cancel":
+        with pytest.raises(jobs.Cancelled):
+            recognize.run_parse(sid, cancel)
+    else:
+        recognize.run_parse(sid)
+    song = store.load(sid)
+    assert [b["system"] for b in song["bars"]] == [0, 0, 0, 1, 1, 1]
+    assert [b["n"] for b in song["bars"]] == [1, 2, 3, 4, 5, 6]
+    assert song["systems"][1]["status"] == "error"
