@@ -51,6 +51,8 @@
 .coach .qa .q { font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
 .coach .qa .q .t { font-weight: 400; color: var(--muted); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
 .coach .qa .a { white-space: pre-wrap; line-height: 1.7; color: var(--fg-2); }
+.coach .qa.stale { opacity: .55; }
+.coach .qa .old { font-weight: 400; font-size: 11px; color: var(--amber); border: 1px solid currentColor; border-radius: 5px; padding: 0 4px; }
 .coach .qa-list { display: flex; flex-direction: column; gap: 12px; max-height: 320px; overflow-y: auto; }
 .coach .ask { display: flex; gap: 6px; }
 .coach .ask .input { flex: 1; }
@@ -204,7 +206,7 @@ table.tune td b { font-variant-numeric: tabular-nums; }
           </div>
           <div class="tools" id="explainBox" hidden>
             <button class="btn sm primary" id="explainBtn" data-ic="sparkle">让 AI 讲解这首曲子</button>
-            <span class="hint">根据谱子数据给每个小节写练习提示，并生成练习建议（只发文字，费用很低）。</span>
+            <span class="hint" id="explainHint">根据谱子数据给每个小节写练习提示，并生成练习建议（只发文字，费用很低）。</span>
           </div>
           <div class="editor" id="editor" style="display:none">
             <textarea class="input" id="edText" spellcheck="false"></textarea>
@@ -671,7 +673,11 @@ async function ensureApi() {
   api.scoreLoaded.on(onScoreLoaded);
   api.renderFinished.on(() => { if (BARS.length) applyLoopRange(); markWarnBars(); });
   api.midiLoaded.on(() => { if (BARS.length) applyLoopRange(); }); // 反复的播放时间要等 MIDI 生成后才知道
-  api.error.on(e => UI.toast('谱面出错：' + (e && e.message ? e.message : e), 'err', 6000));
+  api.error.on(e => {
+    const msg = e && e.message ? e.message : String(e);
+    if (SONG && SONG.kind === 'score' && !SONG.bars.length) reportImportError(msg);
+    else UI.toast('谱面出错：' + msg, 'err', 6000);
+  });
   return api;
 }
 
@@ -682,7 +688,7 @@ async function loadScore() {
     if (key === scoreKey) return;
     scoreKey = key;
     const r = await fetch(`/files/${SONG.id}/source`);
-    if (!r.ok) { UI.toast('曲谱文件加载失败', 'err'); return; }
+    if (!r.ok) { reportImportError('曲谱文件加载失败（' + r.status + '）'); return; }
     api.load(new Uint8Array(await r.arrayBuffer()), [SONG.track || 0]);
   } else {
     if (!BARS.length) return;
@@ -735,7 +741,9 @@ async function onScoreLoaded(score) {
         const r = await fetch(`/api/songs/${SONG_ID}/derived`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meta: d.meta, bars: d.bars, track }) });
         if (!r.ok) throw new Error((await r.json()).detail || r.status);
         await refresh(true);
-      } catch (e) { UI.toast('读取曲谱失败：' + e.message, 'err', 6000); }
+      } catch (e) {
+        if (!SONG.bars.length) reportImportError(e.message); else UI.toast('读取曲谱失败：' + e.message, 'err', 6000);
+      }
       return;
     }
   }
@@ -1048,7 +1056,7 @@ function renderHeader() {
     UI.toast(r.ok ? '正在取消，进行中的那几行完成后停止' : ((await r.json()).detail || '取消失败'), r.ok ? 'info' : 'err');
   };
   $('errorBox').style.display = SONG.error ? '' : 'none';
-  $('errorBox').innerHTML = SONG.error ? `<span class="dot err" style="margin-top:4px"></span><div>识别出错：${esc(SONG.error)}</div>` : '';
+  $('errorBox').innerHTML = SONG.error ? `<span class="dot err" style="margin-top:4px"></span><div>${SONG.kind === 'score' && SONG.status === 'error' ? '曲谱读取失败' : '出错了'}：${esc(SONG.error)}</div>` : '';
   if (m.tuning) {
     $('mTitle').value = title;
     m.tuning.forEach((n, i) => { $('mT' + (i + 1)).value = n; });
@@ -1075,13 +1083,15 @@ function renderPlan() {
     $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${SONG.status === 'ready' ? '这次识别没有生成练习建议，可以整首重新识别。' : '识别完成后会自动生成。'}</div></div>`;
     return;
   }
+  const staleNote = p.stale ? `<div class="notice" style="margin-bottom:12px"><span class="dot warn" style="margin-top:4px"></span><div style="flex:1">谱子在生成这些建议之后改过（改音、重新识别或改调弦），下面的内容可能已过时。</div><button class="btn sm" id="planRefresh">${UI.icon('refresh')}重新生成</button></div>` : '';
   const steps = (p.steps || []).map((st, i) => {
     const m = /^(\d+)\s*[-–~]\s*(\d+)$/.exec(st.bars.trim()) || /^(\d+)$/.exec(st.bars.trim());
     const a = m ? +m[1] - 1 : null, z = m ? +(m[2] || m[1]) - 1 : null;
     const link = a != null && a < BARS.length ? `<button class="btn sm" data-a="${a}" data-z="${Math.min(z, BARS.length - 1)}">${UI.icon('repeat', 13)}循环这段</button>` : '';
     return `<div class="row plan-row"><span class="step">${i + 1}</span><div class="who"><div class="name">${esc(st.title)} <span class="badge">第 ${esc(st.bars)} 小节</span></div><div class="sub">${esc(st.advice)}</div></div><div class="ctl">${link}</div></div>`;
   }).join('');
-  $('plan').innerHTML = (p.overview ? `<div class="card pad" style="margin-bottom:12px;line-height:1.7">${esc(p.overview)}</div>` : '') + `<div class="list">${steps}</div>`;
+  $('plan').innerHTML = staleNote + (p.overview ? `<div class="card pad" style="margin-bottom:12px;line-height:1.7">${esc(p.overview)}</div>` : '') + `<div class="list">${steps}</div>`;
+  if (p.stale) $('planRefresh').onclick = () => $('explainBtn').click();
   $('plan').querySelectorAll('button[data-a]').forEach(b => b.onclick = () => { setLoop(+b.dataset.a, +b.dataset.z); showView('practice'); });
 }
 
@@ -1100,7 +1110,15 @@ function render(force) {
   buildAll(); renderTune(); renderFretboard(); renderSections(); renderPlan();
   const isScore = SONG.kind === 'score';
   $('cropCard').hidden = isScore; $('infoGrid').classList.toggle('nocrop', isScore);
-  $('explainBox').hidden = !isScore || !SONG.bars.length || SONG.bars.some(b => b.tip);
+  // 讲解按钮：有小节缺提示（GP 刚导入、改过音或调弦）或练习建议缺失 / 过时就显示；生成中由进度条提示
+  const missing = SONG.bars.filter(b => !(b.tip || '').trim()).length, planOld = !SONG.plan || SONG.plan.stale;
+  const busyNow = SONG.running || SONG.status === 'parsing' || SONG.status === 'queued';
+  $('explainBox').hidden = busyNow || !SONG.bars.length || (!missing && !planOld);
+  const fresh = isScore && missing === SONG.bars.length;
+  $('explainBtn').innerHTML = UI.icon('sparkle') + (fresh ? '让 AI 讲解这首曲子' : '让 AI 补写提示和练习建议');
+  $('explainHint').textContent = fresh
+    ? '根据谱子数据给每个小节写练习提示，并生成练习建议（只发文字，费用很低）。'
+    : `${missing ? `${missing} 个小节还没有提示（比如改过音之后），` : ''}${planOld ? '练习建议需要更新，' : ''}只发文字，费用很低。`;
   $('editBtn').hidden = $('reparseBtn').hidden = $('hintInput').hidden = isScore;
   $('editModeBtn').hidden = isScore;
   if (isScore && editMode) setEditMode(false);
@@ -1118,6 +1136,16 @@ function render(force) {
   shownBar = -1;
   setLoop(a, z, false, keep < 0); // 正在看的小节还在就直接显示它，中途不跳到别的小节（否则编辑器会被关掉）
   if (keep >= 0) showBar(keep);
+}
+
+let importErrorSent = false;
+async function reportImportError(msg) {
+  // GP / MusicXML 第一次打开就解析失败：记到曲库里（不再显示成可以练习），页面上也说清楚
+  UI.toast('读取曲谱失败：' + msg, 'err', 8000);
+  if (importErrorSent) return;
+  importErrorSent = true;
+  await fetch(`/api/songs/${SONG_ID}/import-error`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: msg }) }).catch(() => {});
+  await refresh(false);
 }
 
 async function fetchSong() {
@@ -1146,7 +1174,7 @@ let asking = null; // 正在等回答的小节 id
 function renderCoach() {
   if (shownBar < 0 || !SONG || !SONG.bars[shownBar]) return;
   const bar = SONG.bars[shownBar], qa = bar.qa || [];
-  $('qaList').innerHTML = qa.map(x => `<div class="qa"><div class="q">${UI.icon('sparkle', 13)}<span>${esc(x.q)}</span><span class="t">${esc(x.at || '')}</span></div><div class="a">${esc(x.a)}</div></div>`).join('');
+  $('qaList').innerHTML = qa.map(x => `<div class="qa${x.stale ? ' stale' : ''}"><div class="q">${UI.icon('sparkle', 13)}<span>${esc(x.q)}</span>${x.stale ? '<span class="old" title="这一小节后来改过音，回答说的可能是改之前的谱">改谱前</span>' : ''}<span class="t">${esc(x.at || '')}</span></div><div class="a">${esc(x.a)}</div></div>`).join('');
   $('qaList').hidden = !qa.length;
   $('qaList').scrollTop = $('qaList').scrollHeight;
   const busy = asking === bar.id;

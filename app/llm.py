@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass
 
 import anthropic
@@ -238,6 +239,8 @@ class Claude:
         self.client = anthropic.Anthropic(
             api_key=key, base_url=cfg.base_url or DEFAULT_BASE_URL, max_retries=3, timeout=600
         )
+        # 同一个客户端会被识别的几个线程同时用：用量累加和兜底开关都要加锁
+        self._lock = threading.Lock()
         self.use_fallbacks = True
         self.usage = {"input_tokens": 0, "output_tokens": 0}
 
@@ -252,19 +255,22 @@ class Claude:
                 "format": {"type": "json_schema", "schema": schema},
             },
         }
+        used_fallbacks = self.use_fallbacks
         try:
-            msg = self._stream(kwargs)
+            msg = self._stream(kwargs, fallbacks=used_fallbacks)
         except anthropic.BadRequestError as e:
-            # 代理或旧模型可能不认识 fallbacks 参数：去掉后重试一次
-            if self.use_fallbacks and "fallback" in str(e).lower():
+            # 代理或旧模型可能不认识 fallbacks 参数：去掉后重试一次（看的是这次请求自己有没有带）
+            if used_fallbacks and "fallback" in str(e).lower():
                 log.warning("request_id=unknown fallbacks rejected, retrying without: %s", e)
-                self.use_fallbacks = False
-                msg = self._stream(kwargs)
+                with self._lock:
+                    self.use_fallbacks = False
+                msg = self._stream(kwargs, fallbacks=False)
             else:
                 raise
         rid = getattr(msg, "_request_id", None) or "unknown"
-        self.usage["input_tokens"] += msg.usage.input_tokens or 0
-        self.usage["output_tokens"] += msg.usage.output_tokens or 0
+        with self._lock:
+            self.usage["input_tokens"] += msg.usage.input_tokens or 0
+            self.usage["output_tokens"] += msg.usage.output_tokens or 0
         if msg.stop_reason == "refusal":
             raise LLMError(f"模型拒绝了这次请求（request_id={rid}）")
         if msg.stop_reason == "max_tokens":
@@ -275,8 +281,8 @@ class Claude:
         except json.JSONDecodeError as e:
             raise LLMError(f"模型返回的不是合法 JSON（request_id={rid}）：{e}") from e
 
-    def _stream(self, kwargs: dict):
-        if self.use_fallbacks:
+    def _stream(self, kwargs: dict, fallbacks: bool | None = None):
+        if self.use_fallbacks if fallbacks is None else fallbacks:
             with self.client.beta.messages.stream(**kwargs, betas=[FALLBACK_BETA], fallbacks="default") as s:
                 return s.get_final_message()
         with self.client.messages.stream(**kwargs) as s:

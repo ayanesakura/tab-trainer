@@ -27,18 +27,40 @@ export function ticksToDur(t) {
   return TICKS / g === 1 ? String(t / g) : `${t / g}/${TICKS / g}`;
 }
 
-/** 把一段时长拆成能写出来的拍（优先一个就能表示；否则从大到小拆，后面的用连音线接上）。 */
+export const GRID = 20; // 所有可写的时值都是 20 tick 的整数倍（最短是 64 分三连音 40 tick）
+
+/**
+ * 把一段时长精确拆成能写出来的拍（后面的段用连音线接上）。用动态规划找段数最少、尽量不用三连音的拆法；
+ * 贪心会出错（140 tick 先取 120 就剩下拼不出的 20，其实 80 + 60 正好）。拼不出来时返回 null。
+ */
 export function splitTicks(t) {
   const exact = UNITS.find(u => u[0] === t);
   if (exact) return [exact];
-  const out = [];
-  let rest = t;
-  for (const u of UNITS) {
-    while (rest >= u[0]) { out.push(u); rest -= u[0]; }
+  if (t <= 0 || t % GRID) return null;
+  const n = t / GRID, cost = new Array(n + 1).fill(Infinity), pick = new Array(n + 1).fill(-1);
+  cost[0] = 0;
+  for (let i = 1; i <= n; i++) {
+    UNITS.forEach((u, k) => {
+      const step = u[0] / GRID;
+      if (step <= i && cost[i - step] + 10 + u[3] < cost[i]) { cost[i] = cost[i - step] + 10 + u[3]; pick[i] = k; }
+    });
   }
-  // 小于 64 分三连音的零头（正常数据不会出现）直接忽略
-  return out.length ? out : [UNITS[UNITS.length - 1]];
+  if (!Number.isFinite(cost[n])) return null;
+  const out = [];
+  for (let i = n; i > 0; i -= UNITS[pick[i]][0] / GRID) out.push(UNITS[pick[i]]);
+  return out.sort((x, y) => y[0] - x[0]);
 }
+
+/** 拼不出精确时值时的近似：取不超过它的最长可写拍，至少一个最短单位（误差由调用方补到后面的音上）。 */
+function approxTicks(t) {
+  for (let r = Math.floor(t / GRID) * GRID; r >= 40; r -= GRID) {
+    const s = splitTicks(r);
+    if (s) return s;
+  }
+  return [UNITS[UNITS.length - 1]];
+}
+
+const quarters = dur => { const [a, b] = String(dur).split('/'); return b === undefined ? +a : +a / +b; };
 
 const esc = s => String(s ?? '').replace(/["\\]/g, ' ');
 
@@ -91,7 +113,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
         lastOnString[n.string] = note;
         return { note, grace };
       });
-      return { ticks: durToTicks(e.dur), notes, roll: notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll')) };
+      return { ticks: durToTicks(e.dur), q: quarters(e.dur), notes, roll: notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll')) };
     });
   });
 
@@ -113,19 +135,26 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
   const barTexts = bars.map((evs, bi) => {
     const parts = [];
     const onsets = [];
+    // 起拍位置按累计时间对齐到 20 tick 的网格（1/5、1/7 拍这类写不出来的时值也不会在小节里越积越多），
+    // 每个音写到下一个音的网格位置为止；实在拼不出时近似，误差留给下一个音
+    const grid = x => Math.round(x * TICKS / GRID) * GRID;
+    let cum = 0;
+    const targets = evs.map(ev => { const o = cum; cum += ev.q; return grid(o); });
+    const end = grid(cum);
     let t = 0;
-    for (const ev of evs) {
+    evs.forEach((ev, k) => {
       onsets.push(t);
-      t += ev.ticks;
+      const want = (k + 1 < evs.length ? targets[k + 1] : end) - t;
+      const units = splitTicks(want) || approxTicks(want);
+      t += units.reduce((a, u) => a + u[0], 0);
       const graces = ev.notes.filter(x => x.grace).map(x => x.grace);
       if (graces.length) parts.push(beatTex(graces.map(g => noteTex(g)), [0, 16, 0, 0], ['gr']));
-      const units = splitTicks(ev.ticks);
       units.forEach((u, i) => {
         // 第一段带上音符和技巧；后面的段用连音线（{t}）延续，不重新拨弦
         const notes = i === 0 ? ev.notes.map(x => noteTex(x.note)) : ev.notes.map(x => `${x.note.fret}.${x.note.string}{t}`);
         parts.push(beatTex(notes, u, i === 0 && ev.roll ? ['au'] : []));
       });
-    }
+    });
     beatMap.push(onsets);
     return barMetaTex(song.bars[bi]) + parts.join(' ');
   });

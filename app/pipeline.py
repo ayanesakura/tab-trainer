@@ -192,12 +192,20 @@ def new_bar_id() -> str:
     return uuid.uuid4().hex[:10]
 
 
+GRID = Fraction(1, 48)  # 播放器能精确写出的最小时值单位（四分音符的 1/48：64 分音符和 64 分三连音的公约数）
+
+
 def check_bar(events: list[dict], meta: dict) -> list[str]:
     problems = []
     total = sum((parse_dur(e["dur"]) for e in events), Fraction(0))
     want = bar_length(meta)
     if total != want:
         problems.append(f"时值合计 {float(total):g} 拍，应为 {float(want):g} 拍")
+    odd = sorted({e["dur"] for e in events if (parse_dur(e["dur"]) / GRID).denominator != 1}, key=parse_dur)
+    if odd:
+        problems.append(
+            f"时值 {'、'.join(odd)} 拍不在播放器支持的节奏网格上（支持到 64 分音符和三连音、六连音，五连音、七连音这类不支持），播放时按最接近的位置近似"
+        )
     for e in events:
         for n in e["notes"]:
             if not 1 <= n["string"] <= 6:
@@ -282,6 +290,33 @@ def create_song(uploads: list[tuple[str, bytes]], title: str = "") -> str:
     return sid
 
 
+def _looks_like_score(ext: str, data: bytes) -> bool:
+    """按文件头粗查一下，挡住损坏的文件和改了扩展名的其他文件（真正的解析在浏览器里用 alphaTab 做）。"""
+    head = data[:4096]
+    zipped = head.startswith(b"PK\x03\x04")
+    if ext in (".gp3", ".gp4", ".gp5"):
+        return b"FICHIER GUITAR PRO" in head[:64]
+    if ext == ".gpx":
+        return head[:4] in (b"BCFS", b"BCFZ")
+    if ext == ".gp":  # Guitar Pro 7/8 是 zip；也有人把 gp5 改成 .gp
+        return zipped or b"FICHIER GUITAR PRO" in head[:64]
+    if ext == ".mxl":
+        return zipped
+    text = head.decode("utf-8", "ignore").lower()
+    return "<score-partwise" in text or "<score-timewise" in text
+
+
+def import_failed(sid: str, error: str) -> dict:
+    """浏览器解析 GP / MusicXML 失败：记到曲库里，不再显示成“可以练习”。"""
+
+    def apply(s):
+        if s.get("kind") != "score":
+            raise ValueError("只有 Guitar Pro / MusicXML 曲子会这样报错")
+        s.update(status="error", error=(str(error or "").strip() or "曲谱文件无法读取")[:300])
+
+    return store.update(sid, apply)
+
+
 def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
     """Guitar Pro / MusicXML：本来就是精确数据，不用 AI 识别。原文件保存下来，
     练习页用 alphaTab 打开后把小节数据回传（set_derived）。"""
@@ -289,6 +324,10 @@ def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
         raise ValueError("Guitar Pro / MusicXML 文件一次只能上传一个，也不能和图片混在一起")
     name, data = uploads[0]
     ext = _score_ext(name)
+    if not _looks_like_score(ext, data):
+        raise ValueError(
+            f"“{name.rsplit('/', 1)[-1]}”不是有效的 Guitar Pro / MusicXML 文件（文件内容和扩展名对不上），可能已损坏或只是改了扩展名"
+        )
     sid = store.new_id()
     d = store.song_dir(sid)
     d.mkdir(parents=True, exist_ok=True)
@@ -301,7 +340,7 @@ def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
             "source": f"source{ext}",
             "title": title.strip() or stem,
             "created": time.strftime("%Y-%m-%d %H:%M"),
-            "status": "ready",
+            "status": "imported",  # 文件在浏览器里第一次成功解析后才变成 ready（见 set_derived / import_failed）
             "progress": None,
             "error": None,
             "pages": [],
@@ -344,9 +383,38 @@ def set_derived(sid: str, meta_raw: dict, bars_raw: list, track: int = 0) -> dic
                     **clean_repeats(b or {}),
                 }
             )
-        s.update(meta=meta, bars=bars, track=int(track or 0), plan=None)
+        s.update(meta=meta, bars=bars, track=int(track or 0), plan=None, status="ready", error=None)
+        _prune_practice(s)
 
     return store.update(sid, apply)
+
+
+# ---------------------------------------------------------------------------
+# 谱面变了以后，AI 写的内容和练习记录的失效处理
+# ---------------------------------------------------------------------------
+def _invalidate_bar(bar: dict) -> None:
+    """这个小节的音变了：提示和不确定说明是按旧音写的，清掉；问答保留但标成“改谱之前的”。"""
+    bar["tip"] = ""
+    bar["uncertain"] = ""
+    for q in bar.get("qa") or []:
+        q["stale"] = True
+
+
+def _invalidate_plan(s: dict) -> None:
+    if s.get("plan"):
+        s["plan"]["stale"] = True
+
+
+def _prune_practice(s: dict) -> None:
+    """小节被重新识别 / 换了音轨以后 id 都变了：丢掉对不上的练习记录（累计总时长保留）。"""
+    p = s.get("practice")
+    if not p:
+        return
+    ids = {b.get("id") for b in s.get("bars", [])}
+    p["bars"] = {k: v for k, v in (p.get("bars") or {}).items() if k in ids}
+    last = p.get("last")
+    if last and (last.get("a") not in ids or last.get("b") not in ids):
+        p.pop("last", None)
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +622,13 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
                 if "ah" in n["tech"]:
                     harmonic_marks[(n["string"], n["fret"] + 12)] += 1
         got = Counter(seen) - harmonic_marks
+        # 两位数的两个数字隔得稍远时 OCR 会读成两个音（11 → 1、1）：AI 写的两位数能由这几位拼出来就算一致
+        for (st, f), k in list((ai - got).items()):
+            parts = Counter((st, int(d)) for d in str(f)) if f >= 10 else None
+            for _ in range(k):
+                if parts and not (parts - (got - ai)):
+                    got -= parts
+                    got[(st, f)] += 1
         if got:
             pairs.append((i, ai, got))
     agree = sum(sum((ai & got).values()) for _, ai, got in pairs)
@@ -758,6 +833,7 @@ def _run_parse(sid: str, cancel: threading.Event | None = None) -> None:
                 s["systems"][i].update(status=status, error=err)
                 s["progress"]["done"] += 1
                 s["usage"] = dict(claude.usage)
+                _prune_practice(s)
 
             store.update(sid, apply)
             if cancel.is_set():
@@ -794,16 +870,27 @@ EXPLAIN_CHUNK = 16
 
 
 def start_explain(sid: str) -> None:
-    """GTP / MusicXML 曲子：根据精确的小节数据生成每小节提示和练习建议（只发文字，费用很低）。"""
+    """补写缺失的小节提示，再重新生成整曲练习建议（只发文字，费用很低）。
+    GP / MusicXML 导入的曲子一开始都没有提示；识别出来的曲子改过音、改过调弦之后，对应的提示会被清掉。"""
     song = store.load(sid)
-    if song.get("kind") != "score" or not song.get("bars"):
+    if not song.get("bars"):
         raise ValueError("曲子还没有小节数据，请先打开练习页让它加载一次")
+    todo = [b["id"] for b in song["bars"] if not (b.get("tip") or "").strip()]
+    plan = song.get("plan")
+    if not todo and plan and not plan.get("stale"):
+        raise ValueError("每个小节都已经有提示，练习建议也是最新的")
     check_llm_ready()
     cancel = jobs.claim(sid)
     if cancel is None:
         raise RuntimeError("这首曲子正在处理中")
-    total = (len(song["bars"]) + EXPLAIN_CHUNK - 1) // EXPLAIN_CHUNK
+    total = (len(todo) + EXPLAIN_CHUNK - 1) // EXPLAIN_CHUNK
     _set(sid, status="parsing", error=None, progress={"stage": "生成讲解", "done": 0, "total": total})
+
+    def add_usage(s, claude, before):
+        s["usage"] = {
+            k: s.get("usage", {}).get(k, 0) + claude.usage[k] - before[k]
+            for k in ("input_tokens", "output_tokens")
+        }
 
     def run():
         try:
@@ -812,22 +899,32 @@ def start_explain(sid: str) -> None:
                 if cancel.is_set():
                     raise Cancelled()
                 cur = store.load(sid)
-                chunk = cur["bars"][k * EXPLAIN_CHUNK : (k + 1) * EXPLAIN_CHUNK]
+                ids = set(todo[k * EXPLAIN_CHUNK : (k + 1) * EXPLAIN_CHUNK])
+                chunk = [b for b in cur["bars"] if b.get("id") in ids]
+                if not chunk:
+                    continue
+                before = dict(claude.usage)
                 tips = {
                     t["number"]: t["tip"] for t in claude.explain_bars(cur["meta"], chunk).get("bars", [])
                 }
 
-                def apply(s, tips=tips, k=k):
+                def apply(s, tips=tips, k=k, ids=ids, before=before):
                     for b in s["bars"]:
-                        if b["n"] in tips:
+                        if b.get("id") in ids and b["n"] in tips and not (b.get("tip") or "").strip():
                             b["tip"] = tips[b["n"]]
                     s["progress"] = {"stage": "生成讲解", "done": k + 1, "total": total}
-                    s["usage"] = dict(claude.usage)
+                    add_usage(s, claude, before)
 
                 store.update(sid, apply)
             cur = store.load(sid)
-            plan = claude.practice_plan(cur["meta"], cur["bars"])
-            _set(sid, plan=plan, status="ready", progress=None, usage=dict(claude.usage))
+            before = dict(claude.usage)
+            new_plan = claude.practice_plan(cur["meta"], cur["bars"])
+
+            def finish(s):
+                s.update(plan=new_plan, status="ready", progress=None)
+                add_usage(s, claude, before)
+
+            store.update(sid, finish)
         except Cancelled:
             _set(sid, status="ready", progress=None, error="讲解生成已取消，已完成的部分会保留。")
         except Exception as e:
@@ -877,6 +974,8 @@ def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | 
         s["bars"] = [b for b in s["bars"] if b["system"] != si] + bars
         _renumber(s)
         s["systems"][si].update(status="done", error=None)
+        _invalidate_plan(s)
+        _prune_practice(s)
         s["usage"] = {
             k: s.get("usage", {}).get(k, 0) + claude.usage[k] for k in ("input_tokens", "output_tokens")
         }
@@ -896,7 +995,11 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
         bar = next((b for b in s["bars"] if b.get("id") == bar_id), None)
         if bar is None:
             raise BarNotFound(bar_id)
-        bar["events"] = cleaned or rest_bar(s["meta"])
+        new = cleaned or rest_bar(s["meta"])
+        if new != bar["events"]:
+            _invalidate_bar(bar)
+            _invalidate_plan(s)
+        bar["events"] = new
         bar["warn"] = check_bar(bar["events"], s["meta"])
         bar["uncertain"] = ""
         if tip is not None:
@@ -907,8 +1010,13 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
 
 def edit_meta(sid: str, raw: dict) -> dict:
     def apply(s):
-        merged = {**(s.get("meta") or {}), **raw}
+        old = s.get("meta") or {}
+        merged = {**old, **raw}
         s["meta"] = normalize_meta(merged, strict=True)
+        if any(s["meta"][k] != old.get(k) for k in ("tuning_midi", "capo", "time_signature")):
+            for b in s["bars"]:  # 调弦 / 变调夹 / 拍号变了：所有提示都按旧设定写的
+                _invalidate_bar(b)
+            _invalidate_plan(s)
         if "title" in raw:
             s["title"] = str(raw["title"]).strip()
         for b in s["bars"]:
@@ -963,7 +1071,7 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
             bar,
             neighbours,
             question,
-            bar.get("qa") or [],
+            [q for q in bar.get("qa") or [] if not q.get("stale")],  # 改谱之前的问答说的是旧音，不再当上下文
             practice_summary(song, bar_id),
             image,
         )
@@ -1007,7 +1115,7 @@ def record_practice(sid: str, body: dict) -> dict:
 
     def apply(s):
         known = {b.get("id") for b in s["bars"]}
-        valid = [i for i in ids if i in known]
+        valid = list(dict.fromkeys(i for i in ids if i in known))  # 保持顺序去重
         if not valid:
             return
         p = s.setdefault("practice", {})

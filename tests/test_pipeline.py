@@ -246,17 +246,50 @@ def _derived_bars(n):
 
 
 def test_guitar_pro_upload_skips_ai_and_keeps_file(data_dir):
-    sid = pipeline.create_song([("我的曲子.gp5", b"FICHIER GUITAR PRO")])
+    sid = pipeline.create_song([("我的曲子.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
     song = store.load(sid)
-    assert song["kind"] == "score" and song["status"] == "ready" and song["title"] == "我的曲子"
-    assert (store.song_dir(sid) / song["source"]).read_bytes() == b"FICHIER GUITAR PRO"
+    assert song["kind"] == "score" and song["status"] == "imported" and song["title"] == "我的曲子"
+    assert (store.song_dir(sid) / song["source"]).read_bytes() == b"\x18FICHIER GUITAR PRO v5.10"
     assert not FakeClaude.calls
     with pytest.raises(ValueError):
         pipeline.create_song([("a.gp5", b"x"), ("b.png", _png())])
 
 
+@pytest.mark.parametrize(
+    ("name", "data", "ok"),
+    [
+        ("a.gp5", b"\x18FICHIER GUITAR PRO v5.10", True),
+        ("a.gp5", b"not a gp file", False),
+        ("a.gpx", b"BCFZ....", True),
+        ("a.gp", b"PK\x03\x04....", True),
+        ("a.gp", b"%PDF-1.7", False),
+        ("a.musicxml", b'<?xml version="1.0"?>\n<!DOCTYPE x>\n<score-partwise version="4.0">', True),
+        ("a.musicxml", b"<html>hello</html>", False),
+        ("a.mxl", b"PK\x03\x04", True),
+    ],
+)
+def test_score_upload_checks_file_header(data_dir, name, data, ok):
+    if ok:
+        assert store.load(pipeline.create_song([(name, data)]))["status"] == "imported"
+    else:
+        with pytest.raises(ValueError, match="不是有效"):
+            pipeline.create_song([(name, data)])
+
+
+def test_import_lifecycle(data_dir):
+    sid = pipeline.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    song = pipeline.import_failed(sid, "Unsupported format")  # 浏览器解析失败
+    assert song["status"] == "error" and song["error"] == "Unsupported format"
+    song = pipeline.set_derived(
+        sid, {"tuning": pipeline.STANDARD}, _derived_bars(2)
+    )  # 之后成功解析（比如换了音轨）
+    assert song["status"] == "ready" and song["error"] is None
+    with pytest.raises(ValueError):
+        pipeline.import_failed(pipeline.create_song([("p1.png", _png())]), "x")
+
+
 def test_set_derived_and_explain(data_dir, monkeypatch):
-    sid = pipeline.create_song([("x.gp", b"..")])
+    sid = pipeline.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
     bars = _derived_bars(20)
     bars[3] = {"events": [{"dur": "4", "notes": [{"string": 9, "fret": 0}]}]}  # 坏数据：弦号 9
     meta = {"tuning": ["E4", "B3", "G3", "D3", "A2", "E2"], "capo": 0, "time_signature": [4, 4], "tempo": 90}
@@ -285,7 +318,7 @@ def test_set_derived_and_explain(data_dir, monkeypatch):
 
 
 def test_recover_interrupted_explain_keeps_score_song_playable(data_dir):
-    sid = pipeline.create_song([("x.gp", b"..")])
+    sid = pipeline.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
     pipeline.set_derived(sid, {}, _derived_bars(2))
     store.update(sid, lambda s: s.update(status="parsing"))
     pipeline.recover_interrupted()
@@ -298,7 +331,7 @@ def test_explain_without_key_fails_fast(data_dir, monkeypatch):
 
     monkeypatch.setattr(pipeline, "Claude", llm.Claude)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sid = pipeline.create_song([("x.gp", b"..")])
+    sid = pipeline.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
     pipeline.set_derived(sid, {}, _derived_bars(2))
     with pytest.raises(ValueError, match="API key"):
         pipeline.start_explain(sid)
@@ -319,7 +352,7 @@ def test_clean_repeats_keeps_only_valid_marks():
 
 
 def test_set_derived_keeps_repeats(data_dir):
-    sid = pipeline.create_song([("曲子.gp", b"x")])
+    sid = pipeline.create_song([("曲子.gp", b"\x18FICHIER GUITAR PRO v5.10")])
     bars = _derived_bars(2)
     bars[0]["repeat_start"] = True
     bars[1].update(repeat_end=3, directions=["fine"])
@@ -378,7 +411,7 @@ def test_ask_bar_without_key_is_a_user_error(data_dir, monkeypatch):
 
     monkeypatch.setattr(pipeline, "Claude", llm.Claude)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sid = pipeline.create_song([("曲子.gp", b"x")])
+    sid = pipeline.create_song([("曲子.gp", b"\x18FICHIER GUITAR PRO v5.10")])
     pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, _derived_bars(2))
     bar_id = store.load(sid)["bars"][0]["id"]
     with pytest.raises(ValueError, match="API key"):
@@ -386,7 +419,7 @@ def test_ask_bar_without_key_is_a_user_error(data_dir, monkeypatch):
 
 
 def test_practice_log_accumulates_per_bar(data_dir):
-    sid = pipeline.create_song([("曲子.gp", b"x")])
+    sid = pipeline.create_song([("曲子.gp", b"\x18FICHIER GUITAR PRO v5.10")])
     pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, _derived_bars(4))
     ids = [b["id"] for b in store.load(sid)["bars"]]
     pipeline.record_practice(sid, {"bar_ids": ids[1:3], "loops": 4, "bpm": 48, "seconds": 120})
@@ -407,3 +440,90 @@ def test_practice_log_accumulates_per_bar(data_dir):
     ):
         with pytest.raises(ValueError):
             pipeline.record_practice(sid, bad)
+
+
+def _explain_sync(monkeypatch):
+    monkeypatch.setattr(
+        pipeline.threading, "Thread", lambda target, daemon: type("T", (), {"start": lambda self: target()})()
+    )
+
+
+def test_editing_notes_invalidates_tip_qa_and_plan_but_keeps_practice(data_dir, monkeypatch):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    song = store.load(sid)
+    bar = song["bars"][1]
+    pipeline.ask_bar(sid, bar["id"], "怎么练？")
+    pipeline.record_practice(sid, {"bar_ids": [bar["id"]], "loops": 2, "bpm": 50, "seconds": 30})
+    assert store.load(sid)["plan"] and not store.load(sid)["plan"].get("stale")
+
+    # 内容没变的保存：什么都不失效
+    song = pipeline.edit_bar(sid, bar["id"], bar["events"], None)
+    assert song["bars"][1]["tip"] == "tip 2" and not song["plan"].get("stale")
+
+    song = pipeline.edit_bar(sid, bar["id"], [{"dur": "4", "notes": [{"string": 2, "fret": 3}]}], None)
+    b = song["bars"][1]
+    assert b["tip"] == "" and b["uncertain"] == "" and all(q["stale"] for q in b["qa"])
+    assert song["plan"]["stale"] and song["bars"][0]["tip"] == "tip 1"  # 别的小节不受影响
+    assert song["practice"]["bars"][bar["id"]]["loops"] == 2  # 同一个小节，练习记录保留
+
+    # 之后再问：改谱之前的问答不再作为上下文
+    pipeline.ask_bar(sid, bar["id"], "现在呢？")
+    assert FakeClaude.calls[-1]["history"] == 0
+
+    # 补写：只写缺失的小节，并重新生成计划
+    _explain_sync(monkeypatch)
+    FakeClaude.calls.clear()
+    pipeline.start_explain(sid)
+    song = store.load(sid)
+    assert [c["explain"] for c in FakeClaude.calls if "explain" in c] == [[2]]
+    assert song["bars"][1]["tip"] == "讲解 2" and song["bars"][0]["tip"] == "tip 1"
+    assert not song["plan"].get("stale")
+    with pytest.raises(ValueError, match="最新"):
+        pipeline.start_explain(sid)
+
+
+def test_changing_tuning_or_time_signature_invalidates_all_tips(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    song = pipeline.edit_meta(sid, {"title": "新名字"})
+    assert all(b["tip"] for b in song["bars"]) and not song["plan"].get("stale")  # 只改名字
+    song = pipeline.edit_meta(sid, {"capo": 4})
+    assert not any(b["tip"] for b in song["bars"]) and song["plan"]["stale"]
+
+
+def test_reparse_line_marks_plan_stale_and_drops_practice_of_replaced_bars(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    bars = store.load(sid)["bars"]
+    pipeline.record_practice(sid, {"bar_ids": [bars[0]["id"]], "loops": 1, "bpm": 50, "seconds": 10})
+    pipeline.record_practice(sid, {"bar_ids": [bars[4]["id"]], "loops": 1, "bpm": 60, "seconds": 10})
+    pipeline.reparse_system(sid, 1)  # 第 2 行（小节 4–6）换成了新的小节
+    song = store.load(sid)
+    assert song["plan"]["stale"]
+    assert set(song["practice"]["bars"]) == {bars[0]["id"]}
+    assert "last" not in song["practice"]  # 最近一次练的是被替换的小节
+    assert song["practice"]["total_seconds"] == 20
+
+
+def test_practice_ignores_duplicate_bar_ids(data_dir):
+    sid = pipeline.create_song([("曲子.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, _derived_bars(2))
+    ids = [b["id"] for b in store.load(sid)["bars"]]
+    p = pipeline.record_practice(
+        sid, {"bar_ids": [ids[0], ids[0], ids[1]], "loops": 1, "bpm": 60, "seconds": 20}
+    )
+    assert p["bars"][ids[0]] == {**p["bars"][ids[0]], "loops": 1, "seconds": 10}
+
+
+def test_check_bar_flags_durations_the_player_cannot_write():
+    meta = pipeline.normalize_meta({})
+    ok = [{"dur": "1/3", "notes": []}] * 3 + [
+        {"dur": "7/48", "notes": []},
+        {"dur": "41/48", "notes": []},
+        {"dur": "2", "notes": []},
+    ]
+    assert pipeline.check_bar(ok, meta) == []
+    quint = [{"dur": "1/5", "notes": []}] * 5 + [{"dur": "3", "notes": []}]
+    probs = pipeline.check_bar(quint, meta)
+    assert len(probs) == 1 and "1/5" in probs[0] and "近似" in probs[0]

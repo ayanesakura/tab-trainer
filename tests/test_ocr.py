@@ -58,7 +58,10 @@ def test_disagreements_rules():
     def bar(*notes):
         return {
             "events": [
-                {"dur": "1", "notes": [dict(string=s, fret=f, tech=list(t), grace=g) for s, f, t, g in notes]}
+                {
+                    "dur": "1",
+                    "notes": [{"string": s, "fret": f, "tech": list(t), "grace": g} for s, f, t, g in notes],
+                }
             ]
         }
 
@@ -74,6 +77,13 @@ def test_disagreements_rules():
     assert list(out) == [1]
     only_ocr, only_ai = out[1]
     assert dict(only_ocr) == {(5, 0): 1} and dict(only_ai) == {(6, 0): 1}
+    # 两位数被 OCR 拆成两个数字：算一致；但真的是两个音时（AI 只写了一个 1）照样报
+    assert (
+        pipeline.ocr_disagreements([bar((1, 11, (), -1), (2, 0, (), -1))], [[(1, 1), (1, 1), (2, 0)]]) == {}
+    )
+    assert list(
+        pipeline.ocr_disagreements([bar((1, 1, (), -1), (2, 0, (), -1))], [[(1, 1), (1, 1), (2, 0)]])
+    ) == [0]
     # 一致率太低：多半是 OCR 读不准这种排版，整行不判断
     assert pipeline.ocr_disagreements(bars[:2], [[(3, 3)], [(4, 4)]]) == {}
 

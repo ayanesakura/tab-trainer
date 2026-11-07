@@ -178,9 +178,9 @@ function songState(s) {
     const pct = p.total ? Math.round(100 * p.done / p.total) : 6;
     return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${p.done}/${p.total} 行` : ''}</span><span class="progress"><i style="width:${pct}%"></i></span>`;
   }
-  if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">识别失败：${esc(s.error)}</span>`;
+  if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">${s.kind === 'score' ? '曲谱读取失败' : '识别失败'}：${esc(s.error)}</span>`;
   if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${s.bars} 小节` : ''}</span>`;
-  if (s.kind === 'score' && !s.bars) return `<span class="dot ok"></span><span>已导入，打开练习页即可</span>`;
+  if (s.kind === 'score' && !s.bars) return `<span class="dot ok"></span><span>已导入，打开练习页读取曲谱</span>`;
   const parts = [`<span class="dot ${s.warn_bars ? 'warn' : 'ok'}"></span><span>${s.bars} 小节</span>`];
   if (s.warn_bars) parts.push(`<span class="badge warn">${s.warn_bars} 处待核对</span>`);
   if (s.error) parts.push(`<span class="badge err">部分行识别失败</span>`);

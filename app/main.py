@@ -8,12 +8,13 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import secrets
 import shutil
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import pipeline, store
@@ -29,6 +30,34 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="tab-trainer", lifespan=lifespan)
+app.state.token = None  # 绑定到非本机地址时才设置（见 main）：局域网里的其他设备要带这个令牌才能访问
+
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+TOKEN_COOKIE = "tt_token"
+DENIED_PAGE = """<!doctype html><meta charset="utf-8"><title>tab-trainer</title>
+<body style="font-family:system-ui;max-width:520px;margin:80px auto;line-height:1.7;color:#333">
+<h2>需要访问令牌</h2><p>tab-trainer 开放了局域网访问，其他设备需要用带令牌的地址打开一次。</p>
+<p>请在运行 tab-trainer 的电脑上，从启动时打印的信息里复制完整地址（以 <code>?token=</code> 结尾）。</p></body>"""
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    """局域网访问时校验令牌：本机访问不需要；带 ?token= 的地址校验通过后写进 Cookie 并去掉地址里的令牌。"""
+    token = app.state.token
+    client = request.client.host if request.client else ""
+    if not token or client in LOOPBACK:
+        return await call_next(request)
+    given = request.query_params.get("token")
+    if given is not None and secrets.compare_digest(given, token):
+        url = request.url.remove_query_params("token")
+        resp = RedirectResponse(str(url), status_code=303)
+        resp.set_cookie(TOKEN_COOKIE, token, max_age=30 * 86400, httponly=True, samesite="lax")
+        return resp
+    if secrets.compare_digest(request.cookies.get(TOKEN_COOKIE, ""), token):
+        return await call_next(request)
+    if request.url.path.startswith("/api/") or request.url.path.startswith("/files/"):
+        return JSONResponse({"detail": "需要访问令牌"}, status_code=401)
+    return HTMLResponse(DENIED_PAGE, status_code=401)
 
 
 def _song(sid: str) -> dict:
@@ -173,6 +202,15 @@ def put_derived(sid: str, body: Annotated[dict, Body()]):
         raise HTTPException(400, str(e)) from None
 
 
+@app.post("/api/songs/{sid}/import-error")
+def import_error(sid: str, body: Annotated[dict, Body()]):
+    _song(sid)
+    try:
+        return pipeline.import_failed(sid, str(body.get("error") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @app.post("/api/songs/{sid}/explain")
 def explain(sid: str):
     _song(sid)
@@ -255,6 +293,17 @@ def reparse_line(sid: str, si: int, body: Annotated[dict | None, Body()] = None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+def _lan_addresses() -> list[str]:
+    import socket
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))  # 不会真的发包，只是让系统选出对外的网卡地址
+            return [s.getsockname()[0]]
+    except OSError:
+        return ["<本机的局域网 IP>"]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="tab-trainer 本地服务")
     ap.add_argument("--host", default="127.0.0.1")
@@ -263,7 +312,15 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     import uvicorn
 
-    print(f"\n  tab-trainer 已启动：http://{a.host}:{a.port}\n")
+    if a.host in LOOPBACK:
+        print(f"\n  tab-trainer 已启动：http://{a.host}:{a.port}\n")
+    else:
+        # 开放给局域网：其他设备必须带令牌（谱子、API key 设置、删除和会产生费用的模型调用都在这些接口后面）
+        app.state.token = os.environ.get("TAB_TRAINER_TOKEN") or secrets.token_urlsafe(16)
+        print(f"\n  tab-trainer 已启动，本机打开：http://127.0.0.1:{a.port}")
+        for ip in _lan_addresses():
+            print(f"  局域网里的其他设备打开：http://{ip}:{a.port}/?token={app.state.token}")
+        print("  （令牌每次启动都会变；想固定可以设置环境变量 TAB_TRAINER_TOKEN）\n")
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
 

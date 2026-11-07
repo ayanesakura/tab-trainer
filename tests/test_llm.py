@@ -22,3 +22,24 @@ def test_env_api_key_and_custom_base_url(monkeypatch):
     c = Claude(LLMConfig(base_url="https://example.com/proxy"))
     assert c.client.api_key == "sk-ant-env"
     assert str(c.client.base_url).startswith("https://example.com/proxy")
+
+
+def test_usage_is_counted_exactly_under_concurrency(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from app.llm import Claude, LLMConfig
+
+    c = Claude(LLMConfig(api_key="sk-test"))
+    msg = SimpleNamespace(
+        usage=SimpleNamespace(input_tokens=3, output_tokens=5),
+        stop_reason="end_turn",
+        content=[SimpleNamespace(type="text", text="{}")],
+    )
+    monkeypatch.setattr(c, "_stream", lambda kwargs, fallbacks=None: msg)
+    threads = [threading.Thread(target=lambda: [c._call([], {}) for _ in range(200)]) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert c.usage == {"input_tokens": 3 * 1600, "output_tokens": 5 * 1600}

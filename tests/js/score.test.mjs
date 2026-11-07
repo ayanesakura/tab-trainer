@@ -93,3 +93,27 @@ test('retiming an onset keeps the bar length', async () => {
   assert.throws(() => retimeEvent(bar, 0, '2'), /盖过下一个音/);
   assert.equal(bar[0].dur, '1'); // 原数据不变
 });
+
+test('odd durations never lose time: exact split, grid-aligned onsets', () => {
+  assert.deepEqual(splitTicks(140).map(u => u[0]), [80, 60]); // 贪心会丢掉 20 tick
+  assert.equal(splitTicks(192), null); // 1/5 拍写不出来
+  const quint = Array.from({ length: 5 }, (_, i) => ({ dur: '1/5', notes: [N(1, i)] }));
+  const song = {
+    meta: { tuning: ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'], time_signature: [4, 4] },
+    bars: [
+      { events: [...quint, { dur: '3', notes: [N(2, 0)] }] }, // 五连音 + 附点二分
+      { events: [{ dur: '7/48', notes: [N(1, 1)] }, { dur: '41/48', notes: [N(1, 2)] }, { dur: '3', notes: [N(1, 3)] }] },
+    ],
+  };
+  const { tex, beatMap } = toAlphaTex(song);
+  const score = parse(tex);
+  for (const bar of score.tracks[0].staves[0].bars) {
+    const beats = bar.voices[0].beats;
+    const last = beats[beats.length - 1];
+    assert.equal(last.playbackStart + last.playbackDuration, 3840, `第 ${bar.index + 1} 小节总长不对`);
+  }
+  // 五连音的起拍：0、192、384、576、768 对齐到网格 → 0、200、380、580、760（误差不超过 10 tick，不累积）
+  beatMap[0].slice(0, 5).forEach((t, i) => assert.ok(Math.abs(t - i * 192) <= 10, `第 ${i + 1} 个音在 ${t}`));
+  assert.equal(beatMap[0][5], 960);
+  assert.deepEqual(beatMap[1], [0, 140, 960]); // 7/48 拍精确表示
+});
