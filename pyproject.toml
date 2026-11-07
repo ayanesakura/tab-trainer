@@ -1,0 +1,20 @@
+[project]
+name = "tab-trainer"
+version = "0.1.0"
+description = "本地吉他谱练习器：上传谱子，用 Claude 识别成可播放的六线谱"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=1.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "pillow>=10.0",
+    "numpy>=1.26",
+    "pymupdf>=1.24",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false

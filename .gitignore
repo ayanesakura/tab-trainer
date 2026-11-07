@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+# 本地数据：上传的谱子、识别结果、含 API key 的配置
+data/
