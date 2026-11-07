@@ -102,7 +102,7 @@ def _trim(group: list[float]) -> list[float]:
 def detect_page(img: Image.Image) -> dict:
     """返回 {"width", "height", "systems": [...]}，每个 system 是一行六线谱：
     top/bottom：这一行（含上方五线谱和标记）的纵向范围；x0/x1：谱线横向范围；
-    bars：小节横向范围列表 [[bx0, bx1], ...]。"""
+    bars：小节横向范围列表 [[bx0, bx1], ...]；lines：六根弦线的纵坐标（1 弦在最上面）。"""
     g = np.asarray(img.convert("L"))
     h, w = g.shape
     dark = g < 200
@@ -145,6 +145,7 @@ def detect_page(img: Image.Image) -> dict:
                         "x0": int(x0),
                         "x1": int(x1),
                         "bars": bars,
+                        "lines": [round(float(y), 1) for y in tab],
                     }
                 )
 
@@ -177,5 +178,5 @@ def detect_page(img: Image.Image) -> dict:
     return {
         "width": w,
         "height": h,
-        "systems": [{k: s_[k] for k in ("top", "bottom", "x0", "x1", "bars")} for s_ in systems],
+        "systems": [{k: s_[k] for k in ("top", "bottom", "x0", "x1", "bars", "lines")} for s_ in systems],
     }

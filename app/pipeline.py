@@ -485,8 +485,23 @@ def _plan_systems(sid: str, song: dict) -> list[dict]:
             pad = 12
             x0 = max(0, s["x0"] - 70)  # 带上行首的谱号 / 小节号
             crop = [x0, min(page["width"], s["x1"] + pad), s["top"], s["bottom"]]
-            systems.append({"page": pi, "crop": crop, "spans": s["bars"], "status": "pending"})
+            systems.append(
+                {"page": pi, "crop": crop, "spans": s["bars"], "lines": s["lines"], "status": "pending"}
+            )
     return systems
+
+
+def _tab_lines(sid: str, song: dict, sysinfo: dict) -> list[float] | None:
+    """这一行六线谱 6 根弦线在裁剪图里的纵坐标。旧曲子没存，就对整页重新检测，取落在裁剪范围里的那一行。"""
+    x0, x1, y0, y1 = sysinfo["crop"]
+    lines = sysinfo.get("lines")
+    if not lines:
+        page = song["pages"][sysinfo["page"]]
+        for s in detect_page(_page_image(sid, page))["systems"]:
+            if y0 <= s["lines"][0] and s["lines"][-1] <= y1 and s["x0"] < x1 and x0 < s["x1"]:
+                lines = s["lines"]
+                break
+    return [y - y0 for y in lines] if lines else None
 
 
 def _transcribe_system(
@@ -503,12 +518,15 @@ def _transcribe_system(
     x0, x1, y0, y1 = sysinfo["crop"]
     img = _page_image(sid, page).crop((x0, y0, x1, y1))
     spans = [(a - x0, b - x0) for a, b in sysinfo["spans"]] if sysinfo["spans"] else None
+    lines = _tab_lines(sid, song, sysinfo) if spans else None
     meta = song["meta"]
 
     def run(previous=None, problems=None):
         if cancel is not None and cancel.is_set():
             raise Cancelled()
-        raw = claude.transcribe(img, meta, first_bar, spans, hint=hint, previous=previous, problems=problems)
+        raw = claude.transcribe(
+            img, meta, first_bar, spans, hint=hint, previous=previous, problems=problems, tab_lines=lines
+        )
         bars, issues = [], []
         for i, b in enumerate(raw.get("bars", [])):
             try:

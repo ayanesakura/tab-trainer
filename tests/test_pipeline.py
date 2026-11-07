@@ -1,4 +1,5 @@
 import io
+import itertools
 from typing import ClassVar
 
 import pytest
@@ -11,6 +12,7 @@ class FakeClaude:
     """替身模型：每行返回检测到的小节数；第一次识别第 1 行时故意把时值写错，验证返修。"""
 
     calls: ClassVar[list] = []
+    tab_lines: ClassVar[list] = []
 
     def __init__(self, cfg):
         self.usage = {"input_tokens": 10, "output_tokens": 20}
@@ -27,8 +29,9 @@ class FakeClaude:
             "notes": "",
         }
 
-    def transcribe(self, img, meta, first_bar, spans, hint="", previous=None, problems=None):
+    def transcribe(self, img, meta, first_bar, spans, hint="", previous=None, problems=None, tab_lines=None):
         FakeClaude.calls.append({"first_bar": first_bar, "retry": previous is not None, "hint": hint})
+        FakeClaude.tab_lines.append((first_bar, tab_lines))
         bad = first_bar == 1 and previous is None
         bars = []
         for i in range(len(spans)):
@@ -65,6 +68,7 @@ def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "Claude", FakeClaude)
     monkeypatch.setattr(pipeline, "start_parse", lambda sid: None)  # 测试里同步执行
     FakeClaude.calls = []
+    FakeClaude.tab_lines = []
     return tmp_path
 
 
@@ -307,3 +311,20 @@ def test_set_derived_keeps_repeats(data_dir):
     song = pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, bars)
     assert song["bars"][0]["repeat_start"] is True
     assert song["bars"][1]["repeat_end"] == 3 and song["bars"][1]["directions"] == ["fine"]
+
+
+def test_tab_line_positions_are_passed_in_crop_coordinates(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    song = store.load(sid)
+    # 合成谱子的六线谱：第一行从 y=230 开始、第二行从 y=630 开始，线距 14
+    sent = dict(FakeClaude.tab_lines)  # 起始小节号 -> 传给模型的弦线位置
+    for sysinfo, first in zip(song["systems"], (1, 4), strict=True):
+        lines, top = sent[first], sysinfo["crop"][2]
+        assert sysinfo["lines"][0] in (230, 630)
+        assert lines == [y - top for y in sysinfo["lines"]]
+        assert [round(b - a) for a, b in itertools.pairwise(lines)] == [14] * 5
+    # 旧曲子没存 lines：在裁剪图上重新检测
+    s0 = dict(song["systems"][0])
+    lines0 = s0.pop("lines")
+    assert pipeline._tab_lines(sid, song, s0) == [y - s0["crop"][2] for y in lines0]

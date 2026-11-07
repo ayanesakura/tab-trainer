@@ -300,6 +300,7 @@ class Claude:
         hint: str = "",
         previous: dict | None = None,
         problems: list[str] | None = None,
+        tab_lines: list[float] | None = None,
     ) -> dict:
         block, scale = _image_block(img, min_width=1800)
         ts = meta["time_signature"]
@@ -321,6 +322,15 @@ class Claude:
                 f"This image is one line (system) of the score with {len(bar_spans)} bars, numbered {first_bar}-{last}. "
                 f"Horizontal extent of each bar in this image (pixels): {spans}. Return exactly these bars."
             )
+            if tab_lines and len(tab_lines) == 6:
+                ys = ", ".join(f"string {i + 1} at y={round(y * scale)}" for i, y in enumerate(tab_lines))
+                lines.append(
+                    f"The six tab lines in this image (pixels from the top): {ys}. A fret number sits on the line "
+                    "of its string. Decide each number's string from its vertical position against these lines "
+                    "rather than by counting lines by eye: a common mistake is putting a number one line too low "
+                    "(string 5 read as string 6, string 4 as string 5), especially bass notes and open strings (0) "
+                    "on the lower lines."
+                )
         else:
             lines.append(
                 f"This image is a whole page. Transcribe every bar on it in reading order, numbering from {first_bar}. "
