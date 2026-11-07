@@ -36,7 +36,13 @@ def _all_prompts(monkeypatch) -> dict:
     calls = _capture(monkeypatch)
     c = Claude(LLMConfig(api_key="sk-ant-test"))
     meta = music.normalize_meta(
-        {"title": "T", "tuning": ["D4", "A3", "F#3", "D3", "A2", "D2"], "capo": 2, "time_signature": [4, 4]}
+        {
+            "title": "T",
+            "tuning": ["D4", "A3", "F#3", "D3", "A2", "D2"],
+            "capo": 2,
+            "time_signature": [4, 4],
+            "notes": "5、6 弦叠在一起的 x 是拍弦",
+        }
     )
     img = Image.new("RGB", (1200, 200), "white")
     bars = [

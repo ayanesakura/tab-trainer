@@ -337,8 +337,10 @@ class Claude(LLM):
             "- time_signature: [numerator, denominator] of the first bar, e.g. [4, 4].\n"
             "- tempo: quarter-note BPM if written, else 0.\n"
             "- notes: in Chinese, anything a player should know (e.g. tuning changes, the written capo looking "
-            "inconsistent with the standard-notation pitches). "
-            "Empty string if nothing."
+            "inconsistent with the standard-notation pitches), and the notation conventions this score uses that "
+            "matter for reading every line - for example x marks meaning chord tones of the diagrams above, a "
+            "pattern of x marks labelled once as a slap / percussive hit (拍弦, 打板, 切音) that later lines repeat "
+            "without the label, or what a special symbol means. Empty string if nothing."
         )
         return self._call([block, {"type": "text", "text": text}], META_SCHEMA, max_tokens=16000)
 
@@ -375,6 +377,12 @@ class Claude(LLM):
                 "unless a time-signature change is written (see below)."
             )
         lines = [info]
+        if (meta.get("notes") or "").strip():
+            # 首页读谱头时记下的说明（记谱约定、标在别处的拍弦 / 切音等）：每一行单独识别，看不到别的行
+            lines.append(
+                "Notes about this score, written when its first page was read (they apply to every line, including "
+                f"marks that are only labelled once in the score): {meta['notes'].strip()}"
+            )
         if bar_spans:
             last = first_bar + len(bar_spans) - 1
             spans = "; ".join(
