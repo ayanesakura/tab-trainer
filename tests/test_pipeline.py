@@ -284,3 +284,70 @@ def test_explain_without_key_fails_fast(data_dir, monkeypatch):
     with pytest.raises(ValueError, match="API key"):
         pipeline.start_explain(sid)
     assert store.load(sid)["status"] == "ready" and not pipeline.jobs.running(sid)
+
+
+STD_META = pipeline.normalize_meta({"tuning": pipeline.STANDARD, "capo": 2, "time_signature": [4, 4]})
+
+
+def _raw(notes_per_bar):
+    """[[(string, fret, pitch, tech), ...], ...] -> 模型原始输出的 bars（每个音一个起拍）。"""
+    return [
+        {
+            "events": [
+                {"dur": "1", "notes": [{"string": s, "fret": f, "pitch": p, "tech": t}]} for s, f, p, t in bar
+            ]
+        }
+        for bar in notes_per_bar
+    ]
+
+
+def test_pitch_check_flags_note_read_onto_wrong_string():
+    # 五线谱按实际发音记（变调夹 2 品 → 每个音比指法高 2 个半音，且高八度记谱）
+    ok = [(5, 2, "C#4", []), (4, 2, "F#4", []), (3, 2, "B4", []), (2, 3, "E5", [])]
+    assert pipeline.pitch_mismatches(_raw([ok]), STD_META) == {}
+
+    # 第 2 小节：原谱是 6 弦 9 品（C#3，加变调夹记成 D#3），模型把数字读到了 5 弦（按调弦应是 G#）
+    wrong = [(5, 9, "D#3", [])]
+    out = pipeline.pitch_mismatches(_raw([ok, wrong]), STD_META)
+    assert list(out) == [1]
+    assert "5 弦 9 品" in out[1][0] and "G#" in out[1][0]
+
+
+def test_pitch_check_skips_harmonics_and_sparse_or_inconsistent_staff():
+    ok = [(5, 2, "C#4", []), (4, 2, "F#4", []), (3, 2, "B4", []), (2, 3, "E5", [])]
+    harmonic = [(3, 12, "G6", ["nh"]), (1, 0, "x", ["x"])]
+    assert pipeline.pitch_mismatches(_raw([ok, harmonic]), STD_META) == {}
+    # 没有五线谱（pitch 为空）或音太少：不判断
+    assert pipeline.pitch_mismatches(_raw([[(5, 2, "", []), (4, 2, "", [])]]), STD_META) == {}
+    assert pipeline.pitch_mismatches(_raw([[(5, 2, "C#4", []), (4, 2, "C4", [])]]), STD_META) == {}
+    # 五线谱读得乱七八糟（没有一致的偏移）：不下结论，免得误报
+    chaos = [(5, 0, "C4", []), (5, 0, "D4", []), (5, 0, "E4", []), (5, 0, "F#4", []), (5, 0, "G#4", [])]
+    assert pipeline.pitch_mismatches(_raw([chaos]), STD_META) == {}
+
+
+def test_pitch_mismatch_triggers_retry_and_warns_if_unfixed(data_dir, monkeypatch):
+    def transcribe(self, img, meta, first_bar, spans, hint="", previous=None, problems=None):
+        FakeClaude.calls.append({"first_bar": first_bar, "retry": previous is not None, "problems": problems})
+        bars = []
+        for i in range(len(spans)):
+            # 调弦 D A F# C# A D，五线谱按指法记。第 1 行第 2 小节最后一个音（2 弦 1 品 = A#）被读到了 3 弦
+            notes = [(1, 0, "D", []), (2, 1, "A#", []), (3, 2, "G#", []), (2, 1, "A#", [])]
+            if first_bar == 1 and i == 1 and previous is None:
+                notes[3] = (3, 1, "A#", [])
+            if first_bar == 4 and i == 0:  # 第 2 行第 1 小节两次都错：返修后仍应标出来
+                notes[3] = (3, 1, "A#", [])
+            bars.append(
+                {"number": first_bar + i, "events": _raw([notes])[0]["events"], "tip": "", "uncertain": ""}
+            )
+        return {"bars": bars}
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    song = store.load(sid)
+    retries = [c for c in FakeClaude.calls if c.get("retry")]
+    assert {c["first_bar"] for c in retries} == {1, 4}
+    assert any("3 弦 1 品" in p for c in retries for p in c["problems"])
+    assert song["bars"][1]["warn"] == []  # 返修改对了
+    assert any("3 弦 1 品" in w for w in song["bars"][3]["warn"])  # 仍然不对：练习页标橙
+    assert all(not b["warn"] for b in song["bars"] if b["n"] not in (4,))

@@ -66,6 +66,13 @@ NOTE_SCHEMA = _obj(
             "description": "fret of a grace note leading into this note, -1 if none",
         },
         "bend": {"type": "number", "description": "bend amount in semitones, 0 if no bend"},
+        "pitch": {
+            "type": "string",
+            "description": "the note head in the standard notation staff that this tab note corresponds to, "
+            'as a note name with accidental and octave as written (e.g. "F#4", "Bb3"), applying the key '
+            'signature and accidentals in the bar; "" if the score has no standard notation or this tab note '
+            "has no matching note head",
+        },
     }
 )
 EVENT_SCHEMA = _obj(
@@ -147,6 +154,8 @@ Techniques (put them on the note that receives them):
 - "roll": arpeggiated chord (wavy vertical line) - put it on every note of the chord.
 - "vib": vibrato. "bend": a bend; also set "bend" to the size in semitones (full = 2, 1/2 = 1).
 - A small grace note before a note: set "grace" on the main note to the grace note's fret (and add "h"/"sl"/"p" if the grace connects by that technique). Otherwise grace = -1.
+
+"pitch" (cross-check): if the score has a standard notation staff, also read the note head that each tab note corresponds to and give its written name, e.g. "F#4" (apply the key signature and accidentals). Read it from the staff itself, not computed from the tab - the app compares the two to catch a fret number read onto the wrong string. Use "" when there is no staff or no matching note head.
 
 "tip": 1-4 sentences of practical Chinese guidance for this bar, naming strings and frets the way a teacher would, e.g. "5 弦空弦 + 2 弦空弦一起弹，2 弦击弦到 2 品再勾弦回空弦（只拨一次）。第 3 拍和弦：2 弦 4 品、3 弦 2 品、4 弦 3 品；第 4 拍三连音：4 弦 3 品、3 弦空弦、2 弦空弦。" Mention what is hard and how to practise it when it helps.
 "uncertain": in Chinese, anything you could not read with confidence (which beat, which string, what you assumed). Empty string if everything is clear."""
