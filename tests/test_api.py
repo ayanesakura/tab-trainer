@@ -424,3 +424,14 @@ def test_confirming_a_bar_clears_needs_review_until_its_notes_change(data_dir):
     store.update(sid, lambda s: s["bars"][0].update(uncertain="还是看不清"))
     b = c.get(f"/api/songs/{sid}").json()["bars"][0]
     assert b["needs_review"] and not b["reviewed"]
+
+
+def test_double_check_setting_round_trips(client):
+    assert client.get("/api/settings").json()["double_check"] is False
+    assert client.put("/api/settings", json={"double_check": True}).json()["double_check"] is True
+    from app import config
+
+    assert config.double_check() is True
+    assert (
+        client.put("/api/settings", json={"model": "claude-opus-5-5"}).json()["double_check"] is True
+    )  # 别的设置不动它

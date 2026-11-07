@@ -120,7 +120,14 @@ def _fmt_note(x) -> str:
     return f"{float(t):g}拍:{s}弦{f}品"
 
 
-def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, price_model: str = "") -> dict:
+def run(
+    sid: str,
+    cfg: LLMConfig,
+    systems: list[int] | None,
+    concurrency: int,
+    price_model: str = "",
+    double: bool = False,
+) -> dict:
     truth = store.load(sid)
     sys_idx = systems if systems is not None else list(range(len(truth["systems"])))
     claude = Claude(cfg)
@@ -145,7 +152,11 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
             # 这一行开头的拍号按标准答案给（整首识别时由前面各行的结果带过来，见 recognize.run_parse）
             row = by_sys.get(si) or []
             ts = (row[0].get("time_signature") if row else None) or truth["meta"]["time_signature"]
-            return si, recognize.transcribe_system(claude, sid, truth, si, first, start_ts=ts), None
+            return (
+                si,
+                recognize.transcribe_system(claude, sid, truth, si, first, start_ts=ts, double_check=double),
+                None,
+            )
         except Exception as e:  # noqa: BLE001 - 单行失败照样出报告
             return si, [], friendly(e)
 
@@ -278,6 +289,7 @@ def main() -> None:
     ap.add_argument("--base-url", help="覆盖设置里的 Base URL（key 用设置里的或环境变量 ANTHROPIC_API_KEY）")
     ap.add_argument("--price-as", help="按这个模型的价格估算费用（模型名不在价格表里时用）")
     ap.add_argument("--concurrency", type=int, default=4)
+    ap.add_argument("--double-check", action="store_true", help="双重校对：两遍不一致的小节再读一遍投票")
     ap.add_argument(
         "--rescore", metavar="REPORT", help="用已有的 report.json 按当前标准答案重新计分，不调用模型"
     )
@@ -315,7 +327,7 @@ def main() -> None:
         print("这只是计划。确认要运行请加 --yes。")
         return
 
-    rep = run(a.song, cfg, systems, a.concurrency, price_model)
+    rep = run(a.song, cfg, systems, a.concurrency, price_model, a.double_check)
     model_tag = (a.model or cfg.model or "").split("/")[-1]
     out = store.DATA / "evals" / f"{time.strftime('%Y%m%d-%H%M%S')}-{a.song}-{model_tag}"
     out.mkdir(parents=True, exist_ok=True)

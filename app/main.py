@@ -84,7 +84,9 @@ def get_settings():
 
 @app.put("/api/settings")
 def put_settings(body: schemas.SettingsIn):
-    fields = {k: getattr(body, k) for k in body.model_fields_set & {"base_url", "model", "effort"}}
+    fields = {
+        k: getattr(body, k) for k in body.model_fields_set & {"base_url", "model", "effort", "double_check"}
+    }
     return config.update_settings(body.api_key, body.clear_api_key, fields)
 
 

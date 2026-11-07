@@ -53,11 +53,12 @@ def public_settings() -> dict:
         "base_url": c.get("base_url", ""),
         "model": c.get("model") or DEFAULT_MODEL,
         "effort": c.get("effort") or "high",
+        "double_check": bool(c.get("double_check")),
     }
 
 
 def update_settings(api_key: str | None, clear_api_key: bool, fields: dict) -> dict:
-    """fields：这次请求里带了的 base_url / model / effort（None 当成清空）。"""
+    """fields：这次请求里带了的 base_url / model / effort（None 当成清空）、double_check。"""
     c = store.load_config()
     if api_key:
         c["api_key"] = api_key.strip()
@@ -65,8 +66,15 @@ def update_settings(api_key: str | None, clear_api_key: bool, fields: dict) -> d
         c.pop("api_key", None)
     for k in fields.keys() & {"base_url", "model", "effort"}:
         c[k] = (fields[k] or "").strip()
+    if "double_check" in fields:
+        c["double_check"] = bool(fields["double_check"])
     store.save_config(c)
     return public_settings()
+
+
+def double_check() -> bool:
+    """双重校对：每一行识别两遍，两遍不一致的小节再读一遍投票（更准，费用约 2 倍）。"""
+    return bool(store.load_config().get("double_check"))
 
 
 def llm_config() -> LLMConfig:

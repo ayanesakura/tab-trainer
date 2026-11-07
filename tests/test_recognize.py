@@ -941,3 +941,36 @@ def test_wrong_bar_count_after_the_fix_up_is_read_once_more(data_dir, monkeypatc
     s = store.load(sid)
     assert calls.count(1) == 3
     assert len([b for b in s["bars"] if b["system"] == 0]) == 3
+
+
+def test_double_check_votes_bars_that_two_reads_disagree_on(data_dir, monkeypatch):
+    """双重校对：第二遍和第一遍有一个小节不一样，读第三遍；第三遍和第二遍一样就用第二遍的。
+    三遍都不一样的小节用第一遍，标上不确定。"""
+    real = FakeClaude.transcribe
+    reads = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        out = real(self, img, meta, first_bar, spans, *a, **kw)
+        if first_bar != 1:
+            return out
+        if kw.get("previous") is None:
+            reads.append(1)
+        k = len(reads)  # 返修（previous 不是 None）算在同一遍里
+        # 第 1 小节：第一遍读成 5 品，第二、三遍读成 0 品；第 2 小节：三遍各不相同
+        for e in out["bars"][0]["events"]:
+            e["notes"][0]["fret"] = 5 if k == 1 else 0
+        for e in out["bars"][1]["events"]:
+            e["notes"][0]["fret"] = k
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    song = store.load(sid)
+    song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+    song["systems"] = recognize.plan_systems(sid, song)
+    claude = FakeClaude(None)
+    bars = recognize.transcribe_system(claude, sid, song, 0, 1, double_check=True)
+    assert len(reads) == 3
+    assert bars[0]["events"][0]["notes"][0]["fret"] == 0  # 第二、三遍一致
+    assert bars[1]["events"][0]["notes"][0]["fret"] == 1 and "三次识别" in bars[1]["uncertain"]
+    assert not bars[2].get("uncertain")

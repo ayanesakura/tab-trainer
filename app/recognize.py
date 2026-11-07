@@ -227,7 +227,11 @@ def transcribe_system(
     hint: str = "",
     cancel: threading.Event | None = None,
     start_ts: list[int] | None = None,
+    double_check: bool | None = None,
 ) -> list[dict]:
+    """识别一行。double_check：两遍不一致的小节再读一遍投票（None = 按设置）。"""
+    if double_check is None:
+        double_check = config.double_check()
     sysinfo = song["systems"][si]
     page = song["pages"][sysinfo["page"]]
     x0, x1, y0, y1 = sysinfo["crop"]
@@ -337,36 +341,43 @@ def transcribe_system(
                 bars[i]["_ocr"] = (only_ocr, only_ai)
         return raw, bars, issues
 
-    raw, bars, issues = run()
-    if issues:
-        texts = [t for _, t in issues]
-        log.info("request_id=%s song=%s system=%d retry: %s", claude.last_request_id, sid, si, texts)
-        try:
-            _raw2, bars2, issues2 = run(previous=raw, problems=texts)
-        except Cancelled:
-            raise
-        except Exception as e:  # noqa: BLE001 - 返修出错（过载、断线）：用第一次的结果，警告照常标在小节上
-            log.warning("request_id=%s song=%s system=%d retry failed: %s", request_id_of(e), sid, si, e)
-        else:
-            if len(issues2) <= len(issues):
-                bars, issues = bars2, issues2
-    if spans and len(bars) != len(spans):
-        # 返修后小节数还是不对（模型漏了 / 合并了整小节，比读错一个音严重得多）：不带上次的结果重新读一遍，取问题少的
-        log.info(
-            "request_id=%s song=%s system=%d bar count still wrong, rereading",
-            claude.last_request_id,
-            sid,
-            si,
-        )
-        try:
-            _raw3, bars3, issues3 = run()
-        except Cancelled:
-            raise
-        except Exception as e:  # noqa: BLE001 - 重读出错：用前面的结果
-            log.warning("request_id=%s song=%s system=%d reread failed: %s", request_id_of(e), sid, si, e)
-        else:
-            if len(bars3) == len(spans) or len(issues3) < len(issues):
-                bars, issues = bars3, issues3
+    def read_once() -> tuple[list[dict], list]:
+        """读一遍这一行：有问题返修一次；返修后小节数还不对就从头再读一次。"""
+        raw, bars, issues = run()
+        if issues:
+            texts = [t for _, t in issues]
+            log.info("request_id=%s song=%s system=%d retry: %s", claude.last_request_id, sid, si, texts)
+            try:
+                _raw2, bars2, issues2 = run(previous=raw, problems=texts)
+            except Cancelled:
+                raise
+            except Exception as e:  # noqa: BLE001 - 返修出错（过载、断线）：用第一次的结果，警告照常标在小节上
+                log.warning("request_id=%s song=%s system=%d retry failed: %s", request_id_of(e), sid, si, e)
+            else:
+                if len(issues2) <= len(issues):
+                    bars, issues = bars2, issues2
+        if spans and len(bars) != len(spans):
+            # 返修后小节数还是不对（模型漏了 / 合并了整小节，比读错一个音严重得多）：不带上次的结果重新读一遍，取问题少的
+            log.info(
+                "request_id=%s song=%s system=%d bar count still wrong, rereading",
+                claude.last_request_id,
+                sid,
+                si,
+            )
+            try:
+                _raw3, bars3, issues3 = run()
+            except Cancelled:
+                raise
+            except Exception as e:  # noqa: BLE001 - 重读出错：用前面的结果
+                log.warning("request_id=%s song=%s system=%d reread failed: %s", request_id_of(e), sid, si, e)
+            else:
+                if len(bars3) == len(spans) or len(issues3) < len(issues):
+                    bars, issues = bars3, issues3
+        return bars, issues
+
+    bars, _ = read_once()
+    if double_check and spans and len(bars) == len(spans):
+        bars = _double_check(bars, read_once, len(spans), sid, si)
     if not bars:  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
         raise LLMError("模型没有读出这一行的小节，请重新识别这一行", getattr(claude, "last_request_id", None))
 
@@ -388,6 +399,56 @@ def transcribe_system(
         else:
             region = [x0, x1, y0, y1]
         out.append({"id": new_bar_id(), "system": si, "page": sysinfo["page"], "region": region, **b})
+    return out
+
+
+def _bar_key(bar: dict) -> tuple:
+    """比较两遍识别是否一致：每个起拍的时间、弦、品和技巧。"""
+    t, out = Fraction(0), []
+    for e in bar["events"]:
+        if e["notes"]:
+            out.append(
+                (t, tuple(sorted((n["string"], n["fret"], tuple(sorted(n["tech"]))) for n in e["notes"])))
+            )
+        t += parse_dur(e["dur"])
+    return tuple(out)
+
+
+def _double_check(first: list[dict], read_once, n: int, sid: str, si: int) -> list[dict]:
+    """双重校对：再独立读一遍；两遍不一样的小节读第三遍当裁判，和哪一遍一样就用哪一遍。
+    三遍都不一样的小节用第一遍的结果，标上“不确定”，提醒对照原谱。（评测：单遍约 89% 的小节完全正确，
+    这样约 95%，费用约 2 倍）"""
+    try:
+        second, _ = read_once()
+    except Cancelled:
+        raise
+    except Exception as e:  # noqa: BLE001 - 第二遍失败：用第一遍
+        log.warning("song=%s system=%d double check failed: %s", sid, si, e)
+        return first
+    if len(second) != n:
+        return first
+    diff = [i for i in range(n) if _bar_key(first[i]) != _bar_key(second[i])]
+    if not diff:
+        return first
+    log.info("song=%s system=%d double check: bars %s differ, reading a third time", sid, si, diff)
+    try:
+        third, _ = read_once()
+    except Cancelled:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.warning("song=%s system=%d third read failed: %s", sid, si, e)
+        third = []
+    out = list(first)
+    for i in diff:
+        k3 = _bar_key(third[i]) if len(third) == n else None
+        if k3 is not None and k3 == _bar_key(second[i]):
+            out[i] = second[i]
+        elif k3 is None or k3 != _bar_key(first[i]):
+            note = "三次识别这个小节结果都不一样，请对照原谱核对。"
+            out[i] = {
+                **first[i],
+                "uncertain": " ".join(x for x in (first[i].get("uncertain", ""), note) if x),
+            }
     return out
 
 

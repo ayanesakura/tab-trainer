@@ -24,6 +24,7 @@ class SettingsIn(_In):
     base_url: str | None = Field(None, max_length=500)
     model: str | None = Field(None, max_length=200)
     effort: Literal["", "low", "medium", "high", "xhigh", "max"] | None = None
+    double_check: bool | None = None
 
 
 class DerivedInfo(_In):
@@ -120,6 +121,7 @@ FIELD_NAMES = {
     "base_url": "Base URL",
     "model": "模型",
     "effort": "识别精细度",
+    "double_check": "双重校对",
     "events": "小节内容（events）",
     "tip": "提示",
     "question": "问题",

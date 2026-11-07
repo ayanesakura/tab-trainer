@@ -413,6 +413,7 @@ function showSettings(c) {
   $('modelCustom').hidden = !custom;
   if (custom) $('modelCustom').value = c.model;
   setEffortSeg(c.effort);
+  $('doubleCheck').checked = !!c.double_check;
   $('baseUrl').value = c.base_url;
 }
 async function save(body, msg = '已保存') {
@@ -424,6 +425,7 @@ const setModelSeg = UI.seg($('modelSeg'), 'claude-opus-5-5', v => {
 });
 $('modelCustom').onchange = () => { if ($('modelCustom').value.trim()) save({ model: $('modelCustom').value.trim() }); };
 const setEffortSeg = UI.seg($('effortSeg'), 'high', v => save({ effort: v }));
+$('doubleCheck').onchange = () => save({ double_check: $('doubleCheck').checked }, $('doubleCheck').checked ? '已打开双重校对' : '已关闭双重校对');
 $('baseUrl').onchange = () => save({ base_url: $('baseUrl').value });
 $('saveKey').onclick = () => api.withBusy($('saveKey'), async () => {
   const k = $('apiKey').value.trim();
