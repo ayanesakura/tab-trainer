@@ -343,3 +343,49 @@ def test_import_accepts_empty_meta_from_older_bundles(data_dir):
     song = _v2("old-meta-1", meta={}, bars=[], status="error")
     r = bundles.import_bundles([("x.zip", _bundle(song, {}))])
     assert [s["id"] for s in r["imported"]] == ["old-meta-1"] and store.load("old-meta-1")["meta"] is None
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"activity": "parse"},
+        {"bars": ["x"]},
+        {"systems": [1]},
+        {"plan": []},
+        {"notice": "oops"},
+        {"schema_version": 1, "bars": [{"id": "a", "events": [], "_orig": 5}]},
+    ],
+)
+def test_one_malformed_song_does_not_abort_the_import(data_dir, bad):
+    """reviewer 的 bad_bundle：结构不对的 song.json 以前抛 AttributeError → 500，整个包都没导入。"""
+    buf = io.BytesIO()
+    good = {"schema_version": 2, "id": "good-song", "source_type": "image", "status": "ready", "bars": []}
+    broken = {"schema_version": 2, "id": "bad-song", "source_type": "image", "status": "ready", **bad}
+    with zipfile.ZipFile(buf, "w") as zf:
+        ids = ["bad-song", "good-song"]
+        zf.writestr(
+            bundles.MANIFEST,
+            json.dumps({"format": bundles.FORMAT, "version": 1, "songs": [{"id": i} for i in ids]}),
+        )
+        zf.writestr("songs/bad-song/song.json", json.dumps(broken))
+        zf.writestr("songs/good-song/song.json", json.dumps(good))
+    buf.seek(0)
+    r = bundles.import_bundles([("b.zip", buf)])
+    assert [s["id"] for s in r["imported"]] == ["good-song"]
+    assert [s["title"] for s in r["skipped"]] == ["bad-song"] and "格式不对" in r["skipped"][0]["reason"]
+    assert not store.exists("bad-song") and [p.name for p in store.SONGS.iterdir()] == ["good-song"]
+
+
+def test_old_bundle_with_a_single_warning_string_imports(data_dir):
+    song = {
+        "schema_version": 1,
+        "id": "old-warn-1",
+        "meta": {"title": "a"},
+        "bars": [{"id": "a", "events": [], "warn": "oops"}],
+    }
+    r = bundles.import_bundles([("x.zip", _bundle(song, {}))])
+    assert [s["id"] for s in r["imported"]] == ["old-warn-1"]
+    s = store.load("old-warn-1")
+    assert (
+        s["title"] == "a" and s["meta"] is None and s["bars"][0]["warn"] == [{"code": "other", "msg": "oops"}]
+    )

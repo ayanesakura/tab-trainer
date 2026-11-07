@@ -239,8 +239,8 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
             (tmp / store.PRACTICE_FILE).write_bytes(_clean_jsonl(data))
         song["id"] = bid
         song = migrate.migrate(song, bid)
+        _check_shape(song)  # 先查形状：后面的 recover / strip 都假定字段类型是对的
         state.recover(song)  # 导出时正在识别 / 讲解的，改成“已中断”
-        _check_shape(song)
         song["imported"] = now()
         store.write_song(tmp, song)
         if not store.install(tmp, bid):  # 目标已存在（同时导入了同一首）时失败，不会覆盖
@@ -255,7 +255,7 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
 def _check_shape(song: dict) -> None:
     """外来的 song.json（已升级到当前格式）要符合 model.Song，否则这首跳过，不让它在曲库里出错。"""
     try:
-        model.Song.model_validate(model.strip(dict(song)))
+        model.Song.model_validate(song)  # 多出来的字段（派生的 n、meta.title，临时的 _ 开头字段）忽略
     except ValidationError as e:
         err = e.errors()[0]
         where = ".".join(str(x) for x in err.get("loc", ()))
@@ -309,10 +309,14 @@ def import_bundles(files: list[tuple[str, BinaryIO]]) -> dict:
                 continue
             for ent in entries:
                 ent = ent if isinstance(ent, dict) else {}
+                title = str(ent.get("title") or ent.get("id") or fname)
                 try:
                     imported.append(_import_one(zf, ent.get("id"), budget))
                 except Invalid as e:
-                    title = str(ent.get("title") or ent.get("id") or fname)
                     skipped.append({"title": title, "reason": str(e), "duplicate": isinstance(e, _Duplicate)})
+                except Exception as e:  # 外来数据结构不对（检查没覆盖到的）：只跳过这一首，其他的照常导入
+                    log.exception("导入曲子包：%s 无法导入", ent.get("id"))
+                    reason = f"song.json 格式不对（{type(e).__name__}）"
+                    skipped.append({"title": title, "reason": reason, "duplicate": False})
     log.info("导入曲子包：%d 首成功，%d 首跳过", len(imported), len(skipped))
     return {"imported": imported, "skipped": skipped}

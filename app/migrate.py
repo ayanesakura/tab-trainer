@@ -101,7 +101,8 @@ def _to_v2(s: dict) -> None:
             continue
         if not b.get("id"):
             b["id"] = uuid.uuid4().hex[:10]
-        b["warn"] = [as_warn(w) for w in b.get("warn") or []]
+        warns = b.get("warn") or []
+        b["warn"] = [as_warn(w) for w in ([warns] if isinstance(warns, str) else warns)]
         if "_orig" in b:
             b["edited"] = True
         b.pop("n", None)
