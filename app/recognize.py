@@ -44,9 +44,10 @@ OCR_CHECK = True  # 用本机数字识别校对 AI 读出的弦和品（见 app/
 # ---------------------------------------------------------------------------
 # 任务入口
 # ---------------------------------------------------------------------------
-def start_parse(sid: str) -> bool:
-    """后台识别整首；已经有任务在跑就返回 False。"""
-    cancel = jobs.jobs.claim(sid)
+def start_parse(sid: str, cancel: threading.Event | None = None) -> bool:
+    """后台识别整首；已经有任务在跑就返回 False。cancel：调用方已经登记好的任务（调整页面时一直占着，
+    中间不会被别的任务插进来），这时不再登记。"""
+    cancel = cancel or jobs.jobs.claim(sid)
     if cancel is None:
         return False
     try:
@@ -664,11 +665,17 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
 
         def apply(s):
             systems, sys_map = [], {}
+            kept_pages = {opi for opi in from_old if opi is not None}
+            kept_rows = {
+                si for si, info in enumerate(s.get("systems") or []) if info.get("page") in kept_pages
+            }
+            # 留下的页上还有小节：只识别新行；一个都不剩：整首识别（新行先是 pending，见下面）
+            any_left = any(b.get("system") in kept_rows for b in s.get("bars") or [])
             for npi, opi in enumerate(from_old):
                 if opi is None:
                     for info in planned[npi]:
                         pending.append(len(systems))
-                        systems.append({**info, "status": "parsing" if s.get("bars") else "pending"})
+                        systems.append({**info, "status": "parsing" if any_left else "pending"})
                     continue
                 for si, info in enumerate(s.get("systems") or []):
                     if info.get("page") == opi:
@@ -704,10 +711,8 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
         if pending and song["bars"]:
             jobs.spawn(sid, lambda: _recognize_new_rows(sid, pending, cancel))
             started = True
-        elif pending:  # 原来一个小节都没识别出来：整首识别（包括读谱头）
-            jobs.jobs.release(sid)
-            started = True
-            start_parse(sid)
+        elif pending:  # 原来一个小节都没识别出来（或者都在删掉的页上）：整首识别（包括读谱头）
+            started = start_parse(sid, cancel)  # 一直占着任务登记，中间不会被别的任务插进来
         return store.load(sid)
     finally:
         if not started:

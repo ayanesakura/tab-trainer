@@ -71,14 +71,43 @@ def test_added_page_is_recognized_alone(data_dir, sync_jobs, monkeypatch):
     assert after["usage"]["cost_usd"] > before["usage"]["cost_usd"]
 
 
-def test_new_page_on_song_without_bars_runs_full_recognition(data_dir, monkeypatch):
+def test_new_page_on_song_without_bars_runs_full_recognition(data_dir, sync_jobs, monkeypatch):
     sid = songs.create_song([("a.png", score_png())])
     store.patch(sid, status="error", notice={"kind": "error", "msg": "没有识别出任何小节", "source": "parse"})
     started = []
-    monkeypatch.setattr(recognize, "start_parse", lambda s: started.append(s) or True)
+    real = recognize.start_parse
+
+    def spy(s, cancel=None):
+        started.append((s, jobs.jobs.running(s)))  # 调整页面占着的任务登记一直没放手
+        return real(s, cancel)
+
+    monkeypatch.setattr(recognize, "start_parse", spy)
     recognize.arrange_pages(sid, ["p1.png", "new:0"], [("c.png", score_png())])
-    assert started == [sid] and len(store.load(sid)["pages"]) == 2
+    assert started == [(sid, True)]
+    song = store.load(sid)
+    assert len(song["pages"]) == 2 and len(song["bars"]) == 12 and song["status"] == "ready"
+    assert song["notice"] is None and all(x["status"] == "done" for x in song["systems"])
     assert not jobs.jobs.running(sid)
+
+
+def test_replacing_every_recognized_page_runs_full_recognition_without_stuck_rows(data_dir, monkeypatch):
+    """原来的小节都在删掉的页上：按删完之后的小节判断（以前按删之前的，新行被标成 parsing），
+    整首识别启动前一直占着任务登记；启动不了时新行也不会卡在“识别中”。"""
+    sid = songs.create_song([("a.png", score_png())])
+    recognize.run_parse(sid)
+    seen = []
+
+    def no_start(s, cancel=None):
+        seen.append([x["status"] for x in store.load(s)["systems"]])
+        raise RuntimeError("磁盘满了")
+
+    monkeypatch.setattr(recognize, "start_parse", no_start)
+    with pytest.raises(RuntimeError):
+        recognize.arrange_pages(sid, ["new:0"], [("c.png", score_png())])
+    assert seen == [["pending", "pending"]]  # 不是 parsing：不会锁住、也不会一直显示在识别
+    assert not jobs.jobs.running(sid)
+    song = store.load(sid)
+    assert song["bars"] == [] and not any(x["status"] == "parsing" for x in song["systems"])
 
 
 @pytest.mark.parametrize(
