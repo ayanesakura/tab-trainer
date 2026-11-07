@@ -674,3 +674,13 @@ def test_metronome_only_without_the_demo_guitar(trainer):
     assert b.js("window.__vols[window.__vols.length - 1]") > 0
     assert b.js("JSON.parse(localStorage.getItem('tt.playPrefs')).demo") is True
     assert not b.errors, b.errors
+
+
+def test_side_panel_ends_above_the_fretboard_dock(trainer):
+    """侧栏最下面（“识别有误？”）不能被底部的指板挡住：--dock-h 要是指板的实际高度。"""
+    b = trainer()
+    b.wait_for("parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-h')) > 0")
+    side, dock = b.js(
+        "[document.querySelector('.side').getBoundingClientRect().bottom, document.getElementById('fbDock').getBoundingClientRect().top]"
+    )
+    assert side <= dock + 1

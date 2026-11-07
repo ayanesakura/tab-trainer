@@ -101,7 +101,8 @@ function initDock() {
   $('fbToggle').onclick = toggle;
   // 停靠条的高度给布局用（侧栏高度、页面底部留白、“回到播放位置”按钮的位置）
   const dock = $('fbDock');
-  new ResizeObserver(() => document.documentElement.style.setProperty('--dock-h', (dock.offsetParent ? dock.offsetHeight : 0) + 'px')).observe(dock);
+  // 指板是 position: fixed（offsetParent 永远是 null，不能拿它判断显没显示）：用 getClientRects 判断是否显示
+  new ResizeObserver(() => document.documentElement.style.setProperty('--dock-h', (dock.getClientRects().length ? dock.offsetHeight : 0) + 'px')).observe(dock);
   $('fbBtn').onclick = toggle;
   on('rhythm.on', v => { dock.hidden = v; $('fbBtn').disabled = v; });
 }
