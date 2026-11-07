@@ -6,7 +6,9 @@
 // alphaTab：alphaTex 里 string 1 也是最高音弦，但内部模型里 note.string 1 = 最低音弦；
 //   击弦、滑音标在“起始音”上。转换时要把这些技巧挪到同一根弦的前一个音。
 
-export const TICKS = 960; // 每个四分音符的 MIDI tick 数
+import { DIRECTIONS, GRID as GRID_TICKS, TICKS_PER_QUARTER, STRINGS, parseDur } from './vocab.js';
+
+export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数（960）
 
 // deriveSong 的输出格式 / 转换规则的版本。改了 deriveSong（音符、技巧、拍号的转换）就加 1：
 // 已经导入的曲子下次打开时会重新转换（alphaTab 升级也会）。
@@ -25,8 +27,7 @@ const UNITS = [
 ];
 
 export function durToTicks(dur) {
-  const [a, b] = String(dur).split('/');
-  return Math.round((b === undefined ? +a : +a / +b) * TICKS);
+  return Math.round(parseDur(dur) * TICKS);
 }
 
 function gcd(a, b) { while (b) [a, b] = [b, a % b]; return a; }
@@ -35,7 +36,7 @@ export function ticksToDur(t) {
   return TICKS / g === 1 ? String(t / g) : `${t / g}/${TICKS / g}`;
 }
 
-export const GRID = 20; // 所有可写的时值都是 20 tick 的整数倍（最短是 64 分三连音 40 tick）
+export const GRID = GRID_TICKS; // 所有可写的时值都是 20 tick 的整数倍（最短是 64 分三连音 40 tick）
 
 /**
  * 把一段时长精确拆成能写出来的拍（后面的段用连音线接上）。用动态规划找段数最少、尽量不用三连音的拆法；
@@ -68,14 +69,11 @@ function approxTicks(t) {
   return [UNITS[UNITS.length - 1]];
 }
 
-const quarters = dur => { const [a, b] = String(dur).split('/'); return b === undefined ? +a : +a / +b; };
 
 const esc = s => String(s ?? '').replace(/["\\]/g, ' ');
 
-// 反复 / 跳转记号：名字和 alphaTex 的 \jump 一致，下标就是 alphaTab 的 Direction 枚举值
-const DIRECTION_NAMES = ['fine', 'segno', 'segnosegno', 'coda', 'doublecoda', 'dacapo', 'dacapoalcoda', 'dacapoaldoublecoda',
-  'dacapoalfine', 'dalsegno', 'dalsegnoalcoda', 'dalsegnoaldoublecoda', 'dalsegnoalfine', 'dalsegnosegno',
-  'dalsegnosegnoalcoda', 'dalsegnosegnoaldoublecoda', 'dalsegnosegnoalfine', 'dacoda', 'dadoublecoda'];
+// 反复 / 跳转记号（词表）：名字和 alphaTex 的 \jump 一致，下标就是 alphaTab 的 Direction 枚举值
+const DIRECTION_NAMES = DIRECTIONS;
 
 /** 小节开头的 alphaTex 元数据：拍号（和上一小节不同时）、反复开始 / 结束（一共弹几遍）、跳房子、跳转。 */
 function barMetaTex(bar, ts, prevTs) {
@@ -104,7 +102,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
   const bars = song.bars.map(bar => {
     const evs = bar.events && bar.events.length ? bar.events : [{ dur: ticksToDur(barTicks(bar)), notes: [] }];
     return evs.map(e => {
-      const notes = (e.notes || []).filter(n => n.string >= 1 && n.string <= 6).map(n => {
+      const notes = (e.notes || []).filter(n => n.string >= 1 && n.string <= STRINGS).map(n => {
         const tech = new Set(n.tech || []);
         const fx = new Set();
         if (tech.has('si')) fx.add('sib');
@@ -123,7 +121,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
         lastOnString[n.string] = note;
         return { note, grace };
       });
-      return { ticks: durToTicks(e.dur), q: quarters(e.dur), notes, roll: notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll')) };
+      return { ticks: durToTicks(e.dur), q: parseDur(e.dur), notes, roll: notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll')) };
     });
   });
 
@@ -199,7 +197,7 @@ export function deriveSong(score, trackIndex = 0) {
   const track = score.tracks[trackIndex];
   const staff = track.staves[0];
   const nStr = staff.tuning.length;
-  if (nStr !== 6) throw new Error(`这个音轨是 ${nStr} 弦的，目前只支持六弦吉他`);
+  if (nStr !== STRINGS) throw new Error(`这个音轨是 ${nStr} 弦的，目前只支持六弦吉他`);
   const NN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const name = m => NN[m % 12] + (Math.floor(m / 12) - 1);
   const mb0 = score.masterBars[0];
