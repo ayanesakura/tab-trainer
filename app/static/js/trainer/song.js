@@ -97,6 +97,16 @@ function progressText(s) {
   return `正在识别：${esc(pr.stage || '')}${n}，已识别的小节可以先练。`;
 }
 
+async function retryFailed(btn, n) {
+  const ok = await UI.confirm('会再调用 AI，只重新识别失败的行；已经识别好的小节不动。', { title: `重试失败的 ${n} 行？`, ok: '重试' });
+  if (!ok) return;
+  await withBusy(btn, async () => {
+    try { await post(songUrl('/retry-failed')); UI.toast('已开始重试失败的行', 'info'); }
+    catch (e) { UI.toast(e.message, 'err', 5000); }
+  });
+  await refresh();
+}
+
 async function explain(btn) {
   await withBusy(btn, async () => {
     try { await post(songUrl('/explain')); UI.toast('AI 正在写讲解', 'info'); }
@@ -117,14 +127,16 @@ function renderNotices(s) {
     }) }],
   } : null);
 
-  // 出错 / 警告：只显示后端给的 notice
+  // 出错 / 警告：只显示后端给的 notice；有识别失败的行时带上“重试失败的 N 行”（只重新识别这几行）
   const n = s.notice;
   const errKey = n ? 'err:' + n.msg : '';
   const scoreFail = isScore(s) && s.status === 'error';
-  notice('error', n && !dismissed.has(errKey) ? {
+  const failed = !running && !isScore(s) && s.failed_rows > 0 ? s.failed_rows : 0;
+  const retry = failed ? [{ label: `重试失败的 ${failed} 行`, icon: 'refresh', primary: true, onClick: btn => retryFailed(btn, failed) }] : [];
+  notice('error', n ? (dismissed.has(errKey) ? null : {
     kind: n.kind === 'error' ? 'err' : 'warn',
-    html: `${scoreFail ? '曲谱读取失败' : n.kind === 'error' ? '出错了' : '注意'}：${esc(n.msg)}`, onDismiss: closable(errKey),
-  } : null);
+    html: `${scoreFail ? '曲谱读取失败' : n.kind === 'error' ? '出错了' : '注意'}：${esc(n.msg)}`, actions: retry, onDismiss: closable(errKey),
+  }) : failed ? { kind: 'warn', html: `有 ${failed} 行识别失败，这几行的小节可能缺失或不完整。`, actions: retry } : null);
 
   // 让 AI 讲解：有小节缺提示（GP 刚导入、改过音或调弦）或练习建议过时就显示；没有练习建议的提示放在练习建议页
   const ex = explainState(s);

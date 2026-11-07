@@ -368,3 +368,42 @@ def test_mixed_zip_and_other_files_warns(server, browser):
     b.wait_for("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('请单独导入'))")
     assert b.js("window.__imports") == 0
     assert not b.errors, b.errors
+
+
+def test_retry_failed_rows_from_library_and_practice_page(server, browser, trainer):
+    """有识别失败的行：曲库行上和“…”菜单里有“重试失败的 N 行”，练习页的通知里也有；确认后调用 retry-failed。"""
+    sid, store = server["image"], server["store"]
+    raw = store.load(sid)
+    store.update(sid, lambda s: s["systems"][1].update(status="error"))
+    fake = """(() => { window.__posts = []; const of = window.fetch; window.fetch = (u, init) => {
+      if (init && init.method === 'POST' && String(u).includes('/retry-failed')) { __posts.push(String(u));
+        return Promise.resolve(new Response('{"ok": true}', {status: 200, headers: {'Content-Type': 'application/json'}})); }
+      return of(u, init); }; return true; })()"""
+    try:
+        b = browser
+        b.open(server["base"] + "/")
+        b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{sid}\"] [data-retry-failed]')")
+        assert "重试失败的 1 行" in b.js(
+            f"document.querySelector('.song-row[data-id=\"{sid}\"] .ctl').textContent"
+        )
+        b.js(fake)
+        b.js(f"document.querySelector('.song-row[data-id=\"{sid}\"] [data-retry-failed]').click(); true")
+        b.wait_for("!!document.querySelector('.dlg-msg[open] [data-ok]')")
+        b.js("document.querySelector('.dlg-msg [data-ok]').click(); true")
+        b.wait_for("__posts.length === 1")
+        assert __import__("re").search(r"/api/songs/[^/]+/retry-failed$", b.js("__posts[0]"))
+        # 练习页：通知里带“重试失败的 1 行”
+        b = trainer(sid)
+        b.wait_for(
+            "[...document.querySelectorAll('#notices button')].some(x => x.textContent.includes('重试失败的 1 行'))"
+        )
+        b.js(fake)
+        b.js(
+            "[...document.querySelectorAll('#notices button')].find(x => x.textContent.includes('重试失败')).click(); true"
+        )
+        b.wait_for("!!document.querySelector('.dlg-msg[open] [data-ok]')")
+        b.js("document.querySelector('.dlg-msg [data-ok]').click(); true")
+        b.wait_for("__posts.length === 1")
+        assert not b.errors, b.errors
+    finally:
+        store.update(sid, lambda s: s.update(systems=raw["systems"]))

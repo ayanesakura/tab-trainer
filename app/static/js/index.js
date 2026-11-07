@@ -205,10 +205,12 @@ function costText(s) {
 
 // 识别失败 / 取消、又没有可练的小节时的下一步：模型设置的问题去设置，其他的（图片 / PDF 曲子）重新识别
 const SETTINGS_ERR = /API key|模型设置|模型名|Base URL|余额|额度/i;
+const settingsError = s => s.status === 'error' && s.notice && SETTINGS_ERR.test(s.notice.msg || '');
+const retryButton = s => `<button class="btn sm act" data-k="retry-failed" data-retry-failed="${esc(s.id)}" title="只重新识别没识别出来的行">${icon('refresh', 12)}重试失败的 ${esc(s.failed_rows)} 行</button>`;
 function fixAction(s) {
-  if (s.status === 'error' && s.notice && SETTINGS_ERR.test(s.notice.msg || '')) return `<a class="btn sm act" data-k="settings" href="#settings">${icon('settings', 12)}去设置</a>`;
-  if (!isScore(s)) return `<button class="btn sm act" data-k="retry" data-retry="${esc(s.id)}">${icon('refresh', 12)}重新识别</button>`;
-  return '';
+  if (settingsError(s)) return `<a class="btn sm act" data-k="settings" href="#settings">${icon('settings', 12)}去设置</a>`;
+  if (isScore(s)) return '';
+  return s.failed_rows > 0 ? retryButton(s) : `<button class="btn sm act" data-k="retry" data-retry="${esc(s.id)}">${icon('refresh', 12)}重新识别</button>`;
 }
 
 function rowHTML(s) {
@@ -226,6 +228,8 @@ function rowHTML(s) {
   if (play && last) action = `<a class="btn primary sm act" data-k="resume" href="${href}&resume=1" title="${esc(`从${range || '上次的位置'}${last.bpm ? `、${last.bpm} BPM` : ''} 接着练`)}">${icon('repeat', 12)}接着练</a>`;
   else if (play) action = `<a class="btn sm act" data-k="play" href="${href}">${icon('play', 12)}练习</a>`;
   else if (!s.busy && (s.status === 'error' || s.status === 'cancelled')) action = fixAction(s); // 没有可练的内容：给出下一步
+  // 有识别失败的行、已经有小节可练：重试失败的行放在练习前面（只识别那几行，比整首重新识别便宜）
+  if (play && !s.busy && s.failed_rows > 0 && !isScore(s) && !settingsError(s)) action = retryButton(s) + action;
   return `<div class="row song-row${play || pick ? ' click' : ''}${on ? ' on' : ''}" data-id="${esc(s.id)}" data-play="${play ? 1 : ''}" data-pick="${pick ? 1 : ''}">
     ${selecting ? `<input type="checkbox" class="pick" data-k="pick" aria-label="选择 ${esc(s.title)}" ${on ? 'checked' : ''} ${pick ? '' : 'disabled'}>` : ''}
     <span class="src-ic" title="${esc(src ? `来源：${src}` : '')}">${icon(SOURCE_ICON[s.source_type] || 'music', 18)}</span>
@@ -338,6 +342,8 @@ $('songs').addEventListener('click', e => {
   if (more) { e.stopPropagation(); openMore(more); return; }
   const retry = e.target.closest('[data-retry]');
   if (retry) { const s = lastSongs.find(x => x.id === retry.dataset.retry); if (s) reparse(s); return; }
+  const rf = e.target.closest('[data-retry-failed]');
+  if (rf) { const s = lastSongs.find(x => x.id === rf.dataset.retryFailed); if (s) retryFailed(s); return; }
   if (e.target.closest('a,button')) return;
   const row = e.target.closest('.row[data-play="1"]');
   if (row) location.href = row.querySelector('a.title').href;
@@ -358,6 +364,7 @@ function openMore(btn) {
     { label: '重命名', icon: 'edit', onClick: () => rename(s) },
     { label: '编辑标签', icon: 'list', onClick: () => editTags(s) },
     image && { label: '管理原谱页面', icon: 'image', onClick: () => openPages(id) },
+    image && s.failed_rows > 0 && { label: `重试失败的 ${s.failed_rows} 行`, icon: 'refresh', onClick: () => retryFailed(s) },
     image && { label: '整首重新识别', icon: 'refresh', onClick: () => reparse(s) },
     { label: '导出曲子包', icon: 'upload', onClick: () => exportSongs([id]) },
     'sep',
@@ -383,6 +390,10 @@ async function reparse(s) {
   const ok = await UI.confirm('会再调用一次 AI（按原谱页数计费）。\n和原来一样的小节保留提示、问答和练习记录，手改过的小节保留你的修改；识别失败或取消时原结果不变。',
     { title: `整首重新识别“${s.title}”？`, ok: '重新识别' });
   if (ok) await act(() => api.post(`/api/songs/${s.id}/parse`), '已开始重新识别', 'info');
+}
+async function retryFailed(s) {
+  const ok = await UI.confirm('会再调用 AI，只重新识别失败的行；已经识别好的小节不动。', { title: `重试“${s.title}”失败的 ${s.failed_rows} 行？`, ok: '重试' });
+  if (ok) await act(() => api.post(`/api/songs/${s.id}/retry-failed`), '已开始重试失败的行', 'info');
 }
 async function cancel(id) { await act(() => api.post(`/api/songs/${id}/cancel`), '正在取消…', 'info'); }
 async function remove(s) {

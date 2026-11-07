@@ -587,7 +587,9 @@ def test_follow_scrolls_cursor_row_into_view(trainer):
     """自动跟随（默认开）：循环跨行时，光标走到下面看不见的那一行，谱面自己滚过去；手动滚动后停几秒不抢。"""
     b = trainer()
     _viewport(b, 1400, 640)
-    b.js("document.body.style.paddingBottom = '2000px'; true")  # 只有两行的曲子：页面加高，最后一行也能滚到控制条下面
+    b.js(
+        "document.body.style.paddingBottom = '2000px'; true"
+    )  # 只有两行的曲子：页面加高，最后一行也能滚到控制条下面
     time.sleep(1)  # 窗口变了，谱面重画
     b.wait_for("tt.followDelta(4) !== null")
     # 这个宽度下第 1–5 小节一行、第 6 小节在下一行
