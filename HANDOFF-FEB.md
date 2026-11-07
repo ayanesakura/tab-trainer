@@ -14,7 +14,10 @@
 10. 新布局（见 PLAN）；截图在 /tmp/feb-shots/final-*.png。
 11. 无障碍 / 文案：品位 ± aria-label、自动提速三个输入框有 label、原图→原谱、F♯ 显示（输入框也显示 ♯，保存时转回 #）。
 
-## 等 BE（第 9 项）
+## 第 9 项已完成（已合并 refactor/be 19ef7a9）
+兜底已删：用 isScore(source_type)、busy、recognizing、activity、notice、locked、needs_review、can_edit_bars、editable_meta、rev；写接口返回的 SongView 直接 applySong。
+
+## （旧记录）等 BE
 代码已按契约字段写（busy / recognizing / activity / can_edit_bars / editable_meta / notice / locked / needs_review / warn{code,msg} / rev + 409），
 都带了旧接口的兜底（`s.busy ?? ...` 等）。合并 refactor/be 后：删掉这些兜底（song.js isBusy / recognizing / renderNotices 的 error 兜底，editor.js barLocked 的旧逻辑和 busy，view.js needsReview 的兜底），跑 e2e。
 
