@@ -254,7 +254,9 @@ class Song(_M):
     meta_rev: int = 0  # 可改谱头字段的版本号（改谱头的 PUT 用它做乐观锁）
     pages: list[Page] = Field(default_factory=list)
     meta: Meta | None = None
-    meta_user: dict = Field(default_factory=dict)  # 用户亲手改的调弦 / 变调夹 / 拍号（重新识别时以它为准）
+    meta_user: dict = Field(
+        default_factory=dict
+    )  # 用户亲手改的艺人 / 调弦 / 变调夹 / 拍号（重新识别时以它为准）
     systems: list[System] = Field(default_factory=list)
     bars: list[Bar] = Field(default_factory=list)
     plan: Plan | None = None

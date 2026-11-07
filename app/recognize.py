@@ -397,7 +397,7 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
 
     store.update(sid, lambda s: _begin_parse(s, "读取谱头"))
     head = claude.read_meta(store.page_image(sid, song["pages"][0]))
-    # 用户手改过的调弦、变调夹、拍号以用户的为准
+    # 用户手改过的艺人、调弦、变调夹、拍号以用户的为准
     meta = normalize_meta({**head, **(song.get("meta_user") or {})}, song.get("title", ""))
     if not restage:
         store.patch(sid, meta=meta)
@@ -497,6 +497,10 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
 
         def swap(s):
             # 一次性换成新结果（曲名只存在 song.title，不受谱头影响）。新旧小节按内容对上，对上的保留 id、问答、练习记录和手改
+            # 识别期间用户改的谱头（只可能是艺人：调弦等识别时不能改）同样以用户的为准
+            work["meta"] = normalize_meta(
+                {**work["meta"], **(s.get("meta_user") or {})}, work["meta"]["title"]
+            )
             changed = staleness.setting_changed(s.get("meta") or {}, work["meta"])
             dropped = staleness.reconcile_bars(s, s["bars"], work["bars"], staleness.RESTAGE, changed)
             s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"])

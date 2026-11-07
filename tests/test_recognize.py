@@ -705,3 +705,25 @@ def test_cancel_before_the_fix_up_attempt_still_cancels(data_dir, monkeypatch):
         recognize.run_parse(sid, cancel)
     assert not any(c["retry"] for c in FakeClaude.calls if c.get("first_bar") == 1)
     assert store.load(sid)["systems"][0]["error"] == "已取消"
+
+
+def test_full_rerecognition_keeps_the_artist_set_by_hand(data_dir, monkeypatch):
+    """艺人和调弦 / 变调夹 / 拍号一样：手改过的以用户的为准，重新识别读出的谱头不覆盖（包括识别期间改的）。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    songs.edit_meta(sid, {"artist": "Yiruma", "capo": 3})
+    recognize.run_parse(sid)
+    meta = store.load(sid)["meta"]
+    assert (meta["artist"], meta["capo"]) == ("Yiruma", 3)
+
+    real = FakeClaude.transcribe
+
+    def edit_during_run(self, *a, **kw):
+        if not kw.get("previous"):
+            songs.edit_meta(sid, {"artist": "久石让"})
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", edit_during_run)
+    recognize.run_parse(sid)
+    meta = store.load(sid)["meta"]
+    assert (meta["artist"], meta["capo"]) == ("久石让", 3)

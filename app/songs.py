@@ -375,6 +375,8 @@ def edit_meta(sid: str, raw: dict, rev: int | None = None) -> dict:
             # 识别时按调弦、拍号检查和返修，改了会和正在写回的结果对不上（曲名之类随时能改）
             raise Busy("正在识别，完成后再改调弦、变调夹和拍号")
         s["meta"] = new
+        if new["artist"] != old.get("artist", ""):
+            s.setdefault("meta_user", {})["artist"] = new["artist"]  # 重新识别时同样以用户的为准
         if changed:
             invalidate_tips_for_setting(s)
             # 记下用户亲手改的设定：整首重新识别时以它为准，不被模型重新读出的谱头覆盖
