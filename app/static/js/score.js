@@ -6,14 +6,17 @@
 // alphaTab：alphaTex 里 string 1 也是最高音弦，但内部模型里 note.string 1 = 最低音弦；
 //   击弦、滑音标在“起始音”上。转换时要把这些技巧挪到同一根弦的前一个音。
 
-export const TICKS = 960; // 每个四分音符的 MIDI tick 数
+import { DIRECTIONS, GRID as GRID_TICKS, TICKS_PER_QUARTER, STRINGS, parseDur } from './vocab.js';
+
+export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数（960）
 
 // deriveSong 的输出格式 / 转换规则的版本。改了 deriveSong（音符、技巧、拍号的转换）就加 1：
 // 已经导入的曲子下次打开时会重新转换（alphaTab 升级也会）。
 // 2：每小节带自己的拍号；多声部同一根弦同时起拍的音只保留一个
 // 3：按谱面位置分起拍（拍上倚音不再在小节开头多出假休止）
 // 4：闷音的品格记 0；自然泛音的品格记谱上标的泛音点（<12> → 12）
-export const DERIVE_VERSION = 4;
+// 5：中文 GP3–5 文件按 GBK 重新导入（曲名、艺人不再是乱码）
+export const DERIVE_VERSION = 5;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -24,8 +27,7 @@ const UNITS = [
 ];
 
 export function durToTicks(dur) {
-  const [a, b] = String(dur).split('/');
-  return Math.round((b === undefined ? +a : +a / +b) * TICKS);
+  return Math.round(parseDur(dur) * TICKS);
 }
 
 function gcd(a, b) { while (b) [a, b] = [b, a % b]; return a; }
@@ -34,7 +36,7 @@ export function ticksToDur(t) {
   return TICKS / g === 1 ? String(t / g) : `${t / g}/${TICKS / g}`;
 }
 
-export const GRID = 20; // 所有可写的时值都是 20 tick 的整数倍（最短是 64 分三连音 40 tick）
+export const GRID = GRID_TICKS; // 所有可写的时值都是 20 tick 的整数倍（最短是 64 分三连音 40 tick）
 
 /**
  * 把一段时长精确拆成能写出来的拍（后面的段用连音线接上）。用动态规划找段数最少、尽量不用三连音的拆法；
@@ -67,14 +69,11 @@ function approxTicks(t) {
   return [UNITS[UNITS.length - 1]];
 }
 
-const quarters = dur => { const [a, b] = String(dur).split('/'); return b === undefined ? +a : +a / +b; };
 
 const esc = s => String(s ?? '').replace(/["\\]/g, ' ');
 
-// 反复 / 跳转记号：名字和 alphaTex 的 \jump 一致，下标就是 alphaTab 的 Direction 枚举值
-const DIRECTION_NAMES = ['fine', 'segno', 'segnosegno', 'coda', 'doublecoda', 'dacapo', 'dacapoalcoda', 'dacapoaldoublecoda',
-  'dacapoalfine', 'dalsegno', 'dalsegnoalcoda', 'dalsegnoaldoublecoda', 'dalsegnoalfine', 'dalsegnosegno',
-  'dalsegnosegnoalcoda', 'dalsegnosegnoaldoublecoda', 'dalsegnosegnoalfine', 'dacoda', 'dadoublecoda'];
+// 反复 / 跳转记号（词表）：名字和 alphaTex 的 \jump 一致，下标就是 alphaTab 的 Direction 枚举值
+const DIRECTION_NAMES = DIRECTIONS;
 
 /** 小节开头的 alphaTex 元数据：拍号（和上一小节不同时）、反复开始 / 结束（一共弹几遍）、跳房子、跳转。 */
 function barMetaTex(bar, ts, prevTs) {
@@ -103,7 +102,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
   const bars = song.bars.map(bar => {
     const evs = bar.events && bar.events.length ? bar.events : [{ dur: ticksToDur(barTicks(bar)), notes: [] }];
     return evs.map(e => {
-      const notes = (e.notes || []).filter(n => n.string >= 1 && n.string <= 6).map(n => {
+      const notes = (e.notes || []).filter(n => n.string >= 1 && n.string <= STRINGS).map(n => {
         const tech = new Set(n.tech || []);
         const fx = new Set();
         if (tech.has('si')) fx.add('sib');
@@ -122,7 +121,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
         lastOnString[n.string] = note;
         return { note, grace };
       });
-      return { ticks: durToTicks(e.dur), q: quarters(e.dur), notes, roll: notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll')) };
+      return { ticks: durToTicks(e.dur), q: parseDur(e.dur), notes, roll: notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll')) };
     });
   });
 
@@ -198,7 +197,7 @@ export function deriveSong(score, trackIndex = 0) {
   const track = score.tracks[trackIndex];
   const staff = track.staves[0];
   const nStr = staff.tuning.length;
-  if (nStr !== 6) throw new Error(`这个音轨是 ${nStr} 弦的，目前只支持六弦吉他`);
+  if (nStr !== STRINGS) throw new Error(`这个音轨是 ${nStr} 弦的，目前只支持六弦吉他`);
   const NN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const name = m => NN[m % 12] + (Math.floor(m / 12) - 1);
   const mb0 = score.masterBars[0];
@@ -282,6 +281,47 @@ export function deriveSong(score, trackIndex = 0) {
     return out;
   });
   return { meta, bars, trackName: track.name, version: DERIVE_VERSION };
+}
+
+// ---------------------------------------------------------------------
+// 中文 GP3–5 文件的乱码：老版本 Guitar Pro 按系统编码存文字，中文系统上是 GBK；alphaTab 默认按
+// windows-1252 读，曲名、艺人就成了“Ñº¹ãÌ«ÀÉ”。认出这种乱码后用 settings.importer.encoding = 'gbk' 重新导入。
+// ---------------------------------------------------------------------
+let CP1252 = null; // windows-1252 的字符 → 字节
+function cp1252Bytes(s) {
+  if (!CP1252) {
+    CP1252 = new Map();
+    const dec = new TextDecoder('windows-1252');
+    for (let b = 0; b < 256; b++) CP1252.set(dec.decode(new Uint8Array([b])), b);
+  }
+  const out = [];
+  for (const ch of s) { const b = CP1252.get(ch); if (b === undefined) return null; out.push(b); }
+  return new Uint8Array(out);
+}
+const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+
+/**
+ * 按 windows-1252 读出来的 GBK 文字 → 原来的中文；看着不像这种乱码就返回 null。
+ * 判断：只有 ASCII 和 1252 的高位字符，高位字符连续成对出现（GBK 一个汉字两个高位字节），
+ * 按 GBK 严格解码成功，并且解出了汉字。“Café”“Für Elise”这类西文不会被误判（单个高位字符）。
+ */
+export function gbkFromMojibake(s) {
+  s = String(s ?? '');
+  if (!/[\u0080-\uffff]/.test(s)) return null;
+  const bytes = cp1252Bytes(s);
+  if (!bytes) return null;
+  let run = 0;
+  for (const b of [...bytes, 0]) { if (b >= 0x80) run++; else { if (run % 2) return null; run = 0; } }
+  let out;
+  try { out = new TextDecoder('gbk', { fatal: true }).decode(bytes); } catch { return null; }
+  return CJK.test(out) && !/[\ue000-\uf8ff]/.test(out) ? out : null;
+}
+
+/** alphaTab 读出来的谱子是不是 GBK 被当成 windows-1252 读了（看曲名、艺人等和音轨名） */
+export function scoreNeedsGbk(score) {
+  const texts = [score.title, score.subTitle, score.artist, score.album, score.words, score.music, score.tab, score.copyright,
+    ...(score.tracks || []).map(t => t.name)].filter(Boolean);
+  return texts.some(t => gbkFromMojibake(t) !== null);
 }
 
 /** 改音面板里可选的时值（到下一个音的时长，单位四分音符）。 */

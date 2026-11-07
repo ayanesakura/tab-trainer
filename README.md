@@ -198,7 +198,7 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/store.py` | `data/` 下的 JSON 读写（加锁的读-改-写、`.bak` 备份、坏文件回退、单实例锁） |
 | `app/evaluate.py` | 识别准确率评测 |
 
-前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`。练习页的脚本按功能拆在 `js/trainer/` 下（core → synth / tuner / fretboard / bar-info → player → coach / practice-log / editor → song → main），用普通 `<script>` 按顺序加载：前面的文件只做声明，事件绑定放在各自的 `initXxx()` 里，由 `main.js` 统一调用并在 alphaTab 模块就绪后第一次加载曲子。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`）。
+前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。练习页从 `js/trainer/main.js` 进入，按功能拆成模块：`store.js`（一个小 store：`song` 后端数据、`view` 派生结构、`play` 播放状态、`ui` 界面状态，按路径 `set` / `get` / `on`，值没变不通知）、`view.js`（纯函数：`deriveView(song)`、段落、换段、练习记录文案等，Node 测试直接用）、`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `setTempo` / `setStatus`）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息）、`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅 `ui.bar` 等状态，互不直接调用）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）。页面上 `window.tt` 是给端到端测试和调试用的句柄。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`），也负责认出中文 GP3–5 文件的 GBK 乱码（练习页和 `scripts/make_eval_song.py` 遇到时按 GBK 重新读）。
 
 测试和模块一一对应（`tests/test_<模块>.py`），替身模型和合成谱子在 `tests/fakes.py`，公共 fixture 在 `tests/conftest.py`。
 

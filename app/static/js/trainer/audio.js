@@ -2,9 +2,16 @@
 // 练习时的播放、节拍器都由 alphaTab 负责（player.js）；这里只给调弦表的“听”按钮和记号说明的“试听”发声，
 // 麦克风调音器（tuner.js）也共用这里的 AudioContext。
 
-let ac = null, bus, gtGain;
+import { get } from './store.js';
+import { mtof, noteMidi, T3, STD_MIDI } from './view.js';
+
+const STD_VIEW = { open: Object.fromEntries(STD_MIDI.map((m, i) => [i + 1, m])), capo: 0 };
+
+export let ac = null;
+let bus, gtGain;
 const panners = {};
-function initAudio() {
+const GT_VOL = () => (get('play.gtVol') ?? 80) / 100;
+export function initAudio() {
   if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
   ac = new (window.AudioContext || window.webkitAudioContext)();
   const comp = ac.createDynamicsCompressor();
@@ -15,7 +22,7 @@ function initAudio() {
   for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
   conv.buffer = ir;
   const wet = ac.createGain(); wet.gain.value = 0.16; conv.connect(wet); wet.connect(comp);
-  gtGain = ac.createGain(); gtGain.gain.value = document.getElementById('gtVol').value / 100;
+  gtGain = ac.createGain(); gtGain.gain.value = GT_VOL();
   bus = ac.createGain(); bus.connect(gtGain); gtGain.connect(comp); gtGain.connect(conv);
   for (let s = 0; s <= 6; s++) { const p = ac.createStereoPanner(); p.pan.value = s ? (s - 3.5) * 0.09 : 0; p.connect(bus); panners[s] = p; }
 }
@@ -78,8 +85,8 @@ function stopVoice(s, when) {
   try { v.src.stop(when + 0.2); } catch (e) {}
   voices[s] = null;
 }
-function stopAllVoices() { for (const s in voices) stopVoice(s, ac.currentTime); }
-function pluck(s, midi, when, { mode = 'n', gain = 0.9, harm = false, slideIn = false } = {}) {
+export function stopAllVoices() { for (const s in voices) stopVoice(s, ac.currentTime); }
+export function pluck(s, midi, when, { mode = 'n', gain = 0.9, harm = false, slideIn = false } = {}) {
   stopVoice(s, when);
   const { buf, f0 } = harm ? harmBuffer(midi) : ksBuffer(midi, mode);
   const src = ac.createBufferSource(); src.buffer = buf;
@@ -103,11 +110,12 @@ function slideTo(s, midi, when) {
   v.rate = newRate;
 }
 function playEvent(e, when) {
+  const v = get('view') || STD_VIEW; // 按曲子的调弦和变调夹
   const ns = [...e.notes].sort((a, b) => b.s - a.s);
   ns.forEach((n, i) => {
-    const tk = n.tech, t = when + (tk.has('roll') ? i * 0.045 : 0), m = noteMidi(n);
+    const tk = n.tech, t = when + (tk.has('roll') ? i * 0.045 : 0), m = noteMidi(n, v);
     const legato = tk.has('h') || tk.has('p');
-    if (n.grace != null) pluck(n.s, OPEN[n.s] + CAPO + n.grace, Math.max(ac.currentTime, t - 0.07)); // 倚音
+    if (n.grace != null) pluck(n.s, v.open[n.s] + v.capo + n.grace, Math.max(ac.currentTime, t - 0.07)); // 倚音
     if (tk.has('sl') && voices[n.s]) slideTo(n.s, m, t);
     else pluck(n.s, m, t, {
       mode: tk.has('pm') || tk.has('x') ? 'm' : legato ? 's' : 'n',
@@ -153,11 +161,10 @@ const DEMOS = {
   si: [ev(0,1.5,'2-5 3-5','si'), ev(1.5,1.5,'1-6 2-7','si')],
   tri: [ev(0,T3,'4-3'), ev(T3,T3,'3-0'), ev(2*T3,T3,'2-0'), ev(1,T3,'4-3'), ev(1+T3,T3,'3-0'), ev(1+2*T3,T3,'2-0')],
 };
-function initDemos() {
-  document.querySelectorAll('button.demo').forEach(b => b.onclick = () => {
-    initAudio(); if (state.playing) stop(); stopAllVoices();
-    if (gtGain) gtGain.gain.value = 0.8;
-    const spb = 60 / 72, t0 = ac.currentTime + 0.05;
-    for (const e of DEMOS[b.dataset.demo]) playEvent(e, t0 + e.t * spb);
-  });
+/** 记号说明里的“试听”：按 72 BPM 弹一段示范 */
+export function playDemo(name) {
+  initAudio(); stopAllVoices();
+  if (gtGain) gtGain.gain.value = 0.8;
+  const spb = 60 / 72, t0 = ac.currentTime + 0.05;
+  for (const e of DEMOS[name] || []) playEvent(e, t0 + e.t * spb);
 }

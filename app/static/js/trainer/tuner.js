@@ -1,6 +1,10 @@
-// 调弦页：调弦表（每根弦要怎么调，带“听”按钮）和麦克风调音器
+// 调弦页：调弦表（每根弦要怎么调，带“听”按钮）和麦克风调音器。音名显示用 ♯。
 
-const STD = { 1: 64, 2: 59, 3: 55, 4: 50, 5: 45, 6: 40 };
+import { get, on } from './store.js';
+import { $, UI } from './dom.js';
+import { ac, initAudio, pluck } from './audio.js';
+import { mname, mtof, STD_MIDI } from './view.js';
+
 let TUNE = [];
 function howTo(d) {
   if (d === 0) return ['不变', 'chg-same'];
@@ -8,12 +12,12 @@ function howTo(d) {
   const w = words[Math.abs(d)] || `${Math.abs(d)} 个半音`;
   return [(d < 0 ? '降' : '升') + w, d < 0 ? 'chg-down' : 'chg-up'];
 }
-function renderTune() {
-  TUNE = [6, 5, 4, 3, 2, 1].map(s => { const [how, cls] = howTo(OPEN[s] - STD[s]); return { s, std: mname(STD[s]), m: OPEN[s], how, cls }; });
-  $('tuneRows').innerHTML = TUNE.map(t => `<tr id="tr${t.s}"><td><b>${t.s} 弦</b></td><td class="muted">${t.std}</td><td><b>${mname(t.m)}</b> <span class="hint">${mtof(t.m).toFixed(1)} Hz</span></td><td class="${t.cls}">${t.how}</td><td style="text-align:right"><button class="btn sm" data-m="${t.m}">${UI.icon('volume', 13)}听</button></td></tr>`).join('');
-  const names = [6, 5, 4, 3, 2, 1].map(s => OPEN_NAME[s]).join('–');
+function renderTune(v) {
+  TUNE = [6, 5, 4, 3, 2, 1].map(s => { const [how, cls] = howTo(v.open[s] - STD_MIDI[s - 1]); return { s, std: mname(STD_MIDI[s - 1]), m: v.open[s], how, cls }; });
+  $('tuneRows').innerHTML = TUNE.map(t => `<tr id="tr${t.s}"><td><b>${t.s} 弦</b></td><td class="muted">${t.std}</td><td><b>${mname(t.m)}</b> <span class="hint">${mtof(t.m).toFixed(1)} Hz</span></td><td class="${t.cls}">${t.how}</td><td class="tune-play"><button class="btn sm" data-m="${t.m}" aria-label="听 ${t.s} 弦的目标音 ${mname(t.m)}">${UI.icon('volume', 13)}听</button></td></tr>`).join('');
+  const names = [6, 5, 4, 3, 2, 1].map(s => v.openName[s]).join('–');
   const std = TUNE.every(t => t.how === '不变');
-  $('tuneTitle').textContent = `调弦：${std ? '标准调弦' : names}${CAPO ? ` · 变调夹 ${CAPO} 品` : ''}`;
+  $('tuneTitle').textContent = `调弦：${std ? '标准调弦' : names}${v.capo ? ` · 变调夹 ${v.capo} 品` : ''}`;
 }
 function autoCorrelate(buf, sr) {
   let n = buf.length, rms = 0;
@@ -53,19 +57,20 @@ async function startMic() {
     const fm = [...hist].sort((x, y) => x - y)[Math.floor(hist.length / 2)];
     const m = 69 + 12 * Math.log2(fm / 440);
     let best = TUNE[0]; for (const t of TUNE) if (Math.abs(m - t.m) < Math.abs(m - best.m)) best = t;
-    const cents = Math.round((m - best.m) * 100);
+    const cents = Math.round((m - best.m) * 100), ok = Math.abs(cents) <= 5;
     TUNE.forEach(t => $('tr' + t.s).classList.toggle('hit', t === best));
     $('tNote').textContent = mname(Math.round(m));
     $('tNeedle').style.left = (50 + Math.max(-50, Math.min(50, cents))) + '%';
-    const ok = Math.abs(cents) <= 5;
-    $('tNeedle').style.background = ok ? 'var(--green)' : 'var(--amber)';
+    $('tNeedle').classList.toggle('ok', ok);
     $('tRead').innerHTML = `${best.s} 弦 → 目标 <b>${mname(best.m)}</b>　当前 ${fm.toFixed(1)} Hz，${cents > 0 ? '+' : ''}${cents} 音分　` +
-      (ok ? '<span style="color:var(--green)">✓ 准了</span>' : Math.abs(cents) > 300 ? '差得较多' : cents > 0 ? '偏高，往下调' : '偏低，往上调');
+      (ok ? '<span class="chg-same">✓ 准了</span>' : Math.abs(cents) > 300 ? '差得较多' : cents > 0 ? '偏高，往下调' : '偏低，往上调');
   }, 80);
 }
 
-function initTuner() {
+export function initTuner() {
   $('micBtn').onclick = startMic;
   if (!window.isSecureContext) { $('micBtn').disabled = true; $('tRead').textContent = MIC_BLOCKED; }
   $('tuneRows').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; initAudio(); pluck(0, +b.dataset.m, ac.currentTime + 0.02); });
+  on('view', v => { if (v) renderTune(v); });
+  if (get('view')) renderTune(get('view'));
 }

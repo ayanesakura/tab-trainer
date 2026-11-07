@@ -134,7 +134,7 @@ def trainer(server, browser):
     def open_song(sid=None):
         browser.open(f"{server['base']}/trainer?id={sid or server['image']}")
         browser.wait_for(
-            "typeof state !== 'undefined' && state.ready && !!document.querySelector('#score .at-surface')",
+            "window.tt && tt.state.ready && !!document.querySelector('#score .at-surface')",
             timeout=40,
         )
         return browser
