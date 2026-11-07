@@ -41,3 +41,37 @@ def test_recovers_tab_line_hidden_by_numbers():
 
 def test_blank_page_has_no_systems():
     assert detect_page(Image.new("L", (800, 1000), 255))["systems"] == []
+
+
+def _draw_system(d, top, x0, x1, barlines):
+    for i in range(5):
+        d.line([(x0, top + i * 10), (x1, top + i * 10)], fill=170)
+    tab_top = top + 110
+    for i in range(6):
+        d.line([(x0, tab_top + i * 14), (x1, tab_top + i * 14)], fill=170)
+    for x in barlines:
+        d.line([(x, tab_top), (x, tab_top + 70)], fill=40, width=2)
+
+
+def test_short_last_line_is_kept():
+    """最后一行没占满页宽（MuseScore 常见）也要找出来。"""
+    img = Image.new("L", (1200, 900), 255)
+    d = ImageDraw.Draw(img)
+    _draw_system(d, 120, 60, 1140, (60, 600, 1140))
+    _draw_system(d, 520, 60, 500, (60, 280, 500))  # 只占 37% 页宽
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2, 2]
+
+
+def test_two_columns_split_and_read_left_column_first():
+    img = Image.new("L", (1400, 900), 255)
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        _draw_system(d, top, 60, 640, (60, 350, 640))
+        _draw_system(d, top, 760, 1340, (760, 1050, 1340))
+    r = detect_page(img)
+    systems = r["systems"]
+    assert len(systems) == 4 and all(len(s["bars"]) == 2 for s in systems)
+    assert [s["x0"] < 700 for s in systems] == [True, True, False, False]  # 先左栏再右栏
+    assert systems[0]["top"] < systems[1]["top"]
+    assert all(b[1] - b[0] < 400 for s in systems for b in s["bars"])  # 栏间空白没有变成假小节

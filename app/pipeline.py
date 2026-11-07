@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 import re
 import shutil
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import uuid
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from fractions import Fraction
 
 from PIL import Image, ImageOps
@@ -48,31 +50,51 @@ def midi_to_name(m: int) -> str:
     return f"{_NAMES[m % 12]}{m // 12 - 1}"
 
 
-def normalize_meta(raw: dict, fallback_title: str = "") -> dict:
+def normalize_meta(raw: dict, fallback_title: str = "", strict: bool = False) -> dict:
+    """整理谱头信息。模型的输出宽松处理（读不懂就退回默认值）；strict=True 用于用户手工修改，格式不对直接报错。"""
     tuning = list(raw.get("tuning") or [])
     if len(tuning) != 6:
+        if strict:
+            raise ValueError("调弦需要 6 根弦的音名")
         tuning = STANDARD
     midis = []
     for i, n in enumerate(tuning):
         std = note_to_midi(STANDARD[i])
         try:
-            m = note_to_midi(n, near=std)
+            m = note_to_midi(str(n), near=std)
         except ValueError:
+            if strict:
+                raise ValueError(f"{i + 1} 弦的音名无法识别：{n!r}") from None
             m = std
         midis.append(m)
     ts = list(raw.get("time_signature") or [4, 4])
-    if len(ts) != 2 or ts[0] <= 0 or ts[1] not in (1, 2, 4, 8, 16):
+    ok_ts = len(ts) == 2 and all(isinstance(x, int) and not isinstance(x, bool) for x in ts)
+    if not ok_ts or ts[0] <= 0 or ts[1] not in (1, 2, 4, 8, 16):
+        if strict:
+            raise ValueError("拍号格式不对，应写成 4/4、3/4、6/8 这样")
         ts = [4, 4]
+    try:
+        capo = int(raw.get("capo") or 0)
+    except (TypeError, ValueError):
+        if strict:
+            raise ValueError("变调夹应为 0–12 的整数") from None
+        capo = 0
+    if strict and not 0 <= capo <= 12:
+        raise ValueError("变调夹应为 0–12 的整数")
+    try:
+        tempo = max(0, int(raw.get("tempo") or 0))
+    except (TypeError, ValueError):
+        tempo = 0
     return {
-        "title": (raw.get("title") or fallback_title or "").strip(),
-        "artist": (raw.get("artist") or "").strip(),
-        "arranger": (raw.get("arranger") or "").strip(),
+        "title": str(raw.get("title") or fallback_title or "").strip(),
+        "artist": str(raw.get("artist") or "").strip(),
+        "arranger": str(raw.get("arranger") or "").strip(),
         "tuning": [midi_to_name(m) for m in midis],
         "tuning_midi": midis,
-        "capo": max(0, min(12, int(raw.get("capo") or 0))),
+        "capo": max(0, min(12, capo)),
         "time_signature": ts,
-        "tempo": max(0, int(raw.get("tempo") or 0)),
-        "notes": (raw.get("notes") or "").strip(),
+        "tempo": tempo,
+        "notes": str(raw.get("notes") or "").strip(),
     }
 
 
@@ -85,28 +107,55 @@ def parse_dur(s) -> Fraction:
     return Fraction(str(s).strip())
 
 
-def clean_events(events: list) -> list[dict]:
-    """把模型或用户提交的事件整理成统一结构；结构不对直接抛 ValueError。"""
+def clean_events(events) -> list[dict]:
+    """把模型或用户提交的事件整理成统一结构。格式不对一律抛 ValueError（带中文说明）。"""
+    if not isinstance(events, list):
+        raise ValueError("events 必须是列表")  # noqa: TRY004 - 约定：用户输入的格式问题统一用 ValueError，接口返回 400
     out = []
-    for e in events:
-        dur = parse_dur(e["dur"])
+    for i, e in enumerate(events, 1):
+        if not isinstance(e, dict) or "dur" not in e:
+            raise ValueError(f"第 {i} 个事件缺少 dur")
+        try:
+            dur = parse_dur(e["dur"])
+        except (ValueError, ZeroDivisionError, TypeError):
+            raise ValueError(f"第 {i} 个事件的时值无法识别：{e['dur']!r}") from None
         if dur <= 0:
-            raise ValueError(f"时值必须大于 0：{e['dur']}")
+            raise ValueError(f"第 {i} 个事件的时值必须大于 0：{e['dur']!r}")
         notes = []
-        for n in e.get("notes", []):
-            s, f = int(n["string"]), int(n["fret"])
-            tech = [t for t in n.get("tech", []) if t in TECHS]
+        for n in e.get("notes") or []:
+            try:
+                st, fr = int(n["string"]), int(n["fret"])
+                grace = int(n.get("grace", -1))
+                bend = float(n.get("bend", 0) or 0)
+                tech = [t for t in (n.get("tech") or []) if t in TECHS]
+            except (KeyError, TypeError, ValueError, AttributeError):
+                raise ValueError(f"第 {i} 个事件里有音符格式不对（需要 string、fret）") from None
+            if not 1 <= st <= 6:
+                raise ValueError(f"第 {i} 个事件：弦号 {st} 超出 1–6")
+            if not 0 <= fr <= 30:
+                raise ValueError(f"第 {i} 个事件：品数 {fr} 超出 0–30")
+            if not math.isfinite(bend) or not 0 <= bend <= 4:
+                raise ValueError(f"第 {i} 个事件：推弦幅度 {bend} 不合理（0–4 个半音）")
             notes.append(
                 {
-                    "string": s,
-                    "fret": f,
+                    "string": st,
+                    "fret": fr,
                     "tech": tech,
-                    "grace": int(n.get("grace", -1)),
-                    "bend": float(n.get("bend", 0) or 0),
+                    "grace": grace if 0 <= grace <= 30 else -1,
+                    "bend": bend,
                 }
             )
         out.append({"dur": str(dur), "notes": notes})
     return out
+
+
+def rest_bar(meta: dict) -> list[dict]:
+    """整小节休止：识别失败或被清空的小节用它占位，页面才能正常显示和播放。"""
+    return [{"dur": str(bar_length(meta)), "notes": []}]
+
+
+def new_bar_id() -> str:
+    return uuid.uuid4().hex[:10]
 
 
 def check_bar(events: list[dict], meta: dict) -> list[str]:
@@ -192,8 +241,41 @@ def create_song(uploads: list[tuple[str, bytes]], title: str = "") -> str:
 # ---------------------------------------------------------------------------
 # 识别
 # ---------------------------------------------------------------------------
-_running: set[str] = set()
-_running_lock = threading.Lock()
+class Cancelled(Exception):
+    pass
+
+
+class Jobs:
+    """每首曲子同一时间只允许一个识别任务（整首或单行）。登记、取消、查询都在一把锁里。"""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._active: dict[str, threading.Event] = {}
+
+    def claim(self, sid: str) -> threading.Event | None:
+        with self._lock:
+            if sid in self._active:
+                return None
+            ev = self._active[sid] = threading.Event()
+            return ev
+
+    def release(self, sid: str) -> None:
+        with self._lock:
+            self._active.pop(sid, None)
+
+    def running(self, sid: str) -> bool:
+        with self._lock:
+            return sid in self._active
+
+    def cancel(self, sid: str) -> bool:
+        with self._lock:
+            ev = self._active.get(sid)
+        if ev:
+            ev.set()
+        return ev is not None
+
+
+jobs = Jobs()
 
 
 def llm_config() -> LLMConfig:
@@ -207,16 +289,55 @@ def llm_config() -> LLMConfig:
 
 
 def start_parse(sid: str) -> bool:
-    with _running_lock:
-        if sid in _running:
-            return False
-        _running.add(sid)
-    threading.Thread(target=_run_parse_safe, args=(sid,), daemon=True).start()
+    cancel = jobs.claim(sid)
+    if cancel is None:
+        return False
+    store.update(
+        sid,
+        lambda s: s.update(status="queued", error=None, progress={"stage": "排队中", "done": 0, "total": 0}),
+    )
+    threading.Thread(target=_run_parse_safe, args=(sid, cancel), daemon=True).start()
     return True
 
 
 def is_running(sid: str) -> bool:
-    return sid in _running
+    return jobs.running(sid)
+
+
+def cancel_parse(sid: str) -> bool:
+    return jobs.cancel(sid)
+
+
+def ensure_bar_ids(song: dict) -> None:
+    for b in song.get("bars", []):
+        if not b.get("id"):
+            b["id"] = new_bar_id()
+
+
+def recover_interrupted() -> None:
+    """服务启动时调用：上次没跑完的识别（服务被关掉）标成中断，否则曲子会一直卡在“识别中”。
+    同时给老数据里没有 id 的小节补上 id。"""
+    if not store.SONGS.exists():
+        return
+    for d in store.SONGS.iterdir():
+        try:
+            song = store.load(d.name)
+        except (KeyError, ValueError):
+            continue
+        changed = False
+        if song.get("status") in ("parsing", "queued"):
+            song["status"] = "error"
+            song["error"] = "服务重启，识别中断。可以在曲库的“…”菜单里重新识别。"
+            changed = True
+        for s in song.get("systems", []):
+            if s.get("status") in ("parsing", "pending"):
+                s.update(status="error", error="服务重启，识别中断")
+                changed = True
+        if any(not b.get("id") for b in song.get("bars", [])):
+            ensure_bar_ids(song)
+            changed = True
+        if changed:
+            store.save(song)
 
 
 def _page_image(sid: str, page: dict) -> Image.Image:
@@ -246,7 +367,13 @@ def _plan_systems(sid: str, song: dict) -> list[dict]:
 
 
 def _transcribe_system(
-    claude: Claude, sid: str, song: dict, si: int, first_bar: int, hint: str = ""
+    claude: Claude,
+    sid: str,
+    song: dict,
+    si: int,
+    first_bar: int,
+    hint: str = "",
+    cancel: threading.Event | None = None,
 ) -> list[dict]:
     sysinfo = song["systems"][si]
     page = song["pages"][sysinfo["page"]]
@@ -256,16 +383,21 @@ def _transcribe_system(
     meta = song["meta"]
 
     def run(previous=None, problems=None):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
         raw = claude.transcribe(img, meta, first_bar, spans, hint=hint, previous=previous, problems=problems)
         bars, issues = [], []
         for i, b in enumerate(raw.get("bars", [])):
             try:
                 events = clean_events(b.get("events", []))
-            except (KeyError, ValueError, TypeError) as e:
+            except ValueError as e:
                 events = []
                 issues.append(f"第 {first_bar + i} 小节数据格式错误：{e}")
             probs = check_bar(events, meta)
             issues += [f"第 {first_bar + i} 小节：{p}" for p in probs]
+            if not events:
+                events = rest_bar(meta)
+                probs = ["没有识别出可用的音符，暂按整小节休止处理"]
             bars.append(
                 {
                     "events": events,
@@ -292,7 +424,7 @@ def _transcribe_system(
             region = [max(0, a - 8), min(page["width"], c + 8), y0, y1]
         else:
             region = [x0, x1, y0, y1]
-        out.append({"system": si, "page": sysinfo["page"], "region": region, **b})
+        out.append({"id": new_bar_id(), "system": si, "page": sysinfo["page"], "region": region, **b})
     return out
 
 
@@ -307,15 +439,16 @@ def _set(sid: str, **kw) -> None:
     store.update(sid, lambda s: s.update(kw))
 
 
-def _run_parse_safe(sid: str) -> None:
+def _run_parse_safe(sid: str, cancel: threading.Event) -> None:
     try:
-        _run_parse(sid)
+        _run_parse(sid, cancel)
+    except Cancelled:
+        _set(sid, status="cancelled", error="识别已取消，已完成的行会保留。")
     except Exception as e:
         log.exception("request_id=unknown song=%s parse failed", sid)
         _set(sid, status="error", error=_friendly(e))
     finally:
-        with _running_lock:
-            _running.discard(sid)
+        jobs.release(sid)
 
 
 def _friendly(e: Exception) -> str:
@@ -338,13 +471,16 @@ def _friendly(e: Exception) -> str:
     return f"{type(e).__name__}: {e}"
 
 
-def _run_parse(sid: str) -> None:
+def _run_parse(sid: str, cancel: threading.Event | None = None) -> None:
+    cancel = cancel or threading.Event()
     claude = Claude(llm_config())
     song = store.load(sid)
     _set(sid, status="parsing", error=None, progress={"stage": "读取谱头", "done": 0, "total": 0})
     meta = normalize_meta(claude.read_meta(_page_image(sid, song["pages"][0])), song.get("title", ""))
     _set(sid, meta=meta, progress={"stage": "分析版面", "done": 0, "total": 0})
 
+    if cancel.is_set():
+        raise Cancelled()
     song = store.load(sid)
     systems = _plan_systems(sid, song)
     _set(sid, systems=systems, bars=[], progress={"stage": "逐行识别", "done": 0, "total": len(systems)})
@@ -359,13 +495,16 @@ def _run_parse(sid: str) -> None:
     errors = []
     with ThreadPoolExecutor(CONCURRENCY) as pool:
         futs = {
-            pool.submit(_transcribe_system, claude, sid, song, i, starts[i]): i for i in range(len(systems))
+            pool.submit(_transcribe_system, claude, sid, song, i, starts[i], "", cancel): i
+            for i in range(len(systems))
         }
         for fut in as_completed(futs):
             i = futs[fut]
             try:
                 bars = fut.result()
                 status, err = "done", None
+            except (Cancelled, CancelledError):
+                bars, status, err = [], "error", "已取消"
             except Exception as e:
                 log.exception("request_id=unknown song=%s system=%d failed", sid, i)
                 bars, status, err = [], "error", _friendly(e)
@@ -381,7 +520,12 @@ def _run_parse(sid: str) -> None:
                 s["usage"] = dict(claude.usage)
 
             store.update(sid, apply)
+            if cancel.is_set():
+                for f in futs:
+                    f.cancel()  # 还没开始的行不再发请求；正在进行的请求会跑完
 
+    if cancel.is_set():
+        raise Cancelled()
     song = store.load(sid)
     if not song["bars"]:
         _set(sid, status="error", error="；".join(errors) or "没有识别出任何小节（可能不是六线谱）")
@@ -406,39 +550,63 @@ def _run_parse(sid: str) -> None:
 # ---------------------------------------------------------------------------
 # 重新识别某一行 / 手工修改
 # ---------------------------------------------------------------------------
-def reparse_system(sid: str, si: int, hint: str = "") -> None:
-    with _running_lock:
-        if sid in _running:
-            raise RuntimeError("这首曲子正在识别中")
-        _running.add(sid)
+def start_reparse(sid: str, si: int, hint: str = "") -> None:
+    """在请求里就登记任务（而不是等后台线程），连点两次或和整首识别撞上时直接拒绝。"""
+    cancel = jobs.claim(sid)
+    if cancel is None:
+        raise RuntimeError("这首曲子正在识别中")
     try:
-        claude = Claude(llm_config())
-        song = store.load(sid)
-        first = min((b["n"] for b in song["bars"] if b["system"] == si), default=1)
-        bars = _transcribe_system(claude, sid, song, si, first, hint=hint)
+        store.update(sid, lambda x: x["systems"][si].update(status="parsing", error=None))
+    except Exception:
+        jobs.release(sid)
+        raise
 
-        def apply(s):
-            for k, b in enumerate(bars):
-                b["_order"] = k
-            s["bars"] = [b for b in s["bars"] if b["system"] != si] + bars
-            _renumber(s)
-            s["systems"][si].update(status="done", error=None)
-            s["usage"] = {
-                k: s.get("usage", {}).get(k, 0) + claude.usage[k] for k in ("input_tokens", "output_tokens")
-            }
+    def run():
+        try:
+            reparse_system(sid, si, hint, cancel)
+        except Exception as e:
+            log.exception("request_id=unknown song=%s system=%d reparse failed", sid, si)
+            msg = "已取消" if isinstance(e, Cancelled) else _friendly(e)
+            store.update(sid, lambda x: x["systems"][si].update(status="error", error=msg))
+        finally:
+            jobs.release(sid)
 
-        store.update(sid, apply)
-    finally:
-        with _running_lock:
-            _running.discard(sid)
+    threading.Thread(target=run, daemon=True).start()
 
 
-def edit_bar(sid: str, n: int, events: list, tip: str | None) -> dict:
+def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | None = None) -> None:
+    claude = Claude(llm_config())
+    song = store.load(sid)
+    # 起始小节号：前面各行最后一个小节 + 1（这一行之前识别失败、没有小节时也对）
+    first = max((b["n"] for b in song["bars"] if b["system"] < si), default=0) + 1
+    bars = _transcribe_system(claude, sid, song, si, first, hint=hint, cancel=cancel)
+
     def apply(s):
-        bar = next((b for b in s["bars"] if b["n"] == n), None)
+        for k, b in enumerate(bars):
+            b["_order"] = k
+        s["bars"] = [b for b in s["bars"] if b["system"] != si] + bars
+        _renumber(s)
+        s["systems"][si].update(status="done", error=None)
+        s["usage"] = {
+            k: s.get("usage", {}).get(k, 0) + claude.usage[k] for k in ("input_tokens", "output_tokens")
+        }
+
+    store.update(sid, apply)
+
+
+class BarNotFound(LookupError):
+    pass
+
+
+def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
+    """按小节的稳定 id 修改（编号在识别过程中会变，按编号改可能改到别的小节）。"""
+    cleaned = clean_events(events)
+
+    def apply(s):
+        bar = next((b for b in s["bars"] if b.get("id") == bar_id), None)
         if bar is None:
-            raise KeyError(n)
-        bar["events"] = clean_events(events)
+            raise BarNotFound(bar_id)
+        bar["events"] = cleaned or rest_bar(s["meta"])
         bar["warn"] = check_bar(bar["events"], s["meta"])
         bar["uncertain"] = ""
         if tip is not None:
@@ -450,9 +618,9 @@ def edit_bar(sid: str, n: int, events: list, tip: str | None) -> dict:
 def edit_meta(sid: str, raw: dict) -> dict:
     def apply(s):
         merged = {**(s.get("meta") or {}), **raw}
-        s["meta"] = normalize_meta(merged)
+        s["meta"] = normalize_meta(merged, strict=True)
         if "title" in raw:
-            s["title"] = raw["title"].strip()
+            s["title"] = str(raw["title"]).strip()
         for b in s["bars"]:
             b["warn"] = check_bar(b["events"], s["meta"])
 

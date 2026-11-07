@@ -89,12 +89,13 @@ def test_edit_bar_and_meta(data_dir):
     sid = pipeline.create_song([("p1.png", _png())])
     pipeline._run_parse(sid)
 
-    song = pipeline.edit_bar(sid, 2, [{"dur": "3", "notes": []}], tip="改过")
+    bar_id = store.load(sid)["bars"][1]["id"]
+    song = pipeline.edit_bar(sid, bar_id, [{"dur": "3", "notes": []}], tip="改过")
     bar = song["bars"][1]
     assert bar["tip"] == "改过" and bar["warn"] == ["时值合计 3 拍，应为 4 拍"]
 
     with pytest.raises(ValueError):
-        pipeline.edit_bar(sid, 2, [{"dur": "abc", "notes": []}], tip=None)
+        pipeline.edit_bar(sid, bar_id, [{"dur": "abc", "notes": []}], tip=None)
 
     song = pipeline.edit_meta(sid, {"time_signature": [3, 4], "tuning": ["E4", "B3", "G3", "D3", "A2", "E2"]})
     assert song["meta"]["tuning_midi"] == [64, 59, 55, 50, 45, 40]
@@ -115,3 +116,103 @@ def test_note_names():
     assert pipeline.note_to_midi("D♭3") == 49
     assert pipeline.note_to_midi("D", near=40) == 38  # 6 弦写 D：降到 D2，而不是升到 D3
     assert pipeline.note_to_midi("F#", near=55) == 54
+
+
+def test_bar_ids_are_stable_and_unique(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    before = store.load(sid)["bars"]
+    assert len({b["id"] for b in before}) == len(before)
+    pipeline.reparse_system(sid, 1)
+    after = store.load(sid)["bars"]
+    assert [b["id"] for b in after[:3]] == [b["id"] for b in before[:3]]  # 没重识别的行，id 不变
+    with pytest.raises(pipeline.BarNotFound):
+        pipeline.edit_bar(sid, before[4]["id"], [{"dur": "4", "notes": []}], tip=None)  # 旧 id 已失效
+
+
+@pytest.mark.parametrize(
+    ("events", "msg"),
+    [
+        ([{"dur": "1/0", "notes": []}], "时值无法识别"),
+        ([{"notes": []}], "缺少 dur"),
+        ([{"dur": "4", "notes": [{"string": 7, "fret": 0}]}], "弦号 7"),
+        ([{"dur": "4", "notes": [{"string": 1, "fret": 0, "bend": "nan"}]}], "推弦"),
+        ([{"dur": "4", "notes": [{"fret": 0}]}], "格式不对"),
+        ("oops", "列表"),
+    ],
+)
+def test_clean_events_rejects_bad_input(events, msg):
+    with pytest.raises(ValueError, match=msg):
+        pipeline.clean_events(events)
+
+
+def test_empty_bar_becomes_rest(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    bar_id = store.load(sid)["bars"][0]["id"]
+    song = pipeline.edit_bar(sid, bar_id, [], tip=None)
+    assert song["bars"][0]["events"] == [{"dur": "4", "notes": []}]
+    assert song["bars"][0]["warn"] == []
+
+
+def test_edit_meta_rejects_bad_values(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    for bad in ({"time_signature": [None, 4]}, {"capo": 20}, {"tuning": ["E4", "B3", "G3", "D3", "A2", "Q"]}):
+        with pytest.raises(ValueError):
+            pipeline.edit_meta(sid, bad)
+
+
+def test_recover_interrupted_parse(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+
+    def stuck(s):
+        s["status"] = "parsing"
+        s["systems"][1]["status"] = "parsing"
+        s["bars"][0].pop("id")
+
+    store.update(sid, stuck)
+    pipeline.recover_interrupted()
+    song = store.load(sid)
+    assert song["status"] == "error" and "中断" in song["error"]
+    assert song["systems"][1]["status"] == "error"
+    assert song["bars"][0]["id"]
+
+
+def test_reparse_claim_rejects_concurrent_job(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    assert pipeline.jobs.claim(sid) is not None  # 模拟整首识别正在进行
+    with pytest.raises(RuntimeError):
+        pipeline.start_reparse(sid, 0)
+    assert store.load(sid)["systems"][0]["status"] == "done"  # 没有被误标成识别中
+    pipeline.jobs.release(sid)
+
+
+def test_cancel_stops_remaining_systems(data_dir, monkeypatch):
+    sid = pipeline.create_song([("p1.png", _png())])
+    cancel = pipeline.threading.Event()
+    real = FakeClaude.transcribe
+
+    def transcribe_then_cancel(self, *a, **kw):
+        cancel.set()  # 第一行识别完成后用户点了取消
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe_then_cancel)
+    monkeypatch.setattr(pipeline, "CONCURRENCY", 1)
+    with pytest.raises(pipeline.Cancelled):
+        pipeline._run_parse(sid, cancel)
+    song = store.load(sid)
+    assert len([c for c in FakeClaude.calls if not c["retry"]]) == 1  # 第二行没有再发请求
+    assert any(s["error"] == "已取消" for s in song["systems"])
+
+
+def test_reparse_failed_line_uses_real_bar_numbers(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    store.update(
+        sid, lambda s: s.update(bars=[b for b in s["bars"] if b["system"] != 1])
+    )  # 第 2 行之前失败了
+    pipeline.reparse_system(sid, 1)
+    assert FakeClaude.calls[-1]["first_bar"] == 4

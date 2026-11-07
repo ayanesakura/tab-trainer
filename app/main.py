@@ -9,7 +9,7 @@ import argparse
 import logging
 import os
 import shutil
-import threading
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
@@ -20,8 +20,15 @@ from app import pipeline, store
 from app.llm import DEFAULT_MODEL, Claude
 
 STATIC = store.ROOT / "app" / "static"
-log = logging.getLogger("tab_trainer")
-app = FastAPI(title="tab-trainer")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    pipeline.recover_interrupted()  # 上次服务关掉时没跑完的识别，标成中断
+    yield
+
+
+app = FastAPI(title="tab-trainer", lifespan=lifespan)
 
 
 def _song(sid: str) -> dict:
@@ -118,6 +125,8 @@ async def upload(files: Annotated[list[UploadFile], File()], title: Annotated[st
 @app.get("/api/songs/{sid}")
 def song(sid: str):
     s = _song(sid)
+    if any(not b.get("id") for b in s.get("bars", [])):  # 旧格式数据：补上小节 id，前端按 id 定位小节
+        s = store.update(sid, pipeline.ensure_bar_ids)
     s["running"] = pipeline.is_running(sid)
     return s
 
@@ -139,6 +148,14 @@ def reparse_all(sid: str):
     return {"ok": True}
 
 
+@app.post("/api/songs/{sid}/cancel")
+def cancel(sid: str):
+    _song(sid)
+    if not pipeline.cancel_parse(sid):
+        raise HTTPException(409, "没有正在进行的识别")
+    return {"ok": True}
+
+
 @app.put("/api/songs/{sid}/meta")
 def put_meta(sid: str, body: Annotated[dict, Body()]):
     _song(sid)
@@ -148,14 +165,16 @@ def put_meta(sid: str, body: Annotated[dict, Body()]):
         raise HTTPException(400, str(e)) from None
 
 
-@app.put("/api/songs/{sid}/bars/{n}")
-def put_bar(sid: str, n: int, body: Annotated[dict, Body()]):
+@app.put("/api/songs/{sid}/bars/{bar_id}")
+def put_bar(sid: str, bar_id: str, body: Annotated[dict, Body()]):
     _song(sid)
+    if "events" not in body:
+        raise HTTPException(400, "缺少 events")
     try:
-        return pipeline.edit_bar(sid, n, body["events"], body.get("tip"))
-    except KeyError:
-        raise HTTPException(404, "小节不存在") from None
-    except (ValueError, TypeError) as e:
+        return pipeline.edit_bar(sid, bar_id, body["events"], body.get("tip"))
+    except pipeline.BarNotFound:
+        raise HTTPException(404, "小节不存在（可能刚被重新识别，请刷新页面）") from None
+    except ValueError as e:
         raise HTTPException(400, f"小节数据格式不对：{e}") from None
 
 
@@ -164,20 +183,11 @@ def reparse_line(sid: str, si: int, body: Annotated[dict | None, Body()] = None)
     s = _song(sid)
     if not 0 <= si < len(s.get("systems", [])):
         raise HTTPException(404, "这一行不存在")
-    if pipeline.is_running(sid):
-        raise HTTPException(409, "正在识别中")
-    hint = ((body or {}).get("hint") or "").strip()
-
-    def run():
-        try:
-            pipeline.reparse_system(sid, si, hint)
-        except Exception as e:
-            log.exception("request_id=unknown song=%s system=%d reparse failed", sid, si)
-            msg = pipeline._friendly(e)
-            store.update(sid, lambda x: x["systems"][si].update(status="error", error=msg))
-
-    store.update(sid, lambda x: x["systems"][si].update(status="parsing", error=None))
-    threading.Thread(target=run, daemon=True).start()
+    hint = str((body or {}).get("hint") or "").strip()
+    try:
+        pipeline.start_reparse(sid, si, hint)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from None
     return {"ok": True}
 
 

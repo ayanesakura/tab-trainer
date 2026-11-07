@@ -465,7 +465,7 @@ function layoutBar(bi) {
   const maxX = W - PADR - 10;
   if (last > maxX) { const k = (maxX - PADL - 6) / (last - PADL - 6); for (let i = 0; i < xs.length; i++) xs[i] = PADL + 6 + (xs[i] - PADL - 6) * k; }
   const knots = [];
-  if (evs[0].t > 0) knots.push([0, PADL]);
+  if (!evs.length || evs[0].t > 0) knots.push([0, PADL]);
   evs.forEach((e, i) => knots.push([e.t, xs[i]]));
   knots.push([BL, W - PADR]);
   return { xs, knots, W };
@@ -608,10 +608,8 @@ function showBar(bi) {
   const sb = SONG.bars[bi], warn = [...(sb.warn || []), sb.uncertain].filter(Boolean);
   $('tipWarn').style.display = warn.length ? '' : 'none';
   $('tipWarn').innerHTML = warn.map(w => `<div>${UI.icon('alert', 13)} ${esc(w)}</div>`).join('');
-  const sys = SONG.systems[sb.system];
-  $('reparseBtn').disabled = !sys || sys.status === 'parsing' || SONG.running;
-  $('reparseBtn').innerHTML = sys && sys.status === 'parsing' ? '<span class="spinner"></span>正在重新识别…' : UI.icon('refresh') + '重新识别这一行';
-  closeEditor();
+  updateBarTools();
+  if (sb.id !== editorBarId) closeEditor();
   const tags = new Set();
   BARS[bi].forEach(e => {
     e.tech.forEach(k => LAB[k] && tags.add(k === 'si' ? '滑入' : LAB[k]));
@@ -686,13 +684,13 @@ function setTempo(bpm) {
   state.bpm = bpm;
   $('bpm').value = bpm; $('bpmVal').textContent = bpm + ' BPM'; UI.fillRange($('bpm'));
 }
-function setLoop(a, b) {
+function setLoop(a, b, restart = true, show = true) {
   state.a = Math.min(a, b); state.b = Math.max(a, b);
   updateLoopUI();
   const partial = state.b - state.a + 1 < BARS.length; // 循环全曲时不高亮，免得满屏都是选中色
   barBoxes.forEach((box, i) => box.classList.toggle('sel', partial && i >= state.a && i <= state.b));
-  showBar(state.a);
-  if (state.playing) { stop(); play(); }
+  if (show) showBar(state.a);
+  if (state.playing && restart) { stop(); play(); }
 }
 function previewEvent(e) {
   initAudio();
@@ -725,7 +723,7 @@ function frame() {
   let cur = null;
   for (const { e } of LE) if (e.abs <= scoreBeat + 1e-6) cur = e;
   const ci = cur ? LE.findIndex(x => x.e === cur) : -1;
-  const next = LE[(ci + 1) % LE.length].e;
+  const next = LE.length ? LE[(ci + 1) % LE.length].e : null;
   clearHighlights();
   if (cur) { evNodes[cur.idx].classList.add('on'); lit.push(evNodes[cur.idx]); }
   if (next && next !== cur) { evNodes[next.idx].classList.add('next'); lit.push(evNodes[next.idx]); }
@@ -831,7 +829,7 @@ document.querySelectorAll('button.demo').forEach(b => b.onclick = () => {
   for (const e of DEMOS[b.dataset.demo]) playEvent(e, t0 + e.t * spb);
 });
 document.addEventListener('keydown', e => {
-  if (e.code === 'Space' && !['INPUT', 'SELECT', 'BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); state.playing ? stop() : play(); }
+  if (e.code === 'Space' && !e.target.closest('input, textarea, select, button, [contenteditable]')) { e.preventDefault(); state.playing ? stop() : play(); }
 });
 window.addEventListener('resize', () => { if (shownBar < 0) return; const b = shownBar; shownBar = -1; showBar(b); });
 requestAnimationFrame(frame);
@@ -855,8 +853,11 @@ function applySong(song) {
   PAGES = song.pages.map(p => `/files/${song.id}/${p.file}`);
   BARS = song.bars.map(b => {
     let t = 0;
-    return b.events.map(e => {
-      const notes = e.notes.map(n => ({ s: n.string, f: n.fret, tech: new Set(n.tech), grace: n.grace >= 0 ? n.grace : null, bend: n.bend || 0 }));
+    const evs = b.events && b.events.length ? b.events : [{ dur: String(BL), notes: [] }]; // 空小节按整小节休止显示
+    return evs.map(e => {
+      const notes = (e.notes || [])
+        .filter(n => n.string >= 1 && n.string <= 6 && Number.isFinite(n.fret)) // 非法弦号会让音高变成 NaN，播放卡死
+        .map(n => ({ s: n.string, f: n.fret, tech: new Set(n.tech || []), grace: n.grace >= 0 ? n.grace : null, bend: Number.isFinite(n.bend) ? n.bend : 0 }));
       const all = new Set(); notes.forEach(n => n.tech.forEach(k => all.add(k)));
       const d = frac(e.dur), r = { t, d, notes, tech: all };
       t += d;
@@ -880,7 +881,11 @@ function renderHeader() {
   const running = SONG.running || SONG.status === 'parsing' || SONG.status === 'queued';
   const pr = SONG.progress || {};
   $('progressBox').style.display = running ? '' : 'none';
-  $('progressBox').innerHTML = running ? `<span class="spinner" style="margin-top:2px"></span><div>正在识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}。已识别的小节可以先练，页面会自动刷新。</div>` : '';
+  $('progressBox').innerHTML = running ? `<span class="spinner" style="margin-top:2px"></span><div style="flex:1">正在识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}。已识别的小节可以先练，页面会自动刷新。</div><button class="btn sm" id="cancelBtn">取消识别</button>` : '';
+  if (running) $('cancelBtn').onclick = async () => {
+    const r = await fetch(`/api/songs/${SONG_ID}/cancel`, { method: 'POST' });
+    UI.toast(r.ok ? '正在取消，进行中的那几行完成后停止' : ((await r.json()).detail || '取消失败'), r.ok ? 'info' : 'err');
+  };
   $('errorBox').style.display = SONG.error ? '' : 'none';
   $('errorBox').innerHTML = SONG.error ? `<span class="dot err" style="margin-top:4px"></span><div>识别出错：${esc(SONG.error)}</div>` : '';
   if (m.tuning) {
@@ -905,7 +910,10 @@ function renderSections() {
 
 function renderPlan() {
   const p = SONG.plan;
-  if (!p) return;
+  if (!p) {
+    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${SONG.status === 'ready' ? '这次识别没有生成练习建议，可以整首重新识别。' : '识别完成后会自动生成。'}</div></div>`;
+    return;
+  }
   const steps = (p.steps || []).map((st, i) => {
     const m = /^(\d+)\s*[-–~]\s*(\d+)$/.exec(st.bars.trim()) || /^(\d+)$/.exec(st.bars.trim());
     const a = m ? +m[1] - 1 : null, z = m ? +(m[2] || m[1]) - 1 : null;
@@ -916,24 +924,37 @@ function renderPlan() {
   $('plan').querySelectorAll('button[data-a]').forEach(b => b.onclick = () => { setLoop(+b.dataset.a, +b.dataset.z); showView('practice'); });
 }
 
-let renderedKey = '', BARS_RENDERED = 0;
+let renderedKey = '';
+let renderedIds = [];
 function render(force) {
   renderHeader();
-  const key = JSON.stringify([SONG.bars, SONG.meta, SONG.systems.map(s => s.status)]);
+  updateBarTools();
+  const key = JSON.stringify([SONG.bars, SONG.meta, SONG.systems.map(s => s.status), SONG.plan]);
   if (!force && key === renderedKey) return;
   renderedKey = key;
-  if (state.playing) stop();
-  const prevCount = BARS_RENDERED, keepA = state.a, keepB = state.b, keepBar = shownBar;
-  const wasAll = prevCount === 0 || (keepA === 0 && keepB === prevCount - 1);
+  // 按小节 id 记住循环范围和正在看的小节：重新识别某一行后小节编号可能整体移动
+  const prevIds = renderedIds, prevA = state.a, prevB = state.b;
+  const wasAll = !prevIds.length || (prevA === 0 && prevB === prevIds.length - 1);
+  const idA = prevIds[prevA], idB = prevIds[prevB], idShown = prevIds[shownBar];
+  const loopSig = bars => JSON.stringify(bars.map(b => b && [b.id, b.events]));
+  const oldLoop = state.playing ? loopSig(prevIds.slice(prevA, prevB + 1).map(id => prevSongBars.get(id))) : null;
   buildAll(); renderTune(); renderFretboard(); renderTabs(); renderSections(); renderPlan();
   if (!imgs.length || imgs.length !== PAGES.length) loadImages();
-  if (!BARS.length) { $('tabs').innerHTML = '<div class="list" style="width:100%"><div class="empty-state"><b>还没有识别出的小节</b>识别完成后会出现在这里。</div></div>'; return; }
-  const n = BARS.length - 1;
+  renderedIds = SONG.bars.map(b => b.id);
+  prevSongBars = new Map(SONG.bars.map(b => [b.id, b]));
+  if (!BARS.length) { if (state.playing) stop(); $('tabs').innerHTML = '<div class="list" style="width:100%"><div class="empty-state"><b>还没有识别出的小节</b>识别完成后会出现在这里。</div></div>'; return; }
+  const n = BARS.length - 1, find = (id, fallback) => { const i = renderedIds.indexOf(id); return i >= 0 ? i : Math.min(fallback, n); };
+  let a = wasAll ? 0 : find(idA, prevA), z = wasAll ? n : find(idB, prevB);
+  if (z < a) z = a;
+  const sameLoop = oldLoop !== null && oldLoop === loopSig(SONG.bars.slice(a, z + 1));
+  if (state.playing && !sameLoop) stop();
+  const keep = idShown ? renderedIds.indexOf(idShown) : -1;
   shownBar = -1;
-  BARS_RENDERED = BARS.length;
-  if (wasAll) setLoop(0, n); else setLoop(Math.min(keepA, n), Math.min(Math.max(keepB, keepA), n));
-  if (keepBar >= 0 && keepBar <= n) { shownBar = -1; showBar(keepBar); }
+  setLoop(a, z, false, keep < 0); // 正在看的小节还在就直接显示它，中途不跳到别的小节（否则编辑器会被关掉）
+  if (state.playing) LE = loopEvents(); // 循环里的小节没变：换成新的事件对象，继续播放
+  if (keep >= 0) showBar(keep);
 }
+let prevSongBars = new Map();
 
 async function fetchSong() {
   const r = await fetch(`/api/songs/${encodeURIComponent(SONG_ID)}`);
@@ -954,19 +975,28 @@ async function refresh(force) {
 }
 
 // 修改小节
-function closeEditor() { $('editor').style.display = 'none'; $('edMsg').textContent = ''; }
+let editorBarId = null;
+function closeEditor() { $('editor').style.display = 'none'; $('edMsg').textContent = ''; editorBarId = null; }
+function updateBarTools() {
+  if (shownBar < 0 || !SONG || !SONG.bars[shownBar]) return;
+  const sys = SONG.systems[SONG.bars[shownBar].system];
+  const busy = SONG.running || SONG.status === 'parsing' || SONG.status === 'queued';
+  $('reparseBtn').disabled = !sys || sys.status === 'parsing' || busy;
+  $('reparseBtn').innerHTML = sys && sys.status === 'parsing' ? '<span class="spinner"></span>正在重新识别…' : UI.icon('refresh') + '重新识别这一行';
+}
 $('editBtn').onclick = () => {
   if (shownBar < 0) return;
   const evs = SONG.bars[shownBar].events;
   $('edText').value = '[\n' + evs.map(e => '  ' + JSON.stringify(e)).join(',\n') + '\n]';
+  editorBarId = SONG.bars[shownBar].id;
   $('editor').style.display = '';
 };
 $('edCancel').onclick = closeEditor;
 $('edSave').onclick = async () => {
   let events;
   try { events = JSON.parse($('edText').value); } catch (e) { UI.toast('JSON 格式不对：' + e.message, 'err', 4000); return; }
-  const n = SONG.bars[shownBar].n;
-  const r = await fetch(`/api/songs/${SONG_ID}/bars/${n}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events }) });
+  const barId = editorBarId;
+  const r = await fetch(`/api/songs/${SONG_ID}/bars/${encodeURIComponent(barId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events }) });
   if (!r.ok) { UI.toast((await r.json()).detail || '保存失败', 'err', 4000); return; }
   closeEditor(); await refresh(true); UI.toast('已保存');
 };

@@ -179,6 +179,7 @@ function songState(s) {
     return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${p.done}/${p.total} 行` : ''}</span><span class="progress"><i style="width:${pct}%"></i></span>`;
   }
   if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">识别失败：${esc(s.error)}</span>`;
+  if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${s.bars} 小节` : ''}</span>`;
   const parts = [`<span class="dot ${s.warn_bars ? 'warn' : 'ok'}"></span><span>${s.bars} 小节</span>`];
   if (s.warn_bars) parts.push(`<span class="badge warn">${s.warn_bars} 处待核对</span>`);
   if (s.error) parts.push(`<span class="badge err">部分行识别失败</span>`);
@@ -202,7 +203,7 @@ async function loadSongs() {
         <div class="who"><div class="name">${esc(s.title)}</div><div class="state">${songState(s)}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
         <div class="ctl">
           ${canPlay ? `<a class="btn primary sm" href="/trainer?id=${s.id}">${icon('play', 12)}练习</a>` : ''}
-          ${busy ? '' : `<button class="icon-btn sm" data-more="${s.id}" title="更多">${icon('more')}</button>`}
+          <button class="icon-btn sm" data-more="${s.id}" data-busy="${busy ? 1 : ''}" title="更多">${icon('more')}</button>
         </div>
       </div>`;
     }).join('');
@@ -215,6 +216,10 @@ $('songs').addEventListener('click', e => {
   if (more) {
     e.stopPropagation();
     const id = more.dataset.more;
+    if (more.dataset.busy) {
+      UI.menu(more, [{ label: '取消识别', icon: 'x', onClick: () => cancel(id) }]);
+      return;
+    }
     UI.menu(more, [
       { label: '整首重新识别', icon: 'refresh', onClick: () => reparse(id) },
       'sep',
@@ -229,6 +234,10 @@ $('songs').addEventListener('click', e => {
 async function reparse(id) {
   if (!confirm('整首重新识别会覆盖现有结果（包括手工修改），并再次产生模型调用费用。继续？')) return;
   try { await api(`/api/songs/${id}/parse`, { method: 'POST' }); toast('已开始重新识别', 'info'); } catch (e) { toast(e.message, 'err'); }
+  loadSongs();
+}
+async function cancel(id) {
+  try { await api(`/api/songs/${id}/cancel`, { method: 'POST' }); toast('正在取消，进行中的那几行完成后停止', 'info'); } catch (e) { toast(e.message, 'err'); }
   loadSongs();
 }
 async function del(id) {

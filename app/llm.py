@@ -54,7 +54,11 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 
 NOTE_SCHEMA = _obj(
     {
-        "string": {"type": "integer", "description": "1 = highest (top tab line) ... 6 = lowest"},
+        "string": {
+            "type": "integer",
+            "enum": [1, 2, 3, 4, 5, 6],
+            "description": "1 = highest (top tab line) ... 6 = lowest",
+        },
         "fret": {"type": "integer", "description": "fret number exactly as written in the tab"},
         "tech": {"type": "array", "items": {"type": "string", "enum": TECHS}},
         "grace": {
