@@ -1,23 +1,12 @@
-// 原谱弹窗：谱面上点选小节后，小节右上角浮出“原谱”按钮（ui.pick），点开看这一整行的原谱，当前小节框出来。
-// 小节卡片里的截图也能点开。弹窗打开时 ui.orig 是小节下标，关掉是 -1。
+// 原谱弹窗：点侧栏小节卡片里的原谱截图，看这一整行的原谱，当前小节框出来。弹窗打开时 ui.orig 是小节下标，关掉是 -1。
 
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
-import { barBox } from './player.js';
 import { images } from './bar-card.js';
 import { needsReview, isScore } from './view.js';
 
 let origLayer = null;
 const hasOrig = bi => { const s = get('song'), v = get('view'); return !!(s && v && !isScore(s) && v.regions[bi]); };
-
-function placeBtn() {
-  const btn = $('origBtn'), bi = get('ui.pick');
-  const box = !get('play.playing') && hasOrig(bi) && barBox(bi);
-  btn.hidden = !box;
-  if (!box) return;
-  btn.style.left = box.x + box.w - btn.offsetWidth + 'px';
-  btn.style.top = Math.max(0, box.y - btn.offsetHeight - 2) + 'px'; // 放在小节上方，不挡音符
-}
 
 export function openOrig(bi) {
   if (!hasOrig(bi)) return;
@@ -58,11 +47,6 @@ function draw() {
 }
 
 export function initOrig() {
-  const btn = $('origBtn');
-  btn.innerHTML = UI.icon('image', 13) + '原谱';
-  btn.onclick = e => { e.stopPropagation(); openOrig(get('ui.pick')); };
-  btn.addEventListener('mousedown', e => e.stopPropagation()); // 别让 alphaTab 当成点了谱面
-  btn.addEventListener('pointerdown', e => e.stopPropagation());
   $('cropBox').onclick = () => openOrig(get('ui.bar'));
   $('origClose').onclick = () => set('ui.orig', -1);
   $('origPrev').onclick = () => step(-1);
@@ -78,7 +62,6 @@ export function initOrig() {
     if (bi < 0 && origLayer) origLayer.close();
     draw();
   });
-  on(['ui.pick', 'play.playing', 'ui.renderGen', 'view'], placeBtn);
   document.addEventListener('tt-images', draw);
   addEventListener('resize', draw);
 }

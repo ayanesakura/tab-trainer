@@ -4,7 +4,7 @@
 //   song  后端返回的曲子（只读，改动一律 set 新值，不要原地改）
 //   view  deriveView(song) 的结果（播放要用的小节、音高、段落……）
 //   play  播放状态（ready / playing / bpm / a..b 循环范围 / loops 弹完几遍 / note、next 指板上的音）
-//   ui    界面状态（bar 正在看的小节、view 当前页、editMode、pick 谱面上点选的小节、orig 原图弹窗……）
+//   ui    界面状态（bar 正在看的小节、view 当前页、editMode、orig 原图弹窗……）
 //   rhythm  敲节奏（rhythm-drill.js）：on 打开了（播放键 / 空格开始的是敲节奏），running 正在敲（播放键显示成停止）
 //
 // 去重：set 时按结构比较（普通对象和数组逐项比，其他按 ===），值没变就不通知。
@@ -77,7 +77,7 @@ export const store = createStore({
   song: null,
   view: null,
   play: { ready: false, playing: false, bpm: 50, a: 0, b: 0, loops: 0, note: -1, next: -1 },
-  ui: { bar: -1, view: 'practice', editMode: false, pick: -1, orig: -1, np: false, more: false, drawer: false, fb: true },
+  ui: { bar: -1, view: 'practice', editMode: false, orig: -1, np: false, more: false, drawer: false, fb: true },
   rhythm: { on: false, running: false },
 });
 export const { get, set, on } = store;
