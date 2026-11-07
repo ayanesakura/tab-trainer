@@ -1,7 +1,7 @@
 import anthropic
 import httpx
 
-from app import jobs
+from app import llm
 
 
 def _status_error(cls, status: int, body):
@@ -19,18 +19,18 @@ def test_403_shows_upstream_reason():
             "message": "4router.net: this channel only serves official Claude Code CLI requests",
         },
     }
-    msg = jobs.friendly(_status_error(anthropic.PermissionDeniedError, 403, body))
+    msg = llm.friendly(_status_error(anthropic.PermissionDeniedError, 403, body))
     assert "4router.net: this channel only serves official Claude Code CLI requests" in msg
     assert "403" in msg
 
 
 def test_403_without_reason_falls_back_to_permission_hint():
-    msg = jobs.friendly(_status_error(anthropic.PermissionDeniedError, 403, None))
+    msg = llm.friendly(_status_error(anthropic.PermissionDeniedError, 403, None))
     assert "权限" in msg
 
 
 def test_upstream_reason_is_capped_and_only_uses_message_field():
     body = {"error": {"message": "x" * 1000}, "request": {"api_key": "sk-ant-secret"}}
-    reason = jobs.upstream_reason(_status_error(anthropic.PermissionDeniedError, 403, body))
-    assert len(reason) <= jobs.REASON_MAX
+    reason = llm.upstream_reason(_status_error(anthropic.PermissionDeniedError, 403, body))
+    assert len(reason) <= llm.REASON_MAX
     assert "sk-ant" not in reason

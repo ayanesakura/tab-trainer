@@ -1,8 +1,10 @@
-"""本地存储：data/ 目录下一首曲子一个文件夹（song.json + 页面图片），另有 config.json 存模型设置。
+"""本地存储：data/ 目录下一首曲子一个文件夹（song.json、practice.jsonl、页面图片 / 原文件），另有 config.json 存模型设置。
+
+只管文件：路径、加锁的读-改-写、备份、删除。数据格式的升级在 app/migrate.py，派生字段在 app/model.py。
 
 写入：先写临时文件并 fsync，再把旧文件改名成 .bak、临时文件改名成正式文件。断电或崩溃时最多丢最后一次修改；
-读取时正式文件坏了（截断、不是合法 JSON）就用 .bak。两份都坏的曲子在曲库里显示成“数据损坏”，不影响其他曲子。
-song.json 带 schema_version，以后改数据结构时在 _migrate 里升级旧数据。
+读取时正式文件坏了（截断、不是合法 JSON）就用 .bak。两份都坏的曲子抛 CorruptSong（曲库里显示成“数据损坏”，可以删除）。
+每次保存 rev +1（接口用它做乐观锁）。删除在锁里先把目录改名（之后的写入一律 NotFound，不会把目录重新建出来）。
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -19,40 +22,53 @@ from pathlib import Path
 
 from PIL import Image
 
+from app import migrate, model
+from app.errors import CorruptSong, NotFound
+
 ROOT = Path(__file__).resolve().parent.parent
-DATA = Path(os.environ.get("TAB_TRAINER_DATA", ROOT / "data"))
+DATA = Path(os.environ.get("TAB_TRAINER_DATA", ROOT / "data"))  # 测试和 e2e 会替换这三个
 SONGS = DATA / "songs"
 CONFIG = DATA / "config.json"
+SCHEMA_VERSION = migrate.SCHEMA_VERSION
 
 _lock = threading.RLock()
 _ID_RE = re.compile(r"^[a-z0-9-]{4,64}$")
-SCHEMA_VERSION = 1
+PRACTICE_FILE = "practice.jsonl"
 log = logging.getLogger("tab_trainer.store")
 
-
-class CorruptSong(ValueError):
-    """song.json 和备份都读不出来。"""
-
-    def __init__(self, song_id: str, reason: str):
-        super().__init__(f"曲子数据损坏，无法读取：{reason}")
-        self.song_id = song_id
+__all__ = ["CorruptSong", "NotFound"]
 
 
 def new_id() -> str:
     return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
 
 
+def valid_id(song_id: object) -> bool:
+    return isinstance(song_id, str) and bool(_ID_RE.match(song_id))
+
+
 def song_dir(song_id: str) -> Path:
-    if not _ID_RE.match(song_id):
-        raise KeyError(song_id)
+    if not valid_id(song_id):
+        raise NotFound()
     return SONGS / song_id
+
+
+def exists(song_id: str) -> bool:
+    return valid_id(song_id) and (SONGS / song_id).is_dir()
+
+
+def song_ids() -> list[str]:
+    """曲库里所有曲子的 id（新的在前）。临时目录（导入中、删除中）不算。"""
+    if not SONGS.exists():
+        return []
+    return [d.name for d in sorted(SONGS.iterdir(), reverse=True) if d.is_dir() and valid_id(d.name)]
 
 
 def _bak(path: Path) -> Path:
     return path.with_name(path.name + ".bak")
 
 
-def _write_json(path: Path, data: dict, private: bool = False) -> None:
+def write_json(path: Path, data: dict, private: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -91,45 +107,52 @@ def _read_json(path: Path) -> dict:
     raise first  # type: ignore[misc]
 
 
-def _migrate(song: dict, song_id: str) -> dict:
-    """旧数据补齐字段、升级到当前 schema_version。"""
-    song.setdefault("id", song_id)
-    for k, default in (("bars", []), ("systems", []), ("pages", []), ("meta", {})):
-        if not isinstance(song.get(k), type(default)):
-            song[k] = default
-    song.setdefault("status", "ready" if song["bars"] else "error")
-    song.setdefault("title", "")
-    song["schema_version"] = SCHEMA_VERSION
-    return song
-
-
+# ---------------------------------------------------------------------------
+# song.json
+# ---------------------------------------------------------------------------
 def load(song_id: str) -> dict:
+    """读一首曲子（升级到当前格式、补上派生字段）。不存在抛 NotFound，两份文件都坏了抛 CorruptSong。"""
     path = song_dir(song_id) / "song.json"
     with _lock:
         if not path.exists() and not _bak(path).exists():
-            raise KeyError(song_id)
+            raise NotFound()
         try:
             data = _read_json(path)
         except FileNotFoundError:
-            raise KeyError(song_id) from None
+            raise NotFound() from None
         except (OSError, ValueError) as e:
             raise CorruptSong(song_id, str(e)) from None
-    return _migrate(data, song_id)
+    return model.derive(migrate.migrate(data, song_id))
 
 
-def save(song: dict) -> None:
+def save(song: dict, create: bool = False) -> None:
+    """保存（rev +1）。create=False 时曲子目录必须已经存在：删掉的曲子不会被后台任务的写回重新建出来。"""
     with _lock:
+        d = song_dir(song["id"])
+        if not create and not d.is_dir():
+            raise NotFound()
+        song["rev"] = int(song.get("rev") or 0) + 1
+        write_song(d, song)
+
+
+def write_song(d: Path, song: dict) -> None:
+    """把曲子写进目录 d（曲子目录，或导入时的临时目录）：去掉派生字段；旧数据升级时
+    原来记在 song.json 里的练习记录转成 practice.jsonl 的第一行。"""
+    with _lock:
+        seed = song.pop("_practice_seed", None)
+        if seed:
+            _write_seed(d, seed)
         song["schema_version"] = SCHEMA_VERSION
-        _write_json(song_dir(song["id"]) / "song.json", song)
+        write_json(d / "song.json", model.strip(song))
 
 
 def update(song_id: str, fn: Callable[[dict], None]) -> dict:
-    """加锁读-改-写，后台识别线程和接口请求同时改同一首曲子时不会互相覆盖。"""
+    """加锁读-改-写，后台识别线程和接口请求同时改同一首曲子时不会互相覆盖。返回改完的曲子（带派生字段）。"""
     with _lock:
         song = load(song_id)
         fn(song)
         save(song)
-        return song
+        return model.derive(song)
 
 
 def patch(song_id: str, **fields) -> dict:
@@ -137,79 +160,115 @@ def patch(song_id: str, **fields) -> dict:
     return update(song_id, lambda s: s.update(fields))
 
 
+def serialize(song: dict) -> dict:
+    """song.json 里实际存的内容（去掉派生字段），曲子包导出用。"""
+    return model.strip(dict(song))
+
+
+def delete(song_id: str) -> None:
+    """删除一首曲子（数据坏了的也能删）。在锁里先把目录改名：之后同一首的写入都会 NotFound。"""
+    with _lock:
+        d = song_dir(song_id)
+        if not d.is_dir():
+            raise NotFound()
+        trash = SONGS / f".trash-{song_id}-{uuid.uuid4().hex[:6]}"
+        os.rename(d, trash)
+    shutil.rmtree(trash, ignore_errors=True)
+
+
+def clean_temp_dirs() -> None:
+    """启动时删掉上次没清理完的临时目录（删除中、导入中）。"""
+    if SONGS.exists():
+        for d in SONGS.iterdir():
+            if d.is_dir() and d.name.startswith((".trash-", ".import-")):
+                shutil.rmtree(d, ignore_errors=True)
+
+
+def staging_dir() -> Path:
+    """导入用的临时目录（名字不符合 id 格式，曲库列表和启动恢复都会忽略）。"""
+    SONGS.mkdir(parents=True, exist_ok=True)
+    d = SONGS / f".import-{uuid.uuid4().hex[:8]}"
+    (d / "pages").mkdir(parents=True)
+    return d
+
+
+def install(tmp: Path, song_id: str) -> bool:
+    """把准备好的临时目录改名成曲子目录。同一个 id 已经存在时返回 False（不覆盖）。"""
+    with _lock:
+        try:
+            os.rename(tmp, song_dir(song_id))
+        except OSError:
+            return False
+    return True
+
+
 def page_image(song_id: str, page: dict) -> Image.Image:
     """曲子某一页的原图（RGB）。"""
     return Image.open(song_dir(song_id) / "pages" / page["file"]).convert("RGB")
 
 
-_MUSICXML_EXT = (".musicxml", ".xml", ".mxl")
+# ---------------------------------------------------------------------------
+# practice.jsonl：追加写，一行一条 JSON
+# ---------------------------------------------------------------------------
+def practice_path(song_id: str) -> Path:
+    return song_dir(song_id) / PRACTICE_FILE
 
 
-def source_type(s: dict) -> str:
-    """导入渠道：image / pdf / gp / musicxml。早期的曲子没记，按文件推断（图片和 PDF 当时没区分，算图片）。"""
-    if s.get("source_type"):
-        return s["source_type"]
-    if s.get("kind") == "score":
-        return "musicxml" if str(s.get("source", "")).lower().endswith(_MUSICXML_EXT) else "gp"
-    return "image"
+def practice_text(song_id: str, song: dict | None = None) -> str:
+    """practice.jsonl 的全部内容（曲子包导出用）。旧曲子还没存过时带上内存里的种子行。"""
+    try:
+        text = practice_path(song_id).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    seed = (song or {}).get("_practice_seed")
+    if seed and not any(r.get("seed") for r in read_jsonl(practice_path(song_id))):
+        text = json.dumps(seed, ensure_ascii=False) + "\n" + text
+    return text
 
 
-def list_songs() -> list[dict]:
+def append_practice(song_id: str, record: dict) -> None:
+    with _lock:
+        d = song_dir(song_id)
+        if not d.is_dir():
+            raise NotFound()
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        with open(d / PRACTICE_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    """读 jsonl，跳过坏行（断电时可能留下半行）。"""
     out = []
-    if SONGS.exists():
-        for d in sorted(SONGS.iterdir(), reverse=True):
-            if not d.is_dir():
-                continue
-            try:
-                s = load(d.name)
-            except KeyError:
-                continue
-            except CorruptSong as e:  # 一首坏了不能让整个曲库打不开：列出来，可以删除
-                out.append({"id": d.name, "title": d.name, "status": "corrupt", "error": str(e), "bars": 0})
-                continue
-            meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
-            out.append(
-                {
-                    "id": s["id"],
-                    "title": s.get("title") or meta.get("title") or "未命名",
-                    "artist": meta.get("artist", ""),
-                    "status": s["status"],
-                    "progress": s.get("progress"),
-                    "job": s.get("job"),
-                    "error": s.get("error"),
-                    "bars": len(s.get("bars", [])),
-                    "warn_bars": sum(1 for b in s.get("bars", []) if b.get("warn")),
-                    "created": s.get("created"),
-                    "kind": s.get("kind", "image"),
-                    "source_type": source_type(s),
-                    "tags": [t for t in s.get("tags") or [] if isinstance(t, str)],
-                    "last_practiced": ((s.get("practice") or {}).get("last") or {}).get("at") or "",
-                    **cost_summary(s.get("usage")),
-                }
-            )
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    for line in text.splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
     return out
 
 
-def cost_summary(usage) -> dict:
-    """曲库里显示的花费（美元）。早期的曲子只记了 token：按默认模型（Opus）的价格估算，标成估算。
-    用了价格表里没有的模型（自定义）的那部分只有 token，没法算钱，也标出来。"""
-    from app.llm import DEFAULT_MODEL, price_of
-
-    u = usage if isinstance(usage, dict) else {}
-    tin, tout = u.get("input_tokens") or 0, u.get("output_tokens") or 0
-    if "cost_usd" in u:
-        cost, estimated = float(u.get("cost_usd") or 0), False
-    else:
-        price = price_of(DEFAULT_MODEL) or (0, 0)
-        cost, estimated = (tin * price[0] + tout * price[1]) / 1e6, bool(tin or tout)
-    return {
-        "cost_usd": round(cost, 4),
-        "cost_estimated": estimated,
-        "unpriced_tokens": int(u.get("unpriced_tokens") or 0),
-        "tokens": tin + tout,
-    }
+def _write_seed(d: Path, seed: dict) -> None:
+    path = d / PRACTICE_FILE
+    if any(r.get("seed") for r in read_jsonl(path)):
+        return
+    d.mkdir(parents=True, exist_ok=True)
+    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(seed, ensure_ascii=False) + "\n" + old, encoding="utf-8")
+    os.replace(tmp, path)
 
 
+# ---------------------------------------------------------------------------
+# config.json（模型设置，内容由 app/config.py 解释）
+# ---------------------------------------------------------------------------
 def load_config() -> dict:
     """模型设置。文件和备份都坏了时，把坏文件改名留着（里面可能有 key，方便手工找回），按没有设置处理。"""
     with _lock:
@@ -229,7 +288,7 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     with _lock:
-        _write_json(CONFIG, cfg, private=True)
+        write_json(CONFIG, cfg, private=True)
 
 
 _lock_file = None

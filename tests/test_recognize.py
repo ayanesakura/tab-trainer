@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from app import errors, jobs, music, recognize, songs, store
+from app import errors, jobs, music, practice, recognize, songs, store
 from tests.fakes import FakeClaude, score_png
 
 
@@ -14,7 +14,9 @@ def test_full_parse(data_dir):
     recognize.run_parse(sid)
     song = store.load(sid)
 
-    assert song["status"] == "ready", song["error"]
+    assert song["status"] == "ready", song["notice"]
+    assert song["activity"] is None and song["notice"] is None
+    assert song["title"] == "测试曲" == song["meta"]["title"]  # 没起名字：用谱头读出来的
     assert song["meta"]["tuning"] == ["D4", "A3", "F#3", "C#3", "A2", "D2"]
     assert len(song["systems"]) == 2
     assert [b["n"] for b in song["bars"]] == [1, 2, 3, 4, 5, 6]
@@ -32,16 +34,30 @@ def test_reparse_system_passes_hint(data_dir):
     assert [b["n"] for b in store.load(sid)["bars"]] == [1, 2, 3, 4, 5, 6]
 
 
-def test_bar_ids_are_stable_and_unique(data_dir):
+def test_bar_ids_are_stable_and_unique(data_dir, monkeypatch):
     sid = songs.create_song([("p1.png", score_png())])
     recognize.run_parse(sid)
     before = store.load(sid)["bars"]
     assert len({b["id"] for b in before}) == len(before)
+    store.update(sid, lambda s: s["bars"][4].update(qa=[{"q": "问", "a": "答"}]))
+    recognize.reparse_system(sid, 1)  # 结果和原来一样：按内容对上，id 和问答都沿用
+    after = store.load(sid)["bars"]
+    assert [b["id"] for b in after] == [b["id"] for b in before]
+    assert after[4]["qa"] == [{"q": "问", "a": "答"}]
+    # 这一行这次少识别出一个小节：对得上的沿用 id，多出来的旧 id 失效
+    real = FakeClaude.transcribe
+
+    def fewer(self, img, meta, first_bar, spans, *a, **kw):
+        out = real(self, img, meta, first_bar, spans, *a, **kw)
+        out["bars"] = out["bars"][:-1]
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", fewer)
     recognize.reparse_system(sid, 1)
     after = store.load(sid)["bars"]
-    assert [b["id"] for b in after[:3]] == [b["id"] for b in before[:3]]  # 没重识别的行，id 不变
+    assert [b["id"] for b in after] == [b["id"] for b in before[:5]]
     with pytest.raises(errors.BarNotFound):
-        songs.edit_bar(sid, before[4]["id"], [{"dur": "4", "notes": []}], tip=None)  # 旧 id 已失效
+        songs.edit_bar(sid, before[5]["id"], [{"dur": "4", "notes": []}], tip=None)  # 旧 id 已失效
 
 
 def test_empty_bar_becomes_rest(data_dir):
@@ -186,7 +202,7 @@ def test_off_grid_durations_do_not_trigger_a_retry(data_dir, monkeypatch):
     sid = songs.create_song([("p1.png", score_png())])
     recognize.run_parse(sid)
     assert not any(c.get("retry") for c in FakeClaude.calls)
-    assert all(any("网格" in w for w in b["warn"]) for b in store.load(sid)["bars"])  # 只是提醒
+    assert all(any(w["code"] == "off_grid" for w in b["warn"]) for b in store.load(sid)["bars"])  # 只是提醒
 
 
 def test_full_parse_plan_built_from_old_notes_stays_stale(data_dir, monkeypatch):
@@ -207,23 +223,33 @@ def test_full_parse_plan_built_from_old_notes_stays_stale(data_dir, monkeypatch)
     assert song["status"] == "ready"
     assert song["plan"]["stale"] and song["plan"]["changed_bars"] == edited and not song["plan"]["stale_all"]
     # 撤销回原样：计划又是最新的
+    assert song["bars"][2]["edited"]
     orig = song["bars"][2]["_orig"]["events"]
     song = songs.edit_bar(sid, edited[0], orig, None)
-    assert not song["plan"]["stale"]
+    assert not song["plan"]["stale"] and not song["bars"][2].get("edited") and "_orig" not in song["bars"][2]
 
 
-def test_reparse_line_marks_plan_stale_and_drops_practice_of_replaced_bars(data_dir):
+def test_reparse_line_marks_plan_stale_and_practice_follows_bar_ids(data_dir, monkeypatch):
     sid = songs.create_song([("p1.png", score_png())])
     recognize.run_parse(sid)
     bars = store.load(sid)["bars"]
-    songs.record_practice(sid, {"bar_ids": [bars[0]["id"]], "loops": 1, "bpm": 50, "seconds": 10})
-    songs.record_practice(sid, {"bar_ids": [bars[4]["id"]], "loops": 1, "bpm": 60, "seconds": 10})
-    recognize.reparse_system(sid, 1)  # 第 2 行（小节 4–6）换成了新的小节
+    practice.record(sid, [bars[0]["id"]], 1, 50, 10)
+    practice.record(sid, [bars[5]["id"]], 1, 60, 10)
+    real = FakeClaude.transcribe
+
+    def fewer(self, img, meta, first_bar, spans, *a, **kw):  # 第 2 行（小节 4–6）这次只识别出两个小节
+        out = real(self, img, meta, first_bar, spans, *a, **kw)
+        out["bars"] = out["bars"][:-1]
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", fewer)
+    recognize.reparse_system(sid, 1)
     song = store.load(sid)
     assert song["plan"]["stale"]
-    assert set(song["practice"]["bars"]) == {bars[0]["id"]}
-    assert "last" not in song["practice"]  # 最近一次练的是被替换的小节
-    assert song["practice"]["total_seconds"] == 20
+    p = practice.aggregate(sid, song)
+    assert set(p["bars"]) == {bars[0]["id"]}  # 第 6 小节没了，它的记录不再算
+    assert p["last"]["a"] == bars[5]["id"] and p["last"]["a_n"] is None  # 最近一次练的小节不在了
+    assert p["total_seconds"] == 20
 
 
 def _parsed_song_with_user_data():
@@ -233,7 +259,7 @@ def _parsed_song_with_user_data():
     bars = store.load(sid)["bars"]
     songs.edit_bar(sid, bars[1]["id"], [{"dur": "4", "notes": [{"string": 2, "fret": 7}]}], None)
     songs.edit_meta(sid, {"title": "我起的名字", "capo": 3, "tuning": ["E4", "B3", "G3", "D3", "A2", "D2"]})
-    songs.record_practice(sid, {"bar_ids": [bars[0]["id"]], "loops": 2, "bpm": 60, "seconds": 30})
+    practice.record(sid, [bars[0]["id"]], 2, 60, 30)
     return sid, store.load(sid)
 
 
@@ -256,10 +282,11 @@ def test_failed_or_cancelled_reparse_keeps_the_old_result(data_dir, sync_jobs, m
     monkeypatch.setattr(recognize, "CONCURRENCY", 1)
     assert recognize.start_parse(sid)
     after = store.load(sid)
-    assert after["status"] == "ready" and "原来的结果保留不变" in after["error"]
-    for k in ("bars", "meta", "systems", "practice", "plan"):
+    assert after["status"] == "ready" and "原来的结果保留不变" in after["notice"]["msg"]
+    for k in ("bars", "meta", "systems", "plan", "title"):
         assert after[k] == before[k], k
-    assert not after.get("restaging")
+    assert practice.aggregate(sid, after) == practice.aggregate(sid, before)
+    assert after["activity"] is None
     songs.edit_bar(sid, after["bars"][0]["id"], [{"dur": "4", "notes": []}], None)  # 之后照常能改
 
 
@@ -268,14 +295,15 @@ def test_successful_reparse_keeps_user_data_on_matching_bars(data_dir, sync_jobs
     store.update(sid, lambda s: s["bars"][0].update(qa=[{"q": "怎么弹", "a": "慢慢弹"}]))
     assert recognize.start_parse(sid)
     after = store.load(sid)
-    assert after["status"] == "ready" and not after["error"] and not after.get("restaging")
+    assert after["status"] == "ready" and not after["notice"] and after["activity"] is None
     # 新结果和原来的识别一样：小节 id、问答、练习记录都保留；手改的小节保留用户改的音
     assert [b["id"] for b in after["bars"]] == [b["id"] for b in before["bars"]]
     assert after["bars"][0]["qa"] == [{"q": "怎么弹", "a": "慢慢弹"}]
     assert after["bars"][1]["events"] == before["bars"][1]["events"] and "_orig" in after["bars"][1]
-    assert after["practice"]["bars"] == before["practice"]["bars"]
+    assert after["bars"][1]["edited"] and not after["bars"][0].get("edited")
+    assert practice.aggregate(sid, after)["bars"] == practice.aggregate(sid, before)["bars"]
     # 曲名、用户改过的变调夹以用户的为准（模型读出来是 2）
-    assert after["meta"]["capo"] == 3 and after["meta"]["title"] == "我起的名字"
+    assert after["meta"]["capo"] == 3 and after["meta"]["title"] == after["title"] == "我起的名字"
     assert after["meta"]["tuning"] == ["E4", "B3", "G3", "D3", "A2", "D2"]
     assert after["meta"]["tuning_midi"] == before["meta"]["tuning_midi"]
     assert after["plan"]["overview"] == "ok"
@@ -296,7 +324,7 @@ def test_reparse_with_different_result_drops_mismatched_data(data_dir, sync_jobs
     after = store.load(sid)
     assert len(after["bars"]) == len(before["bars"]) - 1
     assert [b["id"] for b in after["bars"]] == [b["id"] for b in before["bars"][:-1]]
-    assert after["bars"][0]["id"] in after["practice"]["bars"]
+    assert after["bars"][0]["id"] in practice.aggregate(sid, after)["bars"]
 
 
 def test_edits_that_recognition_would_overwrite_are_refused(data_dir, monkeypatch):
@@ -311,9 +339,8 @@ def test_edits_that_recognition_would_overwrite_are_refused(data_dir, monkeypatc
     songs.edit_bar(sid, bar0, [{"dur": "4", "notes": []}], None)
     songs.edit_meta(sid, {"title": "又改名"})
     # 整首重新识别时：所有小节都不能改
-    store.update(
-        sid, lambda s: (s["systems"][1].update(status="done"), s.update(status="parsing", restaging=True))
-    )
+    restaging = {"kind": "parse", "restaging": True, "systems": []}
+    store.update(sid, lambda s: (s["systems"][1].update(status="done"), s.update(activity=restaging)))
     with pytest.raises(errors.Busy, match="重新识别整首"):
         songs.edit_bar(sid, bar0, [{"dur": "1", "notes": []}], None)
     with pytest.raises(errors.Busy):
@@ -322,11 +349,12 @@ def test_edits_that_recognition_would_overwrite_are_refused(data_dir, monkeypatc
 
 def test_restart_during_reparse_keeps_the_old_result(data_dir):
     sid, before = _parsed_song_with_user_data()
-    store.update(sid, lambda s: s.update(status="parsing", restaging=True, progress={"stage": "逐行识别"}))
+    restaging = {"kind": "parse", "restaging": True, "systems": []}
+    store.update(sid, lambda s: s.update(activity=restaging, progress={"stage": "逐行识别"}))
     songs.recover_interrupted()
     after = store.load(sid)
-    assert after["status"] == "ready" and "原来的结果保留不变" in after["error"]
-    assert after["bars"] == before["bars"] and "restaging" not in after
+    assert after["status"] == "ready" and "原来的结果保留不变" in after["notice"]["msg"]
+    assert after["bars"] == before["bars"] and after["activity"] is None
 
 
 def _ts_transcribe(declare_on_row2=False, row2_retry_declares=False):
@@ -442,7 +470,7 @@ def test_placeholder_rest_follows_the_time_signature(data_dir, monkeypatch):
     recognize.run_parse(sid)
     bar5 = store.load(sid)["bars"][4]
     assert bar5["events"] == [{"dur": "3", "notes": []}] and bar5["placeholder"]
-    assert bar5["warn"] == ["没有识别出可用的音符，暂按整小节休止处理"]
+    assert bar5["warn"] == [{"code": "placeholder", "msg": "没有识别出可用的音符，暂按整小节休止处理"}]
 
 
 def _cramming_transcribe():
@@ -493,7 +521,7 @@ def test_rows_after_an_earlier_time_signature_change_are_reread(data_dir, monkey
     sid = songs.create_song([("p1.png", score_png())])
     recognize.run_parse(sid)
     song = store.load(sid)
-    assert song["status"] == "ready", song["error"]
+    assert song["status"] == "ready", song["notice"]
     # 第 2 行先按全曲拍号识别（凑成了 4 拍），再带上 3/4 重新识别
     row2 = [c for c in calls if c["first_bar"] == 4]
     assert [c["start_ts"] for c in row2] == [None, [3, 4]]

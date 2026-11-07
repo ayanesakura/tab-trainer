@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import errors, jobs, main, recognize, songs, store
+from app import errors, jobs, main, practice, recognize, songs, store, views
 from tests.fakes import FakeClaude, derived_bars, score_png
 
 
@@ -17,7 +17,7 @@ def _two_page_song():
 
 def test_reorder_moves_bars_without_recognizing(data_dir):
     sid, before = _two_page_song()
-    songs.record_practice(sid, {"bar_ids": [before["bars"][7]["id"]], "loops": 1, "bpm": 60, "seconds": 10})
+    practice.record(sid, [before["bars"][7]["id"]], 1, 60, 10)
     calls = len(FakeClaude.calls)
 
     after = recognize.arrange_pages(sid, ["p2.png", "p1.png"], [])
@@ -29,18 +29,18 @@ def test_reorder_moves_bars_without_recognizing(data_dir):
     assert [b["n"] for b in after["bars"]] == list(range(1, 13))
     assert [s["page"] for s in after["systems"]] == [0, 0, 1, 1]
     assert all(b["page"] == after["systems"][b["system"]]["page"] for b in after["bars"])
-    assert before["bars"][7]["id"] in after["practice"]["bars"]
+    assert before["bars"][7]["id"] in practice.aggregate(sid, after)["bars"]
     assert after["plan"]["stale"]  # 小节号变了
 
 
 def test_deleting_a_page_drops_its_bars_and_file(data_dir):
     sid, before = _two_page_song()
-    songs.record_practice(sid, {"bar_ids": [before["bars"][7]["id"]], "loops": 1, "bpm": 60, "seconds": 10})
+    practice.record(sid, [before["bars"][7]["id"]], 1, 60, 10)
 
     after = recognize.arrange_pages(sid, ["p1.png"], [])
 
     assert [b["id"] for b in after["bars"]] == [b["id"] for b in before["bars"][:6]]
-    assert len(after["systems"]) == 2 and not after["practice"]["bars"]
+    assert len(after["systems"]) == 2 and not practice.aggregate(sid, after)["bars"]
     assert not (store.song_dir(sid) / "pages" / "p2.png").exists()
 
 
@@ -66,14 +66,14 @@ def test_added_page_is_recognized_alone(data_dir, sync_jobs, monkeypatch):
     assert all(s["status"] == "done" for s in after["systems"])
     # 只识别了新页的两行（第 1 行故意写错时值会返修一次），没有重新读谱头
     assert {c["first_bar"] for c in FakeClaude.calls} == {1, 4}
-    assert "job" not in after and after["progress"] is None and after["plan"]["stale"]
+    assert after["activity"] is None and after["progress"] is None and after["plan"]["stale"]
     assert after["usage"]["input_tokens"] > before["usage"]["input_tokens"]
     assert after["usage"]["cost_usd"] > before["usage"]["cost_usd"]
 
 
 def test_new_page_on_song_without_bars_runs_full_recognition(data_dir, monkeypatch):
     sid = songs.create_song([("a.png", score_png())])
-    store.patch(sid, status="error", error="没有识别出任何小节")
+    store.patch(sid, status="error", notice={"kind": "error", "msg": "没有识别出任何小节", "source": "parse"})
     started = []
     monkeypatch.setattr(recognize, "start_parse", lambda s: started.append(s) or True)
     recognize.arrange_pages(sid, ["p1.png", "new:0"], [("c.png", score_png())])
@@ -117,15 +117,15 @@ def test_busy_and_score_songs_are_refused(data_dir):
 
 def test_tags_and_cost_in_library(data_dir):
     sid = songs.create_song([("a.png", score_png())])
-    assert songs.set_tags(sid, [" 指弹 ", "练习中", "指弹", ""]) == ["指弹", "练习中"]
-    with pytest.raises(errors.Invalid):
-        songs.set_tags(sid, ["x" * 21])
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    r = c.put(f"/api/songs/{sid}/tags", json={"tags": [" 指弹 ", "练习中", "指弹", ""]})
+    assert r.json() == {"tags": ["指弹", "练习中"]}
     store.patch(sid, usage={"input_tokens": 1_000_000, "output_tokens": 100_000})  # 早期只记 token
-    row = next(r for r in store.list_songs() if r["id"] == sid)
+    row = next(r for r in views.list_library() if r["id"] == sid)
     assert row["tags"] == ["指弹", "练习中"]
     assert row["cost_usd"] == pytest.approx(4 + 2) and row["cost_estimated"]
     store.patch(sid, usage={"input_tokens": 5, "output_tokens": 5, "cost_usd": 1.5, "unpriced_tokens": 0})
-    row = next(r for r in store.list_songs() if r["id"] == sid)
+    row = next(r for r in views.list_library() if r["id"] == sid)
     assert row["cost_usd"] == 1.5 and not row["cost_estimated"]
 
 
@@ -154,4 +154,4 @@ def test_rename_before_the_header_is_read(data_dir):
     sid = songs.create_song([("a.png", score_png())])
     assert not store.load(sid)["meta"]
     songs.edit_meta(sid, {"title": "新名字"})
-    assert next(r for r in store.list_songs() if r["id"] == sid)["title"] == "新名字"
+    assert next(r for r in views.list_library() if r["id"] == sid)["title"] == "新名字"

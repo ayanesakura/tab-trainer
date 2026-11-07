@@ -11,13 +11,15 @@ from fractions import Fraction
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from app import jobs, ocr, songs, staleness, store
+from app import config, jobs, ocr, songs, staleness, state, store
+from app.config import settings
 from app.errors import Busy, Invalid
 from app.jobs import Cancelled
 from app.layout import detect_page
-from app.llm import Claude, request_id_of
+from app.llm import LLM, friendly, request_id_of
+from app.model import add_usage, is_score
 from app.music import (
-    LENGTH_WARN,
+    PLACEHOLDER_MSG,
     apply_time_signatures,
     bar_length,
     check_bar,
@@ -28,12 +30,13 @@ from app.music import (
     normalize_meta,
     parse_dur,
     rest_bar,
+    warn,
 )
 
 log = logging.getLogger("tab_trainer.recognize")
 
-CONCURRENCY = 4  # 一首曲子同时识别几行
-MAX_SYSTEMS = 4  # 所有曲子加起来同时识别几行（连续上传多首时不会成倍地发请求、跑 OCR）
+CONCURRENCY = settings.row_concurrency  # 一首曲子同时识别几行
+MAX_SYSTEMS = settings.max_rows_global  # 所有曲子加起来同时识别几行（连续上传多首时不会成倍地发请求、跑 OCR）
 LABEL_STRINGS = True  # 在裁剪图上标弦号（见 label_strings）
 OCR_CHECK = True  # 用本机数字识别校对 AI 读出的弦和品（见 app/ocr.py、ocr_disagreements）
 
@@ -47,7 +50,7 @@ def start_parse(sid: str) -> bool:
     if cancel is None:
         return False
     try:
-        store.patch(sid, status="queued", error=None, progress={"stage": "排队中", "done": 0, "total": 0})
+        store.update(sid, _begin_parse)
     except Exception:
         jobs.jobs.release(sid)  # 登记了却没启动：不释放的话这首曲子会一直显示“忙”
         raise
@@ -57,17 +60,33 @@ def start_parse(sid: str) -> bool:
             run_parse(sid, cancel)
         except Cancelled:
             if not _end_restage(sid, "重新识别已取消"):
-                store.patch(sid, status="cancelled", error="识别已取消，已完成的行会保留。")
+                _end_parse(sid, "cancelled", ("warn", "识别已取消，已完成的行会保留。"))
         except RestageFailed as e:
             _end_restage(sid, f"重新识别没有全部成功（{e}）")
         except Exception as e:
             rid = request_id_of(e)
             log.exception("request_id=%s song=%s parse failed", rid, sid)
-            if not _end_restage(sid, "重新识别失败：" + jobs.friendly(e)):
-                store.patch(sid, status="error", error=jobs.friendly(e))
+            if not _end_restage(sid, "重新识别失败：" + friendly(e)):
+                _end_parse(sid, "error", ("error", friendly(e)))
 
     jobs.spawn(sid, run)
     return True
+
+
+def _begin_parse(s: dict, stage: str = "排队中") -> None:
+    """整首识别开始：已有小节时是重新识别（restaging：原来的结果在新结果全部成功前不动，status 也不变）。"""
+    restage = bool(s.get("bars"))
+    state.begin(
+        s,
+        "parse",
+        restaging=restage,
+        status=None if restage else ("queued" if stage == "排队中" else "parsing"),
+        progress={"stage": stage, "done": 0, "total": 0},
+    )
+
+
+def _end_parse(sid: str, status: str, notice: tuple[str, str] | None) -> None:
+    store.update(sid, lambda s: state.finish(s, status=status, notice=notice, source="parse"))
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +217,7 @@ def transcribe_queued(*args, cancel: threading.Event | None = None, **kw) -> lis
 
 
 def transcribe_system(
-    claude: Claude,
+    claude: LLM,
     sid: str,
     song: dict,
     si: int,
@@ -249,9 +268,13 @@ def transcribe_system(
                 events = clean_events(b.get("events", []))
             except ValueError as e:
                 events = []
-                issues.append(f"第 {first_bar + i} 小节数据格式错误：{e}")
+                issues.append(("other", f"第 {first_bar + i} 小节数据格式错误：{e}"))
             probs = check_bar(events, meta, bar=ctx)
-            issues += [f"第 {first_bar + i} 小节：{p}" for p in check_bar(events, meta, info=False, bar=ctx)]
+            # issues：(警告 code, 发给模型返修的文字)
+            issues += [
+                (p["code"], f"第 {first_bar + i} 小节：{p['msg']}")
+                for p in check_bar(events, meta, info=False, bar=ctx)
+            ]
             if events:
                 lengths.append(sum((parse_dur(e["dur"]) for e in events), Fraction(0)))
             bar = {
@@ -265,7 +288,7 @@ def transcribe_system(
                 bar["ts_change"] = change
             if not events:
                 bar.update(events=rest_bar(meta, ctx), placeholder=True)
-                bar["warn"] = ["没有识别出可用的音符，暂按整小节休止处理"]
+                bar["warn"] = [warn("placeholder", PLACEHOLDER_MSG)]
             bars.append(bar)
         if (
             not cur_ts
@@ -281,9 +304,9 @@ def transcribe_system(
                 "如果是谱子在前面的行里变了拍号（这一行的节奏本来就是这样），时值保持不变，"
                 "在这一行第一个小节的 time_signature 写上实际拍号；如果是时值读错了，就改正时值。"
             )
-            issues = [x for x in issues if LENGTH_WARN not in x] + [msg]
+            issues = [x for x in issues if x[0] != "length"] + [("other", msg)]
         if spans and len(bars) != len(spans):
-            issues.append(f"应有 {len(spans)} 个小节，返回了 {len(bars)} 个")
+            issues.append(("other", f"应有 {len(spans)} 个小节，返回了 {len(bars)} 个"))
         elif ocr_bars:
             for i, (only_ocr, only_ai) in ocr_disagreements(bars, ocr_bars).items():
                 parts = []
@@ -292,17 +315,21 @@ def transcribe_system(
                 if only_ai:
                     parts.append(f"你写的 {_note_names(only_ai)} 它没读到")
                 issues.append(
-                    f"第 {first_bar + i} 小节："
-                    + "；".join(parts)
-                    + "（它只读品位数字，也可能读错：请对照图片核对这几个位置，图上确实如此再改）"
+                    (
+                        "ocr_mismatch",
+                        f"第 {first_bar + i} 小节："
+                        + "；".join(parts)
+                        + "（它只读品位数字，也可能读错：请对照图片核对这几个位置，图上确实如此再改）",
+                    )
                 )
                 bars[i]["_ocr"] = (only_ocr, only_ai)
         return raw, bars, issues
 
     raw, bars, issues = run()
     if issues:
-        log.info("request_id=%s song=%s system=%d retry: %s", claude.last_request_id, sid, si, issues)
-        _raw2, bars2, issues2 = run(previous=raw, problems=issues)
+        texts = [t for _, t in issues]
+        log.info("request_id=%s song=%s system=%d retry: %s", claude.last_request_id, sid, si, texts)
+        _raw2, bars2, issues2 = run(previous=raw, problems=texts)
         if len(issues2) <= len(issues):
             bars, issues = bars2, issues2
 
@@ -316,7 +343,7 @@ def transcribe_system(
                 msg += f"：谱上读到 {_note_names(only_ocr)}"
             if only_ai:
                 msg += f"{'，' if only_ocr else '：'}AI 写的是 {_note_names(only_ai)}"
-            b["warn"] = [*b["warn"], msg + "。请对照原谱核对"]
+            b["warn"] = [*b["warn"], warn("ocr_mismatch", msg + "。请对照原谱核对")]
     for i, b in enumerate(bars):
         if spans and i < len(spans):
             a, c = sysinfo["spans"][i]
@@ -328,7 +355,9 @@ def transcribe_system(
 
 
 def _replace_system_bars(s: dict, si: int, bars: list[dict]) -> None:
-    """用新识别的小节替换第 si 行原来的小节，再按行和行内顺序重新编号。"""
+    """用新识别的小节替换第 si 行原来的小节，再按行和行内顺序重新编号。
+    和原来这一行的小节按内容 + 位置对上的，沿用 id、问答（练习记录按 id 自然保留），见 staleness.reconcile_bars。"""
+    staleness.reconcile_bars(s, [b for b in s["bars"] if b["system"] == si], bars, staleness.ROW)
     for k, bar in enumerate(bars):
         bar["_order"] = k
     s["bars"] = [b for b in s["bars"] if b["system"] != si] + bars
@@ -349,23 +378,17 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     每一行都成功才一次性替换。有行失败、被取消或服务中断，原来的结果原样保留。
     """
     cancel = cancel or threading.Event()
-    claude = jobs.new_claude()
+    claude = config.new_llm()
     song = store.load(sid)
     restage = bool(song.get("bars"))
     charged = dict(claude.usage)  # 已经记到曲子上的用量：每行完成就把新增的记上（中途失败也不漏记）
 
     def charge(s):
         now = dict(claude.usage)
-        jobs.add_usage(s, now, charged)
+        add_usage(s, now, charged)
         charged.update(now)
 
-    store.patch(
-        sid,
-        status="parsing",
-        error=None,
-        restaging=restage or None,
-        progress={"stage": "读取谱头", "done": 0, "total": 0},
-    )
+    store.update(sid, lambda s: _begin_parse(s, "读取谱头"))
     head = claude.read_meta(store.page_image(sid, song["pages"][0]))
     # 用户手改过的调弦、变调夹、拍号以用户的为准
     meta = normalize_meta({**head, **(song.get("meta_user") or {})}, song.get("title", ""))
@@ -408,7 +431,7 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
                 except Exception as e:
                     rid = request_id_of(e)
                     log.exception("request_id=%s song=%s system=%d failed", rid, sid, i)
-                    bars, status, err = [], "error", jobs.friendly(e)
+                    bars, status, err = [], "error", friendly(e)
                     errors.append(f"第 {i + 1} 行：{err}")
 
                 _replace_system_bars(work, i, [dict(b) for b in bars])
@@ -419,7 +442,6 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
                         _replace_system_bars(s, i, bars)
                         apply_time_signatures(s["bars"], s["meta"])
                         s["systems"][i].update(status=status, error=err)
-                        staleness.prune_practice(s)
                     s["progress"]["done"] += 1
                     charge(s)
 
@@ -435,7 +457,7 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     redo = [] if cancel.is_set() else _rows_needing_carried_ts(work["bars"], meta, len(systems))
     if not restage:
         song_now = store.load(sid)
-        edited = {b["system"] for b in song_now["bars"] if "_orig" in b}  # 用户已经改过的行不覆盖
+        edited = {b["system"] for b in song_now["bars"] if b.get("edited")}  # 用户已经改过的行不覆盖
         redo = [(i, ts) for i, ts in redo if i not in edited]
     if redo:
         log.info("song=%s rerun rows with carried time signature: %s", sid, redo)
@@ -456,19 +478,17 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     if not work["bars"]:
         if restage:
             raise RestageFailed("没有识别出任何小节")
-        store.patch(sid, status="error", error="；".join(errors) or "没有识别出任何小节（可能不是六线谱）")
+        _end_parse(sid, "error", ("error", "；".join(errors) or "没有识别出任何小节（可能不是六线谱）"))
         return
     apply_time_signatures(work["bars"], work["meta"])
     note = None
     if restage:
 
         def swap(s):
-            # 一次性换成新结果；曲名保留用户改过的。新旧小节按内容对上，对上的保留 id、问答、练习记录和手改
-            work["meta"]["title"] = (s.get("meta") or {}).get("title") or work["meta"]["title"]
-            dropped = staleness.carry_over(s, work["meta"], work["bars"], keep_edits=True)
+            # 一次性换成新结果（曲名只存在 song.title，不受谱头影响）。新旧小节按内容对上，对上的保留 id、问答、练习记录和手改
+            changed = staleness.setting_changed(s.get("meta") or {}, work["meta"])
+            dropped = staleness.reconcile_bars(s, s["bars"], work["bars"], staleness.RESTAGE, changed)
             s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"])
-            s.pop("restaging", None)
-            staleness.prune_practice(s)
             return dropped
 
         dropped = []
@@ -489,11 +509,8 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
         if plan or not restage:  # 重新识别后生成建议失败：留着原来的建议（已标成过时）
             staleness.store_plan(s, plan, seen, meta)
         charge(s)
-        s.update(
-            status="ready",
-            error="；".join(errors) or note,
-            progress={"stage": "完成", "done": len(systems), "total": len(systems)},
-        )
+        msg = "；".join(errors) or note
+        state.finish(s, status="ready", notice=("warn", msg) if msg else None, source="parse")
 
     store.update(sid, finish)
 
@@ -528,8 +545,8 @@ def _end_restage(sid: str, why: str) -> bool:
     done = []
 
     def apply(s):
-        if s.pop("restaging", None):
-            s.update(status="ready", error=f"{why}，原来的结果保留不变。", progress=None)
+        if state.restaging(s):
+            state.finish(s, status="ready", notice=("warn", f"{why}，原来的结果保留不变。"), source="parse")
             done.append(True)
 
     store.update(sid, apply)
@@ -541,10 +558,15 @@ def _end_restage(sid: str, why: str) -> bool:
 # ---------------------------------------------------------------------------
 def start_reparse(sid: str, si: int, hint: str = "") -> None:
     """在请求里就登记任务（而不是等后台线程），连点两次或和整首识别撞上时直接拒绝。"""
-    jobs.check_llm_ready()
+    config.check_llm_ready()
     cancel = jobs.claim_or_busy(sid, "这首曲子正在识别中")
+
+    def begin(x):
+        x["systems"][si].update(status="parsing", error=None)
+        state.begin(x, "reparse_row", systems=[si])
+
     try:
-        store.update(sid, lambda x: x["systems"][si].update(status="parsing", error=None))
+        store.update(sid, begin)
     except Exception:
         jobs.jobs.release(sid)
         raise
@@ -555,14 +577,19 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
         except Exception as e:
             rid = request_id_of(e)
             log.exception("request_id=%s song=%s system=%d reparse failed", rid, sid, si)
-            msg = "已取消" if isinstance(e, Cancelled) else jobs.friendly(e)
-            store.update(sid, lambda x: x["systems"][si].update(status="error", error=msg))
+            msg = "已取消" if isinstance(e, Cancelled) else friendly(e)
+
+            def failed(x):
+                x["systems"][si].update(status="error", error=msg)
+                state.finish(x)
+
+            store.update(sid, failed)
 
     jobs.spawn(sid, run)
 
 
 def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | None = None) -> None:
-    claude = jobs.new_claude()
+    claude = config.new_llm()
     song = store.load(sid)
     # 起始小节号：前面各行最后一个小节 + 1（这一行之前识别失败、没有小节时也对）
     first = max((b["n"] for b in song["bars"] if b["system"] < si), default=0) + 1
@@ -574,8 +601,8 @@ def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | 
         apply_time_signatures(s["bars"], s["meta"])  # 这一行新写的变拍号会影响后面的行
         s["systems"][si].update(status="done", error=None)
         staleness.invalidate_plan(s)
-        staleness.prune_practice(s)
-        jobs.add_usage(s, claude.usage)
+        add_usage(s, claude.usage)
+        state.finish(s)
 
     store.update(sid, apply)
 
@@ -591,15 +618,15 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
     started = False
     try:
         song = store.load(sid)
-        if songs.is_score(song):
+        if is_score(song):
             raise Invalid("Guitar Pro / MusicXML 曲子没有页面可以调整")
-        if song.get("status") in ("parsing", "queued") or song.get("restaging"):
+        if song.get("status") in ("parsing", "queued") or state.recognizing(song):
             raise Busy("这首曲子正在识别，完成后再调整页面")
         files = [pg["file"] for pg in song["pages"]]
         new_ix = _check_order(order, files, len(uploads))
         if uploads:
             songs.check_upload_sizes(uploads)
-            jobs.check_llm_ready()  # 新页要识别：没配 key 就先别存
+            config.check_llm_ready()  # 新页要识别：没配 key 就先别存
 
         # 新页先存盘、做版面检测（都在改 song.json 之前，失败了曲子不受影响）
         pages_dir = store.song_dir(sid) / "pages"
@@ -608,7 +635,7 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
         try:
             for k in sorted(new_ix):
                 so_far = kept + [pg for pgs in added.values() for pg in pgs]
-                added[k] = songs._save_pages([uploads[k]], pages_dir, so_far)
+                added[k] = songs.save_pages([uploads[k]], pages_dir, so_far)
                 if not added[k]:
                     raise Invalid(f"“{uploads[k][0]}”里没有可用的页面")
             new_pages, from_old = [], []  # 新页序；每页原来是第几页（新上传的是 None）
@@ -658,12 +685,15 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
             s.update(pages=new_pages, systems=systems, bars=bars)
             if s.get("meta"):
                 apply_time_signatures(bars, s["meta"])
-            staleness.prune_practice(s)
             if renumbered or pending:  # 小节号变了或多了小节，练习建议里的小节号对不上
                 staleness.invalidate_plan(s)
             if pending and bars:
-                s["job"] = "pages"
-                s["progress"] = {"stage": "识别新加的页", "done": 0, "total": len(pending)}
+                state.begin(
+                    s,
+                    "reparse_row",
+                    systems=pending,
+                    progress={"stage": "识别新加的页", "done": 0, "total": len(pending)},
+                )
 
         song = store.update(sid, apply)
         for f in set(files) - set(order):  # 删掉的页：曲子已经不再引用它们
@@ -710,7 +740,7 @@ def _recognize_new_rows(sid: str, rows: list[int], cancel: threading.Event) -> N
     def charge(s):
         if claude:
             now = dict(claude.usage)
-            jobs.add_usage(s, now, charged)
+            add_usage(s, now, charged)
             charged.update(now)
 
     def one(si: int, ts: list[int] | None) -> list[int]:
@@ -729,7 +759,6 @@ def _recognize_new_rows(sid: str, rows: list[int], cancel: threading.Event) -> N
             _replace_system_bars(s, si, bars)
             apply_time_signatures(s["bars"], s["meta"])
             s["systems"][si].update(status="done", error=None)
-            staleness.prune_practice(s)
             if s.get("progress"):
                 s["progress"]["done"] = min(s["progress"]["total"], s["progress"]["done"] + 1)
             charge(s)
@@ -746,7 +775,7 @@ def _recognize_new_rows(sid: str, rows: list[int], cancel: threading.Event) -> N
                 try:
                     used[si] = fut.result()
                 except Exception as e:
-                    msg = "已取消" if isinstance(e, (Cancelled, CancelledError)) else jobs.friendly(e)
+                    msg = "已取消" if isinstance(e, (Cancelled, CancelledError)) else friendly(e)
                     if not isinstance(e, (Cancelled, CancelledError)):
                         rid = request_id_of(e)
                         log.exception("request_id=%s song=%s system=%d failed", rid, sid, si)
@@ -760,7 +789,7 @@ def _recognize_new_rows(sid: str, rows: list[int], cancel: threading.Event) -> N
         return used
 
     try:
-        claude = jobs.new_claude()
+        claude = config.new_llm()
         charged.update(claude.usage)
         used = run_batch([(si, None) for si in rows])
         # 新页上前面的行写了变拍号、后面的行并行识别时看不到：按实际的起始拍号再识别一次
@@ -768,7 +797,7 @@ def _recognize_new_rows(sid: str, rows: list[int], cancel: threading.Event) -> N
         redo = [
             (si, ts)
             for si, ts in ((si, _row_start_ts(song["bars"], song["meta"], si)) for si in used)
-            if ts != used[si] and not any("_orig" in b for b in song["bars"] if b["system"] == si)
+            if ts != used[si] and not any(b.get("edited") for b in song["bars"] if b["system"] == si)
         ]
         if redo and not cancel.is_set():
             store.update(sid, lambda s: [s["systems"][si].update(status="parsing") for si, _ in redo])
@@ -776,20 +805,15 @@ def _recognize_new_rows(sid: str, rows: list[int], cancel: threading.Event) -> N
     except Exception as e:  # 建客户端失败之类：没开始的行都标成失败
         rid = request_id_of(e)
         log.exception("request_id=%s song=%s new pages failed", rid, sid)
-        failed.append(jobs.friendly(e))
+        failed.append(friendly(e))
     finally:
 
         def end(s):
             for si in rows:
                 if si < len(s["systems"]) and s["systems"][si].get("status") in ("parsing", "pending"):
                     s["systems"][si].update(status="error", error="已取消" if cancel.is_set() else "没有识别")
-            s.pop("job", None)
-            s["progress"] = None
-            if failed:
-                s.update(
-                    error="新加的页有行没识别出来（" + "；".join(failed)[:300] + "），可以整首重新识别",
-                    error_kind="pages",
-                )
+            msg = "新加的页有行没识别出来（" + "；".join(failed)[:300] + "），可以整首重新识别"
+            state.finish(s, notice=("warn", msg) if failed else None, source="reparse_row")
             charge(s)
 
         store.update(sid, end)

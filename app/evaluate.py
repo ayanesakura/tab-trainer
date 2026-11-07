@@ -20,8 +20,10 @@ from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from pathlib import Path
 
-from app import jobs, recognize, store
-from app.llm import PRICES, Claude, LLMConfig
+from app import config, recognize, store
+from app.errors import NotFound
+from app.llm import PRICES, Claude, LLMConfig, friendly
+from app.music import warn_code_of
 
 log = logging.getLogger("tab_trainer.evaluate")
 
@@ -128,7 +130,7 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
             ts = (row[0].get("time_signature") if row else None) or truth["meta"]["time_signature"]
             return si, recognize.transcribe_system(claude, sid, truth, si, first, start_ts=ts), None
         except Exception as e:  # noqa: BLE001 - 单行失败照样出报告
-            return si, [], jobs.friendly(e)
+            return si, [], friendly(e)
 
     started = time.time()
     with ThreadPoolExecutor(concurrency) as pool:
@@ -147,7 +149,7 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
                     "bar": tb["n"],
                     "system": si,
                     "cmp": cmp,
-                    "duration_ok": bool(pb) and not any("时值" in w for w in pb.get("warn", [])),
+                    "duration_ok": duration_ok(pb),
                     "pred_events": pb["events"] if pb else None,
                     "pred_uncertain": pb.get("uncertain", "") if pb else "",
                     "pred_warn": pb.get("warn", []) if pb else [],
@@ -175,11 +177,24 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
     }
 
 
+DURATION_CODES = frozenset({"length", "placeholder"})  # 时值合计不对、整小节没识别出来（按休止占位）
+
+
+def duration_ok(pred_bar: dict | None) -> bool:
+    """识别结果的时值凑满了拍号：没有“时值合计”和“占位”这两种警告。
+    旧报告里警告是一句话（不是 {code, msg}），按文字认出 code（见 music.warn_code_of）。"""
+    if not pred_bar:
+        return False
+    return not ({warn_code_of(w) for w in pred_bar.get("warn") or []} & DURATION_CODES)
+
+
 def rescore(rep: dict, truth: dict) -> dict:
-    """标准答案修正后，用报告里保存的识别结果重新计分（不调用模型）。"""
+    """标准答案修正后，用报告里保存的识别结果重新计分（不调用模型）。duration_ok 也按警告 code 重算。"""
     by_n = {b["n"]: b for b in truth["bars"]}
     for r in rep["bars"]:
         r["cmp"] = compare_bar(by_n[r["bar"]]["events"], r["pred_events"])
+        if r.get("pred_events") is not None:
+            r["duration_ok"] = duration_ok({"warn": r.get("pred_warn") or []})
     rep["summary"] = summarize(rep["bars"])
     return rep
 
@@ -245,7 +260,7 @@ def main() -> None:
 
     try:
         truth = store.load(a.song)
-    except KeyError:
+    except NotFound:
         sys.exit(f"找不到曲子 {a.song}")
     if a.rescore:
         rep = rescore(json.loads(Path(a.rescore).read_text()), truth)
@@ -253,7 +268,7 @@ def main() -> None:
         return
     systems = [int(x) for x in a.systems.split(",")] if a.systems else None
     n_sys = len(systems) if systems is not None else len(truth["systems"])
-    cfg = jobs.llm_config()
+    cfg = config.llm_config()
     if a.model:
         cfg.model = a.model
     if a.effort:

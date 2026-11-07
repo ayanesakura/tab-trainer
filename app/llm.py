@@ -16,11 +16,14 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 import anthropic
 from PIL import Image
 
-from app.music import TECHS
+from app import model
+from app.errors import Invalid, Upstream
+from app.music import PROMPT_DIRECTIONS
 
 log = logging.getLogger("tab_trainer.llm")
 
@@ -38,10 +41,18 @@ class LLMConfig:
     effort: str = "high"
 
 
-class LLMError(RuntimeError):
+class LLMError(Upstream):
+    """模型调用失败（拒绝、截断、不是合法 JSON）：502。"""
+
     def __init__(self, msg: str, request_id: str | None = None):
         super().__init__(msg)
         self.request_id = request_id
+
+
+class MissingKey(LLMError, Invalid):
+    """还没有设置 API key：用户自己能解决，400。"""
+
+    status = 400
 
 
 def request_id_of(e: BaseException | None) -> str:
@@ -65,37 +76,10 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
     }
 
 
-NOTE_SCHEMA = _obj(
-    {
-        "string": {
-            "type": "integer",
-            "enum": [1, 2, 3, 4, 5, 6],
-            "description": "1 = highest (top tab line) ... 6 = lowest",
-        },
-        "fret": {"type": "integer", "description": "fret number exactly as written in the tab"},
-        "tech": {"type": "array", "items": {"type": "string", "enum": TECHS}},
-        "grace": {
-            "type": "integer",
-            "description": "fret of a grace note leading into this note, -1 if none",
-        },
-        "bend": {"type": "number", "description": "bend amount in semitones, 0 if no bend"},
-    }
-)
-EVENT_SCHEMA = _obj(
-    {
-        "dur": {
-            "type": "string",
-            "description": "time from this onset to the next onset (or bar end), in quarter notes, "
-            'as a fraction string: "1/4" = 16th, "1/2" = 8th, "1/3" = 8th-note triplet, '
-            '"1/6" = 16th sextuplet, "3/4" = dotted 8th, "1", "3/2", "2", "4" ...',
-        },
-        "notes": {"type": "array", "items": NOTE_SCHEMA, "description": "empty for a rest"},
-    }
-)
-DIRECTIONS = [
-    "segno", "segnosegno", "coda", "doublecoda", "fine",
-    "dacapo", "dacapoalcoda", "dacapoalfine", "dalsegno", "dalsegnoalcoda", "dalsegnoalfine", "dacoda",
-]  # fmt: skip
+# 音符和事件的 schema 由 app/model.py 的 Note / Event 定义生成（tests/test_model.py 断言和原来手写的逐字一致）
+NOTE_SCHEMA = model.llm_schema(model.Note)
+EVENT_SCHEMA = model.llm_schema(model.Event)
+DIRECTIONS = list(PROMPT_DIRECTIONS)  # vocab.json 里 prompt 为 true 的反复记号
 BAR_SCHEMA = _obj(
     {
         "number": {"type": "integer"},
@@ -284,7 +268,88 @@ def price_of(model: str | None) -> tuple[float, float] | None:
     return PRICES.get(name)
 
 
-class Claude:
+@runtime_checkable
+class LLM(Protocol):
+    """模型客户端的接口：Claude 是真的，tests/fakes.py 的 FakeClaude 是替身。usage 累计这个客户端用掉的 token / 费用。"""
+
+    usage: dict
+
+    @property
+    def last_request_id(self) -> str: ...
+
+    def ping(self) -> str: ...
+
+    def read_meta(self, page: Image.Image) -> dict: ...
+
+    def transcribe(
+        self,
+        img: Image.Image,
+        meta: dict,
+        first_bar: int,
+        bar_spans: list[tuple[int, int]] | None,
+        hint: str = "",
+        previous: dict | None = None,
+        problems: list[str] | None = None,
+        labeled_strings: bool = False,
+        start_ts: list[int] | None = None,
+    ) -> dict: ...
+
+    def explain_bars(self, meta: dict, bars: list[dict]) -> dict: ...
+
+    def coach(
+        self,
+        meta: dict,
+        bar: dict,
+        neighbours: list[dict],
+        question: str,
+        history: list[dict],
+        practice: str = "",
+        image: Image.Image | None = None,
+    ) -> str: ...
+
+    def practice_plan(self, meta: dict, bars: list[dict]) -> dict: ...
+
+
+REASON_MAX = 200
+
+
+def upstream_reason(e: anthropic.APIStatusError) -> str:
+    """服务端给的错误说明（只取 error.message 字段，截断），不带请求内容和 key。
+    经过网关时 403 不一定是 key 的问题——例如网关把请求转给了只接受某种客户端的上游渠道，原因只在这里。"""
+    body = e.body
+    msg = None
+    if isinstance(body, dict):
+        err = body.get("error")
+        msg = err.get("message") if isinstance(err, dict) else body.get("message")
+    if not isinstance(msg, str) or not msg.strip():
+        return ""
+    msg = " ".join(msg.split())
+    return msg if len(msg) <= REASON_MAX else msg[: REASON_MAX - 1] + "…"
+
+
+def friendly(e: Exception) -> str:
+    """把模型调用的异常翻译成用户能看懂、知道怎么处理的说明。"""
+    if isinstance(e, anthropic.AuthenticationError):
+        return "API key 无效，请在首页“模型设置”里检查。"
+    if isinstance(e, anthropic.PermissionDeniedError):
+        reason = upstream_reason(e)
+        return "模型服务拒绝了这次请求（403）" + (
+            f"：{reason}" if reason else "，可能是 API key 没有调用该模型的权限。"
+        )
+    if isinstance(e, anthropic.NotFoundError):
+        return "模型不存在或无权访问，请检查“模型设置”里的模型名。"
+    if isinstance(e, anthropic.RateLimitError):
+        return "调用太频繁或额度不足（429），稍后再试。"
+    if isinstance(e, anthropic.APIConnectionError):
+        return "连不上模型服务，请检查网络或 Base URL。"
+    if isinstance(e, anthropic.APIStatusError):
+        return f"模型服务返回错误 {e.status_code}：{e.message}"
+    if isinstance(e, LLMError):
+        return str(e)
+    return f"{type(e).__name__}: {e}"
+
+
+class Claude(LLM):
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
         # 只用设置页里填的 key 或 ANTHROPIC_API_KEY；地址也显式指定。
@@ -292,7 +357,7 @@ class Claude:
         # 那些可能是别的工具（如 Claude Code）的凭据和网关，不能被这个应用顺手用掉。
         key = cfg.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         if not key:
-            raise LLMError(
+            raise MissingKey(
                 "还没有设置 API key：请在首页“模型设置”里填写，或启动前设置环境变量 ANTHROPIC_API_KEY。"
             )
         self.client = anthropic.Anthropic(

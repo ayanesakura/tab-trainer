@@ -4,17 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>吉他谱练习器</title>
+<script src="/static/js/lib/theme-boot.js"></script>
 <link rel="stylesheet" href="/static/ui.css">
-<script src="/static/ui.js"></script>
 <link rel="stylesheet" href="/static/css/index.css">
+<script type="module" src="/static/js/index.js"></script>
 </head>
 <body>
 <header class="top">
   <a class="brand" href="/"><span class="logo" data-ic="logo"></span><span class="label">吉他谱练习器</span></a>
   <div class="center">
-    <div class="seg" id="nav">
-      <button data-v="library" data-ic="music">曲库</button>
-      <button data-v="settings" data-ic="settings">设置</button>
+    <div class="seg" id="nav" aria-label="页面">
+      <button data-v="library" data-ic="music" id="tab-library" aria-controls="view-library">曲库</button>
+      <button data-v="settings" data-ic="settings" id="tab-settings" aria-controls="view-settings">设置</button>
     </div>
   </div>
   <div class="actions"><button class="icon-btn" id="themeBtn" title="切换外观"></button></div>
@@ -22,9 +23,9 @@
 
 <main class="wrap">
   <!-- ============ 曲库 ============ -->
-  <section class="view" id="view-library">
+  <section class="view" id="view-library" role="tabpanel" aria-labelledby="tab-library">
     <div class="head">
-      <div><h1>曲库</h1><p>上传谱子，生成可播放、可循环的练习页。</p></div>
+      <div><h1>曲库</h1><p>上传原谱或 Guitar Pro 文件，生成可播放、可循环的练习页。</p></div>
       <div class="head-actions">
         <button class="btn sm" id="importBtn" data-ic="download" title="导入曲子包（.zip），可以一次选多个">导入曲子包</button>
         <button class="btn sm" id="selectBtn" data-ic="upload" title="选择曲子打包导出（识别结果、提示、练习记录和原图都在里面）">导出…</button>
@@ -32,19 +33,19 @@
       </div>
     </div>
 
-    <div class="notice warn" id="keyNotice" hidden><span class="dot warn"></span><div>还没设置 API key，识别前请先到 <a href="#settings">设置</a> 填写。</div></div>
+    <div class="notice warn" id="keyNotice" hidden></div>
 
-    <div class="stack" style="margin-top:12px">
+    <div class="stack lib-stack">
       <div>
-        <label class="drop" id="drop">
+        <div class="drop" id="drop" role="button" tabindex="0" aria-labelledby="dropT" aria-describedby="dropHint">
           <span class="big" data-ic="upload"></span>
-          <span><span class="t">上传谱子</span><br><span class="hint">拖到这里或点击选择 · 图片 / PDF 由 AI 识别，Guitar Pro / MusicXML 直接导入，曲子包（.zip）直接恢复</span></span>
-          <input type="file" id="file" multiple accept="image/*,application/pdf,.gp,.gpx,.gp3,.gp4,.gp5,.musicxml,.xml,.mxl,.zip" hidden>
-        </label>
+          <span><span class="t" id="dropT">添加曲子</span><br><span class="hint" id="dropHint">拖到这里或点击选择 · 原谱图片 / PDF 由 AI 识别，Guitar Pro / MusicXML 直接导入，曲子包（.zip）直接恢复</span></span>
+        </div>
+        <input type="file" id="file" multiple accept="image/*,application/pdf,.gp,.gpx,.gp3,.gp4,.gp5,.musicxml,.xml,.mxl,.zip" hidden>
         <div id="pickedBox" hidden>
-          <div class="picked" id="picked"></div>
+          <div class="picked" id="picked" aria-label="已选的文件"></div>
           <div class="upload-bar">
-            <input class="input" id="title" placeholder="曲名（可不填）">
+            <input class="input" id="title" placeholder="曲名（可不填）" aria-label="曲名（可不填）">
             <button class="btn ghost" id="clearPick">取消</button>
             <button class="btn primary" id="uploadBtn" data-ic="sparkle">上传并识别</button>
           </div>
@@ -59,78 +60,78 @@
       </div>
       <div class="lib-tools" id="libTools" hidden>
         <input class="input search" id="search" type="search" placeholder="搜索曲名、艺人、标签" aria-label="搜索曲子">
-        <div class="tag-filter" id="tagFilter"></div>
+        <div class="chips multi sm" id="tagFilter" role="group" aria-label="按标签筛选"></div>
         <span class="grow"></span>
-        <div class="seg sm" id="sortSeg"><button data-v="created">最近添加</button><button data-v="practiced">最近练习</button><button data-v="title">曲名</button></div>
+        <span class="hint" id="sortLbl">排序</span>
+        <div class="seg sm" id="sortSeg" aria-labelledby="sortLbl"><button data-v="practiced">最近练习</button><button data-v="created">最近添加</button><button data-v="title">曲名</button></div>
       </div>
-      <div class="list" id="songs"><div class="empty-state"><div class="spinner" style="margin:0 auto"></div></div></div>
-      <div class="hint" style="margin:0 4px">30–40 小节的曲子识别约需 1–3 分钟。</div>
+      <div class="list" id="songs" aria-label="曲子列表" aria-busy="true"><div class="empty-state"><div class="spinner center"></div></div></div>
+      <div class="hint foot-hint">30–40 小节的原谱识别约需 1–3 分钟。</div>
     </div>
   </section>
 
   <!-- ============ 设置 ============ -->
-  <section class="view" id="view-settings" hidden>
+  <section class="view" id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
     <div class="head"><div><h1>设置</h1><p>改动自动保存。</p></div></div>
 
     <div class="section-title">模型</div>
     <div class="list set">
       <div class="row">
-        <div class="who"><div class="name">Anthropic API key</div><div class="sub" id="keyState">只保存在本机，也可以用环境变量 ANTHROPIC_API_KEY。</div></div>
+        <div class="who"><label class="name" for="apiKey">Anthropic API key</label><div class="sub" id="keyState">只保存在本机，也可以用环境变量 ANTHROPIC_API_KEY。</div></div>
         <div class="ctl keyline">
           <input class="input" id="apiKey" type="password" placeholder="sk-ant-…" autocomplete="off">
           <button class="btn" id="saveKey">保存</button>
-          <button class="icon-btn" id="clearKey" title="清除已保存的 key" data-ic="trash"></button>
+          <button class="icon-btn" id="clearKey" title="清除已保存的 key" aria-label="清除已保存的 key" data-ic="trash"></button>
         </div>
       </div>
       <div class="row">
-        <div class="who"><div class="name">识别模型</div><div class="sub">Opus 最准，Sonnet 更便宜。</div></div>
+        <div class="who"><div class="name" id="modelLbl">识别模型</div><div class="sub">Opus 最准，Sonnet 更便宜。</div></div>
         <div class="ctl">
-          <div class="seg sm" id="modelSeg"><button data-v="claude-opus-5-5">Opus 5.5</button><button data-v="claude-sonnet-5-5">Sonnet 5.5</button><button data-v="custom">自定义</button></div>
-          <input class="input" id="modelCustom" placeholder="模型 ID" style="width:170px" hidden>
+          <div class="seg sm" id="modelSeg" aria-labelledby="modelLbl"><button data-v="claude-opus-5-5">Opus 5.5</button><button data-v="claude-sonnet-5-5">Sonnet 5.5</button><button data-v="custom">自定义</button></div>
+          <input class="input w-model" id="modelCustom" placeholder="模型 ID" aria-label="自定义模型 ID" hidden>
         </div>
       </div>
       <div class="row">
-        <div class="who"><div class="name">识别精细度</div><div class="sub">越高越准，也越慢、越贵。</div></div>
-        <div class="ctl"><div class="seg sm" id="effortSeg"><button data-v="medium">medium</button><button data-v="high">high</button><button data-v="xhigh">xhigh</button><button data-v="max">max</button></div></div>
+        <div class="who"><div class="name" id="effortLbl">识别精细度</div><div class="sub">越高越准，也越慢、越贵。</div></div>
+        <div class="ctl"><div class="seg sm" id="effortSeg" aria-labelledby="effortLbl"><button data-v="medium">medium</button><button data-v="high">high</button><button data-v="xhigh">xhigh</button><button data-v="max">max</button></div></div>
       </div>
       <div class="row">
-        <div class="who"><div class="name">Base URL</div><div class="sub">用代理或兼容网关时才需要填。</div></div>
-        <div class="ctl"><input class="input" id="baseUrl" placeholder="https://api.anthropic.com" style="width:260px"></div>
+        <div class="who"><label class="name" for="baseUrl">Base URL</label><div class="sub">用代理或兼容网关时才需要填。</div></div>
+        <div class="ctl"><input class="input w-url" id="baseUrl" placeholder="https://api.anthropic.com"></div>
       </div>
       <div class="row">
         <div class="who"><div class="name">测试连接</div><div class="sub">发一个小请求，检查 key、模型和地址。</div></div>
-        <div class="ctl"><span class="test-state" id="testState"></span><button class="btn" id="testBtn" data-ic="check">测试</button></div>
+        <div class="ctl"><span class="test-state" id="testState" role="status"></span><button class="btn" id="testBtn" data-ic="check">测试</button></div>
       </div>
     </div>
 
     <div class="section-title">外观</div>
     <div class="list set">
       <div class="row">
-        <div class="who"><div class="name">主题</div></div>
-        <div class="ctl"><div class="seg sm" id="themeSeg"><button data-v="system">跟随系统</button><button data-v="light">浅色</button><button data-v="dark">深色</button></div></div>
+        <div class="who"><div class="name" id="themeLbl">主题</div></div>
+        <div class="ctl"><div class="seg sm" id="themeSeg" aria-labelledby="themeLbl"><button data-v="system">跟随系统</button><button data-v="light">浅色</button><button data-v="dark">深色</button></div></div>
       </div>
     </div>
   </section>
 </main>
 
-<dialog class="pages-dlg" id="pagesDlg" aria-labelledby="pagesTitle">
+<dialog class="dlg pages-dlg" id="pagesDlg" aria-labelledby="pagesTitle">
   <div class="pd-h">
-    <span class="card-title" id="pagesTitle">管理页面</span>
+    <span class="card-title" id="pagesTitle">管理原谱页面</span>
     <span class="hint">拖动卡片或用箭头调整顺序</span>
     <span class="grow"></span>
-    <button class="icon-btn sm" id="pagesClose" data-ic="x" title="关闭（Esc）"></button>
+    <button class="icon-btn sm" id="pagesClose" data-ic="x" title="关闭（Esc）" aria-label="关闭"></button>
   </div>
   <div class="pd-body"><div class="page-grid" id="pageGrid"></div></div>
   <div class="pd-f">
     <button class="btn sm" id="pagesAdd" data-ic="plus">添加页面</button>
     <input type="file" id="pagesFile" multiple accept="image/*,application/pdf" hidden>
-    <span class="hint" id="pagesMsg"></span>
+    <span class="hint" id="pagesMsg" role="status"></span>
     <span class="grow"></span>
     <button class="btn ghost sm" id="pagesCancel">取消</button>
     <button class="btn primary sm" id="pagesSave">保存</button>
   </div>
 </dialog>
 
-<script src="/static/js/index.js"></script>
 </body>
 </html>
