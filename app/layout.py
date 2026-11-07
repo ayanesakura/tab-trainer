@@ -260,6 +260,10 @@ def detect_page(img: Image.Image) -> dict:
             if x1 - merged[-1] > sp * 1.5:
                 merged.append(float(x1))
             bars = [[int(a), int(b)] for a, b in itertools.pairwise(merged) if b - a > sp * 3]
+            # 行首是反复开始记号（‖:）时，谱号到它之间会多出一段（只有 TAB 谱号、拍号），不是小节：
+            # 这一段窄（不到 6 个线距；真正的小节、包括弱起小节都宽得多）就去掉
+            if len(bars) > 1 and bars[0][1] - bars[0][0] < sp * 6:
+                bars = bars[1:]
             if bars:
                 systems.append(
                     {

@@ -250,3 +250,20 @@ def test_first_row_crop_includes_chord_diagrams_above_a_tab_only_row():
     assert len(r["systems"]) == 1
     top = r["systems"][0]["top"]
     assert tab_top - 125 <= top <= tab_top - 110 and top > 60
+
+
+def test_clef_before_a_start_repeat_is_not_a_bar():
+    """行首先是 TAB 谱号，再是反复开始记号 ‖:：谱号那一小段不是小节。"""
+    img = Image.new("L", (1200, 400), 255)
+    d = ImageDraw.Draw(img)
+    tab_top = 150
+    for i in range(6):
+        d.line([(60, tab_top + i * 14), (1140, tab_top + i * 14)], fill=170)
+    d.text((70, tab_top + 20), "TAB", fill=0)
+    for x in (120, 126):  # 反复开始记号：粗细两条线（谱号后面约 4.5 个线距）
+        d.line([(x, tab_top), (x, tab_top + 70)], fill=40, width=3 if x == 120 else 1)
+    for x in (630, 1140):
+        d.line([(x, tab_top), (x, tab_top + 70)], fill=40, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2]
+    assert r["systems"][0]["bars"][0][0] >= 115

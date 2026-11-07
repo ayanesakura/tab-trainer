@@ -161,7 +161,7 @@ Repeats and navigation (the app follows them during playback):
 - directions, at the bar where they are written: "segno" (the 𝄋 sign), "coda" (the 𝄌 target, "To Coda" jumps here), "fine" (Fine, where the piece ends after a D.C./D.S.), "dacapo" (D.C.), "dacapoalfine" (D.C. al Fine), "dacapoalcoda" (D.C. al Coda), "dalsegno" (D.S.), "dalsegnoalfine", "dalsegnoalcoda", "dacoda" (the "To Coda" / ⊕ jump point).
 
 "tip": 1-4 sentences of practical Chinese guidance for this bar, naming strings and frets the way a teacher would, e.g. "5 弦空弦 + 2 弦空弦一起弹，2 弦击弦到 2 品再勾弦回空弦（只拨一次）。第 3 拍和弦：2 弦 4 品、3 弦 2 品、4 弦 3 品；第 4 拍三连音：4 弦 3 品、3 弦空弦、2 弦空弦。" Mention what is hard and how to practise it when it helps.
-"uncertain": in Chinese, anything you could not read with confidence (which beat, which string, what you assumed). Empty string if everything is clear."""
+"uncertain": in Chinese, only doubts that could make the player play something wrong - a note, string, fret, technique or rhythm in this bar that you could not read with confidence and that the user should check against the image (say which beat and what you chose). Leave it empty when the notes are clear, including when you only made a routine reading decision. Do not mention: parts of a chord diagram on strings that are not played in this bar, exactly where a chord name sits when the chord change is clear from the music, notes you played as written, a reading that follows standard notation conventions, or anything about the melody or lyrics lines."""
 
 
 def _event_text(e: dict) -> str:
