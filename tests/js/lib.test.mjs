@@ -78,3 +78,9 @@ test('api：poll 出错退避重试，while 为假时停下', async () => {
   p.stop();
   console.warn = origWarn;
 });
+
+test('api：transient 只把连不上和 502 / 503 / 504 当成可以自动重试', () => {
+  assert.equal(api.transient(new api.ApiError('连不上', 0)), true);
+  for (const st of [502, 503, 504]) assert.equal(api.transient(new api.ApiError('x', st)), true, st);
+  for (const st of [400, 404, 409, 500]) assert.equal(api.transient(new api.ApiError('x', st, { detail: 'x' })), false, st);
+});

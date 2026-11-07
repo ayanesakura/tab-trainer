@@ -5,7 +5,7 @@
 
 import { get, set, on } from './store.js';
 import { $, UI, esc, songUrl, SONG_ID } from './dom.js';
-import { get as apiGet, post, put, withBusy, poll } from '../lib/api.js';
+import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.js';
 import { SOURCES } from '../vocab.js';
 import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
@@ -23,7 +23,16 @@ async function load() {
   try {
     s = await apiGet(songUrl());
   } catch (e) {
-    if (e.status === 404) { $('songTitle').textContent = '曲子不存在'; polling = false; poller.stop(); return null; }
+    if (e.name === 'AbortError') throw e;
+    if (!transient(e)) { // 404、数据损坏（500 带说明）……重试也没用：停止轮询，说清楚原因
+      polling = false; if (poller) poller.stop();
+      if (e.status === 404) $('songTitle').textContent = '曲子不存在';
+      else {
+        if (!get('song')) $('songTitle').textContent = '加载失败';
+        notice('offline', { kind: 'err', html: `加载失败：${esc(e.message)}`, actions: [{ label: '重试', onClick: () => refresh() }] });
+      }
+      return null;
+    }
     if (!get('song')) $('songTitle').textContent = '加载失败';
     notice('offline', { kind: 'err', html: `${esc(e.message)}，稍后自动重试。` });
     throw e; // poll 退避重试
