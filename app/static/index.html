@@ -57,6 +57,12 @@
         <button class="btn ghost sm" id="selectCancel">取消</button>
         <button class="btn primary sm" id="exportBtn" data-ic="download" disabled>导出曲子包</button>
       </div>
+      <div class="lib-tools" id="libTools" hidden>
+        <input class="input search" id="search" type="search" placeholder="搜索曲名、艺人、标签" aria-label="搜索曲子">
+        <div class="tag-filter" id="tagFilter"></div>
+        <span class="grow"></span>
+        <div class="seg sm" id="sortSeg"><button data-v="created">最近添加</button><button data-v="practiced">最近练习</button><button data-v="title">曲名</button></div>
+      </div>
       <div class="list" id="songs"><div class="empty-state"><div class="spinner" style="margin:0 auto"></div></div></div>
       <div class="hint" style="margin:0 4px">30–40 小节的曲子识别约需 1–3 分钟。</div>
     </div>
@@ -106,6 +112,24 @@
     </div>
   </section>
 </main>
+
+<dialog class="pages-dlg" id="pagesDlg" aria-labelledby="pagesTitle">
+  <div class="pd-h">
+    <span class="card-title" id="pagesTitle">管理页面</span>
+    <span class="hint">拖动卡片或用箭头调整顺序</span>
+    <span class="grow"></span>
+    <button class="icon-btn sm" id="pagesClose" data-ic="x" title="关闭（Esc）"></button>
+  </div>
+  <div class="pd-body"><div class="page-grid" id="pageGrid"></div></div>
+  <div class="pd-f">
+    <button class="btn sm" id="pagesAdd" data-ic="plus">添加页面</button>
+    <input type="file" id="pagesFile" multiple accept="image/*,application/pdf" hidden>
+    <span class="hint" id="pagesMsg"></span>
+    <span class="grow"></span>
+    <button class="btn ghost sm" id="pagesCancel">取消</button>
+    <button class="btn primary sm" id="pagesSave">保存</button>
+  </div>
+</dialog>
 
 <script src="/static/js/index.js"></script>
 </body>

@@ -60,6 +60,10 @@ class PracticeIn(_In):
     seconds: float = 0
 
 
+class TagsIn(_In):
+    tags: list[str] = Field(max_length=50)
+
+
 class ReparseIn(_In):
     hint: str = Field("", max_length=1000)
 
@@ -78,6 +82,7 @@ FIELD_NAMES = {
     "seconds": "时长",
     "hint": "说明",
     "title": "曲名",
+    "tags": "标签",
     "tuning": "调弦",
     "capo": "变调夹",
     "time_signature": "拍号",

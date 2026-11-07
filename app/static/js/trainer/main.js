@@ -13,7 +13,6 @@ function showView(v) {
   if (v === 'practice' && shownBar >= 0) { const b = shownBar; shownBar = -1; showBar(b); }
   scrollTo({ top: 0 });
 }
-const themeIcon = () => { $('themeBtn').innerHTML = UI.icon(UI.isDark() ? 'moon' : 'sun'); };
 
 // 键盘：空格 播放 / 停止；← → 上一段 / 下一段；↑ ↓ 快 / 慢 4 BPM。只在文字输入框里不响应（滑块、按钮用过之后照样能用空格）
 const typing = el => el && el.closest && el.closest('textarea, [contenteditable], input:not([type=range]):not([type=checkbox])');
@@ -33,10 +32,9 @@ function initShortcuts() {
 function initViews() {
   setNav = UI.seg($('nav'), 'practice', v => showView(v));
   addEventListener('hashchange', () => showView(location.hash.slice(1)));
-  $('themeBtn').onclick = () => UI.setTheme(UI.isDark() ? 'light' : 'dark');
-  document.addEventListener('themechange', () => { themeIcon(); setTimeout(refreshScoreTheme, 50); });
-  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { themeIcon(); setTimeout(refreshScoreTheme, 50); });
-  themeIcon();
+  UI.themeButton($('themeBtn'));
+  document.addEventListener('themechange', () => setTimeout(refreshScoreTheme, 50));
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => setTimeout(refreshScoreTheme, 50));
 }
 
 // ---------------------------------------------------------------------

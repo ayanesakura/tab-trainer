@@ -117,9 +117,9 @@ def _is_pdf(name: str, data: bytes) -> bool:
     return name.lower().endswith(".pdf") or data[:5] == b"%PDF-"
 
 
-def _page_images(uploads: list[tuple[str, bytes]]):
-    """逐页产出 RGB 图片（PDF 一页一页渲染，不把整份文件的页面都留在内存里）。"""
-    count = 0
+def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
+    """逐页产出 RGB 图片（PDF 一页一页渲染，不把整份文件的页面都留在内存里）。existing：曲子已有的页数（补页时）。"""
+    count = existing
 
     def one_more():
         nonlocal count
@@ -156,13 +156,28 @@ def _page_images(uploads: list[tuple[str, bytes]]):
             yield img.convert("RGB")
 
 
-def _save_pages(uploads: list[tuple[str, bytes]], pages_dir) -> list[dict]:
+def _save_pages(
+    uploads: list[tuple[str, bytes]], pages_dir, existing: list[dict] | None = None
+) -> list[dict]:
+    """把上传的图片 / PDF 存成 pages/pN.png。补页时 existing 是已有的页：编号接着往后排，页数上限算上它们。"""
     pages_dir.mkdir(parents=True, exist_ok=True)
+    taken = {pg["file"] for pg in existing or []}
+    nums = [int(f[1:-4]) for f in taken if f.startswith("p") and f.endswith(".png") and f[1:-4].isdigit()]
+    k = max(nums, default=0)
     pages = []
-    for i, img in enumerate(_page_images(uploads)):
-        fn = f"p{i + 1}.png"
-        img.save(pages_dir / fn, optimize=True)
-        pages.append({"file": fn, "width": img.width, "height": img.height})
+    try:
+        for img in _page_images(uploads, len(existing or [])):
+            k += 1
+            while f"p{k}.png" in taken or (pages_dir / f"p{k}.png").exists():
+                k += 1
+            fn = f"p{k}.png"
+            img.save(pages_dir / fn, optimize=True)
+            pages.append({"file": fn, "width": img.width, "height": img.height})
+    except Exception:
+        if existing is not None:  # 补页失败：已经存下的新页删掉（新建曲子时整个目录会被删掉）
+            for pg in pages:
+                (pages_dir / pg["file"]).unlink(missing_ok=True)
+        raise
     return pages
 
 
@@ -289,38 +304,9 @@ def _derived_bar(i: int, b: dict, meta: dict) -> dict:
 
 
 def _carry_over(s: dict, meta: dict, bars: list[dict]) -> None:
-    """重新转换同一个音轨：把原来小节的 id 和 AI 内容搬到新小节上。
-    按内容做序列比对（小节数变了也能对上，比如转换器改了反复记号的展开方式）：
-    内容一样的原样保留；对不上但位置相当的（比对里的“替换”段）保留 id 和练习记录，提示清掉、问答标成过时；
-    新多出来的是新小节，没了的小节连同它的练习记录一起去掉。"""
-    import difflib
-    import json
-
-    old_meta = s.get("meta") or {}
-    meta["title"] = old_meta.get("title") or meta["title"]  # 用户可能改过曲名
-    setting_changed = staleness.setting_changed(old_meta, meta)
-    old = s["bars"]
-
-    def key(b):
-        return json.dumps([b["events"], b.get("time_signature")], sort_keys=True)
-
-    pairs = []  # (原来的小节, 新小节, 内容是否一样)
-    sm = difflib.SequenceMatcher(None, [key(b) for b in old], [key(b) for b in bars], autojunk=False)
-    for op, i1, i2, j1, j2 in sm.get_opcodes():
-        if op in ("equal", "replace"):
-            pairs += [(old[i], bars[j], op == "equal") for i, j in zip(range(i1, i2), range(j1, j2))]
-    for prev, new, same in pairs:
-        new["id"] = prev["id"]
-        new["tip"], new["uncertain"] = prev.get("tip", ""), prev.get("uncertain", "")
-        if prev.get("qa"):
-            new["qa"] = prev["qa"]
-        if setting_changed or not same:
-            new["tip"] = ""
-            staleness.mark_qa_stale(new)
-            if not setting_changed:
-                staleness.invalidate_plan(s, new["id"])
-    if setting_changed or len(old) != len(bars):  # 小节编号整体移动了，练习建议里的小节号对不上
-        staleness.invalidate_plan(s)
+    """重新转换同一个音轨：把原来小节的 id 和 AI 内容搬到新小节上（见 staleness.carry_over）。"""
+    meta["title"] = (s.get("meta") or {}).get("title") or meta["title"]  # 用户可能改过曲名
+    staleness.carry_over(s, meta, bars)
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +358,9 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
 def edit_meta(sid: str, raw: dict) -> dict:
     def apply(s):
         old = s.get("meta") or {}
+        if not old and set(raw) <= {"title"}:  # 还没读出谱头（排队中、识别失败）：只能改曲名
+            s["title"] = str(raw.get("title") or "").strip() or s.get("title", "")
+            return
         s["meta"] = normalize_meta({**old, **raw}, strict=True)
         if is_score(s) and staleness.setting_changed(old, s["meta"]):
             # 播放用的是原文件：这里改了只会让指板、示范音和听到的对不上，重新转换时还会被文件里的设定覆盖
@@ -385,6 +374,11 @@ def edit_meta(sid: str, raw: dict) -> dict:
             raise Busy("正在识别，完成后再改调弦、变调夹和拍号")
         if staleness.setting_changed(old, s["meta"]):
             staleness.invalidate_tips_for_setting(s)
+            # 记下用户亲手改的设定：整首重新识别时以它为准，不被模型重新读出的谱头覆盖
+            user, m = s.setdefault("meta_user", {}), s["meta"]
+            if m.get("tuning_midi") != old.get("tuning_midi"):
+                user["tuning"] = m["tuning"]  # 存音名：重新识别时和读出的谱头一起再整理一遍
+            user.update({k: m[k] for k in ("capo", "time_signature") if m.get(k) != old.get(k)})
         if "title" in raw:
             s["title"] = str(raw["title"]).strip()
         if is_score(s):
@@ -394,6 +388,20 @@ def edit_meta(sid: str, raw: dict) -> dict:
             apply_time_signatures(s["bars"], s["meta"])
 
     return store.update(sid, apply)
+
+
+MAX_TAGS = 12
+MAX_TAG_LEN = 20
+
+
+def set_tags(sid: str, tags: list[str]) -> list[str]:
+    """曲库里用来筛选的标签（去掉首尾空格和重复，保持顺序）。"""
+    clean = list(dict.fromkeys(t.strip() for t in tags if t and t.strip()))
+    if len(clean) > MAX_TAGS:
+        raise Invalid(f"一首曲子最多 {MAX_TAGS} 个标签")
+    if any(len(t) > MAX_TAG_LEN for t in clean):
+        raise Invalid(f"标签最长 {MAX_TAG_LEN} 个字")
+    return store.update(sid, lambda s: s.update(tags=clean))["tags"]
 
 
 # ---------------------------------------------------------------------------

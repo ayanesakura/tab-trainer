@@ -11,7 +11,7 @@ from app import store
 from app.errors import Busy, Invalid
 from app.llm import Claude, LLMConfig, LLMError
 
-USAGE_KEYS = ("input_tokens", "output_tokens")
+USAGE_KEYS = ("input_tokens", "output_tokens", "cost_usd", "unpriced_tokens")
 
 
 class Cancelled(Exception):
@@ -100,7 +100,7 @@ def check_llm_ready() -> None:
 def add_usage(s: dict, usage: dict, before: dict | None = None) -> None:
     """把这次任务用掉的 token（usage 减去开始时的 before）累加到曲子上。"""
     old = s.get("usage") or {}
-    s["usage"] = {k: old.get(k, 0) + usage[k] - (before or {}).get(k, 0) for k in USAGE_KEYS}
+    s["usage"] = {k: old.get(k, 0) + usage.get(k, 0) - (before or {}).get(k, 0) for k in USAGE_KEYS}
 
 
 REASON_MAX = 200

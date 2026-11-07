@@ -52,6 +52,20 @@
     const t = getTheme();
     return t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
   };
+  // 顶栏的外观按钮：跟随系统 → 浅色 → 深色 → 跟随系统，图标显示当前设置（不是当前颜色），点几下都能回到“跟随系统”
+  const THEME_NEXT = { system: 'light', light: 'dark', dark: 'system' };
+  const THEME_NAME = { system: '跟随系统', light: '浅色', dark: '深色' };
+  const themeButton = btn => {
+    const paint = () => {
+      const t = THEME_NEXT[getTheme()] ? getTheme() : 'system';
+      btn.innerHTML = icon({ system: 'monitor', light: 'sun', dark: 'moon' }[t]);
+      btn.title = `外观：${THEME_NAME[t]}（点击切换为${THEME_NAME[THEME_NEXT[t]]}）`;
+      btn.setAttribute('aria-label', btn.title);
+    };
+    btn.onclick = () => setTheme(THEME_NEXT[getTheme()] || 'light');
+    document.addEventListener('themechange', paint);
+    paint();
+  };
 
   // 轻提示
   let toastTimer;
@@ -102,6 +116,6 @@
 
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-  window.UI = { icon, hydrate, getTheme, setTheme, isDark, toast, menu, closeMenu, seg, fillRange, fillAll, esc };
+  window.UI = { icon, hydrate, getTheme, setTheme, isDark, themeButton, toast, menu, closeMenu, seg, fillRange, fillAll, esc };
   document.addEventListener('DOMContentLoaded', () => { hydrate(); fillAll(); });
 })();

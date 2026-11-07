@@ -21,16 +21,10 @@ from fractions import Fraction
 from pathlib import Path
 
 from app import jobs, recognize, store
-from app.llm import Claude, LLMConfig
+from app.llm import PRICES, Claude, LLMConfig
 
 log = logging.getLogger("tab_trainer.evaluate")
 
-# 每百万 token 的美元价格（输入, 输出），用于估算费用
-PRICES = {
-    "claude-opus-5-5": (4.0, 20.0),
-    "claude-sonnet-5-5": (2.0, 10.0),
-    "claude-haiku-5-5": (0.10, 0.50),
-}
 EST_TOKENS_PER_CALL = (6000, 6000)  # 粗估：一行谱子的图片 + 提示词，以及含思考的输出
 
 

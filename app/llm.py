@@ -270,6 +270,20 @@ NOTATION_KEY = (
 )
 
 
+# 每百万 token 的美元价格（输入, 输出），用于估算费用（曲库显示每首花了多少、评测报告）
+PRICES = {
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-haiku-5-5": (0.10, 0.50),
+}
+
+
+def price_of(model: str | None) -> tuple[float, float] | None:
+    """模型的价格；网关加了前缀的名字（如 compass/claude-opus-5-5）按最后一段查。"""
+    name = (model or "").rsplit("/", 1)[-1]
+    return PRICES.get(name)
+
+
 class Claude:
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
@@ -288,7 +302,7 @@ class Claude:
         self._lock = threading.Lock()
         self._local = threading.local()  # 每个线程最近一次请求的 ID（识别是几个线程同时跑的）
         self.use_fallbacks = True
-        self.usage = {"input_tokens": 0, "output_tokens": 0}
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "unpriced_tokens": 0}
 
     def _call(self, content: list, schema: dict, effort: str | None = None, max_tokens: int = 32000) -> dict:
         kwargs = {
@@ -316,8 +330,15 @@ class Claude:
         rid = getattr(msg, "_request_id", None) or "none"
         self._local.request_id = rid
         with self._lock:
-            self.usage["input_tokens"] += msg.usage.input_tokens or 0
-            self.usage["output_tokens"] += msg.usage.output_tokens or 0
+            tin, tout = msg.usage.input_tokens or 0, msg.usage.output_tokens or 0
+            self.usage["input_tokens"] += tin
+            self.usage["output_tokens"] += tout
+            model = getattr(msg, "model", None)
+            price = price_of(model if isinstance(model, str) and model else kwargs["model"])
+            if price:
+                self.usage["cost_usd"] += (tin * price[0] + tout * price[1]) / 1e6
+            else:  # 价格表里没有的模型（自定义）：只记 token
+                self.usage["unpriced_tokens"] += tin + tout
         if msg.stop_reason == "refusal":
             raise LLMError(f"模型拒绝了这次请求（request_id={rid}）", rid)
         if msg.stop_reason == "max_tokens":

@@ -36,8 +36,9 @@ function renderResume() {
   resumeShown = true;
   const last = (SONG.practice || {}).last;
   if (!last) return;
-  const a = SONG.bars.findIndex(b => b.id === last.a), z = SONG.bars.findIndex(b => b.id === last.b);
+  let a = SONG.bars.findIndex(b => b.id === last.a), z = SONG.bars.findIndex(b => b.id === last.b);
   if (a < 0 || z < 0) return;
+  if (a > z) [a, z] = [z, a]; // 调整过页序以后原来的首尾可能对调了
   const label = a === 0 && z === SONG.bars.length - 1 ? '全曲' : a === z ? `第 ${a + 1} 小节` : `第 ${a + 1}–${z + 1} 小节`;
   $('resumeNote').innerHTML = `${UI.icon('repeat', 14)}<div style="flex:1">上次（${esc(last.at)}）练到 <b>${label}</b>，${last.bpm} BPM。</div><button class="btn sm primary" id="resumeBtn">接着练</button><button class="icon-btn sm" id="resumeClose" data-ic="x" title="关闭"></button>`;
   UI.hydrate($('resumeNote'));

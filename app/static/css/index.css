@@ -20,3 +20,35 @@
 .chk input, .song-row .pick { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex: none; }
 .song-row .pick { margin-right: 2px; }
 .song-row.on { background: var(--accent-soft); }
+
+/* 曲库工具条：搜索、标签筛选、排序 */
+.lib-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lib-tools .search { width: 220px; }
+.lib-tools .grow { flex: 1; }
+.tag-filter { display: flex; flex-wrap: wrap; gap: 4px; }
+.tag-filter button { height: 24px; padding: 0 9px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--fg-2); font-size: 12px; cursor: pointer; }
+.tag-filter button:hover { border-color: var(--accent); }
+.tag-filter button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.song-row .tags { display: inline-flex; gap: 4px; margin-left: 4px; vertical-align: 1px; }
+.song-row .tags .badge { background: var(--accent-soft); color: var(--accent); cursor: pointer; }
+.song-row .cost { font-variant-numeric: tabular-nums; }
+
+/* 管理页面 */
+.pages-dlg { width: min(1000px, 94vw); max-height: 90vh; margin: auto; padding: 0; border: 0; border-radius: 12px; background: var(--card); color: var(--fg); box-shadow: var(--shadow); }
+.pages-dlg[open] { display: flex; flex-direction: column; }
+.pages-dlg::backdrop { background: rgba(0, 0, 0, .45); }
+.pd-h, .pd-f { display: flex; align-items: center; gap: 8px; padding: 10px 14px; }
+.pd-h { border-bottom: 1px solid var(--line-2); }
+.pd-f { border-top: 1px solid var(--line-2); }
+.pd-h .grow, .pd-f .grow { flex: 1; }
+.pd-body { padding: 14px; overflow: auto; }
+.page-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.page-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--card); cursor: grab; }
+.page-card.new { border-color: var(--accent); }
+.page-card.dragging { opacity: .4; }
+.page-card.drop-before { box-shadow: -3px 0 0 var(--accent); }
+.page-card .thumb { height: 190px; background: #fff; display: grid; place-items: center; overflow: hidden; }
+.page-card .thumb img { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; }
+.page-card .thumb .ic { width: 28px; height: 28px; color: var(--muted); }
+.page-card .pc-f { display: flex; align-items: center; gap: 4px; padding: 6px 6px 6px 10px; font-size: 12px; border-top: 1px solid var(--line-2); }
+.page-card .pc-f .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

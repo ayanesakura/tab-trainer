@@ -155,8 +155,12 @@ async function onScoreLoaded(score) {
   if (!state.tempoSet) { // 默认用原速的六成练习；没有标速度就 50
     state.tempoSet = true;
     const t = (SONG.meta && SONG.meta.tempo) || (SONG.kind === 'score' ? baseTempo : 0);
+    if (t) { // 原速比滑块上限快时把上限放宽，原速也能拖得到
+      const max = Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10));
+      $('bpm').max = max; $('autoTarget').max = max;
+      $('autoTarget').value = t;
+    }
     setTempo(t ? Math.round(t * 0.6) : 50);
-    if (t) $('autoTarget').value = t;
   }
   setTempo(state.bpm);
 }
@@ -243,7 +247,8 @@ function stop() { if (api) api.pause(); }
 function setTempo(bpm) {
   bpm = Math.max(20, Math.min(240, Math.round(bpm)));
   state.bpm = bpm;
-  $('bpm').value = Math.min(bpm, +$('bpm').max); $('bpmVal').textContent = bpm + ' BPM'; UI.fillRange($('bpm'));
+  if (bpm > +$('bpm').max) { $('bpm').max = Math.min(240, Math.ceil(bpm / 10) * 10); $('autoTarget').max = $('bpm').max; } // ↑ 键 / + 按钮超过了滑块上限
+  $('bpm').value = bpm; $('bpmVal').textContent = bpm + ' BPM'; UI.fillRange($('bpm'));
   if (api) api.playbackSpeed = bpm / baseTempo;
 }
 function setLoop(a, b, restart = true, show = true) {

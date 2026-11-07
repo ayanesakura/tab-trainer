@@ -68,3 +68,101 @@ def test_export_selected_then_import(server, browser):
             _api(server, f"/api/songs/{sid}", "DELETE")
         except OSError:
             pass
+
+
+def test_search_tags_menu_and_theme(server, browser):
+    b = browser
+    img, gp = server["image"], server["gp"]
+    _api(
+        server,
+        f"/api/songs/{img}/tags",
+        "PUT",
+        b'{"tags": ["e2e-tag"]}',
+        {"Content-Type": "application/json"},
+    )
+    try:
+        b.open(server["base"] + "/")
+        b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{img}\"] .tags')")
+        # 点标签只看这个标签的曲子；搜索按曲名过滤
+        b.js("document.querySelector('#tagFilter [data-tag=\"e2e-tag\"]').click(); true")
+        assert b.js("[...document.querySelectorAll('.song-row')].map(r => r.dataset.id)") == [img]
+        b.js("document.querySelector('#tagFilter [data-tag=\"\"]').click(); true")
+        b.js("(s => { s.value = 'E2E 图片'; s.dispatchEvent(new Event('input')); })($('search')); true")
+        assert b.js("[...document.querySelectorAll('.song-row')].map(r => r.dataset.id)") == [img]
+        b.js("(s => { s.value = ''; s.dispatchEvent(new Event('input')); })($('search')); true")
+        # GP 曲子的菜单没有“管理页面”和“整首重新识别”
+        b.js(f"document.querySelector('[data-more=\"{gp}\"]').click(); true")
+        items = b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
+        assert "重命名" in items and "管理页面" not in items and "整首重新识别" not in items
+        b.js(f"document.querySelector('[data-more=\"{img}\"]').click(); true")
+        assert "管理页面" in b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
+        # 外观按钮：跟随系统 → 浅色 → 深色 → 跟随系统
+        b.js("localStorage.setItem('tt-theme', 'system'); UI.setTheme('system'); true")
+        seen = []
+        for _ in range(3):
+            b.js("document.getElementById('themeBtn').click(); true")
+            seen.append(b.js("UI.getTheme()"))
+        assert seen == ["light", "dark", "system"]
+        assert not b.errors, b.errors
+    finally:
+        _api(server, f"/api/songs/{img}/tags", "PUT", b'{"tags": []}', {"Content-Type": "application/json"})
+
+
+def test_reorder_and_delete_pages(server, browser):
+    from app import recognize, songs
+    from tests.fakes import score_png
+
+    store = server["store"]
+    sid = songs.create_song([("a.png", score_png()), ("b.png", score_png())], title="E2E 两页")
+    song = store.load(sid)
+    systems = recognize.plan_systems(sid, song)
+    bars = []
+    for si, s in enumerate(systems):
+        s["status"] = "done"
+        for a, z in s["spans"]:
+            n = len(bars) + 1
+            ev = [
+                {"dur": "1", "notes": [{"string": 1, "fret": n % 5, "tech": [], "grace": -1, "bend": 0}]}
+            ] * 4
+            bars.append({"id": f"{sid[-4:]}b{n}", "n": n, "system": si, "page": s["page"], "region": [a, z, *s["crop"][2:]],
+                         "events": ev, "tip": "", "uncertain": "", "warn": []})  # fmt: skip
+    meta = {
+        "title": "E2E 两页",
+        "tuning": ["E4", "B3", "G3", "D3", "A2", "E2"],
+        "capo": 0,
+        "time_signature": [4, 4],
+    }
+    store.update(sid, lambda x: x.update(meta=meta, systems=systems, bars=bars, status="ready"))
+    ids = [b["id"] for b in bars]
+    try:
+        b = browser
+        b.open(server["base"] + "/")
+        b.wait_for(f"!!document.querySelector('[data-more=\"{sid}\"]')")
+        b.js(f"document.querySelector('[data-more=\"{sid}\"]').click(); true")
+        b.js(
+            "[...document.querySelectorAll('.menu button')].find(x => x.textContent === '管理页面').click(); true"
+        )
+        b.wait_for("document.querySelectorAll('.page-card').length === 2")
+        assert b.js("document.getElementById('pagesSave').disabled") is True
+        b.js('document.querySelector(\'.page-card[data-i="1"] [data-mv="-1"]\').click(); true')
+        assert "调整了顺序" in b.js("document.getElementById('pagesMsg').textContent")
+        b.js("document.getElementById('pagesSave').click(); true")
+        b.wait_for("!document.getElementById('pagesDlg').open")
+        after = json.loads(_api(server, f"/api/songs/{sid}"))
+        assert [p["file"] for p in after["pages"]] == ["p2.png", "p1.png"]
+        assert [x["id"] for x in after["bars"]] == ids[6:] + ids[:6]
+        # 删掉一页：确认后它上面的小节一起删掉
+        b.js("window.confirm = () => true; true")
+        b.js(f"openPages('{sid}'); true")
+        b.wait_for("document.querySelectorAll('.page-card').length === 2")
+        b.js("document.querySelector('.page-card[data-i=\"0\"] [data-rm]').click(); true")
+        assert "删除 1 页（6 小节）" in b.js("document.getElementById('pagesMsg').textContent")
+        b.js("document.getElementById('pagesSave').click(); true")
+        b.wait_for("!document.getElementById('pagesDlg').open")
+        after = json.loads(_api(server, f"/api/songs/{sid}"))
+        assert [p["file"] for p in after["pages"]] == ["p1.png"] and [x["id"] for x in after["bars"]] == ids[
+            :6
+        ]
+        assert not b.errors, b.errors
+    finally:
+        _api(server, f"/api/songs/{sid}", "DELETE")

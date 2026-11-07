@@ -11,7 +11,8 @@ from fractions import Fraction
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from app import jobs, ocr, staleness, store
+from app import jobs, ocr, songs, staleness, store
+from app.errors import Busy, Invalid
 from app.jobs import Cancelled
 from app.layout import detect_page
 from app.llm import Claude, request_id_of
@@ -73,26 +74,24 @@ def start_parse(sid: str) -> bool:
 # 版面
 # ---------------------------------------------------------------------------
 def plan_systems(sid: str, song: dict) -> list[dict]:
+    return [s for pi, page in enumerate(song["pages"]) for s in plan_page_systems(sid, page, pi)]
+
+
+def plan_page_systems(sid: str, page: dict, pi: int) -> list[dict]:
+    """一页上的谱行（裁剪范围、小节位置、弦线）。检测不到六线谱时整页算一行。"""
+    lay = detect_page(store.page_image(sid, page))
+    if not lay["systems"]:
+        return [
+            {"page": pi, "crop": [0, page["width"], 0, page["height"]], "spans": None, "status": "pending"}
+        ]
     systems = []
-    for pi, page in enumerate(song["pages"]):
-        lay = detect_page(store.page_image(sid, page))
-        if not lay["systems"]:
-            systems.append(
-                {
-                    "page": pi,
-                    "crop": [0, page["width"], 0, page["height"]],
-                    "spans": None,
-                    "status": "pending",
-                }
-            )
-            continue
-        for s in lay["systems"]:
-            pad = 12
-            x0 = max(0, s["x0"] - 70)  # 带上行首的谱号 / 小节号
-            crop = [x0, min(page["width"], s["x1"] + pad), s["top"], s["bottom"]]
-            systems.append(
-                {"page": pi, "crop": crop, "spans": s["bars"], "lines": s["lines"], "status": "pending"}
-            )
+    for s in lay["systems"]:
+        pad = 12
+        x0 = max(0, s["x0"] - 70)  # 带上行首的谱号 / 小节号
+        crop = [x0, min(page["width"], s["x1"] + pad), s["top"], s["bottom"]]
+        systems.append(
+            {"page": pi, "crop": crop, "spans": s["bars"], "lines": s["lines"], "status": "pending"}
+        )
     return systems
 
 
@@ -353,6 +352,13 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     claude = jobs.new_claude()
     song = store.load(sid)
     restage = bool(song.get("bars"))
+    charged = dict(claude.usage)  # 已经记到曲子上的用量：每行完成就把新增的记上（中途失败也不漏记）
+
+    def charge(s):
+        now = dict(claude.usage)
+        jobs.add_usage(s, now, charged)
+        charged.update(now)
+
     store.patch(
         sid,
         status="parsing",
@@ -360,7 +366,9 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
         restaging=restage or None,
         progress={"stage": "读取谱头", "done": 0, "total": 0},
     )
-    meta = normalize_meta(claude.read_meta(store.page_image(sid, song["pages"][0])), song.get("title", ""))
+    head = claude.read_meta(store.page_image(sid, song["pages"][0]))
+    # 用户手改过的调弦、变调夹、拍号以用户的为准
+    meta = normalize_meta({**head, **(song.get("meta_user") or {})}, song.get("title", ""))
     if not restage:
         store.patch(sid, meta=meta)
     store.patch(sid, progress={"stage": "分析版面", "done": 0, "total": 0})
@@ -413,7 +421,7 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
                         s["systems"][i].update(status=status, error=err)
                         staleness.prune_practice(s)
                     s["progress"]["done"] += 1
-                    s["usage"] = dict(claude.usage)
+                    charge(s)
 
                 store.update(sid, apply)
                 if cancel.is_set():
@@ -451,16 +459,22 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
         store.patch(sid, status="error", error="；".join(errors) or "没有识别出任何小节（可能不是六线谱）")
         return
     apply_time_signatures(work["bars"], work["meta"])
+    note = None
     if restage:
 
         def swap(s):
-            # 一次性换成新结果；曲名保留用户改过的。小节 id 全换了，旧提示、问答、练习记录随之作废
+            # 一次性换成新结果；曲名保留用户改过的。新旧小节按内容对上，对上的保留 id、问答、练习记录和手改
             work["meta"]["title"] = (s.get("meta") or {}).get("title") or work["meta"]["title"]
-            s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"], plan=None)
+            dropped = staleness.carry_over(s, work["meta"], work["bars"], keep_edits=True)
+            s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"])
             s.pop("restaging", None)
             staleness.prune_practice(s)
+            return dropped
 
-        store.update(sid, swap)
+        dropped = []
+        store.update(sid, lambda s: dropped.append(swap(s)))
+        if dropped and dropped[0]:
+            note = f"重新识别完成；有 {dropped[0]} 个手改过的小节和新结果对不上，改动没有保留。"
 
     song = store.load(sid)
     store.patch(sid, progress={"stage": "生成练习建议", "done": len(systems), "total": len(systems)})
@@ -472,11 +486,12 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
         plan = None
 
     def finish(s, meta=song["meta"]):
-        staleness.store_plan(s, plan, seen, meta)
+        if plan or not restage:  # 重新识别后生成建议失败：留着原来的建议（已标成过时）
+            staleness.store_plan(s, plan, seen, meta)
+        charge(s)
         s.update(
             status="ready",
-            error="；".join(errors) or None,
-            usage=dict(claude.usage),
+            error="；".join(errors) or note,
             progress={"stage": "完成", "done": len(systems), "total": len(systems)},
         )
 
@@ -563,3 +578,218 @@ def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | 
         jobs.add_usage(s, claude.usage)
 
     store.update(sid, apply)
+
+
+# ---------------------------------------------------------------------------
+# 调整页面：补页、删页、换顺序
+# ---------------------------------------------------------------------------
+def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) -> dict:
+    """调整图片 / PDF 曲子的页。order 是新的页序，每项是已有页的文件名，或 "new:k"（第 k 个上传文件的全部页）。
+    不在 order 里的已有页删掉，连同上面的小节和练习记录。已有的行不重新识别（不花钱）；
+    新页做版面检测，之后在后台只识别新页上的行（还没有任何小节的曲子整首识别）。"""
+    cancel = jobs.claim_or_busy(sid, "这首曲子正在识别或生成讲解，完成后再调整页面")
+    started = False
+    try:
+        song = store.load(sid)
+        if songs.is_score(song):
+            raise Invalid("Guitar Pro / MusicXML 曲子没有页面可以调整")
+        if song.get("status") in ("parsing", "queued") or song.get("restaging"):
+            raise Busy("这首曲子正在识别，完成后再调整页面")
+        files = [pg["file"] for pg in song["pages"]]
+        new_ix = _check_order(order, files, len(uploads))
+        if uploads:
+            songs.check_upload_sizes(uploads)
+            jobs.check_llm_ready()  # 新页要识别：没配 key 就先别存
+
+        # 新页先存盘、做版面检测（都在改 song.json 之前，失败了曲子不受影响）
+        pages_dir = store.song_dir(sid) / "pages"
+        kept = [pg for pg in song["pages"] if pg["file"] in order]
+        added: dict[int, list[dict]] = {}
+        try:
+            for k in sorted(new_ix):
+                so_far = kept + [pg for pgs in added.values() for pg in pgs]
+                added[k] = songs._save_pages([uploads[k]], pages_dir, so_far)
+                if not added[k]:
+                    raise Invalid(f"“{uploads[k][0]}”里没有可用的页面")
+            new_pages, from_old = [], []  # 新页序；每页原来是第几页（新上传的是 None）
+            for x in order:
+                if x.startswith("new:"):
+                    new_pages += added[int(x[4:])]
+                    from_old += [None] * len(added[int(x[4:])])
+                else:
+                    new_pages.append(song["pages"][files.index(x)])
+                    from_old.append(files.index(x))
+            planned = {
+                npi: plan_page_systems(sid, pg, npi)
+                for npi, pg in enumerate(new_pages)
+                if from_old[npi] is None
+            }
+        except Exception:
+            for pgs in added.values():
+                for pg in pgs:
+                    (pages_dir / pg["file"]).unlink(missing_ok=True)
+            raise
+
+        pending: list[int] = []
+
+        def apply(s):
+            systems, sys_map = [], {}
+            for npi, opi in enumerate(from_old):
+                if opi is None:
+                    for info in planned[npi]:
+                        pending.append(len(systems))
+                        systems.append({**info, "status": "parsing" if s.get("bars") else "pending"})
+                    continue
+                for si, info in enumerate(s.get("systems") or []):
+                    if info.get("page") == opi:
+                        sys_map[si] = len(systems)
+                        systems.append({**info, "page": npi})
+            bars = [b for b in s.get("bars") or [] if b.get("system") in sys_map]
+            for k, b in enumerate(bars):
+                b["system"], b["_order"] = sys_map[b["system"]], k
+                b["page"] = systems[b["system"]]["page"]
+            bars.sort(key=lambda b: (b["system"], b["_order"]))
+            renumbered = len(bars) != len(s.get("bars") or []) or any(
+                b["n"] != i + 1 for i, b in enumerate(bars)
+            )
+            for i, b in enumerate(bars):
+                b["n"] = i + 1
+                b.pop("_order", None)
+            s.update(pages=new_pages, systems=systems, bars=bars)
+            if s.get("meta"):
+                apply_time_signatures(bars, s["meta"])
+            staleness.prune_practice(s)
+            if renumbered or pending:  # 小节号变了或多了小节，练习建议里的小节号对不上
+                staleness.invalidate_plan(s)
+            if pending and bars:
+                s["job"] = "pages"
+                s["progress"] = {"stage": "识别新加的页", "done": 0, "total": len(pending)}
+
+        song = store.update(sid, apply)
+        for f in set(files) - set(order):  # 删掉的页：曲子已经不再引用它们
+            (pages_dir / f).unlink(missing_ok=True)
+        if pending and song["bars"]:
+            jobs.spawn(sid, lambda: _recognize_new_rows(sid, pending, cancel))
+            started = True
+        elif pending:  # 原来一个小节都没识别出来：整首识别（包括读谱头）
+            jobs.jobs.release(sid)
+            started = True
+            start_parse(sid)
+        return store.load(sid)
+    finally:
+        if not started:
+            jobs.jobs.release(sid)
+
+
+def _check_order(order: list[str], files: list[str], n_uploads: int) -> set[int]:
+    """检查页序，返回其中新上传文件的序号。"""
+    if not order:
+        raise Invalid("至少要留一页")
+    if len(set(order)) != len(order):
+        raise Invalid("页序里有重复的页")
+    new_ix = set()
+    for x in order:
+        if x.startswith("new:"):
+            k = x[4:]
+            if not k.isdigit() or int(k) >= n_uploads:
+                raise Invalid("页序里的新文件对不上上传的文件")
+            new_ix.add(int(k))
+        elif x not in files:
+            raise Invalid("页序里有不认识的页（可能页面已经被改过，刷新后再试）")
+    if len(new_ix) != n_uploads:
+        raise Invalid("有上传的文件没有放进页序")
+    return new_ix
+
+
+def _recognize_new_rows(sid: str, rows: list[int], cancel: threading.Event) -> None:
+    """后台识别新加的页上的行，每行完成就写回（其他行照常能练、能改）。"""
+    claude = None
+    charged: dict = {}
+    failed: list[str] = []
+
+    def charge(s):
+        if claude:
+            now = dict(claude.usage)
+            jobs.add_usage(s, now, charged)
+            charged.update(now)
+
+    def one(si: int, ts: list[int] | None) -> list[int]:
+        song = store.load(sid)
+        # 起始小节号：前面各行已有的小节数；前面还没识别完的新行按检测到的小节数估（最后统一重新编号）
+        first = 1
+        for k, info in enumerate(song["systems"][:si]):
+            n = sum(1 for b in song["bars"] if b["system"] == k)
+            first += n or (
+                len(info["spans"]) if info.get("spans") else 0 if info.get("status") == "error" else 8
+            )
+        start_ts = ts or _row_start_ts(song["bars"], song["meta"], si)
+        bars = transcribe_queued(claude, sid, song, si, first, "", cancel=cancel, start_ts=start_ts)
+
+        def apply(s):
+            _replace_system_bars(s, si, bars)
+            apply_time_signatures(s["bars"], s["meta"])
+            s["systems"][si].update(status="done", error=None)
+            staleness.prune_practice(s)
+            if s.get("progress"):
+                s["progress"]["done"] = min(s["progress"]["total"], s["progress"]["done"] + 1)
+            charge(s)
+
+        store.update(sid, apply)
+        return start_ts
+
+    def run_batch(batch: list[tuple[int, list[int] | None]]) -> dict[int, list[int]]:
+        used = {}
+        with ThreadPoolExecutor(CONCURRENCY) as pool:
+            futs = {pool.submit(one, si, ts): si for si, ts in batch}
+            for fut in as_completed(futs):
+                si = futs[fut]
+                try:
+                    used[si] = fut.result()
+                except Exception as e:
+                    msg = "已取消" if isinstance(e, (Cancelled, CancelledError)) else jobs.friendly(e)
+                    if not isinstance(e, (Cancelled, CancelledError)):
+                        rid = request_id_of(e)
+                        log.exception("request_id=%s song=%s system=%d failed", rid, sid, si)
+                        failed.append(f"第 {si + 1} 行：{msg}")
+                    store.update(
+                        sid, lambda s, si=si, msg=msg: s["systems"][si].update(status="error", error=msg)
+                    )
+                if cancel.is_set():
+                    for f in futs:
+                        f.cancel()
+        return used
+
+    try:
+        claude = jobs.new_claude()
+        charged.update(claude.usage)
+        used = run_batch([(si, None) for si in rows])
+        # 新页上前面的行写了变拍号、后面的行并行识别时看不到：按实际的起始拍号再识别一次
+        song = store.load(sid)
+        redo = [
+            (si, ts)
+            for si, ts in ((si, _row_start_ts(song["bars"], song["meta"], si)) for si in used)
+            if ts != used[si] and not any("_orig" in b for b in song["bars"] if b["system"] == si)
+        ]
+        if redo and not cancel.is_set():
+            store.update(sid, lambda s: [s["systems"][si].update(status="parsing") for si, _ in redo])
+            run_batch(redo)
+    except Exception as e:  # 建客户端失败之类：没开始的行都标成失败
+        rid = request_id_of(e)
+        log.exception("request_id=%s song=%s new pages failed", rid, sid)
+        failed.append(jobs.friendly(e))
+    finally:
+
+        def end(s):
+            for si in rows:
+                if si < len(s["systems"]) and s["systems"][si].get("status") in ("parsing", "pending"):
+                    s["systems"][si].update(status="error", error="已取消" if cancel.is_set() else "没有识别")
+            s.pop("job", None)
+            s["progress"] = None
+            if failed:
+                s.update(
+                    error="新加的页有行没识别出来（" + "；".join(failed)[:300] + "），可以整首重新识别",
+                    error_kind="pages",
+                )
+            charge(s)
+
+        store.update(sid, end)

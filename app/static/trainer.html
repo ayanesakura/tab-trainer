@@ -47,7 +47,7 @@
         <div class="grp">
           <span class="lbl">速度</span>
           <button class="icon-btn sm" id="bpmDown" data-ic="minus" title="慢 4 BPM"></button>
-          <input type="range" id="bpm" min="30" max="140" value="50">
+          <input type="range" id="bpm" min="20" max="140" value="50">
           <button class="icon-btn sm" id="bpmUp" data-ic="plus" title="快 4 BPM"></button>
           <span class="bpm" id="bpmVal">50 BPM</span>
         </div>
@@ -69,7 +69,7 @@
         <span class="grp"><span class="lbl">示范音量</span><input class="vol" type="range" id="gtVol" min="0" max="100" value="80" aria-label="示范音量"></span>
         <span class="grp"><span class="lbl">音色</span><div class="seg sm" id="timbreSeg"><button data-v="steel" title="民谣吉他">钢弦</button><button data-v="nylon" title="古典吉他，更柔和">尼龙</button></div></span>
         <span class="grp"><label class="switch"><input type="checkbox" id="auto">自动提速</label>
-          <span class="lbl">每</span><input class="input num" type="number" id="autoEvery" value="2" min="1"><span class="lbl">遍 +</span><input class="input num" type="number" id="autoStep" value="4" min="1"><span class="lbl">到</span><input class="input num" type="number" id="autoTarget" value="72" min="30" max="140"></span>
+          <span class="lbl">每</span><input class="input num" type="number" id="autoEvery" value="2" min="1"><span class="lbl">遍 +</span><input class="input num" type="number" id="autoStep" value="4" min="1"><span class="lbl">到</span><input class="input num" type="number" id="autoTarget" value="72" min="20" max="140"></span>
       </div>
     </div>
 
@@ -155,8 +155,8 @@
     <div class="card">
       <div class="meta-grid">
         <label>曲名<input class="input" id="mTitle"></label>
-        <label class="meta-setting">1 弦（最细）<input class="input" id="mT1"></label><label class="meta-setting">2 弦<input class="input" id="mT2"></label><label class="meta-setting">3 弦<input class="input" id="mT3"></label>
-        <label class="meta-setting">4 弦<input class="input" id="mT4"></label><label class="meta-setting">5 弦<input class="input" id="mT5"></label><label class="meta-setting">6 弦（最粗）<input class="input" id="mT6"></label>
+        <label class="meta-setting">6 弦（最粗）<input class="input" id="mT6"></label><label class="meta-setting">5 弦<input class="input" id="mT5"></label><label class="meta-setting">4 弦<input class="input" id="mT4"></label>
+        <label class="meta-setting">3 弦<input class="input" id="mT3"></label><label class="meta-setting">2 弦<input class="input" id="mT2"></label><label class="meta-setting">1 弦（最细）<input class="input" id="mT1"></label>
         <label class="meta-setting">变调夹（品）<input class="input" id="mCapo" type="number" min="0" max="12"></label>
         <label class="meta-setting">拍号<input class="input" id="mTs" placeholder="4/4"></label>
       </div>

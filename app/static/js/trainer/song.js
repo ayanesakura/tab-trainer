@@ -43,14 +43,19 @@ function renderHeader() {
   const parts = [m.artist, m.arranger && m.arranger + ' 编配', m.tuning && '调弦 ' + [6, 5, 4, 3, 2, 1].map(s => OPEN_NAME[s]).join(' '),
     '变调夹 ' + (CAPO ? CAPO + ' 品' : '无'), m.time_signature && m.time_signature.join('/') + ' 拍' + (SONG.bars.some(b => b.time_signature) ? '（有变拍号）' : ''), `共 ${SONG.bars.length} 小节`];
   $('songSub').textContent = parts.filter(Boolean).join(' · ');
-  $('metaNote').style.display = m.notes ? '' : 'none';
-  $('metaNote').innerHTML = m.notes ? `<span class="dot" style="background:var(--accent)"></span><div><b>AI 备注：</b>${esc(m.notes)}</div>` : '';
+  // AI 读谱头时写的备注：可以关掉；同一段备注关掉后不再显示（备注变了才重新出现）
+  const noteKey = 'tt.noteHidden.' + SONG_ID, showNote = m.notes && localStorage.getItem(noteKey) !== m.notes;
+  $('metaNote').style.display = showNote ? '' : 'none';
+  $('metaNote').innerHTML = showNote ? `<span class="dot" style="background:var(--accent);margin-top:6px"></span><div style="flex:1"><b>AI 备注：</b>${esc(m.notes)}</div><button class="icon-btn sm" id="metaNoteClose" title="不再显示这条备注">${UI.icon('x')}</button>` : '';
+  if (showNote) $('metaNoteClose').onclick = () => { localStorage.setItem(noteKey, m.notes); $('metaNote').style.display = 'none'; };
   const running = SONG.running || SONG.status === 'parsing' || SONG.status === 'queued';
   const pr = SONG.progress || {};
   const explaining = SONG.job === 'explain';
   const what = explaining
     ? `正在生成讲解${pr.total ? `（${pr.done}/${pr.total} 批）` : ''}，可以照常练习。`
-    : SONG.restaging
+    : SONG.job === 'pages'
+      ? `正在识别新加的页${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}，其他小节可以照常练习。`
+      : SONG.restaging
       ? `正在重新识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}，完成前不能改谱。`
       : `正在识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}，已识别的小节可以先练。`;
   $('progressBox').style.display = running ? '' : 'none';

@@ -6,6 +6,11 @@
 
 from __future__ import annotations
 
+import difflib
+import json
+
+from app.music import check_bar
+
 SETTING_KEYS = ("tuning_midi", "capo", "time_signature")  # 这些变了，所有小节的提示都按旧设定写的
 
 
@@ -89,7 +94,8 @@ def invalidate_tips_for_setting(s: dict) -> None:
     """调弦 / 变调夹 / 拍号变了：所有提示和问答都按旧设定写的（AI 读谱的不确定说明和设定无关，保留）。"""
     for b in s["bars"]:
         b["tip"] = ""
-        b.pop("_orig", None)
+        if "_orig" in b:  # 改回原样时也不该恢复旧设定下写的提示；_orig 留着，重新识别时靠它认出手改过的小节
+            b["_orig"]["tip"] = ""
         mark_qa_stale(b)
     invalidate_plan(s)
 
@@ -99,3 +105,65 @@ def mark_qa_stale(bar: dict) -> None:
     for q in bar.get("qa") or []:
         q["stale"] = True
         q.pop("stale_by_edit", None)
+
+
+def carry_over(s: dict, meta: dict, bars: list[dict], keep_edits: bool = False) -> int:
+    """同一首曲子换成一批新小节（GP 重新转换、整首重新识别）：把原来小节的 id、提示、问答和练习记录搬到新小节上。
+    按内容做序列比对（小节数变了也能对上）：内容一样的原样保留；对不上但位置相当的（比对里的“替换”段）
+    保留 id 和练习记录，提示用新小节自己的、问答标成过时；新多出来的是新小节，没了的连同练习记录一起去掉。
+
+    keep_edits（重新识别图片谱子）：用户手改过的小节（有 _orig）按改之前的识别结果去比对，
+    一一对应上的保留用户改的音，新识别的结果记成它的 _orig（撤销回识别结果用）。
+    返回因为对不上而没能保留的手改小节数。调用方之后自己把 bars / meta 写进 s。"""
+    old_meta = s.get("meta") or {}
+    setting_changed_ = setting_changed(old_meta, meta)
+    old = s.get("bars") or []
+
+    def key(events, b):
+        return json.dumps([events, b.get("time_signature")], sort_keys=True)
+
+    def old_key(b):
+        orig = b.get("_orig") if keep_edits else None
+        return key(orig["events"] if orig else b["events"], b)
+
+    pairs = []  # (原来的小节, 新小节, 内容是否一样, 是否一一对应)
+    sm = difflib.SequenceMatcher(
+        None, [old_key(b) for b in old], [key(b["events"], b) for b in bars], autojunk=False
+    )
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op in ("equal", "replace"):
+            one_to_one = i2 - i1 == j2 - j1
+            pairs += [
+                (old[i], bars[j], op == "equal", one_to_one) for i, j in zip(range(i1, i2), range(j1, j2))
+            ]
+    paired = {id(p[0]) for p in pairs}
+    dropped = sum(1 for b in old if keep_edits and "_orig" in b and id(b) not in paired)
+    for prev, new, same, one_to_one in pairs:
+        new["id"] = prev["id"]
+        if prev.get("qa"):
+            new["qa"] = prev["qa"]
+        edited = keep_edits and "_orig" in prev
+        if edited and not setting_changed_ and (same or one_to_one):
+            _keep_edit(prev, new, meta)
+            continue
+        dropped += edited
+        if same and not setting_changed_:
+            new["tip"] = prev.get("tip") or new.get("tip", "")  # 讲解补写的提示比识别时顺手写的更完整
+            continue
+        mark_qa_stale(new)
+        if not setting_changed_:
+            invalidate_plan(s, new["id"])
+    if setting_changed_ or len(old) != len(bars):  # 小节编号整体移动了，练习建议里的小节号对不上
+        invalidate_plan(s)
+    return dropped
+
+
+def _keep_edit(prev: dict, new: dict, meta: dict) -> None:
+    """重新识别后保留用户手改的音：识别结果放进 _orig，改回去时还能恢复。"""
+    if prev["events"] == new["events"]:  # 新识别的正好就是用户改成的样子
+        new["tip"] = prev.get("tip") or new.get("tip", "")
+        return
+    new["_orig"] = {"events": new["events"], "tip": new.get("tip", ""), "uncertain": new.get("uncertain", "")}
+    new["events"] = prev["events"]
+    new["tip"], new["uncertain"] = prev.get("tip", ""), ""
+    new["warn"] = check_bar(new["events"], meta, bar=new)

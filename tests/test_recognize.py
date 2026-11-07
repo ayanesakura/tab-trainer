@@ -232,7 +232,7 @@ def _parsed_song_with_user_data():
     recognize.run_parse(sid)
     bars = store.load(sid)["bars"]
     songs.edit_bar(sid, bars[1]["id"], [{"dur": "4", "notes": [{"string": 2, "fret": 7}]}], None)
-    songs.edit_meta(sid, {"title": "我起的名字", "capo": 3})
+    songs.edit_meta(sid, {"title": "我起的名字", "capo": 3, "tuning": ["E4", "B3", "G3", "D3", "A2", "D2"]})
     songs.record_practice(sid, {"bar_ids": [bars[0]["id"]], "loops": 2, "bpm": 60, "seconds": 30})
     return sid, store.load(sid)
 
@@ -263,14 +263,40 @@ def test_failed_or_cancelled_reparse_keeps_the_old_result(data_dir, sync_jobs, m
     songs.edit_bar(sid, after["bars"][0]["id"], [{"dur": "4", "notes": []}], None)  # 之后照常能改
 
 
-def test_successful_reparse_replaces_everything_but_the_title(data_dir, sync_jobs):
+def test_successful_reparse_keeps_user_data_on_matching_bars(data_dir, sync_jobs):
     sid, before = _parsed_song_with_user_data()
+    store.update(sid, lambda s: s["bars"][0].update(qa=[{"q": "怎么弹", "a": "慢慢弹"}]))
     assert recognize.start_parse(sid)
     after = store.load(sid)
     assert after["status"] == "ready" and not after["error"] and not after.get("restaging")
-    assert not {b["id"] for b in after["bars"]} & {b["id"] for b in before["bars"]}
-    assert after["meta"]["capo"] == 2 and after["meta"]["title"] == "我起的名字"
-    assert after["plan"]["overview"] == "ok" and not after["practice"]["bars"]
+    # 新结果和原来的识别一样：小节 id、问答、练习记录都保留；手改的小节保留用户改的音
+    assert [b["id"] for b in after["bars"]] == [b["id"] for b in before["bars"]]
+    assert after["bars"][0]["qa"] == [{"q": "怎么弹", "a": "慢慢弹"}]
+    assert after["bars"][1]["events"] == before["bars"][1]["events"] and "_orig" in after["bars"][1]
+    assert after["practice"]["bars"] == before["practice"]["bars"]
+    # 曲名、用户改过的变调夹以用户的为准（模型读出来是 2）
+    assert after["meta"]["capo"] == 3 and after["meta"]["title"] == "我起的名字"
+    assert after["meta"]["tuning"] == ["E4", "B3", "G3", "D3", "A2", "D2"]
+    assert after["meta"]["tuning_midi"] == before["meta"]["tuning_midi"]
+    assert after["plan"]["overview"] == "ok"
+
+
+def test_reparse_with_different_result_drops_mismatched_data(data_dir, sync_jobs, monkeypatch):
+    sid, before = _parsed_song_with_user_data()
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):  # 第二行这次少识别出一个小节
+        out = real(self, img, meta, first_bar, spans, *a, **kw)
+        if first_bar > 1:
+            out["bars"] = out["bars"][:-1]
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    assert len(after["bars"]) == len(before["bars"]) - 1
+    assert [b["id"] for b in after["bars"]] == [b["id"] for b in before["bars"][:-1]]
+    assert after["bars"][0]["id"] in after["practice"]["bars"]
 
 
 def test_edits_that_recognition_would_overwrite_are_refused(data_dir, monkeypatch):

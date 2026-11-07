@@ -182,9 +182,32 @@ def list_songs() -> list[dict]:
                     "created": s.get("created"),
                     "kind": s.get("kind", "image"),
                     "source_type": source_type(s),
+                    "tags": [t for t in s.get("tags") or [] if isinstance(t, str)],
+                    "last_practiced": ((s.get("practice") or {}).get("last") or {}).get("at") or "",
+                    **cost_summary(s.get("usage")),
                 }
             )
     return out
+
+
+def cost_summary(usage) -> dict:
+    """曲库里显示的花费（美元）。早期的曲子只记了 token：按默认模型（Opus）的价格估算，标成估算。
+    用了价格表里没有的模型（自定义）的那部分只有 token，没法算钱，也标出来。"""
+    from app.llm import DEFAULT_MODEL, price_of
+
+    u = usage if isinstance(usage, dict) else {}
+    tin, tout = u.get("input_tokens") or 0, u.get("output_tokens") or 0
+    if "cost_usd" in u:
+        cost, estimated = float(u.get("cost_usd") or 0), False
+    else:
+        price = price_of(DEFAULT_MODEL) or (0, 0)
+        cost, estimated = (tin * price[0] + tout * price[1]) / 1e6, bool(tin or tout)
+    return {
+        "cost_usd": round(cost, 4),
+        "cost_estimated": estimated,
+        "unpriced_tokens": int(u.get("unpriced_tokens") or 0),
+        "tokens": tin + tout,
+    }
 
 
 def load_config() -> dict:

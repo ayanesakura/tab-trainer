@@ -42,7 +42,27 @@ def test_usage_is_counted_exactly_under_concurrency(monkeypatch):
         t.start()
     for t in threads:
         t.join()
-    assert c.usage == {"input_tokens": 3 * 1600, "output_tokens": 5 * 1600}
+    assert c.usage["input_tokens"] == 3 * 1600 and c.usage["output_tokens"] == 5 * 1600
+    # 默认模型 Opus：每百万 token 输入 $4、输出 $20
+    assert c.usage["cost_usd"] == pytest.approx((3 * 4 + 5 * 20) * 1600 / 1e6)
+    assert c.usage["unpriced_tokens"] == 0
+
+
+def test_unknown_model_counts_unpriced_tokens(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.llm import Claude, LLMConfig, price_of
+
+    assert price_of("compass/claude-opus-5-5") == price_of("claude-opus-5-5")
+    c = Claude(LLMConfig(api_key="sk-test", model="my-local-model"))
+    msg = SimpleNamespace(
+        usage=SimpleNamespace(input_tokens=3, output_tokens=5),
+        stop_reason="end_turn",
+        content=[SimpleNamespace(type="text", text="{}")],
+    )
+    monkeypatch.setattr(c, "_stream", lambda kwargs, fallbacks=None: msg)
+    c._call([], {})
+    assert c.usage["cost_usd"] == 0 and c.usage["unpriced_tokens"] == 8
 
 
 def test_request_ids_reach_errors_and_logs(monkeypatch):
