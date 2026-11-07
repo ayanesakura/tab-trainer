@@ -11,6 +11,8 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from PIL import Image
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("TAB_TRAINER_DATA", ROOT / "data"))
 SONGS = DATA / "songs"
@@ -59,6 +61,16 @@ def update(song_id: str, fn: Callable[[dict], None]) -> dict:
         fn(song)
         save(song)
         return song
+
+
+def patch(song_id: str, **fields) -> dict:
+    """update 的简写：直接覆盖几个顶层字段。"""
+    return update(song_id, lambda s: s.update(fields))
+
+
+def page_image(song_id: str, page: dict) -> Image.Image:
+    """曲子某一页的原图（RGB）。"""
+    return Image.open(song_dir(song_id) / "pages" / page["file"]).convert("RGB")
 
 
 def list_songs() -> list[dict]:

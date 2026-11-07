@@ -1,5 +1,5 @@
-from app import evaluate, pipeline, store
-from tests.test_pipeline import FakeClaude, _png, data_dir  # noqa: F401 - pytest fixture
+from app import evaluate, recognize, songs, store
+from tests.fakes import FakeClaude, score_png
 
 
 def ev(dur, *notes, tech=()):
@@ -23,9 +23,9 @@ def test_missing_bar_scores_zero_recall():
     assert c["notes"] == (0, 1, 0) and not c["exact"]
 
 
-def test_run_end_to_end_with_fake_model(data_dir, monkeypatch):  # noqa: F811
-    sid = pipeline.create_song([("p1.png", _png())])
-    pipeline._run_parse(sid)  # 用替身模型生成的结果当“标准答案”
+def test_run_end_to_end_with_fake_model(data_dir, monkeypatch):
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)  # 用替身模型生成的结果当“标准答案”
     monkeypatch.setattr(evaluate, "Claude", FakeClaude)
     rep = evaluate.run(sid, evaluate.LLMConfig(model="claude-opus-5-5"), None, 2)
     s = rep["summary"]

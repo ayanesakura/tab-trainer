@@ -88,8 +88,8 @@ key 只保存在本机 `data/config.json`（权限 600）。也可以不在页�
    - 把每一行（五线谱 + 六线谱）裁出来交给 Claude，同时告诉它这一行有几个小节、每个小节的横向位置，要求按 JSON Schema 输出；
    - 裁出来的图上，六线谱左边用红色标出弦号 1–6。模型数线时容易把低音弦上的数字往下错一根（5 弦读成 6 弦），标上之后评测里这类错误从每次 1–4 处降到 0（只在文字里告诉它弦线坐标没有用）；
    - 首页另做一次调用，读出曲名、调弦、变调夹和拍号。
-3. `app/pipeline.py`：
-   - 4 路并发识别，校验时值、返修，再给全曲统一编号；
+3. `app/recognize.py`：
+   - 4 路并发识别（所有曲子合计最多 4 行同时进行），校验时值、返修，再给全曲统一编号；
    - `app/ocr.py`：本机读每一行的品位数字（版面用我们自己检测到的弦线位置，数字识别用 PaddleOCR 的识别模型，只解码 0–9），和 AI 的结果对比后把差异交给返修。评测曲上它读出的（弦, 品）有 99.4%–100% 是对的；
    - 最后根据全曲内容生成分段练习建议。
 4. `app/static/`：曲库页和练习页。谱面和示范音由 alphaTab 在浏览器里渲染和合成，音色库是本地文件，不需要联网。
@@ -154,12 +154,32 @@ uv run python -m app.evaluate eval-xxx --yes
 - 紧贴在六线谱上方的整行 “LetRing - - -” 虚线（离一弦大约 1.6 倍线距）会和一弦凑成一组，剩下 5 根线被当成五线谱，整行丢失。用 `--hide effectLetRing` 绕开。
 - 一页图太矮（谱线间距超过图高的 3%，比如一页只有一两行六线谱）时整页检测不到谱线；最后一行很短（不到 12 倍线距宽，比如只有一个全音符小节）时这一行会被丢掉。调 `--per-page`、`--bars-per-row` 绕开。
 
+## 代码结构
+
+后端按职责分层，下层不依赖上层：
+
+| 模块 | 职责 |
+|---|---|
+| `app/main.py` | HTTP 接口（只做参数整理和调用，业务错误由统一的异常处理转成状态码） |
+| `app/auth.py` | 局域网访问令牌 |
+| `app/songs.py` | 曲库：新建（图片 / PDF / GP / MusicXML）、保存浏览器转换的小节、手工修改、练习记录、启动恢复 |
+| `app/recognize.py` | 图片谱子识别：版面 → 逐行调模型 → OCR 校对 → 返修 → 练习建议；单行重新识别 |
+| `app/coach.py` | AI 讲解（补写小节提示、重新生成练习建议）和小节问答 |
+| `app/jobs.py` | 后台任务登记 / 取消（每首曲子同时一个）、模型客户端、错误说明 |
+| `app/staleness.py` | 改谱后 AI 内容和练习记录的失效与恢复（纯函数） |
+| `app/music.py` | 数据模型：调弦、拍号、时值、事件和反复记号的整理与校验（纯函数） |
+| `app/errors.py` | 业务错误类型（Invalid 400 / NotFound 404 / Busy 409 / Upstream 502） |
+| `app/llm.py`、`app/layout.py`、`app/ocr.py` | 模型调用、版面检测、本机数字识别 |
+| `app/store.py` | `data/` 下的 JSON 读写（加锁的读-改-写） |
+| `app/evaluate.py` | 识别准确率评测 |
+
+测试和模块一一对应（`tests/test_<模块>.py`），替身模型和合成谱子在 `tests/fakes.py`，公共 fixture 在 `tests/conftest.py`。
+
 ## 开发
 
 ```bash
-uv run pytest tests/
-node --test tests/js/*.test.mjs     # 数据 ⇄ alphaTab 往返校验
-uvx ruff check app tests scripts && uvx ruff format --check app tests scripts
+scripts/check.sh           # lint + 格式 + Python 单元测试 + JS 数据转换测试
+scripts/check.sh --e2e     # 再加浏览器端到端测试（需要 Chrome，约 20 秒）
 ```
 
 上传的谱子、识别结果和配置都在 `data/` 下，不进版本库。

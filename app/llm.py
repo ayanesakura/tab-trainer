@@ -19,14 +19,14 @@ from dataclasses import dataclass
 import anthropic
 from PIL import Image
 
+from app.music import TECHS
+
 log = logging.getLogger("tab_trainer.llm")
 
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_BASE_URL = "https://api.anthropic.com"
 MAX_EDGE = 2576  # 当前模型支持的最大长边，超过会被缩小
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
-
-TECHS = ["h", "p", "sl", "si", "pm", "nh", "ah", "roll", "x", "vib", "bend"]
 
 
 @dataclass

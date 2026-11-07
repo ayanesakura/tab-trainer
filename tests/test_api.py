@@ -1,0 +1,46 @@
+"""HTTP 接口：业务错误按类型映射成状态码，上传后只有图片曲子会启动识别。"""
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import main, recognize
+from tests.fakes import derived_bars, score_png
+
+
+@pytest.fixture
+def client(data_dir, monkeypatch):
+    started = []
+    monkeypatch.setattr(recognize, "start_parse", lambda sid: started.append(sid) or True)
+    c = TestClient(main.app)
+    c.started = started
+    return c
+
+
+def test_upload_starts_recognition_only_for_images(client):
+    img = client.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
+    gp = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    assert client.started == [img]
+    assert client.get(f"/api/songs/{gp}").json()["status"] == "imported"
+
+
+def test_upload_rejects_bad_files(client):
+    r = client.post("/api/songs", files={"files": ("x.gp5", b"not a score")})
+    assert r.status_code == 400 and "不是有效" in r.json()["detail"]
+    r = client.post("/api/songs", files={"files": ("p.png", b"not an image")})
+    assert r.status_code == 400 and "文件无法读取" in r.json()["detail"]
+    assert client.started == []
+
+
+def test_domain_errors_map_to_status_codes(client):
+    sid = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    assert client.put(f"/api/songs/{sid}/derived", json={"bars": derived_bars(2)}).status_code == 200
+
+    r = client.put(f"/api/songs/{sid}/bars/nope", json={"events": []})
+    assert r.status_code == 404 and "小节不存在" in r.json()["detail"]
+    bar_id = client.get(f"/api/songs/{sid}").json()["bars"][0]["id"]
+    r = client.put(f"/api/songs/{sid}/bars/{bar_id}", json={"events": [{"dur": "x"}]})
+    assert r.status_code == 400 and r.json()["detail"].startswith("小节数据格式不对")
+    assert client.put(f"/api/songs/{sid}/meta", json={"capo": 99}).status_code == 400
+    assert client.post(f"/api/songs/{sid}/practice", json={}).status_code == 400
+    assert client.post(f"/api/songs/{sid}/cancel").status_code == 409
+    assert client.get("/api/songs/20260101-000000-abcdef").status_code == 404

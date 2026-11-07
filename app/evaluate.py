@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from pathlib import Path
 
-from app import pipeline, store
+from app import jobs, recognize, store
 from app.llm import Claude, LLMConfig
 
 log = logging.getLogger("tab_trainer.evaluate")
@@ -129,9 +129,9 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
     def one(si: int):
         first = by_sys[si][0]["n"] if by_sys.get(si) else 1
         try:
-            return si, pipeline._transcribe_system(claude, sid, truth, si, first), None
+            return si, recognize.transcribe_system(claude, sid, truth, si, first), None
         except Exception as e:  # noqa: BLE001 - 单行失败照样出报告
-            return si, [], pipeline._friendly(e)
+            return si, [], jobs.friendly(e)
 
     started = time.time()
     with ThreadPoolExecutor(concurrency) as pool:
@@ -256,7 +256,7 @@ def main() -> None:
         return
     systems = [int(x) for x in a.systems.split(",")] if a.systems else None
     n_sys = len(systems) if systems is not None else len(truth["systems"])
-    cfg = pipeline.llm_config()
+    cfg = jobs.llm_config()
     if a.model:
         cfg.model = a.model
     if a.effort:

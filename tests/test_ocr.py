@@ -1,8 +1,8 @@
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
-from app import ocr, pipeline, store
-from tests.test_pipeline import FakeClaude, _png, data_dir  # noqa: F401 - pytest fixture
+from app import ocr, recognize, songs, store
+from tests.fakes import FakeClaude, score_png
 
 pytestmark = pytest.mark.skipif(
     not ocr.available(), reason="本地数字识别不可用（缺 onnxruntime / opencv 或模型文件）"
@@ -73,24 +73,24 @@ def test_disagreements_rules():
         bar((4, 4, (), -1)),  # OCR 什么都没读到：不判断
     ]
     seen = [[(5, 0), (1, 2)], [(5, 0)], [(1, 2), (1, 14)], [(2, 1), (2, 3)], []]
-    out = pipeline.ocr_disagreements(bars, seen)
+    out = recognize.ocr_disagreements(bars, seen)
     assert list(out) == [1]
     only_ocr, only_ai = out[1]
     assert dict(only_ocr) == {(5, 0): 1} and dict(only_ai) == {(6, 0): 1}
     # 两位数被 OCR 拆成两个数字：算一致；但真的是两个音时（AI 只写了一个 1）照样报
     assert (
-        pipeline.ocr_disagreements([bar((1, 11, (), -1), (2, 0, (), -1))], [[(1, 1), (1, 1), (2, 0)]]) == {}
+        recognize.ocr_disagreements([bar((1, 11, (), -1), (2, 0, (), -1))], [[(1, 1), (1, 1), (2, 0)]]) == {}
     )
     assert list(
-        pipeline.ocr_disagreements([bar((1, 1, (), -1), (2, 0, (), -1))], [[(1, 1), (1, 1), (2, 0)]])
+        recognize.ocr_disagreements([bar((1, 1, (), -1), (2, 0, (), -1))], [[(1, 1), (1, 1), (2, 0)]])
     ) == [0]
     # 跨小节线的延续音“(2)”：OCR 多读一个和上一小节最后一个音相同的品位，不算；同时 AI 也有对不上的音时照样报
     tie = [bar((1, 2, (), -1), (5, 0, (), -1)), bar((2, 3, (), -1), (4, 0, (), -1))]
-    assert pipeline.ocr_disagreements(tie, [[(1, 2), (5, 0)], [(1, 2), (2, 3), (4, 0)]]) == {}
+    assert recognize.ocr_disagreements(tie, [[(1, 2), (5, 0)], [(1, 2), (2, 3), (4, 0)]]) == {}
     shifted = [bar((5, 0, (), -1), (1, 2, (), -1)), bar((6, 0, (), -1), (1, 3, (), -1))]
-    assert list(pipeline.ocr_disagreements(shifted, [[(5, 0), (1, 2)], [(5, 0), (1, 3)]])) == [1]
+    assert list(recognize.ocr_disagreements(shifted, [[(5, 0), (1, 2)], [(5, 0), (1, 3)]])) == [1]
     # 一致率太低：多半是 OCR 读不准这种排版，整行不判断
-    assert pipeline.ocr_disagreements(bars[:2], [[(3, 3)], [(4, 4)]]) == {}
+    assert recognize.ocr_disagreements(bars[:2], [[(3, 3)], [(4, 4)]]) == {}
 
 
 def test_high_frets_split_by_ocr_still_agree():
@@ -100,19 +100,19 @@ def test_high_frets_split_by_ocr_still_agree():
         return {"dur": "1", "notes": [{"string": st, "fret": f, "tech": [], "grace": -1}]}
 
     bars = [{"events": [ev(1, 25), ev(2, 30), ev(3, 5), ev(4, 0)]}]
-    assert pipeline.ocr_disagreements(bars, [[(1, 2), (1, 5), (2, 3), (2, 0), (3, 5), (4, 0)]]) == {}
+    assert recognize.ocr_disagreements(bars, [[(1, 2), (1, 5), (2, 3), (2, 0), (3, 5), (4, 0)]]) == {}
 
 
-def test_parse_retries_on_ocr_disagreement_and_warns_if_unresolved(data_dir, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(pipeline, "OCR_CHECK", True)
+def test_parse_retries_on_ocr_disagreement_and_warns_if_unresolved(data_dir, monkeypatch):
+    monkeypatch.setattr(recognize, "OCR_CHECK", True)
 
     def fake_ocr(gray, lines, spans):
         # 替身模型每个小节写 4 个 1 弦 i 品；OCR 说第 1 行第 2 小节的 1 弦 1 品其实在 2 弦
         return [[(1, i)] * 4 if i != 1 else [(1, 1)] * 3 + [(2, 1)] for i in range(len(spans))]
 
-    monkeypatch.setattr(pipeline.ocr, "read_system", fake_ocr)
-    sid = pipeline.create_song([("p1.png", _png())])
-    pipeline._run_parse(sid)
+    monkeypatch.setattr(recognize.ocr, "read_system", fake_ocr)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
     song = store.load(sid)
     retries = [c for c in FakeClaude.calls if c.get("retry")]
     assert {c["first_bar"] for c in retries} == {1, 4}  # 两行的第 2 小节都和 OCR 不一致

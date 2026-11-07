@@ -36,7 +36,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app import pipeline, store
+from app import music, recognize, songs, store
 from app.layout import detect_page
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -267,10 +267,9 @@ def main() -> None:
         full.crop((0, cuts[k], full.width, cuts[k + 1])).save(buf, "PNG")
         pages.append((f"page{k + 1}.png", buf.getvalue()))
 
-    pipeline.start_parse = lambda sid: None  # 只建曲子，不调用模型
-    sid = pipeline.create_song(pages, title=a.title or truth["meta"].get("title") or a.song_id)
+    sid = songs.create_song(pages, title=a.title or truth["meta"].get("title") or a.song_id)
     song = store.load(sid)
-    planned = pipeline._plan_systems(sid, song)
+    planned = recognize.plan_systems(sid, song)
     counts = [len(s["spans"] or []) for s in planned]
     if sum(counts) != len(truth["bars"]):
         shutil.rmtree(store.SONGS / sid)
@@ -279,19 +278,19 @@ def main() -> None:
             f"（alphaTab 实际每行 {rows}）"
         )
 
-    meta = pipeline.normalize_meta({**truth["meta"], "title": a.title or truth["meta"].get("title", "")})
+    meta = music.normalize_meta({**truth["meta"], "title": a.title or truth["meta"].get("title", "")})
     bars, k = [], 0
     for si, s in enumerate(planned):
         s["status"] = "done"
         for x_a, x_b in s["spans"]:
             tb = truth["bars"][k]
-            events = pipeline.clean_events(tb["events"])
-            ts = pipeline.clean_time_signature(tb.get("time_signature") or meta["time_signature"])
+            events = music.clean_events(tb["events"])
+            ts = music.clean_time_signature(tb.get("time_signature") or meta["time_signature"])
             own = {"time_signature": ts} if ts and ts != meta["time_signature"] else {}
             bars.append(
                 {
                     **own,
-                    "id": pipeline.new_bar_id(),
+                    "id": music.new_bar_id(),
                     "n": k + 1,
                     "system": si,
                     "page": s["page"],
@@ -299,8 +298,8 @@ def main() -> None:
                     "events": events,
                     "tip": "",
                     "uncertain": "",
-                    "warn": pipeline.check_bar(events, meta, bar=own),
-                    **pipeline.clean_repeats(tb),
+                    "warn": music.check_bar(events, meta, bar=own),
+                    **music.clean_repeats(tb),
                 }
             )
             k += 1

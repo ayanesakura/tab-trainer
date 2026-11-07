@@ -14,56 +14,30 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import pipeline, store
-from app.llm import DEFAULT_MODEL, Claude
+from app import auth, coach, jobs, recognize, songs, store
+from app.errors import AppError
+from app.llm import DEFAULT_MODEL
 
 STATIC = store.ROOT / "app" / "static"
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    pipeline.recover_interrupted()  # 上次服务关掉时没跑完的识别，标成中断
+    songs.recover_interrupted()  # 上次服务关掉时没跑完的任务，标成中断
     yield
 
 
 app = FastAPI(title="tab-trainer", lifespan=lifespan)
-app.state.token = None  # 绑定到非本机地址时才设置（见 main）：局域网里的其他设备要带这个令牌才能访问
-
-LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"}
-TOKEN_COOKIE = "tt_token"
-DENIED_PAGE = """<!doctype html><meta charset="utf-8"><title>tab-trainer</title>
-<body style="font-family:system-ui;max-width:520px;margin:80px auto;line-height:1.7;color:#333">
-<h2>需要访问令牌</h2><p>tab-trainer 开放了局域网访问，其他设备需要用带令牌的地址打开一次。</p>
-<p>请在运行 tab-trainer 的电脑上，从启动时打印的信息里复制完整地址（以 <code>?token=</code> 结尾）。</p></body>"""
+auth.install(app)
 
 
-def _same(a: str, b: str) -> bool:
-    return secrets.compare_digest(
-        a.encode("utf-8"), b.encode("utf-8")
-    )  # 直接比较 str 时非 ASCII 会抛 TypeError
-
-
-@app.middleware("http")
-async def require_token(request: Request, call_next):
-    """局域网访问时校验令牌：本机访问不需要；带 ?token= 的地址校验通过后写进 Cookie 并去掉地址里的令牌。"""
-    token = app.state.token
-    client = request.client.host if request.client else ""
-    if not token or client in LOOPBACK:
-        return await call_next(request)
-    given = request.query_params.get("token")
-    if given is not None and _same(given, token):
-        url = request.url.remove_query_params("token")
-        resp = RedirectResponse(str(url), status_code=303)
-        resp.set_cookie(TOKEN_COOKIE, token, max_age=30 * 86400, httponly=True, samesite="lax")
-        return resp
-    if _same(request.cookies.get(TOKEN_COOKIE, ""), token):
-        return await call_next(request)
-    if request.url.path.startswith("/api/") or request.url.path.startswith("/files/"):
-        return JSONResponse({"detail": "需要访问令牌"}, status_code=401)
-    return HTMLResponse(DENIED_PAGE, status_code=401)
+@app.exception_handler(AppError)
+async def app_error(_request: Request, e: AppError):
+    """业务错误（见 app/errors.py）：按类型返回 400 / 404 / 409 / 502，消息原样给前端显示。"""
+    return JSONResponse({"detail": str(e)}, status_code=e.status)
 
 
 def _song(sid: str) -> dict:
@@ -139,9 +113,9 @@ def put_settings(body: Annotated[dict, Body()]):
 @app.post("/api/settings/test")
 def test_settings():
     try:
-        Claude(pipeline.llm_config()).ping()
+        jobs.new_claude().ping()
     except Exception as e:  # noqa: BLE001 - 任何错误都原样展示给用户
-        return {"ok": False, "error": pipeline._friendly(e)}
+        return {"ok": False, "error": jobs.friendly(e)}
     return {"ok": True}
 
 
@@ -149,7 +123,7 @@ def test_settings():
 # 曲子
 # ---------------------------------------------------------------------------
 @app.get("/api/songs")
-def songs():
+def list_songs():
     return store.list_songs()
 
 
@@ -157,11 +131,13 @@ def songs():
 async def upload(files: Annotated[list[UploadFile], File()], title: Annotated[str, Form()] = ""):
     uploads = [(f.filename or "upload", await f.read()) for f in files]
     try:
-        sid = pipeline.create_song(uploads, title)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from None
+        sid = songs.create_song(uploads, title)
+    except AppError:
+        raise
     except Exception as e:  # noqa: BLE001 - 图片/PDF 解码失败的异常类型很多
         raise HTTPException(400, f"文件无法读取：{e}") from None
+    if not songs.is_score(store.load(sid)):
+        recognize.start_parse(sid)
     return {"id": sid}
 
 
@@ -169,15 +145,15 @@ async def upload(files: Annotated[list[UploadFile], File()], title: Annotated[st
 def song(sid: str):
     s = _song(sid)
     if any(not b.get("id") for b in s.get("bars", [])):  # 旧格式数据：补上小节 id，前端按 id 定位小节
-        s = store.update(sid, pipeline.ensure_bar_ids)
-    s["running"] = pipeline.is_running(sid)
+        s = store.update(sid, songs.ensure_bar_ids)
+    s["running"] = jobs.jobs.running(sid)
     return s
 
 
 @app.delete("/api/songs/{sid}")
 def delete_song(sid: str):
     _song(sid)
-    if pipeline.is_running(sid):
+    if jobs.jobs.running(sid):
         raise HTTPException(409, "正在识别中，完成后再删除")
     shutil.rmtree(store.song_dir(sid))
     return {"ok": True}
@@ -185,14 +161,10 @@ def delete_song(sid: str):
 
 @app.post("/api/songs/{sid}/parse")
 def reparse_all(sid: str):
-    s = _song(sid)
-    if s.get("kind") == "score":
+    if songs.is_score(_song(sid)):
         raise HTTPException(400, "Guitar Pro / MusicXML 曲子不需要识别")
-    try:
-        pipeline.check_llm_ready()
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from None
-    if not pipeline.start_parse(sid):
+    jobs.check_llm_ready()
+    if not recognize.start_parse(sid):
         raise HTTPException(409, "已经在识别中")
     return {"ok": True}
 
@@ -200,39 +172,28 @@ def reparse_all(sid: str):
 @app.put("/api/songs/{sid}/derived")
 def put_derived(sid: str, body: Annotated[dict, Body()]):
     _song(sid)
-    try:
-        return pipeline.set_derived(
-            sid, body.get("meta") or {}, body.get("bars") or [], body.get("track") or 0, body.get("derived")
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from None
+    return songs.set_derived(
+        sid, body.get("meta") or {}, body.get("bars") or [], body.get("track") or 0, body.get("derived")
+    )
 
 
 @app.post("/api/songs/{sid}/import-error")
 def import_error(sid: str, body: Annotated[dict, Body()]):
     _song(sid)
-    try:
-        return pipeline.import_failed(sid, str(body.get("error") or ""))
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from None
+    return songs.import_failed(sid, str(body.get("error") or ""))
 
 
 @app.post("/api/songs/{sid}/explain")
 def explain(sid: str):
     _song(sid)
-    try:
-        pipeline.start_explain(sid)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from None
-    except RuntimeError as e:
-        raise HTTPException(409, str(e)) from None
+    coach.start_explain(sid)
     return {"ok": True}
 
 
 @app.post("/api/songs/{sid}/cancel")
 def cancel(sid: str):
     _song(sid)
-    if not pipeline.cancel_parse(sid):
+    if not jobs.jobs.cancel(sid):
         raise HTTPException(409, "没有正在进行的识别")
     return {"ok": True}
 
@@ -240,10 +201,7 @@ def cancel(sid: str):
 @app.put("/api/songs/{sid}/meta")
 def put_meta(sid: str, body: Annotated[dict, Body()]):
     _song(sid)
-    try:
-        return pipeline.edit_meta(sid, body)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from None
+    return songs.edit_meta(sid, body)
 
 
 @app.put("/api/songs/{sid}/bars/{bar_id}")
@@ -251,34 +209,19 @@ def put_bar(sid: str, bar_id: str, body: Annotated[dict, Body()]):
     _song(sid)
     if "events" not in body:
         raise HTTPException(400, "缺少 events")
-    try:
-        return pipeline.edit_bar(sid, bar_id, body["events"], body.get("tip"))
-    except pipeline.BarNotFound:
-        raise HTTPException(404, "小节不存在（可能刚被重新识别，请刷新页面）") from None
-    except ValueError as e:
-        raise HTTPException(400, f"小节数据格式不对：{e}") from None
+    return songs.edit_bar(sid, bar_id, body["events"], body.get("tip"))
 
 
 @app.post("/api/songs/{sid}/bars/{bar_id}/ask")
 def ask_bar(sid: str, bar_id: str, body: Annotated[dict, Body()]):
     _song(sid)
-    try:
-        return pipeline.ask_bar(sid, bar_id, str(body.get("question") or ""))
-    except pipeline.BarNotFound:
-        raise HTTPException(404, "小节不存在（可能刚被重新识别，请刷新页面）") from None
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from None
-    except pipeline.CoachError as e:
-        raise HTTPException(502, str(e)) from None
+    return coach.ask_bar(sid, bar_id, str(body.get("question") or ""))
 
 
 @app.post("/api/songs/{sid}/practice")
 def practice(sid: str, body: Annotated[dict, Body()]):
     _song(sid)
-    try:
-        return pipeline.record_practice(sid, body)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from None
+    return songs.record_practice(sid, body)
 
 
 @app.post("/api/songs/{sid}/systems/{si}/reparse")
@@ -286,13 +229,7 @@ def reparse_line(sid: str, si: int, body: Annotated[dict | None, Body()] = None)
     s = _song(sid)
     if not 0 <= si < len(s.get("systems", [])):
         raise HTTPException(404, "这一行不存在")
-    hint = str((body or {}).get("hint") or "").strip()
-    try:
-        pipeline.start_reparse(sid, si, hint)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from None
-    except RuntimeError as e:
-        raise HTTPException(409, str(e)) from None
+    recognize.start_reparse(sid, si, str((body or {}).get("hint") or "").strip())
     return {"ok": True}
 
 
@@ -318,7 +255,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     import uvicorn
 
-    if a.host in LOOPBACK:
+    if a.host in auth.LOOPBACK:
         print(f"\n  tab-trainer 已启动：http://{a.host}:{a.port}\n")
     else:
         # 开放给局域网：其他设备必须带令牌（谱子、API key 设置、删除和会产生费用的模型调用都在这些接口后面）

@@ -28,19 +28,17 @@ def pytest_collection_modifyitems(config, items):
                 it.add_marker(skip)
 
 
-def _seed(store, pipeline):
+def _seed():
     """一首识别出来的图片曲子（合成的谱子页面，两行各 3 小节）和一个由 alphaTab 导出的 GP 文件。"""
+    from app import music, recognize, songs, store
     from tests.test_layout import _score
 
     buf = io.BytesIO()
     _score().convert("RGB").save(buf, "PNG")
-    pipeline.start_parse = lambda sid: None
-    sid = pipeline.create_song([("page.png", buf.getvalue())], title="E2E 图片曲")
+    sid = songs.create_song([("page.png", buf.getvalue())], title="E2E 图片曲")
     song = store.load(sid)
-    systems = pipeline._plan_systems(sid, song)
-    meta = pipeline.normalize_meta(
-        {"title": "E2E 图片曲", "tuning": pipeline.STANDARD, "time_signature": [4, 4]}
-    )
+    systems = recognize.plan_systems(sid, song)
+    meta = music.normalize_meta({"title": "E2E 图片曲", "tuning": music.STANDARD, "time_signature": [4, 4]})
     bars, n = [], 0
     for si, s in enumerate(systems):
         s["status"] = "done"
@@ -94,18 +92,16 @@ process.stdout.write(Buffer.from(new at.exporter.Gp7Exporter().export(imp.readSc
 def server(tmp_path_factory):
     import uvicorn
 
-    from app import main, pipeline, store
+    from app import main, songs, store
 
     data = tmp_path_factory.mktemp("data")
     mp = pytest.MonkeyPatch()
     mp.setattr(store, "DATA", data)
     mp.setattr(store, "SONGS", data / "songs")
     mp.setattr(store, "CONFIG", data / "config.json")
-    real_start = pipeline.start_parse
-    image_sid = _seed(store, pipeline)
-    gp_sid = pipeline.create_song([("e2e.gp", _gp_bytes())])
-    broken_sid = pipeline.create_song([("broken.gp5", b"\x18FICHIER GUITAR PRO v5.10" + b"\x00garbage" * 20)])
-    pipeline.start_parse = real_start
+    image_sid = _seed()
+    gp_sid = songs.create_song([("e2e.gp", _gp_bytes())])
+    broken_sid = songs.create_song([("broken.gp5", b"\x18FICHIER GUITAR PRO v5.10" + b"\x00garbage" * 20)])
 
     port = free_port()
     srv = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=port, log_level="warning"))
