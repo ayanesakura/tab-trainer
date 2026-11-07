@@ -218,19 +218,58 @@ def test_song_view_contract(client):
 
 
 def test_rev_conflict_on_bar_and_meta(client):
+    """乐观锁按对象：改小节比这个小节的 rev，改谱头比 meta_rev（顶层 rev 只是保存计数）。"""
     sid = _image_song(client)
     v = client.get(f"/api/songs/{sid}").json()
-    bar = v["bars"][0]
-    body = {"events": bar["events"], "tip": "新提示", "rev": v["rev"]}
+    bar, other = v["bars"][0], v["bars"][1]
+    assert bar["rev"] == 0 and v["meta_rev"] >= 1  # 第一次识别读出谱头
+    body = {"events": bar["events"], "tip": "新提示", "rev": bar["rev"]}
     r = client.put(f"/api/songs/{sid}/bars/{bar['id']}", json=body)
-    assert r.status_code == 200 and r.json()["rev"] == v["rev"] + 1
+    assert r.status_code == 200 and r.json()["bars"][0]["rev"] == 1 and r.json()["rev"] == v["rev"] + 1
+    assert r.json()["bars"][1]["rev"] == 0 and r.json()["meta_rev"] == v["meta_rev"]  # 别的没动
     r = client.put(f"/api/songs/{sid}/bars/{bar['id']}", json=body)  # 还是旧的 rev
     assert r.status_code == 409 and r.json()["detail"] == "曲子在别处改过了，已刷新，请再改一次"
-    r = client.put(f"/api/songs/{sid}/meta", json={"title": "x", "rev": v["rev"]})
+    # 另一个小节、谱头不受影响：拿着改之前的版本号照样能改
+    r = client.put(
+        f"/api/songs/{sid}/bars/{other['id']}", json={"events": [{"dur": "4"}], "rev": other["rev"]}
+    )
+    assert r.status_code == 200 and r.json()["bars"][1]["rev"] == 1
+    r = client.put(f"/api/songs/{sid}/meta", json={"title": "x", "rev": v["meta_rev"]})
+    assert r.status_code == 200 and r.json()["meta_rev"] == v["meta_rev"] + 1
+    r = client.put(f"/api/songs/{sid}/meta", json={"title": "z", "rev": v["meta_rev"]})  # 旧的 meta_rev
     assert r.status_code == 409
-    r = client.put(f"/api/songs/{sid}/meta", json={"title": "x", "rev": v["rev"] + 1})
-    assert r.status_code == 200 and r.json()["title"] == "x"
+    r = client.put(f"/api/songs/{sid}/meta", json={"title": "x", "rev": v["meta_rev"] + 1})  # 没变：不加
+    assert r.status_code == 200 and r.json()["meta_rev"] == v["meta_rev"] + 1
     assert client.put(f"/api/songs/{sid}/meta", json={"title": "y"}).status_code == 200  # 不带 rev 照旧
+    assert client.put(f"/api/songs/{sid}/bars/{bar['id']}", json=body | {"rev": None}).status_code == 200
+
+
+def test_background_writes_do_not_invalidate_the_edit_rev(client, sync_jobs, monkeypatch):
+    """问 AI、讲解补提示、练习记录、改别的小节 / 识别别的行都会保存曲子，但不改这个小节的内容：
+    前端拿着之前的 bar.rev / meta_rev 接着改，不应该 409。"""
+    from app import coach, store
+
+    sid = _image_song(client)
+    store.update(sid, lambda s: [b.update(tip="") for b in s["bars"][:3]])  # 让讲解有活干
+    v = client.get(f"/api/songs/{sid}").json()
+    b0, b1, b4 = v["bars"][0], v["bars"][1], v["bars"][4]
+
+    r = client.post(f"/api/songs/{sid}/bars/{b0['id']}/ask", json={"question": "怎么弹？"})
+    assert r.status_code == 200
+    r = client.post(
+        f"/api/songs/{sid}/practice", json={"bar_ids": [b1["id"]], "loops": 1, "bpm": 60, "seconds": 5}
+    )
+    assert r.status_code == 200
+    coach.start_explain(sid)
+    after = store.load(sid)
+    assert after["bars"][1]["tip"] == "讲解 2" and after["rev"] > v["rev"]
+    recognize.reparse_system(sid, 1)  # 第二行重新识别（结果一样）
+    client.put(f"/api/songs/{sid}/bars/{b4['id']}", json={"events": [{"dur": "4"}], "rev": b4["rev"]})
+
+    r = client.put(f"/api/songs/{sid}/bars/{b1['id']}", json={"events": [{"dur": "4"}], "rev": b1["rev"]})
+    assert r.status_code == 200, r.json()
+    r = client.put(f"/api/songs/{sid}/meta", json={"artist": "某人", "rev": v["meta_rev"]})
+    assert r.status_code == 200, r.json()
 
 
 def test_practice_history_and_last_positions(client):

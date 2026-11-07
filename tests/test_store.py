@@ -96,6 +96,45 @@ def test_every_save_bumps_rev(data_dir):
     assert store.patch(sid, title="x")["rev"] == rev + 1 == store.load(sid)["rev"]
 
 
+def test_per_object_revs_follow_content_only(data_dir):
+    """bar.rev 只跟着这个小节的音符（和手动 touch_bar），meta_rev 只跟着可改的谱头字段；顶层 rev 每次保存都加。"""
+    from app import model
+
+    sid = _gp()
+    store.update(
+        sid,
+        lambda s: s.update(
+            meta={"tuning": ["E4", "B3", "G3", "D3", "A2", "E2"], "time_signature": [4, 4], "capo": 0},
+            bars=[{"id": "a", "events": [{"dur": "4", "notes": []}]}, {"id": "b", "events": []}],
+        ),
+    )
+    s0 = store.load(sid)
+    assert [b["rev"] for b in s0["bars"]] == [0, 0]
+    s1 = store.update(sid, lambda s: s["bars"][0].update(qa=[{"q": "q", "a": "a"}], tip="AI"))
+    assert [b["rev"] for b in s1["bars"]] == [0, 0] and s1["meta_rev"] == s0["meta_rev"]
+    assert s1["rev"] == s0["rev"] + 1
+    s2 = store.update(sid, lambda s: s["bars"][1].update(events=[{"dur": "4", "notes": []}]))
+    assert [b["rev"] for b in s2["bars"]] == [0, 1]
+    # 重新识别换上新 dict（同一个 id）：内容一样沿用 rev，不一样 +1
+    s3 = store.update(
+        sid,
+        lambda s: s.update(
+            bars=[
+                {"id": "a", "events": [{"dur": "4", "notes": []}]},
+                {"id": "b", "events": [{"dur": "2", "notes": []}]},
+            ]
+        ),
+    )
+    assert [b["rev"] for b in s3["bars"]] == [0, 2]
+    s4 = store.update(sid, lambda s: model.touch_bar(s["bars"][0]))
+    assert s4["bars"][0]["rev"] == 1
+    s5 = store.update(sid, lambda s: s["meta"].update(notes="x", tempo=90))  # 不是可改字段
+    assert s5["meta_rev"] == s0["meta_rev"]
+    s6 = store.update(sid, lambda s: s.update(title="新名字"))
+    s7 = store.update(sid, lambda s: s["meta"].update(capo=2))
+    assert s6["meta_rev"] == s0["meta_rev"] + 1 and s7["meta_rev"] == s0["meta_rev"] + 2
+
+
 def test_missing_song_is_not_found(data_dir):
     with pytest.raises(errors.NotFound):
         store.load("20260101-000000-abcdef")

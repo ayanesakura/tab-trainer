@@ -8,11 +8,15 @@
 - llm_schema：从 Note / Event 的字段生成给模型的 JSON Schema（llm.NOTE_SCHEMA / EVENT_SCHEMA），
   tests/test_model.py 断言它和原来手写的逐字一致。
 - SongView / LibraryItem：接口返回的形状（见 app/views.py）。
+- 乐观锁按对象：bar.rev 只在这个小节的内容（音符；用户改提示时也算）变了时 +1，song.meta_rev 只在可改的谱头字段
+  （EDITABLE_META）变了时 +1，都由 store.update 比较改前改后自动维护（见 content_snapshot / bump_revs）。
+  写问答、讲解补提示、进度、识别其他行都不会让别人手里的版本号过期。顶层 rev 是“任意保存计数”，不用于 409。
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import time
 from typing import Any, Literal, get_args, get_origin
 
@@ -26,6 +30,13 @@ ActivityKind = Literal["parse", "reparse_row", "explain"]
 WarnCode = Literal[tuple(WARN_CODES)]  # type: ignore[valid-type]
 SCORE_SOURCES = ("gp", "musicxml")
 USAGE_KEYS = ("input_tokens", "output_tokens", "cost_usd", "unpriced_tokens")
+EDITABLE_META = (
+    "title",
+    "artist",
+    "tuning",
+    "capo",
+    "time_signature",
+)  # 用户能改的谱头字段（meta_rev 跟着它们）
 
 
 class _M(BaseModel):
@@ -121,6 +132,7 @@ class Bar(_M):
     tip: str = ""
     uncertain: str = ""
     warn: list[Warn] = Field(default_factory=list)  # 存盘的只有识别 / 导入时留下的（OCR 不一致等）
+    rev: int = 0  # 这个小节内容的版本号（改小节的 PUT 用它做乐观锁）
     edited: bool = False  # 用户手改过（撤销回原样后变回 False）
     orig: Orig | None = Field(None, alias="_orig")
     placeholder: bool = False  # 识别失败、按整小节休止占位
@@ -207,7 +219,8 @@ class Song(_M):
     activity: Activity | None = None
     notice: Notice | None = None
     progress: Progress | None = None
-    rev: int = 0
+    rev: int = 0  # 保存次数（不用于 409）
+    meta_rev: int = 0  # 可改谱头字段的版本号（改谱头的 PUT 用它做乐观锁）
     pages: list[Page] = Field(default_factory=list)
     meta: Meta | None = None
     meta_user: dict = Field(default_factory=dict)  # 用户亲手改的调弦 / 变调夹 / 拍号（重新识别时以它为准）
@@ -236,6 +249,7 @@ def new_song(sid: str, source_type: str, **fields) -> dict:
         "notice": None,
         "progress": None,
         "rev": 0,
+        "meta_rev": 0,
         "pages": [],
         "meta": None,
         "systems": [],
@@ -275,6 +289,48 @@ def derive(song: dict) -> dict:
     if isinstance(plan, dict):
         plan["stale"] = bool(plan.get("stale_all") or plan.get("changed_bars"))
     return song
+
+
+# ---------------------------------------------------------------------------
+# 按对象的版本号（乐观锁）
+# ---------------------------------------------------------------------------
+def _meta_key(song: dict) -> str:
+    meta = song.get("meta") if isinstance(song.get("meta"), dict) else {}
+    title = song.get("title") or meta.get("title") or ""
+    return json.dumps([title, *(meta.get(k) for k in EDITABLE_META[1:])], sort_keys=True, default=str)
+
+
+def _events_key(bar: dict) -> str:
+    return json.dumps(bar.get("events"), sort_keys=True, default=str)
+
+
+def content_snapshot(song: dict) -> tuple[str, dict[str, tuple[int, str]]]:
+    """改之前的谱头和各小节内容（按 id），给 bump_revs 比较。"""
+    bars = {
+        b["id"]: (int(b.get("rev") or 0), _events_key(b))
+        for b in song.get("bars") or []
+        if isinstance(b, dict) and isinstance(b.get("id"), str)
+    }
+    return _meta_key(song), bars
+
+
+def touch_bar(bar: dict) -> None:
+    """小节内容变了但音符没变（用户改了提示、换调弦清掉了提示）：手动 +1。同一次保存里不会重复加。"""
+    bar["rev"] = int(bar.get("rev") or 0) + 1
+
+
+def bump_revs(song: dict, before: tuple[str, dict[str, tuple[int, str]]]) -> None:
+    """和 content_snapshot 的结果比：音符变了的小节 rev +1（重新识别换上的新 dict 沿用原来的 rev 再看内容），
+    谱头可改字段变了 meta_rev +1。"""
+    meta_key, bars = before
+    if _meta_key(song) != meta_key:
+        song["meta_rev"] = int(song.get("meta_rev") or 0) + 1
+    for b in song.get("bars") or []:
+        prev = bars.get(b.get("id")) if isinstance(b, dict) else None
+        if prev is None:
+            continue
+        old_rev, old_events = prev
+        b["rev"] = max(int(b.get("rev") or 0), old_rev + (_events_key(b) != old_events))
 
 
 # 只在接口返回里出现（app/views.py 算出来），不存盘
@@ -349,7 +405,8 @@ class SongView(_M):
     source_type: SourceType
     source: str | None = None
     status: Status
-    rev: int
+    rev: int  # 保存次数（只用来判断要不要重绘，不用于 409）
+    meta_rev: int  # 改谱头的 PUT 带这个
     busy: bool  # 有任何后台任务（整首识别 / 单行重识别 / 讲解）
     recognizing: bool  # 整首识别或单行重识别在进行（讲解不算）
     activity: Activity | None = None

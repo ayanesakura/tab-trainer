@@ -31,6 +31,7 @@ def migrate(song: dict, song_id: str) -> dict:
         song["meta"] = None
     song.setdefault("title", "")
     song.setdefault("rev", 0)
+    song.setdefault("meta_rev", 0)  # 按对象的版本号：旧数据（和新识别出来的小节）没有的视为 0
     try:
         ver = int(song.get("schema_version") or 0)
     except (TypeError, ValueError):
@@ -38,6 +39,9 @@ def migrate(song: dict, song_id: str) -> dict:
     if ver < 2:
         _to_v2(song)
         song["_migrated"] = True
+    for b in song["bars"]:
+        if isinstance(b, dict):
+            b.setdefault("rev", 0)
     song["schema_version"] = SCHEMA_VERSION
     return song
 

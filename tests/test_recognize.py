@@ -26,6 +26,25 @@ def test_full_parse(data_dir):
     assert song["plan"]["overview"] == "ok"
 
 
+def test_first_recognition_row_writes_keep_earlier_bar_revs(data_dir, monkeypatch):
+    """第一次识别边识别边写：后面的行写进来不会让前面已经能改的小节的 rev 过期。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    monkeypatch.setattr(recognize, "CONCURRENCY", 1)
+    seen = []
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, *a, **kw):
+        if first_bar > 1 and not seen:  # 第二行开始识别时，前端拿到的第一行
+            seen.append(store.load(sid)["bars"][0])
+        return real(self, img, meta, first_bar, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    recognize.run_parse(sid)
+    bar = seen[0]
+    after = songs.edit_bar(sid, bar["id"], [{"dur": "4", "notes": []}], None, rev=bar["rev"])
+    assert after["bars"][0]["rev"] == bar["rev"] + 1
+
+
 def test_reparse_system_passes_hint(data_dir):
     sid = songs.create_song([("p1.png", score_png())])
     recognize.run_parse(sid)
