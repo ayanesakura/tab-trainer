@@ -1,10 +1,10 @@
 // 往返校验：我们的数据 → alphaTex → alphaTab 解析 → 转回我们的数据，应该和原来一致。
-// 运行：node --test tests/js/
+// 运行：node --test tests/js/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import * as at from '../../app/static/vendor/alphatab/alphaTab.core.min.mjs';
-import { toAlphaTex, deriveSong, splitTicks, durToTicks, ticksToDur, eventIndexAt } from '../../app/static/js/score.js';
+import { toAlphaTex, deriveSong, splitTicks, durToTicks, ticksToDur, eventIndexAt, DERIVE_VERSION } from '../../app/static/js/score.js';
 
 const parse = tex => {
   const settings = new at.Settings();
@@ -122,4 +122,43 @@ test('retiming next to septuplets keeps the exact bar length', async () => {
   const { retimeEvent } = await import('../../app/static/js/score.js');
   const out = retimeEvent([{ dur: '1/7', notes: [] }, { dur: '1/7', notes: [] }, { dur: '2/7', notes: [] }, { dur: '25/7', notes: [] }], 0, '1/6');
   assert.deepEqual(out.map(e => e.dur), ['1/6', '5/42', '2/7', '25/7']);
+});
+
+// 一个“真”的 Guitar Pro 文件：两个声部、中途变拍号、24 品以上的音。用 alphaTab 导出成 GP7 再按 GP 文件导入，
+// 走的是练习页打开 .gp 文件的同一条路径（GP 导入器 → deriveSong）
+const MIXED_TEX = `\\title "混合"
+.
+\\track "Guitar" { instrument 25 }
+\\staff {score tabs}
+\\voice
+0.6.4 2.5.4 2.4.4 1.3.4 | \\ts (3 4) 27.1.4 25.2.4 24.1.4 | \\ts (6 8) 0.1.8 2.1.8 3.1.8 5.1.4{d} | \\ts (4 4) 0.1.1
+\\voice
+0.6.2 0.6.2 | 0.5.2{d} | 0.4.4{d} 0.4.4{d} | r.1`;
+
+const gpRoundTrip = tex => {
+  const settings = new at.Settings();
+  const bytes = new at.exporter.Gp7Exporter().export(parse(tex), settings);
+  return at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings);
+};
+
+test('GP file with two voices, time signature changes and high frets', () => {
+  const d = deriveSong(gpRoundTrip(MIXED_TEX), 0);
+  assert.equal(d.version, DERIVE_VERSION);
+  assert.deepEqual(d.meta.time_signature, [4, 4]);
+  assert.deepEqual(d.bars.map(b => b.time_signature), [undefined, [3, 4], [6, 8], undefined]);
+  // 每个小节的时值合计等于它自己的拍号
+  const len = b => { const t = b.time_signature || d.meta.time_signature; return t[0] * 4 / t[1]; };
+  for (const b of d.bars) assert.equal(b.events.reduce((a, e) => a + durToTicks(e.dur), 0), len(b) * 960);
+  const sig = b => b.events.map(e => e.dur + ':' + e.notes.map(n => `${n.string}/${n.fret}`).sort().join(','));
+  // 第 1 小节：两个声部都在 6 弦空弦起拍，只算一个音；第二个声部的第二个音和第一个声部的第三拍合并
+  assert.deepEqual(sig(d.bars[0]), ['1:6/0', '1:5/2', '1:4/2,6/0', '1:3/1']);
+  assert.deepEqual(sig(d.bars[1]), ['1:1/27,5/0', '1:2/25', '1:1/24']);
+  assert.deepEqual(sig(d.bars[2]), ['1/2:1/0,4/0', '1/2:1/2', '1/2:1/3', '3/2:1/5,4/0']);
+});
+
+test('per-bar time signatures survive our data -> alphaTex -> alphaTab', () => {
+  const d = deriveSong(gpRoundTrip(MIXED_TEX), 0);
+  const score = parse(toAlphaTex(d).tex);
+  assert.deepEqual(score.masterBars.map(m => [m.timeSignatureNumerator, m.timeSignatureDenominator]), [[4, 4], [3, 4], [6, 8], [4, 4]]);
+  assert.deepEqual(norm(deriveSong(score, 0).bars), norm(d.bars));
 });

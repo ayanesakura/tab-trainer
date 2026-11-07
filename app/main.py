@@ -202,7 +202,7 @@ def put_derived(sid: str, body: Annotated[dict, Body()]):
     _song(sid)
     try:
         return pipeline.set_derived(
-            sid, body.get("meta") or {}, body.get("bars") or [], body.get("track") or 0
+            sid, body.get("meta") or {}, body.get("bars") or [], body.get("track") or 0, body.get("derived")
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from None

@@ -71,9 +71,8 @@ def normalize_meta(raw: dict, fallback_title: str = "", strict: bool = False) ->
                 raise ValueError(f"{i + 1} 弦的音名无法识别：{n!r}") from None
             m = std
         midis.append(m)
-    ts = list(raw.get("time_signature") or [4, 4])
-    ok_ts = len(ts) == 2 and all(isinstance(x, int) and not isinstance(x, bool) for x in ts)
-    if not ok_ts or ts[0] <= 0 or ts[1] not in (1, 2, 4, 8, 16):
+    ts = clean_time_signature(raw.get("time_signature") or [4, 4])
+    if ts is None:
         if strict:
             raise ValueError("拍号格式不对，应写成 4/4、3/4、6/8 这样")
         ts = [4, 4]
@@ -102,8 +101,26 @@ def normalize_meta(raw: dict, fallback_title: str = "", strict: bool = False) ->
     }
 
 
-def bar_length(meta: dict) -> Fraction:
-    n, d = meta["time_signature"]
+def clean_time_signature(raw) -> list[int] | None:
+    """[分子, 分母]，不合法返回 None。"""
+    try:
+        ts = list(raw)
+    except TypeError:
+        return None
+    if len(ts) != 2 or not all(isinstance(x, int) and not isinstance(x, bool) for x in ts):
+        return None
+    if not 1 <= ts[0] <= 32 or ts[1] not in (1, 2, 4, 8, 16, 32):
+        return None
+    return ts
+
+
+def bar_time_signature(meta: dict, bar: dict | None = None) -> list[int]:
+    """小节自己的拍号（GP / MusicXML 中途变拍号时有），没有就用曲子的拍号。"""
+    return (bar or {}).get("time_signature") or meta["time_signature"]
+
+
+def bar_length(meta: dict, bar: dict | None = None) -> Fraction:
+    n, d = bar_time_signature(meta, bar)
     return Fraction(n * 4, d)
 
 
@@ -184,9 +201,9 @@ def clean_repeats(b: dict) -> dict:
     return out
 
 
-def rest_bar(meta: dict) -> list[dict]:
+def rest_bar(meta: dict, bar: dict | None = None) -> list[dict]:
     """整小节休止：识别失败或被清空的小节用它占位，页面才能正常显示和播放。"""
-    return [{"dur": str(bar_length(meta)), "notes": []}]
+    return [{"dur": str(bar_length(meta, bar)), "notes": []}]
 
 
 def new_bar_id() -> str:
@@ -196,12 +213,13 @@ def new_bar_id() -> str:
 GRID = Fraction(1, 48)  # 播放器能精确写出的最小时值单位（四分音符的 1/48：64 分音符和 64 分三连音的公约数）
 
 
-def check_bar(events: list[dict], meta: dict, info: bool = True) -> list[str]:
+def check_bar(events: list[dict], meta: dict, info: bool = True, bar: dict | None = None) -> list[str]:
     """小节的问题（显示在练习页）。info=False 时只返回需要模型返修的问题：
-    时值不在播放网格上（五连音之类）只是提醒，读对了也会有，不能拿去让模型“改”。"""
+    时值不在播放网格上（五连音之类）只是提醒，读对了也会有，不能拿去让模型“改”。
+    bar 给出时按它自己的拍号（如果有）算小节长度。"""
     problems = []
     total = sum((parse_dur(e["dur"]) for e in events), Fraction(0))
-    want = bar_length(meta)
+    want = bar_length(meta, bar)
     if total != want:
         problems.append(f"时值合计 {float(total):g} 拍，应为 {float(want):g} 拍")
     odd = sorted({e["dur"] for e in events if (parse_dur(e["dur"]) / GRID).denominator != 1}, key=parse_dur)
@@ -361,8 +379,13 @@ def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
     return sid
 
 
-def set_derived(sid: str, meta_raw: dict, bars_raw: list, track: int = 0) -> dict:
-    """保存练习页从 GTP / MusicXML 解析出的调弦和小节（换音轨时也走这里，会清掉旧的讲解）。"""
+def set_derived(
+    sid: str, meta_raw: dict, bars_raw: list, track: int = 0, derived: dict | None = None
+) -> dict:
+    """保存练习页从 GTP / MusicXML 解析出的调弦和小节。
+    derived 记下转换器和 alphaTab 的版本：它们升级后练习页会重新转换一次，这时同一音轨、小节数不变的话
+    按位置对上原来的小节，内容没变的保留 id、提示、问答和练习记录，变了的按“改过音”处理。
+    换音轨（或小节数变了）就是一首新的谱子，旧的讲解和练习记录都清掉。"""
 
     def apply(s):
         if s.get("kind") != "score":
@@ -370,29 +393,68 @@ def set_derived(sid: str, meta_raw: dict, bars_raw: list, track: int = 0) -> dic
         meta = normalize_meta(meta_raw or {}, s.get("title", ""))
         bars = []
         for i, b in enumerate(bars_raw or []):
+            b = b or {}
+            ts = (
+                clean_time_signature(b.get("time_signature") or meta["time_signature"])
+                or meta["time_signature"]
+            )
+            bar = {"time_signature": ts} if ts != meta["time_signature"] else {}
             try:
-                events = clean_events((b or {}).get("events", []))
-                warn = check_bar(events, meta) if events else []
+                events = clean_events(b.get("events", []))
+                warn = check_bar(events, meta, bar=bar) if events else []
             except ValueError as e:
                 events, warn = [], [f"导入时这一小节的数据无法使用：{e}"]
-            bars.append(
+            bar.update(
                 {
                     "id": new_bar_id(),
                     "n": i + 1,
                     "system": i // 4,  # 没有原谱图片，按每 4 小节一段
                     "page": None,
                     "region": None,
-                    "events": events or rest_bar(meta),
+                    "events": events or rest_bar(meta, bar),
                     "tip": "",
                     "uncertain": "",
                     "warn": warn,
-                    **clean_repeats(b or {}),
+                    **clean_repeats(b),
                 }
             )
-        s.update(meta=meta, bars=bars, track=int(track or 0), plan=None, status="ready", error=None)
+            bars.append(bar)
+        old, track_n = s.get("bars") or [], int(track or 0)
+        if old and len(old) == len(bars) and int(s.get("track") or 0) == track_n:
+            _carry_over(s, meta, bars)
+        else:
+            s["plan"] = None
+        s.update(meta=meta, bars=bars, track=track_n, status="ready", error=None)
+        if isinstance(derived, dict):
+            s["derived"] = {
+                "version": derived.get("version"),
+                "alphatab": str(derived.get("alphatab") or ""),
+            }
         _prune_practice(s)
 
     return store.update(sid, apply)
+
+
+def _carry_over(s: dict, meta: dict, bars: list[dict]) -> None:
+    """重新转换同一个音轨：按位置把原来小节的 id 和 AI 内容搬到新小节上。"""
+    old_meta = s.get("meta") or {}
+    meta["title"] = old_meta.get("title") or meta["title"]  # 用户可能改过曲名
+    setting_changed = any(meta[k] != old_meta.get(k) for k in ("tuning_midi", "capo", "time_signature"))
+    for prev, new in zip(s["bars"], bars, strict=True):
+        new["id"] = prev["id"]
+        new["tip"], new["uncertain"] = prev.get("tip", ""), prev.get("uncertain", "")
+        if prev.get("qa"):
+            new["qa"] = prev["qa"]
+        same = prev["events"] == new["events"] and prev.get("time_signature") == new.get("time_signature")
+        if setting_changed or not same:
+            new["tip"] = ""
+            for q in new.get("qa") or []:
+                q["stale"] = True
+                q.pop("stale_by_edit", None)
+            if not setting_changed:
+                _invalidate_plan(s, new["id"])
+    if setting_changed:
+        _invalidate_plan(s)
 
 
 # ---------------------------------------------------------------------------
@@ -1113,7 +1175,7 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
         bar = next((b for b in s["bars"] if b.get("id") == bar_id), None)
         if bar is None:
             raise BarNotFound(bar_id)
-        new = cleaned or rest_bar(s["meta"])
+        new = cleaned or rest_bar(s["meta"], bar)
         if "_orig" in bar and new == bar["_orig"]["events"]:
             _restore_bar(bar)
             _restore_plan_bar(s, bar_id)
@@ -1121,7 +1183,7 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
             _invalidate_bar(bar)
             _invalidate_plan(s, bar_id)
         bar["events"] = new
-        bar["warn"] = check_bar(bar["events"], s["meta"])
+        bar["warn"] = check_bar(bar["events"], s["meta"], bar=bar)
         if tip is not None:
             bar["tip"] = tip
 
@@ -1146,7 +1208,7 @@ def edit_meta(sid: str, raw: dict) -> dict:
         if "title" in raw:
             s["title"] = str(raw["title"]).strip()
         for b in s["bars"]:
-            b["warn"] = check_bar(b["events"], s["meta"])
+            b["warn"] = check_bar(b["events"], s["meta"], bar=b)
 
     return store.update(sid, apply)
 

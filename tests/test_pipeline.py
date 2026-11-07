@@ -403,6 +403,66 @@ def test_set_derived_keeps_repeats(data_dir):
     assert song["bars"][1]["repeat_end"] == 3 and song["bars"][1]["directions"] == ["fine"]
 
 
+def test_set_derived_per_bar_time_signature(data_dir):
+    sid = pipeline.create_song([("曲子.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    bars = _derived_bars(4)
+    bars[1] = {"time_signature": [3, 4], "events": [{"dur": "3", "notes": [{"string": 1, "fret": 27}]}]}
+    bars[2] = {"time_signature": [6, 8], "events": [{"dur": "3", "notes": []}]}
+    bars[3]["time_signature"] = [4, 4]  # 和全曲一样：不单独存
+    song = pipeline.set_derived(sid, {"tuning": pipeline.STANDARD, "time_signature": [4, 4]}, bars)
+    b = song["bars"]
+    assert [x.get("time_signature") for x in b] == [None, [3, 4], [6, 8], None]
+    assert all(not x["warn"] for x in b), [x["warn"] for x in b]  # 按各自的拍号检查时值
+    assert b[1]["events"][0]["notes"][0]["fret"] == 27
+    # 改音、改全曲拍号时也按小节自己的拍号检查
+    song = pipeline.edit_bar(sid, b[1]["id"], [{"dur": "4", "notes": []}], None)
+    assert song["bars"][1]["warn"] == ["时值合计 4 拍，应为 3 拍"]
+    song = pipeline.edit_meta(sid, {"time_signature": [2, 4]})
+    assert not song["bars"][2]["warn"] and song["bars"][0]["warn"]
+    # 清空的小节按它自己的长度补休止；AI 看到的文字里带拍号
+    song = pipeline.edit_bar(sid, b[2]["id"], [], None)
+    assert song["bars"][2]["events"] == [{"dur": "3", "notes": []}]
+    from app.llm import bar_text
+
+    assert bar_text(song["bars"][2]).startswith("第3小节（6/8 拍）:")
+
+
+def test_rederive_keeps_unchanged_bars(data_dir):
+    """转换器 / alphaTab 升级后重新转换：内容没变的小节保留 id、提示、问答和练习记录，变了的按改过音处理。"""
+    sid = pipeline.create_song([("曲子.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    meta = {"tuning": pipeline.STANDARD}
+    song = pipeline.set_derived(sid, meta, _derived_bars(3), derived={"version": 1, "alphatab": "1.8.0"})
+    assert song["derived"] == {"version": 1, "alphatab": "1.8.0"}
+    ids = [b["id"] for b in song["bars"]]
+
+    def seed(s):
+        for i, b in enumerate(s["bars"]):
+            b["tip"] = f"提示 {i}"
+            b["qa"] = [{"q": "问", "a": "答"}]
+        s["plan"] = {"overview": "ok", "steps": []}
+        s["practice"] = {"bars": {i: {"loops": 3} for i in ids}}
+
+    store.update(sid, seed)
+    pipeline.edit_meta(sid, {"title": "我改的名字"})
+    bars = _derived_bars(3)
+    bars[1]["events"][0]["notes"][0]["fret"] = 9  # 新的转换规则读出来不一样
+    song = pipeline.set_derived(sid, meta, bars, derived={"version": 2, "alphatab": "1.9.0"})
+    b = song["bars"]
+    assert [x["id"] for x in b] == ids
+    assert b[0]["tip"] == "提示 0" and not b[0]["qa"][0].get("stale")
+    assert b[1]["tip"] == "" and b[1]["qa"][0]["stale"]
+    assert song["plan"]["stale"] and song["plan"]["changed_bars"] == [ids[1]]
+    assert set(song["practice"]["bars"]) == set(ids)
+    assert song["meta"]["title"] == "我改的名字"
+    assert song["derived"] == {"version": 2, "alphatab": "1.9.0"}
+
+    # 换音轨：是另一份谱子，全部重来
+    song = pipeline.set_derived(sid, meta, bars, track=1, derived={"version": 2, "alphatab": "1.9.0"})
+    assert not {x["id"] for x in song["bars"]} & set(ids)
+    assert song["plan"] is None and not song["practice"]["bars"]
+    assert all(x["tip"] == "" for x in song["bars"])
+
+
 def test_tab_lines_are_found_and_strings_labelled(data_dir):
     sid = pipeline.create_song([("p1.png", _png())])
     pipeline._run_parse(sid)

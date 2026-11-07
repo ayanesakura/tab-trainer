@@ -8,6 +8,11 @@
 
 export const TICKS = 960; // 每个四分音符的 MIDI tick 数
 
+// deriveSong 的输出格式 / 转换规则的版本。改了 deriveSong（音符、技巧、拍号的转换）就加 1：
+// 已经导入的曲子下次打开时会重新转换（alphaTab 升级也会）。
+// 2：每小节带自己的拍号；多声部同一根弦同时起拍的音只保留一个
+export const DERIVE_VERSION = 2;
+
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
   [3840, 1, 0, 0], [2880, 2, 1, 0], [1920, 2, 0, 0], [1440, 4, 1, 0], [960, 4, 0, 0],
@@ -69,9 +74,10 @@ const DIRECTION_NAMES = ['fine', 'segno', 'segnosegno', 'coda', 'doublecoda', 'd
   'dacapoalfine', 'dalsegno', 'dalsegnoalcoda', 'dalsegnoaldoublecoda', 'dalsegnoalfine', 'dalsegnosegno',
   'dalsegnosegnoalcoda', 'dalsegnosegnoaldoublecoda', 'dalsegnosegnoalfine', 'dacoda', 'dadoublecoda'];
 
-/** 小节开头的 alphaTex 元数据：反复开始 / 结束（一共弹几遍）、跳房子、跳转。 */
-function barMetaTex(bar) {
+/** 小节开头的 alphaTex 元数据：拍号（和上一小节不同时）、反复开始 / 结束（一共弹几遍）、跳房子、跳转。 */
+function barMetaTex(bar, ts, prevTs) {
   const m = [];
+  if (prevTs && (ts[0] !== prevTs[0] || ts[1] !== prevTs[1])) m.push(`\\ts (${ts[0]} ${ts[1]})`);
   if (bar.repeat_start) m.push('\\ro');
   if (bar.repeat_end > 0) m.push(`\\rc ${Math.max(2, bar.repeat_end)}`);
   if (bar.endings && bar.endings.length) m.push(`\\ae (${bar.endings.join(' ')})`);
@@ -87,12 +93,13 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
   const meta = song.meta || {};
   const tuning = (meta.tuning || ['E4', 'B3', 'G3', 'D3', 'A2', 'E2']).join(' ');
   const ts = meta.time_signature || [4, 4];
-  const barTicks = Math.round(ts[0] * 4 / ts[1] * TICKS);
+  const tsOf = bar => bar.time_signature || ts; // 小节自己的拍号（中途变拍号）优先
+  const barTicks = bar => { const t = tsOf(bar); return Math.round(t[0] * 4 / t[1] * TICKS); };
 
   // 第一遍：把每个音转成可挂技巧的对象，并把 h/p/sl 挪到同一根弦的前一个音（或倚音）上
   const lastOnString = {};
   const bars = song.bars.map(bar => {
-    const evs = bar.events && bar.events.length ? bar.events : [{ dur: ticksToDur(barTicks), notes: [] }];
+    const evs = bar.events && bar.events.length ? bar.events : [{ dur: ticksToDur(barTicks(bar)), notes: [] }];
     return evs.map(e => {
       const notes = (e.notes || []).filter(n => n.string >= 1 && n.string <= 6).map(n => {
         const tech = new Set(n.tech || []);
@@ -156,7 +163,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
       });
     });
     beatMap.push(onsets);
-    return barMetaTex(song.bars[bi]) + parts.join(' ');
+    return barMetaTex(song.bars[bi], tsOf(song.bars[bi]), bi ? tsOf(song.bars[bi - 1]) : ts) + parts.join(' ');
   });
 
   const title = meta.title || song.title || '';
@@ -220,6 +227,7 @@ export function deriveSong(score, trackIndex = 0) {
         if (beat.isRest) continue;
         for (const n of beat.notes) {
           if (n.isTieDestination) continue;
+          if (byTick.get(start).some(x => x.string === ours(n.string))) continue; // 两个声部在同一根弦上同时有音：一根弦只能弹一个
           const tech = [];
           if (n.isHammerPullDestination && n.hammerPullOrigin) tech.push(n.fret >= n.hammerPullOrigin.fret ? 'h' : 'p');
           if (n.slideOrigin) tech.push('sl');
@@ -252,13 +260,16 @@ export function deriveSong(score, trackIndex = 0) {
       notes: byTick.get(t),
     }));
     const mb = score.masterBars[bi], out = { events };
+    if (mb.timeSignatureNumerator !== meta.time_signature[0] || mb.timeSignatureDenominator !== meta.time_signature[1]) {
+      out.time_signature = [mb.timeSignatureNumerator, mb.timeSignatureDenominator];
+    }
     if (mb.isRepeatStart) out.repeat_start = true;
     if (mb.repeatCount > 0) out.repeat_end = mb.repeatCount;
     if (mb.alternateEndings) out.endings = [...Array(8).keys()].filter(i => mb.alternateEndings & (1 << i)).map(i => i + 1);
     if (mb.directions && mb.directions.size) out.directions = [...mb.directions].map(d => DIRECTION_NAMES[d]).filter(Boolean);
     return out;
   });
-  return { meta, bars, trackName: track.name };
+  return { meta, bars, trackName: track.name, version: DERIVE_VERSION };
 }
 
 /** 改音面板里可选的时值（到下一个音的时长，单位四分音符）。 */

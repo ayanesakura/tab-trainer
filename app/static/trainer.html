@@ -358,7 +358,8 @@ function ev(t, d, notes, tech = '') {
 }
 const S6 = 1/6;
 // 曲子数据：页面加载后从 /api/songs/<id> 取得，再转换成下面这些结构
-let SONG = null, BARS = [], TIPS = [], REG = [], PAGES = [], BL = 4;
+let SONG = null, BARS = [], TIPS = [], REG = [], PAGES = [], BLS = []; // BLS：每小节的长度（四分音符数，中途可能变拍号）
+const barLen = bi => BLS[bi] || 4;
 
 // ---------------------------------------------------------------------
 // 音高
@@ -380,8 +381,9 @@ const ALL = [];
 function buildAll() {
   ALL.length = 0;
   const last = {};
-  BARS.forEach((evs, bi) => evs.forEach(e => {
-    e.bar = bi; e.abs = bi * BL + e.t; e.idx = ALL.length;
+  let start = 0;
+  BARS.forEach((evs, bi) => { evs.forEach(e => {
+    e.bar = bi; e.abs = start + e.t; e.idx = ALL.length;
     e.prefix = {};
     for (const n of e.notes) {
       if (n.grace != null) last[n.s] = n.grace;
@@ -390,7 +392,7 @@ function buildAll() {
       last[n.s] = n.f;
     }
     ALL.push(e);
-  }));
+  }); start += barLen(bi); });
 }
 
 // ---------------------------------------------------------------------
@@ -781,16 +783,19 @@ async function onScoreLoaded(score) {
     const six = score.tracks.findIndex(t => t.staves[0] && t.staves[0].tuning.length === 6);
     const track = SONG.bars.length ? (SONG.track || 0) : Math.max(0, six);
     $('trackName').textContent = score.tracks[track] ? `音轨：${score.tracks[track].name}` : '';
-    if (!SONG.bars.length || track !== (SONG.track || 0)) {
+    // 转换规则或 alphaTab 升级过：重新转换一次（内容没变的小节会保留讲解和练习记录）
+    const derived = { version: scoreConv.DERIVE_VERSION, alphatab: (alphaTab.meta && alphaTab.meta.version) || '' };
+    const outdated = !SONG.derived || SONG.derived.version !== derived.version || SONG.derived.alphatab !== derived.alphatab;
+    if (!SONG.bars.length || track !== (SONG.track || 0) || outdated) {
       try {
         const d = scoreConv.deriveSong(score, track);
-        const r = await fetch(`/api/songs/${SONG_ID}/derived`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meta: d.meta, bars: d.bars, track }) });
+        const r = await fetch(`/api/songs/${SONG_ID}/derived`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meta: d.meta, bars: d.bars, track, derived }) });
         if (!r.ok) throw new Error((await r.json()).detail || r.status);
         await refresh(true);
       } catch (e) {
         if (!SONG.bars.length) reportImportError(e.message); else UI.toast('读取曲谱失败：' + e.message, 'err', 6000);
+        return;
       }
-      return;
     }
   }
   if (!state.tempoSet) { // 默认用原速的六成练习；没有标速度就 50
@@ -1114,11 +1119,11 @@ function applySong(song) {
   tm.forEach((m, i) => { OPEN[i + 1] = m; OPEN_NAME[i + 1] = NN[m % 12]; });
   CAPO = meta.capo || 0;
   const ts = meta.time_signature || [4, 4];
-  BL = ts[0] * 4 / ts[1];
+  BLS = song.bars.map(b => { const t = b.time_signature || ts; return t[0] * 4 / t[1]; });
   PAGES = song.pages.map(p => `/files/${song.id}/${p.file}`);
-  BARS = song.bars.map(b => {
+  BARS = song.bars.map((b, bi) => {
     let t = 0;
-    const evs = b.events && b.events.length ? b.events : [{ dur: String(BL), notes: [] }]; // 空小节按整小节休止显示
+    const evs = b.events && b.events.length ? b.events : [{ dur: String(barLen(bi)), notes: [] }]; // 空小节按整小节休止显示
     return evs.map(e => {
       const notes = (e.notes || [])
         .filter(n => n.string >= 1 && n.string <= 6 && Number.isFinite(n.fret)) // 非法弦号会让音高变成 NaN，播放卡死
@@ -1127,7 +1132,7 @@ function applySong(song) {
       const d = frac(e.dur), r = { t, d, notes, tech: all };
       t += d;
       return r;
-    }).filter(e => e.t < BL - 1e-9); // 时值超出小节长度的部分不播放（会在提示里标出）
+    }).filter(e => e.t < barLen(bi) - 1e-9); // 时值超出小节长度的部分不播放（会在提示里标出）
   });
   TIPS = song.bars.map(b => b.tip);
   REG = song.bars.map(b => (b.region ? [b.page, ...b.region] : null));
@@ -1140,7 +1145,7 @@ function renderHeader() {
   document.title = title + ' · 吉他谱练习器';
   $('songTitle').textContent = title;
   const parts = [m.artist, m.arranger && m.arranger + ' 编配', m.tuning && '调弦 ' + [6, 5, 4, 3, 2, 1].map(s => OPEN_NAME[s]).join(' '),
-    '变调夹 ' + (CAPO ? CAPO + ' 品' : '无'), m.time_signature && m.time_signature.join('/') + ' 拍', `共 ${SONG.bars.length} 小节`];
+    '变调夹 ' + (CAPO ? CAPO + ' 品' : '无'), m.time_signature && m.time_signature.join('/') + ' 拍' + (SONG.bars.some(b => b.time_signature) ? '（中途有变拍号）' : ''), `共 ${SONG.bars.length} 小节`];
   $('songSub').textContent = parts.filter(Boolean).join(' · ');
   $('metaNote').style.display = m.notes ? '' : 'none';
   $('metaNote').innerHTML = m.notes ? `<span class="dot" style="background:var(--accent)"></span><div><b>AI 读谱时注意到：</b>${esc(m.notes)}</div>` : '';
@@ -1435,7 +1440,7 @@ function queueEditClick(beat, note) {
   pendingClick = { beat, note };
   setTimeout(() => { const c = pendingClick; pendingClick = null; openNotePop(c.beat, c.note); }, 0);
 }
-const barEvents = bi => { const b = SONG.bars[bi]; return b.events && b.events.length ? b.events : [{ dur: String(BL), notes: [] }]; };
+const barEvents = bi => { const b = SONG.bars[bi]; return b.events && b.events.length ? b.events : [{ dur: String(barLen(bi)), notes: [] }]; };
 
 function openNotePop(beat, note) {
   const bi = beat.voice.bar.index;
@@ -1616,7 +1621,7 @@ function updateLoopUI() {
 setPlayBtn(false);
 
 if (!SONG_ID) $('songTitle').textContent = '缺少曲子 id，请从曲库进入';
-else refresh(true).then(() => showView(location.hash.slice(1)));
+else atReady.then(() => refresh(true)).then(() => showView(location.hash.slice(1))); // applySong 要用 scoreConv（ES 模块，可能比曲子数据晚到）
 </script>
 </body>
 </html>
