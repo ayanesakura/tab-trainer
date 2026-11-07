@@ -162,6 +162,8 @@ function renderResume(s) {
     kind: 'info', html: `上次（${esc(r.at)}）练到 <b>${r.label}</b>，${r.bpm} BPM。`,
     actions: [{ label: '接着练', primary: true, onClick: go }], onDismiss: () => {},
   });
+  // 开始播放了（练别的或已经接着练了）就收起这条提示，让出谱面的地方
+  const off = on('play.playing', v => { if (v) { notice('resume', null); off(); } });
 }
 
 // ---------------------------------------------------------------------

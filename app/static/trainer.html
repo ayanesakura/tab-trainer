@@ -98,8 +98,12 @@
             <button class="btn sm" id="editModeBtn" data-ic="edit" aria-pressed="false" title="点击谱面上的音符修改弦、品和技巧">改音</button>
             <div class="seg sm" id="notationSeg" aria-label="谱面样式"><button data-v="both">五线谱 + 六线谱</button><button data-v="tab">只看六线谱</button></div>
             <button class="btn sm" id="exportBtn" data-ic="download" title="下载为 Guitar Pro 文件（.gp）">导出 GP</button>
+            <span class="help-wrap">
+              <button class="icon-btn sm help-btn" id="scoreHelpBtn" aria-label="谱面操作说明" aria-describedby="scoreHelp">?</button>
+              <span class="legend help-pop" id="scoreHelp" role="tooltip"></span>
+            </span>
           </div>
-          <div class="legend score-legend" id="scoreLegend"></div>
+          <div class="legend score-legend" id="scoreLegend" hidden></div>
           <div id="score"></div>
           <div class="empty-state" id="scoreEmpty" hidden><b>还没有识别出的小节</b>识别完成后显示。</div>
           <div class="note-pop" id="notePop" role="dialog" aria-labelledby="npTitle" hidden>

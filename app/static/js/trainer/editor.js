@@ -97,7 +97,9 @@ export function setEditMode(v) {
 function paintEditMode(on_) {
   $('editModeBtn').setAttribute('aria-pressed', on_);
   $('scoreCard').classList.toggle('editing', on_);
-  $('scoreLegend').innerHTML = on_ ? LEGEND_EDIT : LEGEND_PLAY;
+  // 平时的操作说明收在谱面标题栏的“?”里（省出谱面的地方）；改音时的快捷键直接显示在谱面上方
+  $('scoreLegend').innerHTML = on_ ? LEGEND_EDIT : '';
+  $('scoreLegend').hidden = !on_;
   if (!on_) closeNotePop();
   else if (get('play.playing')) stop();
 }
@@ -279,6 +281,7 @@ export function initEditor() {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey && get('ui.editMode') && !np && !(e.target.closest && e.target.closest('input, textarea'))) { e.preventDefault(); undoEdit(); }
   });
 
+  $('scoreHelp').innerHTML = LEGEND_PLAY;
   on('ui.editMode', paintEditMode);
   paintEditMode(false);
   on(['ui.bar', 'song'], updateBarTools);
