@@ -1,0 +1,54 @@
+{
+  "_comment": "前后端共用的词表和常量：后端 app/music.py 读取，前端 js/vocab.js 导入。改这里两边同时生效；tests/test_vocab.py 检查一致性。",
+  "instrument": {
+    "name": "guitar",
+    "strings": 6,
+    "standard_tuning": ["E4", "B3", "G3", "D3", "A2", "E2"],
+    "max_fret": 24
+  },
+  "ticks_per_quarter": 960,
+  "grid_ticks": 20,
+  "techs": [
+    { "code": "h",    "sym": "H",    "name": "击弦" },
+    { "code": "p",    "sym": "P",    "name": "勾弦" },
+    { "code": "sl",   "sym": "sl.",  "name": "滑音" },
+    { "code": "si",   "sym": "/",    "name": "滑入" },
+    { "code": "pm",   "sym": "P.M.", "name": "闷音" },
+    { "code": "nh",   "sym": "<>",   "name": "自然泛音" },
+    { "code": "ah",   "sym": "AH",   "name": "人工泛音" },
+    { "code": "roll", "sym": "琶",   "name": "琶音" },
+    { "code": "x",    "sym": "x",    "name": "死音" },
+    { "code": "vib",  "sym": "~",    "name": "揉弦" },
+    { "code": "bend", "sym": "b",    "name": "推弦" }
+  ],
+  "directions": [
+    { "code": "fine",                     "prompt": true  },
+    { "code": "segno",                    "prompt": true  },
+    { "code": "segnosegno",               "prompt": true  },
+    { "code": "coda",                     "prompt": true  },
+    { "code": "doublecoda",               "prompt": true  },
+    { "code": "dacapo",                   "prompt": true  },
+    { "code": "dacapoalcoda",             "prompt": true  },
+    { "code": "dacapoaldoublecoda",       "prompt": false },
+    { "code": "dacapoalfine",             "prompt": true  },
+    { "code": "dalsegno",                 "prompt": true  },
+    { "code": "dalsegnoalcoda",           "prompt": true  },
+    { "code": "dalsegnoaldoublecoda",     "prompt": false },
+    { "code": "dalsegnoalfine",           "prompt": true  },
+    { "code": "dalsegnosegno",            "prompt": false },
+    { "code": "dalsegnosegnoalcoda",      "prompt": false },
+    { "code": "dalsegnosegnoaldoublecoda","prompt": false },
+    { "code": "dalsegnosegnoalfine",      "prompt": false },
+    { "code": "dacoda",                   "prompt": true  },
+    { "code": "dadoublecoda",             "prompt": false }
+  ],
+  "sources": { "image": "图片", "pdf": "PDF", "gp": "GP", "musicxml": "MusicXML" },
+  "warn_codes": {
+    "length": "时值合计不对",
+    "off_grid": "时值不在播放网格上",
+    "ocr_mismatch": "和本机 OCR 对不上",
+    "placeholder": "这一行没识别出来，暂用休止占位",
+    "string_range": "弦号 / 品位超出范围",
+    "other": "其他"
+  }
+}
