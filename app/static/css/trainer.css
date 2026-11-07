@@ -201,7 +201,6 @@ table.tune td b { font-variant-numeric: tabular-nums; }
   .bar-card .body > .coach { grid-column: 2; border-top: 0; padding-top: 0; }
   .bar-card .body > .paper[hidden] + .coach { grid-column: 1 / -1; }
   .t-row { flex-wrap: wrap; row-gap: var(--sp-2); }
-  .crumb-sub { display: none; }
 }
 @media (max-width: 760px) {
   .transport { position: static; }
