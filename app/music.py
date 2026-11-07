@@ -200,6 +200,32 @@ def new_bar_id() -> str:
 GRID = Fraction(1, 48)  # 播放器能精确写出的最小时值单位（四分音符的 1/48：64 分音符和 64 分三连音的公约数）
 
 
+LENGTH_WARN = "时值合计"  # check_bar 里时值合计不对的那条提示的开头
+
+
+def apply_time_signatures(bars: list[dict], meta: dict) -> None:
+    """图片识别的曲子：模型只标出谱上写了变拍号的小节（ts_change），这里按小节顺序往后传，
+    给和全曲拍号不同的小节写上 time_signature（和 GP 导入的数据一样），并更新时值提示。
+    各行是分开识别的，后面的行看不到前面行写的变拍号，所以要等整首（或改了一行）之后统一算。"""
+    cur = meta["time_signature"]
+    for b in bars:
+        cur = b.get("ts_change") or cur
+        if cur != meta["time_signature"]:
+            b["time_signature"] = cur
+        else:
+            b.pop("time_signature", None)
+        if b.get("placeholder"):  # 没识别出音符、按整小节休止占位的：休止长度跟着拍号
+            b["events"] = rest_bar(meta, b)
+        refresh_length_warn(b, meta)
+
+
+def refresh_length_warn(bar: dict, meta: dict) -> None:
+    """只重算“时值合计”这一条提示（OCR 不一致之类的其他提示保留）。"""
+    keep = [w for w in bar.get("warn") or [] if not w.startswith(LENGTH_WARN)]
+    length = [p for p in check_bar(bar["events"], meta, bar=bar) if p.startswith(LENGTH_WARN)]
+    bar["warn"] = length + keep
+
+
 def check_bar(events: list[dict], meta: dict, info: bool = True, bar: dict | None = None) -> list[str]:
     """小节的问题（显示在练习页）。info=False 时只返回需要模型返修的问题：
     时值不在播放网格上（五连音之类）只是提醒，读对了也会有，不能拿去让模型“改”。
@@ -208,7 +234,7 @@ def check_bar(events: list[dict], meta: dict, info: bool = True, bar: dict | Non
     total = sum((parse_dur(e["dur"]) for e in events), Fraction(0))
     want = bar_length(meta, bar)
     if total != want:
-        problems.append(f"时值合计 {float(total):g} 拍，应为 {float(want):g} 拍")
+        problems.append(f"{LENGTH_WARN} {float(total):g} 拍，应为 {float(want):g} 拍")
     odd = sorted({e["dur"] for e in events if (parse_dur(e["dur"]) / GRID).denominator != 1}, key=parse_dur)
     if odd and info:
         problems.append(

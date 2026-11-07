@@ -292,3 +292,110 @@ def test_restart_during_reparse_keeps_the_old_result(data_dir):
     after = store.load(sid)
     assert after["status"] == "ready" and "原来的结果保留不变" in after["error"]
     assert after["bars"] == before["bars"] and "restaging" not in after
+
+
+def _ts_transcribe(declare_on_row2=False, row2_retry_declares=False):
+    """替身模型：第 1 行第 2 小节写着变拍号 3/4，之后的小节都是 3 拍。"""
+    calls = []
+
+    def transcribe(
+        self, img, meta, first_bar, spans, hint="", previous=None, problems=None, labeled_strings=False
+    ):
+        calls.append({"first_bar": first_bar, "retry": previous is not None, "problems": problems})
+        bars = []
+        for i in range(len(spans)):
+            n = first_bar + i
+            beats = 4 if n == 1 else 3
+            ts = []
+            if n == 2 or (
+                i == 0
+                and first_bar > 1
+                and (declare_on_row2 or (row2_retry_declares and previous is not None))
+            ):
+                ts = [3, 4]
+            bars.append(
+                {
+                    "number": n,
+                    "time_signature": ts,
+                    "events": [
+                        {"dur": "1", "notes": [{"string": 1, "fret": k, "tech": [], "grace": -1, "bend": 0}]}
+                        for k in range(beats)
+                    ],
+                    "tip": "",
+                    "uncertain": "",
+                }
+            )
+        return {"bars": bars}
+
+    return transcribe, calls
+
+
+def test_time_signature_change_inside_a_row(data_dir, monkeypatch):
+    transcribe, calls = _ts_transcribe(declare_on_row2=True)
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bars = store.load(sid)["bars"]
+    assert [b.get("time_signature") for b in bars] == [None] + [[3, 4]] * 5
+    assert all(not b["warn"] for b in bars), [b["warn"] for b in bars]
+    assert not any(c["retry"] for c in calls)  # 写了变拍号的 3 拍小节不算时值错误
+
+
+@pytest.mark.parametrize("declares", [False, True])
+def test_time_signature_change_in_an_earlier_row(data_dir, monkeypatch, declares):
+    """第 2 行看不到第 1 行写的变拍号：整行都是 3 拍时返修，但告诉模型可能是前面变了拍号、不要硬凑；
+    整首识别完按变拍号统一检查，不管模型返修时有没有在第 2 行写上拍号，都不该留下时值警告。"""
+    transcribe, calls = _ts_transcribe(row2_retry_declares=declares)
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bars = store.load(sid)["bars"]
+    retry = [c for c in calls if c["retry"]]
+    assert [c["first_bar"] for c in retry] == [4]
+    assert any("前面的行里变了拍号" in p for p in retry[0]["problems"])
+    assert [b.get("time_signature") for b in bars] == [None] + [[3, 4]] * 5
+    assert all(not b["warn"] for b in bars), [b["warn"] for b in bars]
+
+
+def test_time_signatures_follow_edits_and_reparse(data_dir, monkeypatch):
+    transcribe, _ = _ts_transcribe()
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    # 改全曲拍号成 3/4：所有小节都是 3/4，第 1 小节（4 拍）有时值警告
+    song = songs.edit_meta(sid, {"time_signature": [3, 4]})
+    assert all("time_signature" not in b for b in song["bars"])
+    assert song["bars"][0]["warn"] and not any(b["warn"] for b in song["bars"][1:])
+    songs.edit_meta(sid, {"time_signature": [4, 4]})
+
+    # 重新识别第 1 行时模型没看到变拍号：第 2 行的 3 拍小节恢复成按 4/4 检查，出现时值警告
+    def no_change(self, img, meta, first_bar, spans, *a, **kw):
+        out = transcribe(self, img, meta, first_bar, spans, *a, **kw)
+        for b in out["bars"]:
+            b["time_signature"] = []
+            if b["number"] <= 3:
+                b["events"] = [{"dur": "4", "notes": []}]
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", no_change)
+    recognize.reparse_system(sid, 0)
+    bars = store.load(sid)["bars"]
+    assert all("time_signature" not in b for b in bars)
+    assert [bool(b["warn"]) for b in bars] == [False] * 3 + [True] * 3
+
+
+def test_placeholder_rest_follows_the_time_signature(data_dir, monkeypatch):
+    transcribe, _ = _ts_transcribe(declare_on_row2=True)
+
+    def with_empty(self, img, meta, first_bar, spans, *a, **kw):
+        out = transcribe(self, img, meta, first_bar, spans, *a, **kw)
+        if first_bar > 1:
+            out["bars"][1]["events"] = []  # 第 5 小节没识别出来
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", with_empty)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bar5 = store.load(sid)["bars"][4]
+    assert bar5["events"] == [{"dur": "3", "notes": []}] and bar5["placeholder"]
+    assert bar5["warn"] == ["没有识别出可用的音符，暂按整小节休止处理"]

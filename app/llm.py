@@ -98,6 +98,12 @@ DIRECTIONS = [
 BAR_SCHEMA = _obj(
     {
         "number": {"type": "integer"},
+        "time_signature": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "[numerator, denominator] if a time-signature change is written at the start of this "
+            "bar (e.g. [3, 4]); [] if none",
+        },
         "events": {"type": "array", "items": EVENT_SCHEMA},
         "repeat_start": {
             "type": "boolean",
@@ -173,6 +179,7 @@ How to encode a bar:
 - "dur" is the time from this onset to the next onset in the same bar (for the last event: to the end of the bar), in quarter notes. The durs of a bar must add up exactly to the bar length.
 - Notes that keep ringing while other notes are played do not create extra events, and a tied continuation note (a note whose fret number is not re-written, or connected by a tie) is not a new event.
 - A rest at the start of a bar or between notes is an event with an empty "notes" list.
+- Time signature: a bar where a new time signature is written (e.g. 3/4 or 6/8 printed after the barline) gets "time_signature": [3, 4] etc., and from that bar on every bar lasts the new length until the next change. Bars without a written change get []. Never change durations just to make a bar fit a time signature: if the notes clearly fill a different length, check whether a time-signature change is written.
 - string: 1 is the top line of the tab (highest pitch), 6 the bottom line. fret: exactly as written (relative to the capo; 0 = open string).
 
 Techniques (put them on the note that receives them):
@@ -361,8 +368,8 @@ class Claude:
         lines = [
             (
                 f"Score info: tuning (string 1 -> 6) {' '.join(meta['tuning'])}; capo {meta['capo']} "
-                f"(copy fret numbers as written). Time signature {ts[0]}/{ts[1]}: every bar lasts exactly "
-                f"{bar_len:g} quarter notes unless the score shows a time-signature change."
+                f"(copy fret numbers as written). Time signature at the start of the piece {ts[0]}/{ts[1]}: a bar "
+                f"lasts {bar_len:g} quarter notes unless a time-signature change is written (see below)."
             ),
         ]
         if bar_spans:

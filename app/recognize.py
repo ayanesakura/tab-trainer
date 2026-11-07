@@ -6,6 +6,7 @@ import logging
 import threading
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from fractions import Fraction
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -14,7 +15,19 @@ from app import jobs, ocr, staleness, store
 from app.jobs import Cancelled
 from app.layout import detect_page
 from app.llm import Claude, request_id_of
-from app.music import check_bar, clean_events, clean_repeats, new_bar_id, normalize_meta, rest_bar
+from app.music import (
+    LENGTH_WARN,
+    apply_time_signatures,
+    bar_length,
+    check_bar,
+    clean_events,
+    clean_repeats,
+    clean_time_signature,
+    new_bar_id,
+    normalize_meta,
+    parse_dur,
+    rest_bar,
+)
 
 log = logging.getLogger("tab_trainer.recognize")
 
@@ -224,27 +237,49 @@ def transcribe_system(
             problems=problems,
             labeled_strings=labeled,
         )
-        bars, issues = [], []
+        bars, issues, lengths = [], [], []
+        cur_ts = None  # 这一行里谱上写了变拍号之后的拍号（之前的按全曲拍号；前面几行写的变拍号这里看不到）
         for i, b in enumerate(raw.get("bars", [])):
+            change = clean_time_signature(b.get("time_signature") or [])
+            cur_ts = change or cur_ts
+            ctx = {"time_signature": cur_ts} if cur_ts and cur_ts != meta["time_signature"] else {}
             try:
                 events = clean_events(b.get("events", []))
             except ValueError as e:
                 events = []
                 issues.append(f"第 {first_bar + i} 小节数据格式错误：{e}")
-            probs = check_bar(events, meta)
-            issues += [f"第 {first_bar + i} 小节：{p}" for p in check_bar(events, meta, info=False)]
+            probs = check_bar(events, meta, bar=ctx)
+            issues += [f"第 {first_bar + i} 小节：{p}" for p in check_bar(events, meta, info=False, bar=ctx)]
+            if events:
+                lengths.append(sum((parse_dur(e["dur"]) for e in events), Fraction(0)))
+            bar = {
+                "events": events,
+                "tip": b.get("tip", ""),
+                "uncertain": b.get("uncertain", ""),
+                "warn": probs,
+                **clean_repeats(b),
+            }
+            if change:
+                bar["ts_change"] = change
             if not events:
-                events = rest_bar(meta)
-                probs = ["没有识别出可用的音符，暂按整小节休止处理"]
-            bars.append(
-                {
-                    "events": events,
-                    "tip": b.get("tip", ""),
-                    "uncertain": b.get("uncertain", ""),
-                    "warn": probs,
-                    **clean_repeats(b),
-                }
+                bar.update(events=rest_bar(meta, ctx), placeholder=True)
+                bar["warn"] = ["没有识别出可用的音符，暂按整小节休止处理"]
+            bars.append(bar)
+        if (
+            not cur_ts
+            and len(lengths) == len(bars)
+            and len(set(lengths)) == 1
+            and lengths[0] != bar_length(meta)
+        ):
+            # 整行每个小节一样长、只是和全曲拍号对不上，这一行又没写变拍号：可能是前面几行变了拍号（各行分开识别，
+            # 模型看不到），也可能是整行时值读错了。不要逼模型凑拍数，让它自己判断
+            n = lengths[0]
+            msg = (
+                f"这一行每个小节都是 {float(n):g} 拍，而全曲拍号每小节 {float(bar_length(meta)):g} 拍。"
+                "如果是谱子在前面的行里变了拍号（这一行的节奏本来就是这样），时值保持不变，"
+                "在这一行第一个小节的 time_signature 写上实际拍号；如果是时值读错了，就改正时值。"
             )
+            issues = [x for x in issues if LENGTH_WARN not in x] + [msg]
         if spans and len(bars) != len(spans):
             issues.append(f"应有 {len(spans)} 个小节，返回了 {len(bars)} 个")
         elif ocr_bars:
@@ -360,12 +395,13 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
                 bars, status, err = [], "error", jobs.friendly(e)
                 errors.append(f"第 {i + 1} 行：{err}")
 
-            _replace_system_bars(work, i, bars)
+            _replace_system_bars(work, i, [dict(b) for b in bars])
             work["systems"][i].update(status=status, error=err)
 
             def apply(s, i=i, bars=bars, status=status, err=err):
                 if not restage:
                     _replace_system_bars(s, i, bars)
+                    apply_time_signatures(s["bars"], s["meta"])
                     s["systems"][i].update(status=status, error=err)
                     staleness.prune_practice(s)
                 s["progress"]["done"] += 1
@@ -385,6 +421,7 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
             raise RestageFailed("没有识别出任何小节")
         store.patch(sid, status="error", error="；".join(errors) or "没有识别出任何小节（可能不是六线谱）")
         return
+    apply_time_signatures(work["bars"], work["meta"])
     if restage:
 
         def swap(s):
@@ -468,6 +505,7 @@ def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | 
 
     def apply(s):
         _replace_system_bars(s, si, bars)
+        apply_time_signatures(s["bars"], s["meta"])  # 这一行新写的变拍号会影响后面的行
         s["systems"][si].update(status="done", error=None)
         staleness.invalidate_plan(s)
         staleness.prune_practice(s)

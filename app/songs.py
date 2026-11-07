@@ -15,6 +15,7 @@ from PIL import Image, ImageOps
 from app import staleness, store
 from app.errors import BarNotFound, Busy, Invalid
 from app.music import (
+    apply_time_signatures,
     check_bar,
     clean_events,
     clean_repeats,
@@ -354,6 +355,7 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
             staleness.invalidate_bar(bar)
             staleness.invalidate_plan(s, bar_id)
         bar["events"] = new
+        bar.pop("placeholder", None)  # 用户自己写的内容，不再是识别失败的占位休止
         bar["warn"] = check_bar(bar["events"], s["meta"], bar=bar)
         if tip is not None:
             bar["tip"] = tip
@@ -379,8 +381,11 @@ def edit_meta(sid: str, raw: dict) -> dict:
             staleness.invalidate_tips_for_setting(s)
         if "title" in raw:
             s["title"] = str(raw["title"]).strip()
-        for b in s["bars"]:
-            b["warn"] = check_bar(b["events"], s["meta"], bar=b)
+        if is_score(s):
+            for b in s["bars"]:
+                b["warn"] = check_bar(b["events"], s["meta"], bar=b)
+        else:  # 图片曲子：谱上写了变拍号的小节按变拍号，其余跟着新的全曲拍号
+            apply_time_signatures(s["bars"], s["meta"])
 
     return store.update(sid, apply)
 
