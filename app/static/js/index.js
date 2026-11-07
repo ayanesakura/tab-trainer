@@ -2,7 +2,8 @@
 // 词表：曲子 = 曲库里的一条；谱面 = 渲染出来的谱；原谱 = 上传的图片 / PDF。
 import { UI, $, esc, icon, toast } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
-import { SOURCES, SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
+import { SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
+import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS } from '/static/js/library-view.js';
 
 UI.initShell();
 
@@ -99,7 +100,6 @@ async function exportSongs(ids) {
 // 选择模式：勾选曲子，一起导出成一个包
 let selecting = false, lastSongs = [];
 const selected = new Set();
-const selectable = s => s.status !== 'corrupt';
 function setSelecting(on) {
   selecting = on; selected.clear();
   $('selectBar').hidden = !on;
@@ -123,124 +123,15 @@ $('selectAll').onchange = e => {  // 只管当前列表里的
   renderSongs();
 };
 $('exportBtn').onclick = () => api.withBusy($('exportBtn'), async () => {
-  const ids = sortSongs(lastSongs.filter(s => selected.has(s.id))).map(s => s.id);  // 按列表顺序（包括筛掉的）
+  const ids = sortSongs(lastSongs.filter(s => selected.has(s.id)), lib.sort).map(s => s.id);  // 按列表顺序（包括筛掉的）
   if (await exportSongs(ids)) setSelecting(false);
 });
 addEventListener('keydown', e => { if (e.key === 'Escape' && selecting && !UI.hasLayer()) setSelecting(false); });
 
-// ---------------- 曲库列表 ----------------
-const SOURCE_ICON = { image: 'image', pdf: 'file', gp: 'score', musicxml: 'score' };
-const isScore = s => !!s.is_score; // GP / MusicXML（后端给的）：没有原谱页面，不需要识别
-const canPlay = s => s.status !== 'corrupt' && (s.bars > 0 || isScore(s));
+// ---------------- 曲库列表（一行的 HTML、状态说明、排序等纯函数在 library-view.js） ----------------
 
-// “3 天前”：练习时间是本地时间字符串 “YYYY-MM-DD HH:MM”
-function ago(at) {
-  const d = new Date(String(at).replace(' ', 'T'));
-  if (Number.isNaN(+d)) return String(at);
-  const now = new Date(), mins = (now - d) / 60000;
-  if (mins < 1) return '刚刚';
-  if (mins < 60) return `${Math.floor(mins)} 分钟前`;
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (d >= today) return '今天';
-  const days = Math.ceil((today - d) / 86400000);
-  if (days === 1) return '昨天';
-  if (days < 30) return `${days} 天前`;
-  return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1} 月 ${d.getDate()} 日` : `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`;
-}
-function duration(sec) {
-  const m = Math.round((sec || 0) / 60);
-  if (m < 1) return '不到 1 分钟';
-  if (m < 60) return `${m} 分钟`;
-  return `${Math.floor(m / 60)} 小时${m % 60 ? ` ${m % 60} 分钟` : ''}`;
-}
-// 上次练的范围（小节号从 1 开始；后端已经按当前顺序排好 a_n ≤ b_n，小节被删了是 null）
-function rangeText(s) {
-  const l = s.practice && s.practice.last;
-  if (!l || l.a_n == null || l.b_n == null) return '';
-  if (l.a_n === 1 && l.b_n === s.bars && s.bars > 1) return '全曲';
-  return l.a_n === l.b_n ? `第 ${l.a_n} 小节` : `第 ${l.a_n}–${l.b_n} 小节`;
-}
-// 纯文本（ago() 遇到认不出的时间会原样返回），拼进 HTML 时要 esc
-function practiceText(s) {
-  const p = s.practice;
-  if (!p || !p.last_at) return '';
-  const range = rangeText(s);
-  return [ago(p.last_at), range && (range === '全曲' ? '练全曲' : `练到${range}`), p.total_seconds > 0 && `累计 ${duration(p.total_seconds)}`].filter(Boolean).join(' · ');
-}
 
-// 需要注意的状态（忙、出错、待核对、警告）；一切正常时返回 ''，小节数放在说明行里。
-// 下面拼 HTML 的函数里，后端来的字段（包括数字）一律 esc：曲子包、练习记录可能被改过
-function stateHTML(s) {
-  const n = s.notice;
-  if (s.status === 'corrupt') return `<span class="dot err"></span><span class="err-text">${esc(n && n.msg)}（可在“…”菜单删除）</span>`;
-  if (s.busy) {
-    const p = s.progress || {};
-    const pct = p.total ? Math.round(100 * p.done / p.total) : 6;
-    const unit = s.recognizing ? '行' : '批';
-    return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${esc(p.done)}/${esc(p.total)} ${unit}` : ''}</span><span class="progress" role="progressbar" aria-label="进度" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></span>`;
-  }
-  if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">${isScore(s) ? '曲谱读取失败' : '识别失败'}${n ? `：${esc(n.msg)}` : ''}</span>`;
-  if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${esc(s.bars)} 小节` : ''}</span>`;
-  const review = s.needs_review_bars || 0;
-  const parts = [];
-  if (review) parts.push(`<span class="badge warn" title="有 ${review} 个小节需要对照原谱核对">${review} 小节待核对</span>`);
-  if (n) parts.push(`<span class="badge ${n.kind === 'error' ? 'err' : 'warn'} notice-badge" title="${esc(n.msg)}">${esc(n.msg)}</span>`);
-  return parts.join('');
-}
-function barsText(s) {
-  if (s.status === 'corrupt' || s.busy || s.status === 'error' || s.status === 'cancelled') return '';
-  return s.bars ? `${esc(s.bars)} 小节` : isScore(s) ? '已导入' : '';
-}
 
-// AI 花费：早期曲子只记了 token，按 Opus 价格估算
-function costText(s) {
-  if (!s.tokens) return '';
-  const tip = [`共 ${s.tokens.toLocaleString()} token`];
-  if (s.cost_estimated) tip.push('早期的曲子只记了 token 数，按 Opus 的价格估算');
-  if (s.unpriced_tokens) tip.push(`其中 ${s.unpriced_tokens.toLocaleString()} token 用的是自定义模型，没算进金额`);
-  const usd = s.cost_usd >= 0.005 ? '$' + s.cost_usd.toFixed(2) : s.cost_usd > 0 ? '<$0.01' : '';
-  const text = usd ? `AI 花费${s.cost_estimated ? '约' : ''} ${usd}` : `AI 用量 ${s.tokens.toLocaleString()} token`;
-  return `<span class="cost" title="${esc(tip.join('；'))}">${esc(text)}${s.unpriced_tokens && usd ? ' +' : ''}</span>`;
-}
-
-// 识别失败 / 取消、又没有可练的小节时的下一步：模型设置的问题去设置，其他的（图片 / PDF 曲子）重新识别
-const SETTINGS_ERR = /API key|模型设置|模型名|Base URL|余额|额度/i;
-const settingsError = s => s.status === 'error' && s.notice && SETTINGS_ERR.test(s.notice.msg || '');
-const retryButton = s => `<button class="btn sm act" data-k="retry-failed" data-retry-failed="${esc(s.id)}" title="只重新识别没识别出来的行">${icon('refresh', 12)}重试失败的 ${esc(s.failed_rows)} 行</button>`;
-function fixAction(s) {
-  if (settingsError(s)) return `<a class="btn sm act" data-k="settings" href="#settings">${icon('settings', 12)}去设置</a>`;
-  if (isScore(s)) return '';
-  return s.failed_rows > 0 ? retryButton(s) : `<button class="btn sm act" data-k="retry" data-retry="${esc(s.id)}">${icon('refresh', 12)}重新识别</button>`;
-}
-
-function rowHTML(s) {
-  const play = canPlay(s), href = `/trainer?id=${encodeURIComponent(s.id)}`;
-  const pick = selecting && selectable(s), on = pick && selected.has(s.id);
-  const src = SOURCES[s.source_type] || '';
-  const sub = [src, barsText(s), esc(s.artist), s.created && `添加于 ${esc(s.created)}`, costText(s)].filter(Boolean).join(' · ');
-  const state = stateHTML(s);
-  const prac = practiceText(s);
-  const range = rangeText(s), last = s.practice && s.practice.last;
-  const tags = (s.tags || []).length ? `<span class="tags">${s.tags.map(t => `<button class="badge tag" data-tag="${esc(t)}" data-k="tag:${esc(t)}" title="只看“${esc(t)}”">${esc(t)}</button>`).join('')}</span>` : '';
-  const title = play && !selecting ? `<a class="title" href="${href}" data-k="open" title="${esc(s.title)}">${esc(s.title)}</a>` : `<span class="title" title="${esc(s.title)}">${esc(s.title)}</span>`;
-  // 只有“接着练”用主色按钮，其他行的操作用普通按钮，曲库里不会一列全是实心按钮
-  let action = '';
-  if (play && last) action = `<a class="btn primary sm act" data-k="resume" href="${href}&resume=1" title="${esc(`从${range || '上次的位置'}${last.bpm ? `、${last.bpm} BPM` : ''} 接着练`)}">${icon('repeat', 12)}接着练</a>`;
-  else if (play) action = `<a class="btn sm act" data-k="play" href="${href}">${icon('play', 12)}练习</a>`;
-  else if (!s.busy && (s.status === 'error' || s.status === 'cancelled')) action = fixAction(s); // 没有可练的内容：给出下一步
-  // 有识别失败的行、已经有小节可练：重试失败的行放在练习前面（只识别那几行，比整首重新识别便宜）
-  if (play && !s.busy && s.failed_rows > 0 && !isScore(s) && !settingsError(s)) action = retryButton(s) + action;
-  return `<div class="row song-row${play || pick ? ' click' : ''}${on ? ' on' : ''}" data-id="${esc(s.id)}" data-play="${play ? 1 : ''}" data-pick="${pick ? 1 : ''}">
-    ${selecting ? `<input type="checkbox" class="pick" data-k="pick" aria-label="选择 ${esc(s.title)}" ${on ? 'checked' : ''} ${pick ? '' : 'disabled'}>` : ''}
-    <span class="src-ic" title="${esc(src ? `来源：${src}` : '')}">${icon(SOURCE_ICON[s.source_type] || 'music', 18)}</span>
-    <div class="who"><div class="name">${title}${tags}</div>
-      ${state ? `<div class="state">${state}</div>` : ''}
-      ${prac ? `<div class="sub practice">${icon('clock', 12)}<span>${esc(prac)}</span></div>` : ''}
-      ${sub ? `<div class="sub">${sub}</div>` : ''}</div>
-    <div class="ctl"${selecting ? ' hidden' : ''}>${action}
-      <button class="icon-btn sm" data-more="${esc(s.id)}" data-k="more" title="更多" aria-label="${esc(s.title)}：更多操作" aria-haspopup="menu">${icon('more')}</button></div>
-  </div>`;
-}
 
 // 只在内容变了的时候改 DOM（轮询每 2.5 秒刷新一次，不能把正在用的按钮、焦点冲掉）
 function setHTML(el, html) { if (el._html !== html) { el.innerHTML = html; el._html = html; } }
@@ -252,7 +143,7 @@ function renderList(box, songs) {
   const old = new Map([...box.children].map(r => [r.dataset.id, r]));
   let prev = null;
   for (const s of songs) {
-    const html = rowHTML(s);
+    const html = rowHTML(s, { selecting, selected });
     let row = old.get(s.id);
     old.delete(s.id);
     if (!row || row._html !== html) {
@@ -277,24 +168,11 @@ function renderList(box, songs) {
 }
 
 // 搜索、标签筛选、排序（只在浏览器里做；排序方式记在本机）
-const SORTS = ['practiced', 'created', 'title'];
 const lib = { q: '', tag: '', sort: SORTS.includes(localStorage.getItem('tt.libSort')) ? localStorage.getItem('tt.libSort') : 'practiced' };
 UI.seg($('sortSeg'), lib.sort, v => { lib.sort = v; localStorage.setItem('tt.libSort', v); renderSongs(); });
 $('search').oninput = e => { lib.q = e.target.value.trim().toLowerCase(); renderSongs(); };
 $('tagFilter').onclick = e => { const b = e.target.closest('button'); if (b) { lib.tag = b.dataset.tag; renderSongs(); } };
-const byCreated = (a, b) => (b.created || '').localeCompare(a.created || '');
-function visibleSongs() {
-  const hit = s => [s.title, s.artist, ...(s.tags || [])].some(x => (x || '').toLowerCase().includes(lib.q));
-  return sortSongs(lastSongs.filter(s => (!lib.tag || (s.tags || []).includes(lib.tag)) && (!lib.q || hit(s))));
-}
-function sortSongs(list) {
-  if (lib.sort === 'title') list.sort((a, b) => a.title.localeCompare(b.title, 'zh-CN', { numeric: true }));
-  else if (lib.sort === 'practiced') { // 没练过的按添加时间排在后面
-    const at = s => (s.practice && s.practice.last_at) || '';
-    list.sort((a, b) => at(b).localeCompare(at(a)) || byCreated(a, b));
-  } else list.sort(byCreated);
-  return list;
-}
+const visibleSongs = () => filterSongs(lastSongs, lib);
 function renderTagFilter() {
   const tags = [...new Set(lastSongs.flatMap(s => s.tags || []))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
   if (lib.tag && !tags.includes(lib.tag)) lib.tag = '';
