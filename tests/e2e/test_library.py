@@ -259,3 +259,112 @@ def test_practice_line_and_resume_link(server, browser):
     b.js("document.querySelector('#sortSeg [data-v=practiced]').click(); true")
     assert b.js("document.querySelector('.song-row').dataset.id") == img
     assert not b.errors, b.errors
+
+
+def _patch_songs_response(b, fn_js):
+    """把页面里 /api/songs 的返回改一下（fn_js：songs => void），不动真实数据。"""
+    b.js(f"""(() => {{ const of = window.fetch; window.fetch = async (u, init) => {{
+      const r = await of(u, init);
+      if (!String(u).endsWith('/api/songs')) return r;
+      const songs = await r.json(); ({fn_js})(songs);
+      return new Response(JSON.stringify(songs), {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }});
+    }}; return true; }})()""")
+
+
+def test_practice_line_escapes_backend_text(server, browser):
+    # 练习时间认不出时 ago() 原样返回：不能当 HTML 插进去
+    img = server["image"]
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{img}\"]')")
+    evil = '<img src=x onerror="window.__xss=true">'  # 不能带数字，否则 Date 能“认出”它
+    _patch_songs_response(
+        b,
+        f"songs => songs.forEach(s => {{ if (s.id === '{img}') {{ s.practice = {{ last_at: {json.dumps(evil)}, total_seconds: 60, last: null }}; }} }})",
+    )
+    b.js("tt.reload().then(() => true)")
+    row = f"document.querySelector('.song-row[data-id=\"{img}\"]')"
+    b.wait_for(f"!!{row}.querySelector('.practice')")
+    assert b.js(f"{row}.querySelector('.practice img')") is None
+    assert evil in b.js(f"{row}.querySelector('.practice').textContent")
+    assert not b.js("window.__xss")
+    assert not b.errors, b.errors
+
+
+def test_enter_while_composing_does_not_submit(server, browser):
+    # 输入法选词时按回车只是确认候选词，不能提交（曲名、API key）
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for("!!document.getElementById('title')")
+    b.js("""window.__clicks = [];
+      for (const id of ['uploadBtn', 'saveKey']) document.getElementById(id).click = () => window.__clicks.push(id);
+      for (const id of ['title', 'apiKey']) for (const isComposing of [true, false])
+        document.getElementById(id).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing, bubbles: true }));
+      true""")
+    assert b.js("window.__clicks") == ["uploadBtn", "saveKey"]
+    assert not b.errors, b.errors
+
+
+def test_search_keeps_hidden_selection(server, browser):
+    img, gp = server["image"], server["gp"]
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{gp}\"]')")
+    b.js("document.getElementById('selectBtn').click(); true")
+    for sid in (img, gp):
+        b.js(f"document.querySelector('.song-row[data-id=\"{sid}\"] .who').click(); true")
+    assert b.js("document.getElementById('selectCount').textContent") == "已选 2 首"
+    search = "(s => {{ s.value = '{}'; s.dispatchEvent(new Event('input')); }})(document.getElementById('search')); true"
+    b.js(search.format("E2E 图片"))
+    assert "已选 2 首（1 首不在当前列表里）" == b.js("document.getElementById('selectCount').textContent")
+    assert b.js("document.getElementById('selectAll').checked") is True  # 当前列表里的都选了
+    b.js("tt.reload().then(() => true)")  # 轮询刷新也不丢
+    b.js(search.format(""))
+    assert b.js("[...document.querySelectorAll('.song-row.on')].map(r => r.dataset.id).sort()") == sorted(
+        [img, gp]
+    )
+    b.js("document.getElementById('selectCancel').click(); true")
+    assert not b.errors, b.errors
+
+
+def test_drop_page_card_on_itself_is_noop(server, browser):
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for(f"!!document.querySelector('[data-more=\"{server['image']}\"]')")
+    b.js(f"tt.openPages('{server['image']}').then(() => true)")
+    b.wait_for("document.querySelectorAll('.page-card').length === 1")
+    # 加一张新页（只在对话框里，不保存），凑成两张卡片
+    b.js("""const dt = new DataTransfer(); dt.items.add(new File(['x'], 'new.png', { type: 'image/png' }));
+      const input = document.getElementById('pagesFile'); input.files = dt.files;
+      input.dispatchEvent(new Event('change')); true""")
+    b.wait_for("document.querySelectorAll('.page-card').length === 2")
+    # 第一张拖起来，放在它自己的右半边
+    b.js("""(() => { const card = document.querySelector('.page-card[data-i="0"]'), r = card.getBoundingClientRect();
+      const ev = (type, x) => new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: r.top + r.height / 2, dataTransfer: new DataTransfer() });
+      card.dispatchEvent(ev('dragstart', r.left + 5));
+      card.dispatchEvent(ev('dragover', r.right - 5));
+      card.dispatchEvent(ev('drop', r.right - 5));
+      card.dispatchEvent(ev('dragend', r.right - 5)); return true; })()""")
+    assert b.js("[...document.querySelectorAll('.page-card')].map(c => c.classList.contains('new'))") == [
+        False,
+        True,
+    ]
+    b.js("document.getElementById('pagesCancel').click(); true")
+    b.wait_for("!document.getElementById('pagesDlg').open")
+    assert not b.errors, b.errors
+
+
+def test_mixed_zip_and_other_files_warns(server, browser):
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for("!!document.getElementById('file')")
+    b.js("""window.__imports = 0; const of = window.fetch;
+      window.fetch = (u, init) => { if (String(u).includes('/api/import')) window.__imports++; return of(u, init); };
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'a.zip', { type: 'application/zip' }));
+      dt.items.add(new File(['x'], 'b.png', { type: 'image/png' }));
+      const input = document.getElementById('file'); input.files = dt.files;
+      input.dispatchEvent(new Event('change')); true""")
+    b.wait_for("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('请单独导入'))")
+    assert b.js("window.__imports") == 0
+    assert not b.errors, b.errors

@@ -195,3 +195,16 @@ test('dead notes get fret 0 and natural harmonics take their harmonic node', () 
   // 我们的数据 → alphaTex → alphaTab → 我们的数据：x / nh 的品格不变
   assert.deepEqual(norm(deriveSong(parse(toAlphaTex(d).tex), 0).bars), norm(d.bars));
 });
+
+// GP 里的小节可以比拍号长：多出来的拍从小节长度处（或更后面）开始，最后一个音的时值按它自己的算，不能是 0 或负数
+test('overfull GP bars: every event keeps a positive duration', () => {
+  const d = deriveSong(parse('.\n0.6.4 2.6.4 3.6.4 5.6.4 7.6.2 | 0.6.4 2.6.4 3.6.4 5.6.4 7.6.8 8.6.8 | 0.6.1'), 0);
+  assert.deepEqual(d.bars.map(b => b.events.map(e => e.dur)), [['1', '1', '1', '1', '2'], ['1', '1', '1', '1', '1/2', '1/2'], ['4']]);
+  // 没有时值信息的拍（合成数据）也不会出 0
+  const beat = (ds, fret) => ({ displayStart: ds, notes: [{ string: 6, fret }], isRest: false, graceType: 0 });
+  const mb = { timeSignatureNumerator: 4, timeSignatureDenominator: 4, calculateDuration: () => 3840 };
+  const score = { title: '', artist: '', tab: '', tempo: 90, masterBars: [mb], tracks: [{ name: 'g', staves: [{ tuning: [64, 59, 55, 50, 45, 40], capo: 0,
+    bars: [{ voices: [{ beats: [beat(0, 0), beat(1920, 2), beat(3840, 3)] }] }] }] }] };
+  const durs = deriveSong(score).bars[0].events.map(e => durToTicks(e.dur));
+  assert.deepEqual(durs, [1920, 1920, 960]);
+});
