@@ -126,9 +126,17 @@ export function openNotePop(beat, note) {
   pop.hidden = false;
   npLayer = UI.layer(pop, { ignore: [$('score')], focus: $('npFret'), onClose: () => { npLayer = null; np = null; pop.hidden = true; } });
   const x = Math.max(8, Math.min(pointer.x - card.left + 14, card.width - pop.offsetWidth - 8));
-  const y = pointer.y - card.top + 14;
-  pop.style.left = x + 'px'; pop.style.top = y + 'px';
+  pop.style.left = x + 'px'; pop.style.top = notePopY(card, pop.offsetHeight) + 'px';
   setTimeout(() => $('npFret').select(), 0);
+}
+// 面板放在点的位置下方；下面放不下（会压到底部指板或出屏幕）就翻到上方，两边都放不下就贴着可见区域
+function notePopY(card, h) {
+  const css = getComputedStyle(document.documentElement);
+  const topH = parseFloat(css.getPropertyValue('--top-h')) || 0, dockH = parseFloat(css.getPropertyValue('--dock-h')) || 0;
+  const minY = Math.max(topH, $('transport').getBoundingClientRect().bottom) + 8, maxY = innerHeight - dockH - 8; // 可见区域（视口坐标，去掉吸顶的控制条和底部指板）
+  let y = pointer.y + 14;
+  if (y + h > maxY) y = pointer.y - 14 - h >= minY ? pointer.y - 14 - h : Math.max(minY, maxY - h);
+  return y - card.top;
 }
 function freeString(ev, prefer) {
   const used = new Set(ev.notes.map(n => n.string));
