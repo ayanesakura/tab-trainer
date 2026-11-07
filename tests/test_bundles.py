@@ -213,3 +213,10 @@ def test_http_import_rejects_cross_site(client):
         "/api/import", files={"files": ("x.zip", b"x")}, headers={"Origin": "http://evil.example"}
     )
     assert r.status_code == 403
+
+
+def test_import_rejects_songs_that_do_not_match_the_model(data_dir):
+    song = {"id": "bad-00001", "status": "ready", "bars": [{"id": "a", "events": "nope"}]}
+    r = bundles.import_bundles([("x.zip", _bundle(song, {}))])
+    assert r["imported"] == [] and "格式不对" in r["skipped"][0]["reason"]
+    assert not store.exists("bad-00001")
