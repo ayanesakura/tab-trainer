@@ -259,3 +259,35 @@ def test_practice_history_and_last_positions(client):
     assert row["practice"]["total_seconds"] == 35 and row["practice"]["last"]["a_n"] == 5
     assert row["last_practiced"] == row["practice"]["last_at"]
     assert client.get("/api/songs/20260101-000000-abcdef/practice/history").status_code == 404
+
+
+def test_song_view_while_recognizing(client):
+    from app import store
+
+    sid = _image_song(client)
+
+    def row_parsing(s):
+        s["systems"][1]["status"] = "parsing"
+        s["activity"] = {"kind": "reparse_row", "restaging": False, "systems": [1]}
+
+    store.update(sid, row_parsing)
+    v = client.get(f"/api/songs/{sid}").json()
+    assert v["busy"] and v["recognizing"] and v["activity"]["systems"] == [1]
+    assert v["editable_meta"] == ["title", "artist"]
+    assert [b["locked"] is not None for b in v["bars"]] == [False] * 3 + [True] * 3
+    store.update(sid, lambda s: s.update(activity={"kind": "explain", "restaging": False, "systems": []}))
+    store.update(sid, lambda s: s["systems"][1].update(status="done"))
+    v = client.get(f"/api/songs/{sid}").json()
+    assert v["busy"] and not v["recognizing"] and all(b["locked"] is None for b in v["bars"])
+    row = next(x for x in client.get("/api/songs").json() if x["id"] == sid)
+    assert row["busy"] and not row["recognizing"] and row["activity"]["kind"] == "explain"
+    store.update(sid, lambda s: s.update(activity={"kind": "parse", "restaging": True, "systems": []}))
+    v = client.get(f"/api/songs/{sid}").json()
+    assert v["status"] == "ready" and v["recognizing"] and all("整首" in b["locked"] for b in v["bars"])
+    # 警告和不确定说明 → needs_review
+    store.update(sid, lambda s: (s.update(activity=None), s["bars"][0].update(uncertain="看不清")))
+    store.update(sid, lambda s: s["bars"][1].update(events=[{"dur": "1", "notes": []}]))
+    v = client.get(f"/api/songs/{sid}").json()
+    assert [b["needs_review"] for b in v["bars"][:3]] == [True, True, False]
+    assert v["bars"][1]["warn"][0]["code"] == "length"
+    assert next(x for x in client.get("/api/songs").json() if x["id"] == sid)["needs_review_bars"] == 2
