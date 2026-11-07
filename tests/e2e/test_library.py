@@ -1,4 +1,4 @@
-"""曲库页的曲子包：勾选导出、再从导入按钮导回来。"""
+"""曲库页：曲子包导出 / 导入、搜索和标签、菜单、外观、管理原谱页面、键盘和浮层。"""
 
 import json
 import urllib.request
@@ -51,7 +51,7 @@ def test_export_selected_then_import(server, browser):
         assert b.js("document.getElementById('selectBar').hidden") is True  # 导出后退出选择模式
 
         _api(server, f"/api/songs/{sid}", "DELETE")
-        b.js("loadSongs(); true")
+        b.js("tt.reload().then(() => true)")
         b.wait_for(f"!document.querySelector('.song-row[data-id=\"{sid}\"]')")
         # 把刚导出的包放进“导入曲子包”的文件框
         b.js("""const bin = atob(window.__dl.data), u8 = new Uint8Array(bin.length);
@@ -87,22 +87,25 @@ def test_search_tags_menu_and_theme(server, browser):
         b.js("document.querySelector('#tagFilter [data-tag=\"e2e-tag\"]').click(); true")
         assert b.js("[...document.querySelectorAll('.song-row')].map(r => r.dataset.id)") == [img]
         b.js("document.querySelector('#tagFilter [data-tag=\"\"]').click(); true")
-        b.js("(s => { s.value = 'E2E 图片'; s.dispatchEvent(new Event('input')); })($('search')); true")
+        b.js("(s => { s.value = 'E2E 图片'; s.dispatchEvent(new Event('input')); })(document.getElementById('search')); true")
         assert b.js("[...document.querySelectorAll('.song-row')].map(r => r.dataset.id)") == [img]
-        b.js("(s => { s.value = ''; s.dispatchEvent(new Event('input')); })($('search')); true")
+        b.js("(s => { s.value = ''; s.dispatchEvent(new Event('input')); })(document.getElementById('search')); true")
         # GP 曲子的菜单没有“管理页面”和“整首重新识别”
         b.js(f"document.querySelector('[data-more=\"{gp}\"]').click(); true")
         items = b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
-        assert "重命名" in items and "管理页面" not in items and "整首重新识别" not in items
+        assert "重命名" in items and "管理原谱页面" not in items and "整首重新识别" not in items
         b.js(f"document.querySelector('[data-more=\"{img}\"]').click(); true")
-        assert "管理页面" in b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
-        # 外观按钮：跟随系统 → 浅色 → 深色 → 跟随系统
-        b.js("localStorage.setItem('tt-theme', 'system'); UI.setTheme('system'); true")
+        assert "管理原谱页面" in b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
+        # 外观按钮：跟随系统 → 浅色 → 深色 → 跟随系统；<html data-theme> 总是实际生效的 light / dark
+        b.js("localStorage.setItem('tt-theme', 'system'); true")
+        b.open(server["base"] + "/")
+        assert b.js("document.documentElement.dataset.theme") in ("light", "dark")
         seen = []
         for _ in range(3):
             b.js("document.getElementById('themeBtn').click(); true")
-            seen.append(b.js("UI.getTheme()"))
-        assert seen == ["light", "dark", "system"]
+            seen.append((b.js("localStorage.getItem('tt-theme')"), b.js("document.documentElement.dataset.theme")))
+        assert [t for t, _ in seen] == ["light", "dark", "system"]
+        assert seen[0][1] == "light" and seen[1][1] == "dark" and seen[2][1] in ("light", "dark")
         assert not b.errors, b.errors
     finally:
         _api(server, f"/api/songs/{img}/tags", "PUT", b'{"tags": []}', {"Content-Type": "application/json"})
@@ -140,7 +143,7 @@ def test_reorder_and_delete_pages(server, browser):
         b.wait_for(f"!!document.querySelector('[data-more=\"{sid}\"]')")
         b.js(f"document.querySelector('[data-more=\"{sid}\"]').click(); true")
         b.js(
-            "[...document.querySelectorAll('.menu button')].find(x => x.textContent === '管理页面').click(); true"
+            "[...document.querySelectorAll('.menu button')].find(x => x.textContent === '管理原谱页面').click(); true"
         )
         b.wait_for("document.querySelectorAll('.page-card').length === 2")
         assert b.js("document.getElementById('pagesSave').disabled") is True
@@ -152,12 +155,15 @@ def test_reorder_and_delete_pages(server, browser):
         assert [p["file"] for p in after["pages"]] == ["p2.png", "p1.png"]
         assert [x["id"] for x in after["bars"]] == ids[6:] + ids[:6]
         # 删掉一页：确认后它上面的小节一起删掉
-        b.js("window.confirm = () => true; true")
-        b.js(f"openPages('{sid}'); true")
+        b.js(f"tt.openPages('{sid}').then(() => true)")
         b.wait_for("document.querySelectorAll('.page-card').length === 2")
         b.js("document.querySelector('.page-card[data-i=\"0\"] [data-rm]').click(); true")
         assert "删除 1 页（6 小节）" in b.js("document.getElementById('pagesMsg').textContent")
         b.js("document.getElementById('pagesSave').click(); true")
+        # 界面里的确认框（不是原生 confirm），叠在“管理原谱页面”上面
+        b.wait_for("!!document.querySelector('.dlg-msg[open] [data-ok]')")
+        assert "6 个小节" in b.js("document.querySelector('.dlg-msg').textContent")
+        b.js("document.querySelector('.dlg-msg [data-ok]').click(); true")
         b.wait_for("!document.getElementById('pagesDlg').open")
         after = json.loads(_api(server, f"/api/songs/{sid}"))
         assert [p["file"] for p in after["pages"]] == ["p1.png"] and [x["id"] for x in after["bars"]] == ids[
@@ -166,3 +172,44 @@ def test_reorder_and_delete_pages(server, browser):
         assert not b.errors, b.errors
     finally:
         _api(server, f"/api/songs/{sid}", "DELETE")
+
+
+def test_keyboard_overlays_and_focus(server, browser):
+    b = browser
+    img = server["image"]
+    b.open(server["base"] + "/")
+    b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{img}\"]')")
+    # 上传框能用键盘打开文件选择
+    assert b.js("(d => d.tabIndex === 0 && d.getAttribute('role') === 'button')(document.getElementById('drop'))")
+    b.js("window.__picked = 0; document.getElementById('file').click = () => window.__picked++; document.getElementById('drop').focus(); true")
+    b.key("Enter", vk=13)
+    b.key(" ", code="Space", vk=32)
+    assert b.js("window.__picked") == 2
+    # 顶栏导航是 tablist；排序是带 aria-pressed 的分段开关
+    assert b.js("document.getElementById('nav').getAttribute('role')") == "tablist"
+    assert b.js("document.querySelector('#nav [data-v=library]').getAttribute('aria-selected')") == "true"
+    assert b.js("document.querySelectorAll('#sortSeg [aria-pressed=true]').length") == 1
+    # 菜单：焦点移进菜单，Esc 关掉后回到“更多”按钮；hasLayer 反映是否有浮层
+    more = f"document.querySelector('[data-more=\"{img}\"]')"
+    b.js(f"{more}.focus(); {more}.click(); true")
+    assert b.js("!!document.querySelector('.menu') && document.activeElement.closest('.menu') !== null")
+    assert b.js("UI.hasLayer()") is True
+    b.key("Escape", vk=27)
+    assert b.js("!document.querySelector('.menu')")
+    assert b.js(f"document.activeElement === {more}")
+    assert b.js("UI.hasLayer()") is False
+    # 确认框：Esc 取消（返回 false），点确定返回 true
+    b.js("window.__r = 'pending'; UI.confirm('测试？').then(v => { window.__r = v; }); true")
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    b.key("Escape", vk=27)
+    b.wait_for("window.__r !== 'pending'")
+    assert b.js("window.__r") is False and b.js("!document.querySelector('.dlg-msg')")
+    b.js("window.__r = 'pending'; UI.confirm('测试？').then(v => { window.__r = v; }); true")
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    b.js("document.querySelector('.dlg-msg [data-ok]').click(); true")
+    b.wait_for("window.__r === true")
+    # 轮询刷新列表时，没变的行原样保留，焦点不丢
+    b.js(f"{more}.focus(); window.__row = {more}.closest('.song-row'); true")
+    b.js("tt.reload().then(() => true)")
+    assert b.js(f"document.activeElement === {more} && window.__row === {more}.closest('.song-row')")
+    assert not b.errors, b.errors
