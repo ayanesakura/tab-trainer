@@ -28,9 +28,21 @@ def test_vocab_is_well_formed():
     assert sorted(d["prompt_order"] for d in prompt) == list(range(len(prompt)))
     assert llm.DIRECTIONS == music.PROMPT_DIRECTIONS and set(llm.DIRECTIONS) <= set(music.DIRECTIONS)
     assert set(VOCAB["sources"]) == set(model.SourceType.__args__)
+    assert set(model.SCORE_SOURCES) == {"gp", "musicxml"} <= set(VOCAB["sources"])
+    assert set(music.GBK_EXT) <= set(music.SCORE_FILES["gp"])
 
 
 def test_every_warn_code_the_backend_emits_is_in_vocab():
     emitted = set(music.DERIVED_WARNS) | {"ocr_mismatch", "other"}
     assert emitted == set(VOCAB["warn_codes"])
     assert set(model.WarnCode.__args__) == set(VOCAB["warn_codes"])
+
+
+def test_model_presets_on_the_settings_page_have_prices():
+    import re
+
+    html = (Path(music.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+    seg = re.search(r'id="modelSeg".*?</div>', html, re.DOTALL).group(0)
+    buttons = [v for v in re.findall(r'data-v="([^"]+)"', seg) if v != "custom"]
+    assert tuple(buttons) == llm.PRESET_MODELS
+    assert all(llm.price_of(m) for m in llm.PRESET_MODELS) and llm.DEFAULT_MODEL in llm.PRESET_MODELS

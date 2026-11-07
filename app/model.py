@@ -25,6 +25,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 from app.music import (
     DERIVED_WARNS,
     MAX_FRET,
+    SCORE_FILES,
     STRINGS,
     TECHS,
     WARN_CODES,
@@ -38,7 +39,7 @@ SourceType = Literal["image", "pdf", "gp", "musicxml"]
 Status = Literal["queued", "parsing", "ready", "error", "cancelled", "imported"]
 ActivityKind = Literal["parse", "reparse_row", "explain"]
 WarnCode = Literal[tuple(WARN_CODES)]  # type: ignore[valid-type]
-SCORE_SOURCES = ("gp", "musicxml")
+SCORE_SOURCES = tuple(SCORE_FILES)  # ("gp", "musicxml")
 USAGE_KEYS = ("input_tokens", "output_tokens", "cost_usd", "unpriced_tokens")
 # 早期曲子只记了 token、没记钱：第一次再花钱时把这部分 token 记到这里，曲库按默认模型的价格估算
 LEGACY_USAGE_KEYS = ("legacy_input_tokens", "legacy_output_tokens")
@@ -477,8 +478,8 @@ def bump_revs(song: dict, before: tuple[str, dict[str, tuple[int, str]]]) -> Non
 
 # 只在接口返回里出现（app/views.py 算出来），不存盘
 VIEW_ONLY = frozenset(
-    {"practice", "busy", "recognizing", "can_edit_bars", "editable_meta", "running", "error", "job", "kind"}
-)
+    {"practice", "busy", "recognizing", "can_edit_bars", "editable_meta", "is_score", "failed_rows"}
+)  # 早期格式的 running / error / job / kind 由 migrate 在升级时去掉
 
 
 def strip(song: dict) -> dict:

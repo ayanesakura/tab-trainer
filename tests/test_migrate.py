@@ -5,6 +5,7 @@ import json
 import pytest
 
 from app import migrate, practice, songs, store, views
+from app.text import fix_mojibake
 from tests.fakes import score_png
 
 MOJI = "押尾光太郎".encode("gbk").decode("latin-1")  # GBK 当成 Latin-1 读出来的乱码
@@ -162,26 +163,24 @@ MUST_NOT_CHANGE = [
 @pytest.mark.parametrize("text", MUST_FIX)
 def test_mojibake_must_fix(text):
     """FIX-CONTRACT 的统一规则（前端 score.js 用同一套）：cp1252 读法和 Latin-1 读法都能还原。"""
-    assert migrate.fix_mojibake(_as_cp1252(text)) == text
-    assert migrate.fix_mojibake(text.encode("gbk").decode("latin-1")) == text
+    assert fix_mojibake(_as_cp1252(text)) == text
+    assert fix_mojibake(text.encode("gbk").decode("latin-1")) == text
 
 
 @pytest.mark.parametrize(
     "text", [*MUST_NOT_CHANGE, "Pokémon", "Café del Mar", "押尾光太郎", "Romance", "", "Ångström"]
 )
 def test_mojibake_must_not_change(text):
-    assert migrate.fix_mojibake(text) == text
+    assert fix_mojibake(text) == text
 
 
 def test_mojibake_cp1252_range_and_edge_cases():
     moji = _as_cp1252("我們的歌")
     assert "\u201a" in moji and "\u0192" in moji  # 1252 的 0x80–0x9F 区字符（‚ƒ，latin-1 还原不了）
     assert "\x90" in _as_cp1252("周杰倫")  # 1252 没定义的字节按 Latin-1
-    assert MOJI == "Ñº\xce²¹âÌ«ÀÉ" and migrate.fix_mojibake("Ñº¹ãÌ«ÀÉ") != "Ñº¹ãÌ«ÀÉ"
-    assert migrate.fix_mojibake("Ab€") == "Ab€"  # 还原出的字节解不成 GBK
-    assert migrate.fix_mojibake("中文" + _as_cp1252("晴天")) == "中文" + _as_cp1252(
-        "晴天"
-    )  # 有字符还原不成字节
+    assert MOJI == "Ñº\xce²¹âÌ«ÀÉ" and fix_mojibake("Ñº¹ãÌ«ÀÉ") != "Ñº¹ãÌ«ÀÉ"
+    assert fix_mojibake("Ab€") == "Ab€"  # 还原出的字节解不成 GBK
+    assert fix_mojibake("中文" + _as_cp1252("晴天")) == "中文" + _as_cp1252("晴天")  # 有字符还原不成字节
 
 
 def test_mojibake_is_fixed_for_every_source_type():

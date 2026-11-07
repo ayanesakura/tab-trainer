@@ -267,6 +267,10 @@ PRICES = {
 }
 
 
+# 设置页“识别模型”的预设按钮（app/static/index.html 的 #modelSeg；tests/test_vocab.py 检查两边一致、都有价格）
+PRESET_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5")
+
+
 def price_of(model: str | None) -> tuple[float, float] | None:
     """模型的价格；网关加了前缀的名字（如 compass/claude-opus-5-5）按最后一段查。"""
     name = (model or "").rsplit("/", 1)[-1]
