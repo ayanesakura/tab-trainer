@@ -87,15 +87,21 @@ def test_search_tags_menu_and_theme(server, browser):
         b.js("document.querySelector('#tagFilter [data-tag=\"e2e-tag\"]').click(); true")
         assert b.js("[...document.querySelectorAll('.song-row')].map(r => r.dataset.id)") == [img]
         b.js("document.querySelector('#tagFilter [data-tag=\"\"]').click(); true")
-        b.js("(s => { s.value = 'E2E 图片'; s.dispatchEvent(new Event('input')); })(document.getElementById('search')); true")
+        b.js(
+            "(s => { s.value = 'E2E 图片'; s.dispatchEvent(new Event('input')); })(document.getElementById('search')); true"
+        )
         assert b.js("[...document.querySelectorAll('.song-row')].map(r => r.dataset.id)") == [img]
-        b.js("(s => { s.value = ''; s.dispatchEvent(new Event('input')); })(document.getElementById('search')); true")
+        b.js(
+            "(s => { s.value = ''; s.dispatchEvent(new Event('input')); })(document.getElementById('search')); true"
+        )
         # GP 曲子的菜单没有“管理页面”和“整首重新识别”
         b.js(f"document.querySelector('[data-more=\"{gp}\"]').click(); true")
         items = b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
         assert "重命名" in items and "管理原谱页面" not in items and "整首重新识别" not in items
         b.js(f"document.querySelector('[data-more=\"{img}\"]').click(); true")
-        assert "管理原谱页面" in b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
+        assert "管理原谱页面" in b.js(
+            "[...document.querySelectorAll('.menu button')].map(x => x.textContent)"
+        )
         # 外观按钮：跟随系统 → 浅色 → 深色 → 跟随系统；<html data-theme> 总是实际生效的 light / dark
         b.js("localStorage.setItem('tt-theme', 'system'); true")
         b.open(server["base"] + "/")
@@ -103,7 +109,9 @@ def test_search_tags_menu_and_theme(server, browser):
         seen = []
         for _ in range(3):
             b.js("document.getElementById('themeBtn').click(); true")
-            seen.append((b.js("localStorage.getItem('tt-theme')"), b.js("document.documentElement.dataset.theme")))
+            seen.append(
+                (b.js("localStorage.getItem('tt-theme')"), b.js("document.documentElement.dataset.theme"))
+            )
         assert [t for t, _ in seen] == ["light", "dark", "system"]
         assert seen[0][1] == "light" and seen[1][1] == "dark" and seen[2][1] in ("light", "dark")
         assert not b.errors, b.errors
@@ -180,8 +188,12 @@ def test_keyboard_overlays_and_focus(server, browser):
     b.open(server["base"] + "/")
     b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{img}\"]')")
     # 上传框能用键盘打开文件选择
-    assert b.js("(d => d.tabIndex === 0 && d.getAttribute('role') === 'button')(document.getElementById('drop'))")
-    b.js("window.__picked = 0; document.getElementById('file').click = () => window.__picked++; document.getElementById('drop').focus(); true")
+    assert b.js(
+        "(d => d.tabIndex === 0 && d.getAttribute('role') === 'button')(document.getElementById('drop'))"
+    )
+    b.js(
+        "window.__picked = 0; document.getElementById('file').click = () => window.__picked++; document.getElementById('drop').focus(); true"
+    )
     b.key("Enter", vk=13)
     b.key(" ", code="Space", vk=32)
     assert b.js("window.__picked") == 2
