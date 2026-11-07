@@ -240,3 +240,22 @@ def test_rows_show_source_and_no_initial_tiles(server, browser):
     sub = b.js(f"document.querySelector('.song-row[data-id=\"{server['gp']}\"] .sub').textContent")
     assert sub.startswith("GP")
     assert not b.errors, b.errors
+
+
+def test_practice_line_and_resume_link(server, browser):
+    img = server["image"]
+    body = b'{"bar_ids": ["bar2", "bar3"], "loops": 2, "bpm": 60, "seconds": 1500}'
+    _api(server, f"/api/songs/{img}/practice", "POST", body, {"Content-Type": "application/json"})
+    b = browser
+    b.open(server["base"] + "/")
+    row = f"document.querySelector('.song-row[data-id=\"{img}\"]')"
+    b.wait_for(f"!!{row} && !!{row}.querySelector('.practice')")
+    text = b.js(f"{row}.querySelector('.practice').textContent")
+    assert "练到第 2–3 小节" in text and "累计 25 分钟" in text
+    assert (
+        b.js(f"{row}.querySelector('[data-k=resume]').getAttribute('href')") == f"/trainer?id={img}&resume=1"
+    )
+    # 按最近练习排序时练过的排最前
+    b.js("document.querySelector('#sortSeg [data-v=practiced]').click(); true")
+    assert b.js("document.querySelector('.song-row').dataset.id") == img
+    assert not b.errors, b.errors

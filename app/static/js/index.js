@@ -128,7 +128,7 @@ addEventListener('keydown', e => { if (e.key === 'Escape' && selecting && !UI.ha
 
 // ---------------- 曲库列表 ----------------
 const SOURCE_ICON = { image: 'image', pdf: 'file', gp: 'score', musicxml: 'score' };
-const isScore = s => s.kind === 'score';
+const isScore = s => s.source_type === 'gp' || s.source_type === 'musicxml'; // GP / MusicXML：没有原谱页面，不需要识别
 const canPlay = s => s.status !== 'corrupt' && (s.bars > 0 || isScore(s));
 
 // “3 天前”：练习时间是本地时间字符串 “YYYY-MM-DD HH:MM”
@@ -162,20 +162,20 @@ function practiceText(s) {
   const p = s.practice;
   if (!p || !p.last_at) return '';
   const range = rangeText(s);
-  return [ago(p.last_at), range && `练到${range}`, p.total_seconds > 0 && `累计 ${duration(p.total_seconds)}`].filter(Boolean).join(' · ');
+  return [ago(p.last_at), range && (range === '全曲' ? '练全曲' : `练到${range}`), p.total_seconds > 0 && `累计 ${duration(p.total_seconds)}`].filter(Boolean).join(' · ');
 }
 
 // 需要注意的状态（忙、出错、待核对、警告）；一切正常时返回 ''，小节数放在说明行里
 function stateHTML(s) {
-  if (s.status === 'corrupt') return `<span class="dot err"></span><span class="err-text">${esc(s.error)}（可在“…”菜单删除）</span>`;
+  const n = s.notice;
+  if (s.status === 'corrupt') return `<span class="dot err"></span><span class="err-text">${esc(n && n.msg)}（可在“…”菜单删除）</span>`;
   if (s.busy) {
     const p = s.progress || {};
     const pct = p.total ? Math.round(100 * p.done / p.total) : 6;
     const unit = s.recognizing ? '行' : '批';
     return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${p.done}/${p.total} ${unit}` : ''}</span><span class="progress" role="progressbar" aria-label="进度" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></span>`;
   }
-  const n = s.notice;
-  if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">${isScore(s) ? '曲谱读取失败' : '识别失败'}：${esc(n ? n.msg : s.error)}</span>`;
+  if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">${isScore(s) ? '曲谱读取失败' : '识别失败'}${n ? `：${esc(n.msg)}` : ''}</span>`;
   if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${s.bars} 小节` : ''}</span>`;
   const review = s.needs_review_bars || 0;
   const parts = [];
@@ -210,7 +210,7 @@ function rowHTML(s) {
   const tags = (s.tags || []).length ? `<span class="tags">${s.tags.map(t => `<button class="badge tag" data-tag="${esc(t)}" data-k="tag:${esc(t)}" title="只看“${esc(t)}”">${esc(t)}</button>`).join('')}</span>` : '';
   const title = play && !selecting ? `<a class="title" href="${href}" data-k="open">${esc(s.title)}</a>` : `<span class="title">${esc(s.title)}</span>`;
   let action = '';
-  if (play && last) action = `<a class="btn primary sm" data-k="resume" href="${href}&resume=1" title="${esc(`从${range || '上次的位置'}${last.bpm ? `、${last.bpm} BPM` : ''}接着练`)}">${icon('repeat', 12)}接着练</a>`;
+  if (play && last) action = `<a class="btn primary sm" data-k="resume" href="${href}&resume=1" title="${esc(`从${range || '上次的位置'}${last.bpm ? `、${last.bpm} BPM` : ''} 接着练`)}">${icon('repeat', 12)}接着练</a>`;
   else if (play) action = `<a class="btn primary sm" data-k="play" href="${href}">${icon('play', 12)}练习</a>`;
   return `<div class="row song-row${play || pick ? ' click' : ''}${on ? ' on' : ''}" data-id="${esc(s.id)}" data-play="${play ? 1 : ''}" data-pick="${pick ? 1 : ''}">
     ${selecting ? `<input type="checkbox" class="pick" data-k="pick" aria-label="选择 ${esc(s.title)}" ${on ? 'checked' : ''} ${pick ? '' : 'disabled'}>` : ''}
