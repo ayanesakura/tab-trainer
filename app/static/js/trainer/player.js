@@ -108,8 +108,8 @@ function ensureApi() {
   api.playerStateChanged.on(e => set('play.playing', e.state === 1));
   api.playerPositionChanged.on(e => onPosition(e.currentTick));
   api.playedBeatChanged.on(beat => onBeat(beat, false));
-  // 点音符时 alphaTab 先触发拍、再触发音符：攒到同一轮里，点在音符上就只试听（不改循环），点在别处才循环这一小节。
-  // 播放中点音符不试听，照常循环这一小节
+  // 点音符时 alphaTab 先触发拍、再触发音符：攒到同一轮里，点在音符上就只试听（不改播放位置），点在别处才从这个小节开始播放。
+  // 播放中点音符不试听，照常从这个小节开始播放
   api.beatMouseDown.on(b => {
     if (get('ui.editMode') && hooks.editClick) { hooks.editClick(b, null); return; }
     if (pendingBeat) return;
@@ -462,13 +462,31 @@ function scrollToCursor() {
   scrollTo({ top: scrollY + el.getBoundingClientRect().top - stuck - 16, behavior: 'smooth' });
 }
 
+// 点谱面上的小节：从这个小节开始播放（不改循环范围；点到范围外面就改成全曲，好从这里一直往下放）。
+// 要循环就点“只练这一小节”，或 Shift + 点把范围扩到这个小节。敲节奏练的是一段，点小节仍然是选这一小节。
 export function onBeatClick(beat) {
   const bi = beat.voice.bar.index;
   if (bi >= nBars()) return;
   const { a, b } = get('play');
   if (shiftDown) setLoop(Math.min(a, bi), Math.max(b, bi));
-  else setLoop(bi, bi);
+  else if (get('rhythm.on')) setLoop(bi, bi);
+  else {
+    if (bi < a || bi > b) setLoop(0, nBars() - 1, false, false);
+    seekBar(bi);
+    set('ui.bar', bi);
+  }
   onBeat(beat, true);
+}
+
+/** 播放位置跳到第 bi 小节开头（播放中就从那里接着放）。有反复时取落在当前循环范围里的那一遍。 */
+function seekBar(bi) {
+  if (!api || !api.score || !api.score.masterBars[bi]) return;
+  const mb = api.score.masterBars[bi], tc = api.tickCache, r = api.playbackRange;
+  const runs = (tc && tc.masterBars ? tc.masterBars.filter(m => m.masterBar === mb) : []).filter(m => m.end > m.start);
+  const inRange = runs.find(m => !r || (m.start >= r.startTick && m.start < r.endTick));
+  const t = inRange ? inRange.start : runs.length ? runs[0].start : mb.start;
+  lastTick = -1; // 往回跳不能当成弹完了一遍
+  api.tickPosition = t;
 }
 
 export function exportGp() {

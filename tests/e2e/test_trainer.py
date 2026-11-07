@@ -112,7 +112,7 @@ def test_selected_bar_shows_original_image(trainer):
         "document.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', code: 'ArrowRight'})); true"
     )
     assert b.js("document.getElementById('origTitle').textContent") == "原谱 · 第 3 小节"
-    assert b.js("tt.state.a") == 1  # 弹窗里换小节不影响练习页的选段（←→ 不会被当成换段）
+    assert b.js("tt.state.a") == 0  # 点小节不改循环范围；弹窗里换小节也不影响选段（←→ 不会被当成换段）
     b.key("Escape", vk=27)
     assert not b.js("document.getElementById('origModal').open")
     assert not b.errors, b.errors
@@ -684,3 +684,18 @@ def test_side_panel_ends_above_the_fretboard_dock(trainer):
         "[document.querySelector('.side').getBoundingClientRect().bottom, document.getElementById('fbDock').getBoundingClientRect().top]"
     )
     assert side <= dock + 1
+
+
+def test_clicking_a_bar_starts_playback_there_without_looping_it(trainer):
+    """点谱面上的小节：播放位置跳到这个小节开头，循环范围不变；点到范围外面就改成全曲。Shift + 点才扩大范围。"""
+    b = trainer()
+    b.wait_for("!!(tt.api.tracks && tt.api.boundsLookup)")
+    beat = "tt.api.tracks[0].staves[0].bars[{}].voices[0].beats[0]"
+    b.js("tt.setLoop(0, 2); true")
+    b.js(f"tt.onBeatClick({beat.format(1)}); true")
+    assert [b.js("tt.state.a"), b.js("tt.state.b")] == [0, 2]
+    assert b.js("tt.api.tickPosition === tt.api.score.masterBars[1].start") and b.js("tt.get('ui.bar')") == 1
+    b.js(f"tt.onBeatClick({beat.format(4)}); true")  # 范围外：改成全曲，从第 5 小节开始
+    assert [b.js("tt.state.a"), b.js("tt.state.b")] == [0, 5]
+    assert b.js("tt.api.tickPosition === tt.api.score.masterBars[4].start")
+    assert not b.errors, b.errors
