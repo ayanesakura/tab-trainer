@@ -669,3 +669,39 @@ def test_failed_carried_ts_rerun_keeps_the_first_pass_bars(data_dir, monkeypatch
     assert [b["system"] for b in song["bars"]] == [0, 0, 0, 1, 1, 1]
     assert [b["n"] for b in song["bars"]] == [1, 2, 3, 4, 5, 6]
     assert song["systems"][1]["status"] == "error"
+
+
+def test_failed_fix_up_attempt_keeps_the_first_attempt(data_dir, monkeypatch):
+    """返修那次调用出错（过载、断线）：用第一次的结果（带着警告），不让整行失败。"""
+    real = FakeClaude.transcribe
+
+    def flaky(self, img, meta, first_bar, spans, previous=None, **kw):
+        if previous is not None:
+            raise RuntimeError("overloaded")
+        return real(self, img, meta, first_bar, spans, previous=previous, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", flaky)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    song = store.load(sid)
+    assert song["status"] == "ready" and song["notice"] is None
+    assert all(s["status"] == "done" for s in song["systems"])
+    assert [b["n"] for b in song["bars"]] == [1, 2, 3, 4, 5, 6]
+    assert all(w["code"] == "length" for b in song["bars"][:3] for w in b["warn"]) and song["bars"][0]["warn"]
+
+
+def test_cancel_before_the_fix_up_attempt_still_cancels(data_dir, monkeypatch):
+    real = FakeClaude.transcribe
+    cancel = threading.Event()
+
+    def cancelling(self, img, meta, first_bar, spans, previous=None, **kw):
+        if first_bar == 1:
+            cancel.set()  # 第一次识别期间点了取消：不再返修
+        return real(self, img, meta, first_bar, spans, previous=previous, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", cancelling)
+    sid = songs.create_song([("p1.png", score_png())])
+    with pytest.raises(jobs.Cancelled):
+        recognize.run_parse(sid, cancel)
+    assert not any(c["retry"] for c in FakeClaude.calls if c.get("first_bar") == 1)
+    assert store.load(sid)["systems"][0]["error"] == "已取消"

@@ -330,9 +330,15 @@ def transcribe_system(
     if issues:
         texts = [t for _, t in issues]
         log.info("request_id=%s song=%s system=%d retry: %s", claude.last_request_id, sid, si, texts)
-        _raw2, bars2, issues2 = run(previous=raw, problems=texts)
-        if len(issues2) <= len(issues):
-            bars, issues = bars2, issues2
+        try:
+            _raw2, bars2, issues2 = run(previous=raw, problems=texts)
+        except Cancelled:
+            raise
+        except Exception as e:  # noqa: BLE001 - 返修出错（过载、断线）：用第一次的结果，警告照常标在小节上
+            log.warning("request_id=%s song=%s system=%d retry failed: %s", request_id_of(e), sid, si, e)
+        else:
+            if len(issues2) <= len(issues):
+                bars, issues = bars2, issues2
 
     out = []
     for b in bars:
