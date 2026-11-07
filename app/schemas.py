@@ -95,6 +95,21 @@ class ReparseIn(_In):
     hint: str = Field("", max_length=1000)
 
 
+def page_order(raw: str) -> list[str]:
+    """补页 / 调页序的表单字段 order：JSON 数组，每项是已有页的文件名或 "new:k"（multipart 里没法直接用 JSON 请求体）。"""
+    import json
+
+    from app.errors import Invalid
+
+    try:
+        order = json.loads(raw)
+    except ValueError:
+        raise Invalid("页序格式不对") from None
+    if not isinstance(order, list) or not all(isinstance(x, str) for x in order):
+        raise Invalid("页序格式不对")
+    return order
+
+
 FIELD_NAMES = {
     "api_key": "API key",
     "base_url": "Base URL",

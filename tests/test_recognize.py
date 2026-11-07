@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from app import errors, jobs, music, practice, recognize, songs, store
+from app import errors, jobs, music, practice, recognize, songs, state, store
 from tests.fakes import FakeClaude, score_png
 
 
@@ -796,4 +796,50 @@ def test_header_cost_is_recorded_when_the_parse_stops_before_any_row(data_dir, s
     assert recognize.start_parse(sid, cancel)
     song = store.load(sid)
     assert song["status"] == ("cancelled" if how == "cancel" else "error")
-    assert song["usage"]["input_tokens"] == 1000 and song["usage"]["output_tokens"] == 0
+    # 替身一开始就带 10 / 20：新建的客户端用掉的全算这首曲子的
+    assert song["usage"]["input_tokens"] == 1010 and song["usage"]["output_tokens"] == 20
+
+
+def test_row_with_no_bars_fails_instead_of_wiping_the_row(data_dir, sync_jobs, monkeypatch):
+    """模型对一行（返修后也）返回 0 个小节：这一行算失败。重新识别时原来的结果整首保留。"""
+    sid, before = _parsed_song_with_user_data()
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, *a, **kw):
+        out = real(self, img, meta, first_bar, *a, **kw)
+        return {"bars": []} if first_bar > 1 else out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    assert after["bars"] == before["bars"] and "原来的结果保留不变" in after["notice"]["msg"]
+    assert "没有读出这一行的小节" in after["notice"]["msg"]
+
+    fresh = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(fresh)
+    s = store.load(fresh)
+    assert [x["status"] for x in s["systems"]] == ["done", "error"]
+    assert "没有读出" in s["systems"][1]["error"]
+
+
+def test_fixing_every_failed_row_makes_the_song_ready(data_dir, sync_jobs, monkeypatch):
+    """第一次识别中途服务重启（曲子显示识别失败），把这一行单独重新识别成功后，曲子回到“完成”。"""
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, *a, **kw):
+        if first_bar > 1:
+            raise RuntimeError("网络断了")
+        return real(self, img, meta, first_bar, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    # 服务在识别中途重启：recover 把曲子标成识别失败（已经识别出的行留着）
+    store.update(sid, lambda x: x.update(status="parsing", activity={"kind": "parse", "systems": []}))
+    store.update(sid, state.recover)
+    s = store.load(sid)
+    assert s["status"] == "error" and s["notice"]["source"] == "parse"
+    monkeypatch.setattr(FakeClaude, "transcribe", real)
+    recognize.start_reparse(sid, 1)
+    s = store.load(sid)
+    assert s["status"] == "ready" and s["notice"] is None

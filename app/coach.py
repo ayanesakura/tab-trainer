@@ -9,7 +9,7 @@ from app.config import settings
 from app.errors import AppError, Invalid, Upstream
 from app.jobs import Cancelled
 from app.llm import friendly, request_id_of
-from app.model import add_usage, now
+from app.model import now
 from app.songs import find_bar
 
 log = logging.getLogger("tab_trainer.coach")
@@ -29,7 +29,6 @@ def start_explain(sid: str) -> None:
     if not todo and plan and not plan.get("stale"):
         raise Invalid("每个小节都已经有提示，练习建议也是最新的")
     config.check_llm_ready()
-    cancel = jobs.claim_or_busy(sid, "这首曲子正在处理中")
     size = settings.explain_chunk
     chunks = [todo[k : k + size] for k in range(0, len(todo), size)]
 
@@ -37,16 +36,10 @@ def start_explain(sid: str) -> None:
     def begin(s):
         state.begin(s, "explain", progress={"stage": "生成讲解", "done": 0, "total": len(chunks)})
 
-    try:
-        store.update(sid, begin)
-    except Exception:
-        jobs.jobs.release(sid)
-        raise
-
     def end(notice=None):
         store.update(sid, lambda s: state.finish(s, notice=notice, source="explain"))
 
-    def run():
+    def run(cancel):
         try:
             _explain(sid, chunks, cancel)
             end()
@@ -57,30 +50,16 @@ def start_explain(sid: str) -> None:
             log.exception("request_id=%s song=%s explain failed", rid, sid)
             end(("error", "生成讲解失败：" + friendly(e)))
 
-    jobs.spawn(sid, run)
+    jobs.start(sid, "这首曲子正在处理中", begin, run)
 
 
 def _explain(sid: str, chunks: list[list[str]], cancel) -> None:
     claude = config.new_llm()
-    charged = dict(claude.usage)  # 已经记到曲子上的用量：每批写回时把新增的记上
-
-    def charge(s):
-        now = dict(claude.usage)
-        add_usage(s, now, charged)
-        charged.update(now)
-
+    meter = jobs.UsageMeter(claude)  # 每批写回时把新增的用量记上
     try:
-        _explain_chunks(sid, chunks, cancel, claude, charge)
+        _explain_chunks(sid, chunks, cancel, claude, meter.charge)
     finally:  # 某一批或练习建议失败 / 取消：已经发出去的请求也花了钱
-        if dict(claude.usage) != charged:
-            _charge(sid, charge)
-
-
-def _charge(sid: str, fn) -> None:
-    try:
-        store.update(sid, fn)
-    except Exception as e:  # noqa: BLE001 - 曲子已经删掉之类：不能盖住原来的错误
-        log.warning("song=%s usage not recorded: %s", sid, e)
+        meter.flush(sid)
 
 
 def _explain_chunks(sid: str, chunks: list[list[str]], cancel, claude, charge) -> None:
@@ -135,13 +114,7 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
         x0, x1, y0, y1 = bar["region"]
         image = store.page_image(sid, song["pages"][bar["page"]]).crop((x0, y0, x1, y1))
     claude = config.new_llm()  # 没配 key：MissingKey，400
-
-    def charge(s):
-        add_usage(s, claude.usage)
-
-    def charge_failed():  # 失败了这次请求也花了钱（连接都没建立起来时没有用量，不用写）
-        if any(claude.usage.values()):
-            _charge(sid, charge)
+    meter = jobs.UsageMeter(claude)
 
     try:
         answer = claude.coach(
@@ -154,13 +127,13 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
             image,
         )
     except AppError:
-        charge_failed()
+        meter.flush(sid)  # 失败了这次请求也花了钱
         raise
     except Exception as e:  # noqa: BLE001 - 网络 / API 错误统一转成中文说明
-        charge_failed()
+        meter.flush(sid)  # 失败了这次请求也花了钱
         raise Upstream(friendly(e)) from None
     if not answer.strip():
-        charge_failed()
+        meter.flush(sid)  # 失败了这次请求也花了钱
         raise Upstream("模型没有给出回答，换个问法再试一次")
     entry = {"q": question, "a": answer.strip(), "at": now()}
 
@@ -170,7 +143,7 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
             entry["stale"] = True  # 等回答期间这个小节改过音：回答说的是改之前的谱
         if b is not None:  # 等回答期间小节被重新识别掉了，就不存
             b["qa"] = [*(b.get("qa") or []), entry][-settings.qa_keep :]
-        charge(s)
+        meter.charge(s)
 
     s = store.update(sid, apply)
     b = next((x for x in s["bars"] if x.get("id") == bar_id), None)

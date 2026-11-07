@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import uuid
 
-from app.music import as_warn
+from app.music import SCORE_FILES, as_warn
+from app.text import fix_meta_text, fix_mojibake
 
 SCHEMA_VERSION = 2
-_MUSICXML_EXT = (".musicxml", ".xml", ".mxl")
 
 
 def migrate(song: dict, song_id: str) -> dict:
@@ -53,56 +53,8 @@ def source_type_of(s: dict) -> str:
     if s.get("source_type") in ("image", "pdf", "gp", "musicxml"):
         return s["source_type"]
     if s.get("kind") == "score" or s.get("source"):
-        return "musicxml" if str(s.get("source", "")).lower().endswith(_MUSICXML_EXT) else "gp"
+        return "musicxml" if str(s.get("source", "")).lower().endswith(SCORE_FILES["musicxml"]) else "gp"
     return "image"
-
-
-_CJK_RANGES = (("\u3040", "\u30ff"), ("\u3400", "\u4dbf"), ("\u4e00", "\u9fff"), ("\uf900", "\ufaff"))
-
-
-def _cp1252_bytes(text: str) -> bytes | None:
-    """按 windows-1252 把字符还原成字节：Latin-1 能表示的（含 0x80–0x9F 的控制字符）直接取码位，
-    其余按 cp1252 编码（‚ƒ„… € 之类 0x80–0x9F 区的字符）；还原不了返回 None。"""
-    out = bytearray()
-    for c in text:
-        if ord(c) < 256:
-            out.append(ord(c))
-            continue
-        try:
-            out += c.encode("cp1252")
-        except UnicodeEncodeError:
-            return None
-    return bytes(out)
-
-
-def fix_mojibake(text: str) -> str:
-    """GBK 编码的中文被当成 windows-1252 / Latin-1 读出来的乱码（如 "Ñº¹ãÌ«ÀÉ"）还原成中文。
-    规则和前端 score.js 一致（见 FIX-CONTRACT）：按 cp1252 还原字节再按 GBK 严格解码，任一步失败不改；
-    而且要同时满足：非 ASCII 字符 ≥ 4 个、比 ASCII 字母多，解出来的中日韩字符 ≥ 2 个、没有替换符。
-    正常的西文（"Canção"、"Mötley Crüe"、"Beyoncé" 之类）不动。"""
-    if not text or text.isascii():
-        return text
-    raw = _cp1252_bytes(text)
-    if raw is None:
-        return text
-    try:
-        fixed = raw.decode("gbk")
-    except UnicodeDecodeError:
-        return text
-    non_ascii = sum(not c.isascii() for c in text)
-    letters = sum(c.isascii() and c.isalpha() for c in text)
-    cjk = sum(any(lo <= c <= hi for lo, hi in _CJK_RANGES) for c in fixed)
-    if non_ascii >= 4 and non_ascii > letters and cjk >= 2 and "\ufffd" not in fixed:
-        return fixed
-    return text
-
-
-def fix_meta_text(meta: dict) -> dict:
-    """谱头里的曲名、艺人、编配：修复乱码（见 fix_mojibake）。"""
-    return {
-        **meta,
-        **{k: fix_mojibake(meta[k]) for k in ("title", "artist", "arranger") if isinstance(meta.get(k), str)},
-    }
 
 
 def _to_v2(s: dict) -> None:

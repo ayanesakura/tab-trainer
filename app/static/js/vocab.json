@@ -44,6 +44,12 @@
     { "code": "dadoublecoda",             "prompt": false }
   ],
   "sources": { "image": "图片", "pdf": "PDF", "gp": "GP", "musicxml": "MusicXML" },
+  "score_files": {
+    "_comment": "直接导入、不用 AI 识别的曲子：source_type → 认的扩展名。gbk：中文系统上按 GBK 存文字的老格式",
+    "gp": [".gp", ".gpx", ".gp3", ".gp4", ".gp5"],
+    "musicxml": [".musicxml", ".xml", ".mxl"],
+    "gbk": [".gp3", ".gp4", ".gp5", ".gpx"]
+  },
   "warn_codes": {
     "length": "时值合计不对",
     "off_grid": "时值不在播放网格上",

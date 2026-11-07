@@ -23,6 +23,11 @@ MAX_FRET: int = INSTRUMENT["max_fret_written"]  # 数据里接受的最高品（
 TECHS = [t["code"] for t in VOCAB["techs"]]
 STANDARD = list(INSTRUMENT["standard_tuning"])
 WARN_CODES: dict[str, str] = dict(VOCAB["warn_codes"])
+# 直接导入的曲子（Guitar Pro / MusicXML）：source_type → 扩展名
+SCORE_FILES: dict[str, tuple[str, ...]] = {
+    k: tuple(v) for k, v in VOCAB["score_files"].items() if k in ("gp", "musicxml")
+}
+GBK_EXT = tuple(VOCAB["score_files"]["gbk"])  # 中文系统上按 GBK 存文字的老格式（GP7+ 和 MusicXML 是 UTF-8）
 _NOTE = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 _NOTE_RE = re.compile(r"^\s*([A-Ga-g])\s*([#♯b♭]?)\s*(-?\d)?\s*$")
 _NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]

@@ -2,7 +2,7 @@
 
 import pytest
 
-from app import coach, practice, recognize, songs, store
+from app import coach, practice, recognize, songs, staleness, store
 from tests.fakes import FakeClaude, score_png
 
 
@@ -126,3 +126,18 @@ def test_explain_keeps_the_edited_flag_and_undo_baseline(data_dir, sync_jobs):
     assert b["tip"] == "讲解 2" and b["edited"] and b["_orig"]["events"] == bar["events"]
     b = songs.edit_bar(sid, bar["id"], bar["events"], None)["bars"][1]
     assert not b["edited"] and b["tip"] == "tip 2"
+
+
+def test_kept_hand_edit_is_no_longer_a_placeholder_rest():
+    """重新识别时这个小节没读出来（按休止占位），保留下来的是用户的音：之后按拍号重算时不能被换成休止。"""
+    from app import music
+
+    mine = [{"dur": "1", "notes": [{"string": 2, "fret": 3, "tech": [], "grace": -1, "bend": 0}]}] * 4
+    prev = {"id": "a", "events": mine, "tip": "t", "edited": True}
+    new = {"id": "b", "events": [{"dur": "4", "notes": []}], "placeholder": True, "warn": []}
+    staleness._keep_edit(prev, new)
+    assert new["events"] == mine and "placeholder" not in new
+    meta = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+    bars = [new]
+    music.apply_time_signatures(bars, meta)
+    assert bars[0]["events"] == mine

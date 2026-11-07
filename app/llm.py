@@ -267,6 +267,10 @@ PRICES = {
 }
 
 
+# 设置页“识别模型”的预设按钮（app/static/index.html 的 #modelSeg；tests/test_vocab.py 检查两边一致、都有价格）
+PRESET_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5")
+
+
 def price_of(model: str | None) -> tuple[float, float] | None:
     """模型的价格；网关加了前缀的名字（如 compass/claude-opus-5-5）按最后一段查。"""
     name = (model or "").rsplit("/", 1)[-1]
@@ -335,14 +339,14 @@ def upstream_reason(e: anthropic.APIStatusError) -> str:
 def friendly(e: Exception) -> str:
     """把模型调用的异常翻译成用户能看懂、知道怎么处理的说明。"""
     if isinstance(e, anthropic.AuthenticationError):
-        return "API key 无效，请在首页“模型设置”里检查。"
+        return "API key 无效，请在曲库页顶部的“设置”里检查。"
     if isinstance(e, anthropic.PermissionDeniedError):
         reason = upstream_reason(e)
         return "模型服务拒绝了这次请求（403）" + (
             f"：{reason}" if reason else "，可能是 API key 没有调用该模型的权限。"
         )
     if isinstance(e, anthropic.NotFoundError):
-        return "模型不存在或无权访问，请检查“模型设置”里的模型名。"
+        return "模型不存在或无权访问，请检查“设置”里的模型名。"
     if isinstance(e, anthropic.RateLimitError):
         return "调用太频繁或额度不足（429），稍后再试。"
     if isinstance(e, anthropic.APIConnectionError):
@@ -365,7 +369,7 @@ class Claude(LLM):
         key = cfg.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         if not key:
             raise MissingKey(
-                "还没有设置 API key：请在首页“模型设置”里填写，或启动前设置环境变量 ANTHROPIC_API_KEY。"
+                "还没有设置 API key：请在曲库页顶部的“设置”里填写，或启动前设置环境变量 ANTHROPIC_API_KEY。"
             )
         self.client = anthropic.Anthropic(
             api_key=key, base_url=cfg.base_url or DEFAULT_BASE_URL, max_retries=3, timeout=600

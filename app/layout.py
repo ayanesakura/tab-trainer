@@ -162,6 +162,8 @@ def detect_page(img: Image.Image) -> dict:
     bars：小节横向范围列表 [[bx0, bx1], ...]；lines：六根弦线的纵坐标（1 弦在最上面）。"""
     g = np.asarray(img.convert("L"))
     h, w = g.shape
+    if min(h, w) < 16:  # 太小，不可能有谱线（下面按行 / 列统计会遇到空数组）
+        return {"width": w, "height": h, "systems": []}
     dark = g < 200
     staves = _find_staves(g)
 

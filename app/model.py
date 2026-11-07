@@ -25,6 +25,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 from app.music import (
     DERIVED_WARNS,
     MAX_FRET,
+    SCORE_FILES,
     STRINGS,
     TECHS,
     WARN_CODES,
@@ -38,8 +39,10 @@ SourceType = Literal["image", "pdf", "gp", "musicxml"]
 Status = Literal["queued", "parsing", "ready", "error", "cancelled", "imported"]
 ActivityKind = Literal["parse", "reparse_row", "explain"]
 WarnCode = Literal[tuple(WARN_CODES)]  # type: ignore[valid-type]
-SCORE_SOURCES = ("gp", "musicxml")
+SCORE_SOURCES = tuple(SCORE_FILES)  # ("gp", "musicxml")
 USAGE_KEYS = ("input_tokens", "output_tokens", "cost_usd", "unpriced_tokens")
+# 早期曲子只记了 token、没记钱：第一次再花钱时把这部分 token 记到这里，曲库按默认模型的价格估算
+LEGACY_USAGE_KEYS = ("legacy_input_tokens", "legacy_output_tokens")
 EDITABLE_META = (
     "title",
     "artist",
@@ -266,6 +269,63 @@ class Song(_M):
     derived: Derived | None = None
 
 
+def problems(song: dict) -> list[str]:
+    """song.json 的不变量（写盘前检查）：形状符合 Song，以及字段之间的引用对得上——
+    小节 id 不重复；图片曲子的小节在存在的行上、页号和那一行一致；每一行都在存在的页上。"""
+    try:
+        Song.model_validate(song)
+    except Exception as e:  # noqa: BLE001 - 只报告
+        return [f"格式不对：{e}"[:500]]
+    out = []
+    pages, systems, bars = song.get("pages") or [], song.get("systems") or [], song.get("bars") or []
+    ids = [b.get("id") for b in bars]
+    if len(set(ids)) != len(ids):
+        out.append("小节 id 重复")
+    for si, x in enumerate(systems):
+        if not 0 <= x["page"] < len(pages):
+            out.append(f"第 {si} 行的页号 {x['page']} 不存在")
+    for b in [] if is_score(song) else bars:  # GP / MusicXML 的 system 是谱面排版的行，没有 systems
+        si = b.get("system")
+        if si is None:
+            continue
+        if not 0 <= si < len(systems):
+            out.append(f"小节 {b.get('id')} 的行号 {si} 不存在")
+        elif b.get("page") is not None and b["page"] != systems[si]["page"]:
+            out.append(f"小节 {b.get('id')} 的页号和第 {si} 行不一致")
+    return out
+
+
+def _dump(v):
+    if isinstance(v, BaseModel):
+        return v.model_dump(by_alias=True, exclude_none=True)
+    if isinstance(v, list):
+        return [_dump(x) for x in v]
+    return copy.deepcopy(v)
+
+
+def _fill_defaults(raw, obj) -> None:
+    if isinstance(obj, BaseModel) and isinstance(raw, dict):
+        for name, f in type(obj).model_fields.items():
+            key = f.alias or name
+            val = getattr(obj, name)
+            if key in raw:
+                _fill_defaults(raw[key], val)
+            elif name in raw:
+                _fill_defaults(raw[name], val)
+            elif val is not None:  # 可选、默认 None 的字段（_orig、plan…）不写：代码按“有没有这个键”判断
+                raw[key] = _dump(val)
+    elif isinstance(obj, list) and isinstance(raw, list):
+        for r, o in zip(raw, obj, strict=False):
+            _fill_defaults(r, o)
+
+
+def with_defaults(song: dict) -> dict:
+    """外来的 song.json（曲子包）：按 Song 校验，缺的字段补上默认值（小节里缺 notes、tip 之类），
+    其余原样保留（不在模型里的字段也不丢）。校验不过抛 pydantic.ValidationError。"""
+    _fill_defaults(song, Song.model_validate(song))
+    return song
+
+
 # ---------------------------------------------------------------------------
 # practice.jsonl 的一行（见 app/practice.py）
 # ---------------------------------------------------------------------------
@@ -345,8 +405,13 @@ def is_score(song: dict) -> bool:
 
 def add_usage(s: dict, usage: dict, before: dict | None = None) -> None:
     """把这次任务用掉的 token / 费用（usage 减去开始时的 before）累加到曲子上。"""
-    old = s.get("usage") or {}
+    old = dict(s.get("usage") or {})
+    if "cost_usd" not in old and (old.get("input_tokens") or old.get("output_tokens")):
+        # 早期曲子：之前的 token 没有对应的钱数。不记下来的话，这次的 cost_usd 会被当成全部花费
+        old["legacy_input_tokens"] = old.get("input_tokens", 0)
+        old["legacy_output_tokens"] = old.get("output_tokens", 0)
     s["usage"] = {k: old.get(k, 0) + usage.get(k, 0) - (before or {}).get(k, 0) for k in USAGE_KEYS}
+    s["usage"].update({k: old[k] for k in LEGACY_USAGE_KEYS if old.get(k)})
 
 
 # ---------------------------------------------------------------------------
@@ -413,8 +478,8 @@ def bump_revs(song: dict, before: tuple[str, dict[str, tuple[int, str]]]) -> Non
 
 # 只在接口返回里出现（app/views.py 算出来），不存盘
 VIEW_ONLY = frozenset(
-    {"practice", "busy", "recognizing", "can_edit_bars", "editable_meta", "running", "error", "job", "kind"}
-)
+    {"practice", "busy", "recognizing", "can_edit_bars", "editable_meta", "is_score", "failed_rows"}
+)  # 早期格式的 running / error / job / kind 由 migrate 在升级时去掉
 
 
 def strip(song: dict) -> dict:
@@ -502,6 +567,8 @@ class SongView(_M):
     tags: list[str] = Field(default_factory=list)
     track: int = 0
     derived: Derived | None = None
+    is_score: bool = False  # Guitar Pro / MusicXML（小节来自原文件）
+    failed_rows: int = 0  # 识别失败的行数
 
 
 class LibraryPractice(_M):
@@ -527,6 +594,8 @@ class LibraryItem(_M):
     created: str | None = None
     imported: str | None = None
     source_type: SourceType | None = None
+    is_score: bool = False
+    failed_rows: int = 0
     tags: list[str] = Field(default_factory=list)
     practice: LibraryPractice | None = None
     cost_usd: float = 0

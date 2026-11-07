@@ -17,9 +17,10 @@ from PIL import Image, ImageOps
 from app import state, store
 from app.config import settings
 from app.errors import STALE_REV, AppError, BarNotFound, Busy, Conflict, Invalid
-from app.migrate import fix_meta_text
 from app.model import is_score, new_song, touch_bar
 from app.music import (
+    GBK_EXT,
+    SCORE_FILES,
     apply_time_signatures,
     clean_events,
     clean_repeats,
@@ -39,12 +40,12 @@ from app.staleness import (
     restore_plan_bar,
     setting_changed,
 )
+from app.text import fix_meta_text
 
 log = logging.getLogger("tab_trainer.songs")
 
-SCORE_EXT = (".gp", ".gpx", ".gp3", ".gp4", ".gp5", ".musicxml", ".xml", ".mxl")
-MUSICXML_EXT = (".musicxml", ".xml", ".mxl")
-GBK_EXT = (".gp3", ".gp4", ".gp5", ".gpx")  # 中文系统上按 GBK 存文字的老格式（GP7+ 和 MusicXML 是 UTF-8）
+SCORE_EXT = tuple(e for exts in SCORE_FILES.values() for e in exts)
+MIN_SIDE = 32  # 图片最短边（像素）：再小就不可能看清谱子
 
 
 def find_bar(song: dict, bar_id: str) -> dict:
@@ -155,6 +156,8 @@ def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
                 img = Image.open(io.BytesIO(data))  # 只读文件头，还没解码像素
                 if img.width * img.height > settings.max_pixels:
                     raise Invalid(f"“{name}”分辨率太大（{img.width}×{img.height}），请缩小后再上传")
+                if min(img.width, img.height) < MIN_SIDE:
+                    raise Invalid(f"“{name}”太小了（{img.width}×{img.height}），看不清谱子")
                 img = ImageOps.exif_transpose(img)
                 if img.mode in ("RGBA", "LA", "P"):
                     bg = Image.new("RGB", img.size, "white")
@@ -226,7 +229,7 @@ def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
     stem = name.rsplit("/", 1)[-1][: -len(ext)]
     song = new_song(
         sid,
-        "musicxml" if ext in MUSICXML_EXT else "gp",
+        next(k for k, exts in SCORE_FILES.items() if ext in exts),
         source=f"source{ext}",
         title=title.strip() or stem,
         status="imported",  # 文件在浏览器里第一次成功解析后才变成 ready（见 set_derived / import_failed）

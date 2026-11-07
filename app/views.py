@@ -10,9 +10,10 @@ import logging
 from typing import Any
 
 from app import practice, state, store
-from app.errors import CorruptSong
+from app.errors import CorruptSong, NotFound
 from app.jobs import jobs
 from app.llm import DEFAULT_MODEL, price_of
+from app.model import is_score
 
 log = logging.getLogger("tab_trainer.views")
 
@@ -60,8 +61,15 @@ def song_view(s: dict) -> dict:
         **flags,
         bars=[bar_view(s, b) for b in s.get("bars") or []],
         practice=practice.aggregate(s["id"], s),
+        is_score=is_score(s),
+        failed_rows=failed_rows(s),
     )
     return out
+
+
+def failed_rows(s: dict) -> int:
+    """识别失败的行数（“重试失败的行”只重新识别这些）。"""
+    return sum(1 for x in s.get("systems") or [] if isinstance(x, dict) and x.get("status") == "error")
 
 
 def library_item(s: dict) -> dict:
@@ -87,6 +95,8 @@ def library_item(s: dict) -> dict:
         "created": s.get("created"),
         "imported": s.get("imported"),
         "source_type": s.get("source_type"),
+        "is_score": is_score(s),
+        "failed_rows": failed_rows(s),
         "tags": [t for t in s.get("tags") or [] if isinstance(t, str)],
         "practice": p,
         **cost_summary(s.get("usage")),
@@ -116,7 +126,7 @@ def list_library() -> list[dict]:
             out.append(library_item(store.load(sid)))
         except CorruptSong as e:
             out.append(corrupt_item(sid, str(e)))
-        except LookupError:  # 刚被删掉
+        except NotFound:  # 刚被删掉（别的 KeyError 之类是数据不对，按下面的坏曲子列出来，能删）
             continue
         except Exception as e:  # 内容不对（手改坏的文件之类）算到这一首上，曲库照常能打开
             log.exception("song=%s 无法列进曲库", sid)
@@ -129,10 +139,12 @@ def cost_summary(usage) -> dict:
     用了价格表里没有的模型（自定义）的那部分只有 token，没法算钱，也标出来。"""
     u = usage if isinstance(usage, dict) else {}
     tin, tout = u.get("input_tokens") or 0, u.get("output_tokens") or 0
-    if "cost_usd" in u:
-        cost, estimated = float(u.get("cost_usd") or 0), False
+    price = price_of(DEFAULT_MODEL) or (0, 0)
+    if "cost_usd" in u:  # 之后的调用都记了钱；早期只记 token 的那部分（legacy_*）按估算加上
+        lin, lout = u.get("legacy_input_tokens") or 0, u.get("legacy_output_tokens") or 0
+        cost = float(u.get("cost_usd") or 0) + (lin * price[0] + lout * price[1]) / 1e6
+        estimated = bool(lin or lout)
     else:
-        price = price_of(DEFAULT_MODEL) or (0, 0)
         cost, estimated = (tin * price[0] + tout * price[1]) / 1e6, bool(tin or tout)
     return {
         "cost_usd": round(cost, 4),

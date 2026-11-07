@@ -128,6 +128,18 @@ def load(song_id: str) -> dict:
     return model.derive(migrate.migrate(data, song_id))
 
 
+# 写盘前检查不变量（model.problems）：平时只记错误日志（不能因为一处旧数据让用户存不了），测试里设成 True 直接报错
+STRICT = False
+
+
+def _check(song: dict) -> None:
+    bad = model.problems(song)
+    if bad and STRICT:
+        raise AssertionError(f"song={song.get('id')}：" + "；".join(bad))
+    if bad:
+        log.error("song=%s 写入的数据有问题：%s", song.get("id"), "；".join(bad))
+
+
 def save(song: dict, create: bool = False) -> None:
     """保存（rev +1）。create=False 时曲子目录必须已经存在：删掉的曲子不会被后台任务的写回重新建出来。"""
     with _lock:
@@ -146,6 +158,7 @@ def write_song(d: Path, song: dict) -> None:
         if seed:
             _write_seed(d, seed)
         song["schema_version"] = SCHEMA_VERSION
+        _check(song)
         write_json(d / "song.json", model.strip(song))
 
 

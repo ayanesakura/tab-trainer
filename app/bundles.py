@@ -261,7 +261,7 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
 def _check_shape(song: dict) -> None:
     """外来的 song.json（已升级到当前格式）要符合 model.Song，否则这首跳过，不让它在曲库里出错。"""
     try:
-        model.Song.model_validate(song)  # 多出来的字段（派生的 n、meta.title，临时的 _ 开头字段）忽略
+        model.with_defaults(song)  # 缺的字段补默认值；多出来的字段（派生的 n、meta.title 之类）原样留着
     except ValidationError as e:
         err = e.errors()[0]
         where = ".".join(str(x) for x in err.get("loc", ()))

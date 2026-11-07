@@ -74,4 +74,23 @@ def test_derive_and_strip_round_trip():
 def test_add_usage_accumulates():
     s = {"usage": {"input_tokens": 1, "output_tokens": 2}}
     model.add_usage(s, {"input_tokens": 10, "output_tokens": 20, "cost_usd": 0.5}, {"input_tokens": 4})
-    assert s["usage"] == {"input_tokens": 7, "output_tokens": 22, "cost_usd": 0.5, "unpriced_tokens": 0}
+    assert s["usage"] == {
+        "input_tokens": 7,
+        "output_tokens": 22,
+        "cost_usd": 0.5,
+        "unpriced_tokens": 0,
+        "legacy_input_tokens": 1,
+        "legacy_output_tokens": 2,
+    }
+    model.add_usage(s, {"input_tokens": 1, "cost_usd": 0.1})  # 已经有 cost_usd 的不会再改 legacy
+    assert s["usage"]["legacy_input_tokens"] == 1 and s["usage"]["cost_usd"] == 0.6
+
+
+def test_legacy_cost_stays_estimated_after_a_new_call():
+    from app import views
+
+    s = {"usage": {"input_tokens": 2_000_000, "output_tokens": 100_000}}
+    before = views.cost_summary(s["usage"])
+    model.add_usage(s, {"input_tokens": 100, "output_tokens": 10, "cost_usd": 0.01})
+    after = views.cost_summary(s["usage"])
+    assert after["cost_estimated"] and after["cost_usd"] == pytest.approx(before["cost_usd"] + 0.01, abs=1e-3)

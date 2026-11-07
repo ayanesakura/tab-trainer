@@ -56,6 +56,9 @@ def test_ipv6_mapped_loopback_is_local(monkeypatch):
 
 def test_dns_rebinding_hosts_are_rejected(monkeypatch):
     """恶意网页把自己的域名解析到 127.0.0.1：Host 是它的域名，一律拒绝（本机访问也一样）。"""
+    from app import auth
+
+    monkeypatch.setattr(auth.socket, "gethostname", lambda: "my-mac")
     c = _client(monkeypatch, None, host="127.0.0.1")
     for host in ("evil.example.com", "evil.example.com:8765", "127.0.0.1.evil.com"):
         assert c.get("/api/settings", headers={"host": host}).status_code == 403, host
@@ -83,3 +86,15 @@ def test_cross_site_writes_are_rejected(monkeypatch):
         c.post("/api/songs", files={"files": ("p.png", b"x")}, headers=same).status_code == 400
     )  # 到了业务校验
     assert c.post("/api/songs", files={"files": ("p.png", b"x")}).status_code == 400
+
+
+def test_local_requests_only_accept_this_machines_own_local_name(monkeypatch):
+    """本机请求不需要令牌：局域网里有人用 mDNS 把 evil.local 指向 127.0.0.1 时不能放行；自己的 .local 名字可以。"""
+    from app import auth
+
+    monkeypatch.setattr(auth.socket, "gethostname", lambda: "My-Mac.local")
+    local = _client(monkeypatch, None, host="127.0.0.1")
+    assert local.get("/api/songs", headers={"host": "evil.local:8765"}).status_code == 403
+    assert local.get("/api/songs", headers={"host": "my-mac.local:8765"}).status_code == 200
+    lan = _client(monkeypatch, "s3cret", host="192.168.1.20")
+    assert lan.get("/api/songs", headers={"host": "other.local:8765"}).status_code == 401  # 外来的照常要令牌

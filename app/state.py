@@ -43,12 +43,27 @@ def finish(
     s: dict, *, status: str | None = None, notice: tuple[str, str] | None = None, source: str = ""
 ) -> None:
     """任务结束：清掉 activity 和进度；notice = (warn|error, 说明)。"""
+    kind = (s.get("activity") or {}).get("kind")
     s["activity"] = None
     s["progress"] = None
     if status:
         s["status"] = status
+    elif kind in RECOGNIZE_KINDS:  # 讲解结束不动识别的状态和提示
+        _settle(s)
     if notice:
         set_notice(s, *notice, source=source)
+
+
+def _settle(s: dict) -> None:
+    """识别失败 / 取消（或有行失败）后，用户逐行重新识别、重试失败的行或补页把每一行都补成功了：
+    曲子算识别完成，整首识别留下的“识别失败 / 有行没识别出来”的提示也清掉。"""
+    systems = s.get("systems") or []
+    if not s.get("meta") or not systems or not all(x.get("status") == "done" for x in systems):
+        return
+    if s.get("status") in ("error", "cancelled"):
+        s["status"] = "ready"
+    if (s.get("notice") or {}).get("source") == "parse":
+        s["notice"] = None
 
 
 def set_notice(s: dict, kind: str, msg: str, source: str = "") -> None:
