@@ -182,13 +182,15 @@ How to encode a bar:
 - A rest at the start of a bar or between notes is an event with an empty "notes" list.
 - Time signature: a bar where a new time signature is written (e.g. 3/4 or 6/8 printed after the barline) gets "time_signature": [3, 4] etc., and from that bar on every bar lasts the new length until the next change. Bars without a written change get []. Never change durations just to make a bar fit a time signature: if the notes clearly fill a different length, check whether a time-signature change is written.
 - string: 1 is the top line of the tab (highest pitch), 6 the bottom line. fret: exactly as written (relative to the capo; 0 = open string).
+- Fret numbers in parentheses, e.g. (7), are usually notes tied over from before - especially at the start of a line, where the tie comes from the previous line, which is not in this image (the standard notation shows tie arcs coming in from the left edge). They are not new onsets: leave them out, and if no other note starts at that time, write an event with an empty "notes" list for it.
+- Beamed groups do not always line up with beats. A group can contain a note that crosses the beat (e.g. eighth + sixteenth + eighth = 1 1/4 beats) and the next group then starts off the beat. Take each note's value from its own stem (one beam or flag = eighth, two = sixteenth, three = 32nd; a short beam stub belongs to the note it touches; a dot adds half) and add them up, instead of assuming every beamed group fills exactly one beat.
 
 Techniques (put them on the note that receives them):
 - "h": hammer-on into this note (arc + H from the previous note on the same string). "p": pull-off into this note.
 - "sl": slide into this note from the previous note on the same string; this note is not re-picked.
 - "si": slide in from an unspecified lower fret (a slash before the number with no starting note); the note is picked.
 - "pm": palm mute (P.M. line). "x": dead/muted note written as x (use fret 0).
-- "nh": natural harmonic, written <n>; fret = the harmonic node n. "ah": artificial harmonic (A.H., e.g. "2<14>"): fret = the fretted note (2), the node is 12 frets higher.
+- "nh": natural harmonic, written <n>; fret = the harmonic node n. A natural harmonic written with a fractional node, e.g. <21.7> or <14.7>, gets fret = the node rounded to the nearest whole number (22, 15). "ah": artificial harmonic (A.H., e.g. "2<14>"): fret = the fretted note (2), the node is 12 frets higher.
 - "roll": arpeggiated chord (wavy vertical line) - put it on every note of the chord.
 - "vib": vibrato. "bend": a bend; also set "bend" to the size in semitones (full = 2, 1/2 = 1).
 - A small grace note before a note: set "grace" on the main note to the grace note's fret (and add "h"/"sl"/"p" if the grace connects by that technique). Otherwise grace = -1.
