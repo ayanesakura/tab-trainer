@@ -276,13 +276,19 @@ def derive(song: dict) -> dict:
     return song
 
 
+# 只在接口返回里出现（app/views.py 算出来），不存盘
+VIEW_ONLY = frozenset(
+    {"practice", "busy", "recognizing", "can_edit_bars", "editable_meta", "running", "error", "job", "kind"}
+)
+
+
 def strip(song: dict) -> dict:
     """要写进 song.json 的内容：去掉派生字段和以 _ 开头的临时字段（小节上的 _orig 是数据，保留）。
     曲名只存一份：song.title 为空而 meta 里读出了曲名（第一次识别读到谱头）时，用读出来的。"""
     meta = song.get("meta")
     if not song.get("title") and isinstance(meta, dict) and meta.get("title"):
         song["title"] = str(meta["title"]).strip()
-    out: dict[str, Any] = {k: v for k, v in song.items() if not k.startswith("_")}
+    out: dict[str, Any] = {k: v for k, v in song.items() if not k.startswith("_") and k not in VIEW_ONLY}
     if isinstance(meta, dict):
         out["meta"] = {k: v for k, v in meta.items() if k not in ("tuning_midi", "title")}
     bars = []

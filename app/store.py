@@ -131,11 +131,18 @@ def save(song: dict, create: bool = False) -> None:
         d = song_dir(song["id"])
         if not create and not d.is_dir():
             raise NotFound()
+        song["rev"] = int(song.get("rev") or 0) + 1
+        write_song(d, song)
+
+
+def write_song(d: Path, song: dict) -> None:
+    """把曲子写进目录 d（曲子目录，或导入时的临时目录）：去掉派生字段；旧数据升级时
+    原来记在 song.json 里的练习记录转成 practice.jsonl 的第一行。"""
+    with _lock:
         seed = song.pop("_practice_seed", None)
-        if seed:  # 旧数据升级：原来记在 song.json 里的练习记录转成 practice.jsonl 的第一行
+        if seed:
             _write_seed(d, seed)
         song["schema_version"] = SCHEMA_VERSION
-        song["rev"] = int(song.get("rev") or 0) + 1
         write_json(d / "song.json", model.strip(song))
 
 
@@ -207,6 +214,18 @@ def practice_path(song_id: str) -> Path:
     return song_dir(song_id) / PRACTICE_FILE
 
 
+def practice_text(song_id: str, song: dict | None = None) -> str:
+    """practice.jsonl 的全部内容（曲子包导出用）。旧曲子还没存过时带上内存里的种子行。"""
+    try:
+        text = practice_path(song_id).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    seed = (song or {}).get("_practice_seed")
+    if seed and not any(r.get("seed") for r in read_jsonl(practice_path(song_id))):
+        text = json.dumps(seed, ensure_ascii=False) + "\n" + text
+    return text
+
+
 def append_practice(song_id: str, record: dict) -> None:
     with _lock:
         d = song_dir(song_id)
@@ -240,6 +259,7 @@ def _write_seed(d: Path, seed: dict) -> None:
     path = d / PRACTICE_FILE
     if any(r.get("seed") for r in read_jsonl(path)):
         return
+    d.mkdir(parents=True, exist_ok=True)
     old = path.read_text(encoding="utf-8") if path.exists() else ""
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(json.dumps(seed, ensure_ascii=False) + "\n" + old, encoding="utf-8")

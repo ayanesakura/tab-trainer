@@ -1,15 +1,16 @@
-"""谱面变了以后，AI 写的内容（小节提示、问答、练习建议）和练习记录的失效与恢复。
+"""谱面变了以后，AI 写的内容（小节提示、问答、练习建议）的失效与恢复，以及新旧两批小节的对应（reconcile_bars）。
 
-都是对内存里 song dict 的纯操作，由调用方放在 store.update 里执行。改音的第一次会把原内容记在 bar["_orig"]，
-之后又改回原样（比如撤销）就能恢复。
+都是对内存里 song dict 的纯操作，由调用方放在 store.update 里执行。
+- 用户改了音：bar["edited"] = True，第一次改之前的内容记在 bar["_orig"]（撤销基线）；之后又改回原样就恢复、edited 变回 False。
+- 练习记录按小节 id 记在 practice.jsonl 里（见 app/practice.py）：小节换了一批时，对上的沿用原来的 id，
+  记录自然保留；对不上的小节的记录在聚合时忽略，不用删。
 """
 
 from __future__ import annotations
 
 import difflib
 import json
-
-from app.music import check_bar
+from dataclasses import dataclass
 
 SETTING_KEYS = ("tuning_midi", "capo", "time_signature")  # 这些变了，所有小节的提示都按旧设定写的
 
@@ -18,6 +19,7 @@ def invalidate_bar(bar: dict) -> None:
     """这个小节的音变了：提示和不确定说明是按旧音写的，清掉；问答保留但标成“改谱之前的”。
     第一次改动前的内容记在 _orig 里：之后又改回原样（比如撤销），就把它们恢复。"""
     first = "_orig" not in bar
+    bar["edited"] = True
     if first:
         bar["_orig"] = {
             "events": bar["events"],
@@ -36,6 +38,7 @@ def invalidate_bar(bar: dict) -> None:
 def restore_bar(bar: dict) -> None:
     """改回了第一次改动前的音：恢复当时的提示和不确定说明；改动期间问的问题反过来变成过时的。"""
     orig = bar.pop("_orig")
+    bar["edited"] = False
     bar["tip"], bar["uncertain"] = orig["tip"], orig["uncertain"]
     for q in bar.get("qa") or []:
         if q.pop("stale_by_edit", False):
@@ -53,7 +56,7 @@ def invalidate_plan(s: dict, bar_id: str | None = None) -> None:
         plan["changed_bars"] = sorted({*plan.get("changed_bars", []), bar_id})
     else:
         plan["stale_all"] = True
-    plan["stale"] = bool(plan.get("stale_all") or plan.get("changed_bars"))
+    plan["stale"] = bool(plan.get("stale_all") or plan.get("changed_bars"))  # 派生字段，读取时也会重算
 
 
 def restore_plan_bar(s: dict, bar_id: str) -> None:
@@ -74,18 +77,6 @@ def store_plan(s: dict, plan: dict | None, seen: dict, meta: dict) -> None:
     s["plan"] = plan
 
 
-def prune_practice(s: dict) -> None:
-    """小节被重新识别 / 换了音轨以后 id 都变了：丢掉对不上的练习记录（累计总时长保留）。"""
-    p = s.get("practice")
-    if not p:
-        return
-    ids = {b.get("id") for b in s.get("bars", [])}
-    p["bars"] = {k: v for k, v in (p.get("bars") or {}).items() if k in ids}
-    last = p.get("last")
-    if last and (last.get("a") not in ids or last.get("b") not in ids):
-        p.pop("last", None)
-
-
 def setting_changed(old_meta: dict, new_meta: dict) -> bool:
     return any(new_meta.get(k) != old_meta.get(k) for k in SETTING_KEYS)
 
@@ -94,7 +85,7 @@ def invalidate_tips_for_setting(s: dict) -> None:
     """调弦 / 变调夹 / 拍号变了：所有提示和问答都按旧设定写的（AI 读谱的不确定说明和设定无关，保留）。"""
     for b in s["bars"]:
         b["tip"] = ""
-        if "_orig" in b:  # 改回原样时也不该恢复旧设定下写的提示；_orig 留着，重新识别时靠它认出手改过的小节
+        if "_orig" in b:  # 改回原样时也不该恢复旧设定下写的提示
             b["_orig"]["tip"] = ""
         mark_qa_stale(b)
     invalidate_plan(s)
@@ -107,23 +98,36 @@ def mark_qa_stale(bar: dict) -> None:
         q.pop("stale_by_edit", None)
 
 
-def carry_over(s: dict, meta: dict, bars: list[dict], keep_edits: bool = False) -> int:
-    """同一首曲子换成一批新小节（GP 重新转换、整首重新识别）：把原来小节的 id、提示、问答和练习记录搬到新小节上。
-    按内容做序列比对（小节数变了也能对上）：内容一样的原样保留；对不上但位置相当的（比对里的“替换”段）
-    保留 id 和练习记录，提示用新小节自己的、问答标成过时；新多出来的是新小节，没了的连同练习记录一起去掉。
+@dataclass(frozen=True)
+class Policy:
+    """新旧小节对应时怎么处理用户手改过的小节。"""
 
-    keep_edits（重新识别图片谱子）：用户手改过的小节（有 _orig）按改之前的识别结果去比对，
+    keep_edits: bool = False  # True：手改过的小节保留用户的音，新识别的结果当成它的撤销基线
+
+
+DERIVE = Policy()  # GP / MusicXML 重新转换（小节不能手改）
+RESTAGE = Policy(keep_edits=True)  # 整首重新识别图片谱子
+ROW = Policy()  # 重新识别某一行（用户要的就是新结果）、补页、两遍携带拍号
+
+
+def reconcile_bars(
+    s: dict, old: list[dict], bars: list[dict], policy: Policy = DERIVE, setting_changed_: bool = False
+) -> int:
+    """一批新小节（bars）取代原来的小节（old）：把原来小节的 id、提示、问答搬到新小节上（练习记录按 id 自然保留）。
+    按内容做序列比对（小节数变了也能对上）：内容一样的原样保留；对不上但位置相当的（比对里的“替换”段）
+    保留 id，提示用新小节自己的、问答标成过时；新多出来的是新小节，没了的就没了。
+
+    policy.keep_edits（重新识别图片谱子）：用户手改过的小节（edited）按改之前的识别结果（_orig）去比对，
     一一对应上的保留用户改的音，新识别的结果记成它的 _orig（撤销回识别结果用）。
-    返回因为对不上而没能保留的手改小节数。调用方之后自己把 bars / meta 写进 s。"""
-    old_meta = s.get("meta") or {}
-    setting_changed_ = setting_changed(old_meta, meta)
-    old = s.get("bars") or []
+    setting_changed_：调弦 / 变调夹 / 拍号也变了（所有提示都按旧设定写的）。
+    返回因为对不上而没能保留的手改小节数。调用方之后自己把 bars 放进 s。"""
+    keep_edits = policy.keep_edits
 
     def key(events, b):
         return json.dumps([events, b.get("time_signature")], sort_keys=True)
 
     def old_key(b):
-        orig = b.get("_orig") if keep_edits else None
+        orig = b.get("_orig") if keep_edits and b.get("edited") else None
         return key(orig["events"] if orig else b["events"], b)
 
     pairs = []  # (原来的小节, 新小节, 内容是否一样, 是否一一对应)
@@ -137,14 +141,14 @@ def carry_over(s: dict, meta: dict, bars: list[dict], keep_edits: bool = False) 
                 (old[i], bars[j], op == "equal", one_to_one) for i, j in zip(range(i1, i2), range(j1, j2))
             ]
     paired = {id(p[0]) for p in pairs}
-    dropped = sum(1 for b in old if keep_edits and "_orig" in b and id(b) not in paired)
+    dropped = sum(1 for b in old if keep_edits and b.get("edited") and id(b) not in paired)
     for prev, new, same, one_to_one in pairs:
         new["id"] = prev["id"]
         if prev.get("qa"):
             new["qa"] = prev["qa"]
-        edited = keep_edits and "_orig" in prev
+        edited = keep_edits and bool(prev.get("edited"))
         if edited and not setting_changed_ and (same or one_to_one):
-            _keep_edit(prev, new, meta)
+            _keep_edit(prev, new)
             continue
         dropped += edited
         if same and not setting_changed_:
@@ -158,12 +162,13 @@ def carry_over(s: dict, meta: dict, bars: list[dict], keep_edits: bool = False) 
     return dropped
 
 
-def _keep_edit(prev: dict, new: dict, meta: dict) -> None:
+def _keep_edit(prev: dict, new: dict) -> None:
     """重新识别后保留用户手改的音：识别结果放进 _orig，改回去时还能恢复。"""
     if prev["events"] == new["events"]:  # 新识别的正好就是用户改成的样子
         new["tip"] = prev.get("tip") or new.get("tip", "")
         return
     new["_orig"] = {"events": new["events"], "tip": new.get("tip", ""), "uncertain": new.get("uncertain", "")}
+    new["edited"] = True
     new["events"] = prev["events"]
     new["tip"], new["uncertain"] = prev.get("tip", ""), ""
-    new["warn"] = check_bar(new["events"], meta, bar=new)
+    new["warn"] = [w for w in new.get("warn") or [] if w.get("code") != "ocr_mismatch"]  # OCR 比的是识别结果

@@ -4,6 +4,7 @@
 包的结构：
     tab-trainer.json            清单：{"format": "tab-trainer-bundle", "version": 1, "songs": [{"id", "title"}]}
     songs/<id>/song.json
+    songs/<id>/practice.jsonl     练习记录（练过才有）
     songs/<id>/pages/<页面图片>   图片 / PDF 曲子
     songs/<id>/<source.gp 等>    Guitar Pro / MusicXML 曲子的原文件
 
@@ -22,27 +23,23 @@ import re
 import shutil
 import tempfile
 import time
-import uuid
 import zipfile
 from pathlib import Path
 from typing import BinaryIO
 
 from PIL import Image
 
-from app import songs, store
-from app.errors import Invalid
+from app import migrate, songs, state, store
+from app.config import settings
+from app.errors import CorruptSong, Invalid, NotFound
+from app.model import now
 
 log = logging.getLogger("tab_trainer.bundles")
 
 FORMAT = "tab-trainer-bundle"
 VERSION = 1
 MANIFEST = "tab-trainer.json"
-MAX_SONGS = 500  # 一个包最多几首
-MAX_SONG_JSON = 20 * 1024 * 1024
-MAX_IMPORT_BYTES = 2 * 1024 * 1024 * 1024  # 一次导入解出来的总大小（也用来挡上传的请求体）
 _FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
-# 导出后运行状态没有意义（导入的地方没有这个任务），导入时由 songs._recover 改成“已中断”
-_RUNTIME = ("running",)
 
 
 # ---------------------------------------------------------------------------
@@ -63,14 +60,26 @@ def _files(song: dict) -> list[tuple[str, Path]]:
 
 
 def song_title(song: dict) -> str:
+    """包里一首曲子的名字（旧版本导出的包里曲名可能只在 meta 里）。"""
     meta = song.get("meta") if isinstance(song.get("meta"), dict) else {}
-    return (song.get("title") or meta.get("title") or "未命名").strip() or "未命名"
+    return (str(song.get("title") or meta.get("title") or "未命名")).strip() or "未命名"
+
+
+def _all_ids() -> list[str]:
+    out = []
+    for sid in store.song_ids():
+        try:
+            store.load(sid)
+        except (CorruptSong, NotFound):
+            continue
+        out.append(sid)
+    return out
 
 
 def export_bundle(ids: list[str]) -> tuple[Path, str]:
     """把这些曲子（空列表 = 整个曲库）打成一个 zip 临时文件，返回 (路径, 建议的文件名)。调用方负责删掉临时文件。"""
     if not ids:
-        ids = [s["id"] for s in store.list_songs() if s.get("status") != "corrupt"]
+        ids = _all_ids()
     ids = list(dict.fromkeys(ids))  # 去重，保持顺序
     if not ids:
         raise Invalid("曲库是空的，没有可导出的曲子")
@@ -78,9 +87,9 @@ def export_bundle(ids: list[str]) -> tuple[Path, str]:
     for sid in ids:
         try:
             loaded.append(store.load(sid))
-        except KeyError:
+        except NotFound:
             raise Invalid(f"曲子不存在：{sid}") from None
-        except store.CorruptSong:
+        except CorruptSong:
             raise Invalid(f"曲子 {sid} 的数据已损坏，不能导出") from None
 
     fd, tmp = tempfile.mkstemp(prefix="tab-trainer-export-", suffix=".zip")
@@ -97,11 +106,15 @@ def export_bundle(ids: list[str]) -> tuple[Path, str]:
             }
             zf.writestr(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=1), zipfile.ZIP_DEFLATED)
             for s in loaded:
-                data = {k: v for k, v in s.items() if k not in _RUNTIME}
                 base = f"songs/{s['id']}/"
                 zf.writestr(
-                    base + "song.json", json.dumps(data, ensure_ascii=False, indent=1), zipfile.ZIP_DEFLATED
+                    base + "song.json",
+                    json.dumps(store.serialize(s), ensure_ascii=False, indent=1),
+                    zipfile.ZIP_DEFLATED,
                 )
+                practice_lines = store.practice_text(s["id"], s)
+                if practice_lines:
+                    zf.writestr(base + store.PRACTICE_FILE, practice_lines, zipfile.ZIP_DEFLATED)
                 for rel, p in _files(s):
                     # PNG 和 GP 本身已经压缩过，再压一遍只是费 CPU
                     zf.write(
@@ -135,7 +148,7 @@ class _Budget:
     def take(self, n: int) -> None:
         self.left -= n
         if self.left < 0:
-            raise Invalid(f"曲子包解压后超过 {MAX_IMPORT_BYTES // 1024 // 1024 // 1024} GB")
+            raise Invalid(f"曲子包解压后超过 {settings.max_import_bytes // 1024 // 1024 // 1024} GB")
 
 
 def _entry(zf: zipfile.ZipFile, name: str, limit: int, budget: _Budget, what: str) -> zipfile.ZipInfo:
@@ -158,7 +171,7 @@ def _read(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
 def _check_image(data: bytes, name: str) -> None:
     try:
         img = Image.open(io.BytesIO(data))
-        if img.width * img.height > songs.MAX_PIXELS:
+        if img.width * img.height > settings.max_pixels:
             raise Invalid(f"页面 {name} 分辨率太大")
         img.verify()
     except Invalid:
@@ -169,26 +182,31 @@ def _check_image(data: bytes, name: str) -> None:
 
 def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
     """导入包里的一首曲子，返回 {"id", "title"}。出问题抛 Invalid（这一首跳过，不影响其他的）。"""
-    if not isinstance(bid, str) or not store._ID_RE.match(bid):
+    if not store.valid_id(bid):
         raise Invalid("清单里的曲子 id 无效")
     base = f"songs/{bid}/"
     try:
-        song = json.loads(_read(zf, _entry(zf, base + "song.json", MAX_SONG_JSON, budget, " song.json")))
+        info = _entry(zf, base + "song.json", settings.max_song_json, budget, " song.json")
+        song = json.loads(_read(zf, info))
     except (ValueError, UnicodeDecodeError):
         raise Invalid("song.json 不是有效的 JSON") from None
     except (zipfile.BadZipFile, OSError) as e:
         raise Invalid(f"文件损坏：{e}") from None
     if not isinstance(song, dict):
         raise Invalid("song.json 格式不对")
-    if int(song.get("schema_version") or 0) > store.SCHEMA_VERSION:
+    try:
+        newer = int(song.get("schema_version") or 0) > store.SCHEMA_VERSION
+    except (TypeError, ValueError):
+        raise Invalid("song.json 格式不对") from None
+    if newer:
         raise Invalid("这首曲子来自更新版本的 tab-trainer，请先升级再导入")
     title = song_title(song)
-    if store.song_dir(bid).exists():
+    if store.exists(bid):
         raise _Duplicate("曲库里已经有这首（如果想用包里的版本替换，先删除曲库里的那首再导入）")
 
     pages = song.get("pages") if isinstance(song.get("pages"), list) else []
-    if len(pages) > songs.MAX_PAGES:
-        raise Invalid(f"页数超过 {songs.MAX_PAGES}")
+    if len(pages) > settings.max_pages:
+        raise Invalid(f"页数超过 {settings.max_pages}")
     wanted: list[tuple[str, str]] = []  # (包内路径, 曲子目录里的相对路径)
     for p in pages:
         name = p.get("file") if isinstance(p, dict) else None
@@ -197,33 +215,34 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
         wanted.append((base + "pages/" + name, "pages/" + name))
     src = song.get("source")
     if src is not None:
-        ext = songs._score_ext(src) if isinstance(src, str) else None
+        ext = songs.score_ext(src) if isinstance(src, str) else None
         if not ext or not _FILE_RE.match(src):
             raise Invalid("原文件名无效")
         wanted.append((base + src, src))
 
-    tmp = store.SONGS / f".import-{uuid.uuid4().hex[:8]}"  # 不符合 id 格式，曲库列表和启动恢复都会忽略
+    practice_name = base + store.PRACTICE_FILE
+    has_practice = practice_name in zf.namelist()
+
+    tmp = store.staging_dir()  # 不符合 id 格式，曲库列表和启动恢复都会忽略
     try:
-        (tmp / "pages").mkdir(parents=True)
         for zname, rel in wanted:
-            info = _entry(zf, zname, songs.MAX_FILE_BYTES, budget, f"文件 {rel}")
+            info = _entry(zf, zname, settings.max_file_bytes, budget, f"文件 {rel}")
             data = _read(zf, info)
             if rel.startswith("pages/"):
                 _check_image(data, rel[6:])
-            elif not songs._looks_like_score(songs._score_ext(rel), data):
+            elif not songs.looks_like_score(songs.score_ext(rel), data):
                 raise Invalid("原文件不是有效的 Guitar Pro / MusicXML 文件")
             (tmp / rel).write_bytes(data)
+        if has_practice:
+            data = _read(zf, _entry(zf, practice_name, settings.max_song_json, budget, "练习记录"))
+            (tmp / store.PRACTICE_FILE).write_bytes(_clean_jsonl(data))
         song["id"] = bid
-        for k in _RUNTIME:
-            song.pop(k, None)
-        song = store._migrate(song, bid)
-        songs._recover(song)  # 导出时正在识别 / 讲解的，改成“已中断”
-        song["imported"] = time.strftime("%Y-%m-%d %H:%M")
-        (tmp / "song.json").write_text(json.dumps(song, ensure_ascii=False, indent=1), encoding="utf-8")
-        try:
-            os.rename(tmp, store.song_dir(bid))  # 目标已存在（同时导入了同一首）时失败，不会覆盖
-        except OSError:
-            raise _Duplicate("曲库里已经有这首") from None
+        song = migrate.migrate(song, bid)
+        state.recover(song)  # 导出时正在识别 / 讲解的，改成“已中断”
+        song["imported"] = now()
+        store.write_song(tmp, song)
+        if not store.install(tmp, bid):  # 目标已存在（同时导入了同一首）时失败，不会覆盖
+            raise _Duplicate("曲库里已经有这首")
     except (zipfile.BadZipFile, OSError) as e:
         raise Invalid(f"文件损坏：{e}") from None
     finally:
@@ -231,13 +250,25 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
     return {"id": bid, "title": title}
 
 
+def _clean_jsonl(data: bytes) -> bytes:
+    """包里的练习记录：只留每行都是 JSON 对象的行。"""
+    lines = []
+    for line in data.decode("utf-8", "replace").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            lines.append(json.dumps(rec, ensure_ascii=False))
+    return ("\n".join(lines) + "\n").encode() if lines else b""
+
+
 def import_bundles(files: list[tuple[str, BinaryIO]]) -> dict:
     """导入一个或多个曲子包。返回 {"imported": [{"id", "title"}], "skipped": [{"title", "reason", "duplicate"}]}：
     整个包读不了时 title 是文件名；包里单首有问题只跳过那一首。"""
     if not files:
         raise Invalid("没有收到文件")
-    store.SONGS.mkdir(parents=True, exist_ok=True)
-    budget = _Budget(MAX_IMPORT_BYTES)
+    budget = _Budget(settings.max_import_bytes)
     imported, skipped = [], []
     for fname, fobj in files:
         try:
@@ -253,7 +284,7 @@ def import_bundles(files: list[tuple[str, BinaryIO]]) -> dict:
                 if int(manifest.get("version") or 0) > VERSION:
                     raise Invalid("曲子包来自更新版本的 tab-trainer，请先升级再导入")
                 entries = manifest.get("songs")
-                if not isinstance(entries, list) or len(entries) > MAX_SONGS:
+                if not isinstance(entries, list) or len(entries) > settings.max_bundle_songs:
                     raise Invalid("清单里的曲子列表无效")
             except Invalid as e:
                 skipped.append(
