@@ -72,6 +72,24 @@ key 只保存在本机 `data/config.json`（权限 600）。也可以不在页�
 - 曲中变拍号时，按第一小节的拍号校验，会把其他拍号的小节误标为“可能有误”。
 - 识别结果一定要对照原谱检查，尤其是滑音、倚音和连音密集的地方。
 
+## 识别准确率评测
+
+`app/evaluate.py` 拿一首人工校对过的曲子当标准答案，用当前设置重新识别它的每一行，逐小节比对：
+- 音符：以（起拍, 弦, 品）为单位算 F1；
+- 节奏：以起拍位置算 F1；
+- 技巧记号：同样算 F1；
+- 小节完全一致率、时值凑满率。
+
+报告里会列出错得最多的小节。
+
+```bash
+uv run python -m app.evaluate <曲子id>                 # 只打印调用次数和预估费用
+uv run python -m app.evaluate <曲子id> --yes           # 真正运行（产生 API 费用）
+uv run python -m app.evaluate <曲子id> --yes --systems 0,5 --model claude-sonnet-5-5
+```
+
+结果写在 `data/evals/` 下，不改动曲库里的数据。
+
 ## 开发
 
 ```bash
