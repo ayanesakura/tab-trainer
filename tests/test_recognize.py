@@ -566,3 +566,55 @@ def test_songs_without_time_signature_changes_cost_nothing_extra(data_dir):
     recognize.run_parse(sid)
     first_calls = [c for c in FakeClaude.calls if "first_bar" in c and not c["retry"]]
     assert sorted(c["first_bar"] for c in first_calls) == [1, 4]  # 每行只识别一次
+
+
+def test_row_reparse_compares_bars_before_time_signatures_are_derived():
+    """reviewer 的 row_ts：单行重新识别时新小节还没算 time_signature（替换之后才 apply_time_signatures），
+    不能拿它和原来派生出来的 time_signature 比，否则变过拍号的曲子里没变的小节也算“变了”。"""
+    import copy
+
+    ev = [{"dur": "3", "notes": [{"string": 1, "fret": 0, "tech": [], "grace": -1, "bend": 0}]}]
+    s = {
+        "meta": {"time_signature": [4, 4]},
+        "plan": {"overview": "x", "steps": []},
+        "bars": [
+            {"id": "a", "system": 0, "events": [{"dur": "4", "notes": []}], "tip": "t0"},
+            {
+                "id": "b",
+                "system": 1,
+                "events": ev,
+                "time_signature": [3, 4],
+                "tip": "AI tip",
+                "qa": [{"q": "q", "a": "a"}],
+            },
+        ],
+    }
+    recognize._replace_system_bars(
+        s, 1, [{"id": "new1", "system": 1, "events": copy.deepcopy(ev), "tip": "model tip"}]
+    )
+    b = s["bars"][1]
+    assert b["id"] == "b" and b["tip"] == "AI tip" and not b["qa"][0].get("stale")
+    assert not s["plan"].get("changed_bars") and not s["plan"].get("stale_all")
+
+
+def test_reparse_unchanged_row_after_time_signature_change_keeps_ai_content(data_dir, monkeypatch):
+    transcribe, _ = _ts_transcribe()
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+
+    def ai(s):
+        for b in s["bars"]:
+            b["tip"] = f"讲解 {b['n']}"
+            b["qa"] = [{"q": "怎么弹", "a": "慢慢弹"}]
+
+    before = store.update(sid, ai)
+    assert [b.get("time_signature") for b in before["bars"]] == [None] + [[3, 4]] * 5
+    assert not before["plan"]["stale"]
+    recognize.reparse_system(sid, 1)
+    after = store.load(sid)
+    assert [b["id"] for b in after["bars"]] == [b["id"] for b in before["bars"]]
+    assert [b["tip"] for b in after["bars"]] == [b["tip"] for b in before["bars"]]
+    assert not any(q.get("stale") for b in after["bars"] for q in b["qa"])
+    assert not after["plan"]["stale"], after["plan"]
+    assert [b["rev"] for b in after["bars"]] == [b["rev"] for b in before["bars"]]

@@ -107,11 +107,14 @@ class Policy:
     """新旧小节对应时怎么处理用户手改过的小节。"""
 
     keep_edits: bool = False  # True：手改过的小节保留用户的音，新识别的结果当成它的撤销基线
+    # 比对时和音符一起看的拍号字段。单行识别出来的新小节还没按前面各行的变拍号算过 time_signature
+    # （apply_time_signatures 在替换之后才跑），所以按谱上写的 ts_change 比，不按派生的 time_signature 比
+    ts_field: str = "time_signature"
 
 
 DERIVE = Policy()  # GP / MusicXML 重新转换（小节不能手改）
-RESTAGE = Policy(keep_edits=True)  # 整首重新识别图片谱子
-ROW = Policy()  # 重新识别某一行（用户要的就是新结果）、补页、两遍携带拍号
+RESTAGE = Policy(keep_edits=True)  # 整首重新识别图片谱子（新结果替换前已经算好拍号）
+ROW = Policy(ts_field="ts_change")  # 重新识别某一行（用户要的就是新结果）、补页、两遍携带拍号
 
 
 def reconcile_bars(
@@ -128,7 +131,7 @@ def reconcile_bars(
     keep_edits = policy.keep_edits
 
     def key(events, b):
-        return json.dumps([events, b.get("time_signature")], sort_keys=True)
+        return json.dumps([events, b.get(policy.ts_field)], sort_keys=True)
 
     def old_key(b):
         orig = b.get("_orig") if keep_edits and b.get("edited") else None

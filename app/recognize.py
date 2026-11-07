@@ -597,10 +597,12 @@ def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | 
     bars = transcribe_queued(claude, sid, song, si, first, hint=hint, cancel=cancel, start_ts=start_ts)
 
     def apply(s):
-        _replace_system_bars(s, si, bars)
+        others = {b["id"]: b.get("time_signature") for b in s["bars"] if b["system"] != si}
+        _replace_system_bars(s, si, bars)  # 这一行变了的小节在这里标进练习建议的 changed_bars
         apply_time_signatures(s["bars"], s["meta"])  # 这一行新写的变拍号会影响后面的行
         s["systems"][si].update(status="done", error=None)
-        staleness.invalidate_plan(s)
+        if any(b.get("time_signature") != others[b["id"]] for b in s["bars"] if b["id"] in others):
+            staleness.invalidate_plan(s)  # 后面各行的拍号跟着变了
         add_usage(s, claude.usage)
         state.finish(s)
 
