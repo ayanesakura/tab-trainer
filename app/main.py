@@ -13,12 +13,13 @@ import shutil
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
-from app import auth, coach, jobs, recognize, schemas, songs, store
+from app import auth, bundles, coach, jobs, recognize, schemas, songs, store
 from app.errors import AppError
 from app.llm import DEFAULT_MODEL
 
@@ -142,13 +143,16 @@ def list_songs():
 @app.middleware("http")
 async def limit_upload_size(request: Request, call_next):
     """表单解析之前就按 Content-Length 挡掉过大的上传（否则 Starlette 会先把整个请求收下来存到临时文件）。"""
-    if request.method == "POST" and request.url.path == "/api/songs":
+    limit = {"/api/songs": songs.MAX_TOTAL_BYTES, "/api/import": bundles.MAX_IMPORT_BYTES}.get(
+        request.url.path
+    )
+    if request.method == "POST" and limit:
         try:
             size = int(request.headers.get("content-length") or 0)
         except ValueError:
             size = 0
-        if size > songs.MAX_TOTAL_BYTES + 1024 * 1024:
-            return JSONResponse({"detail": f"文件总大小超过 {songs.MAX_TOTAL_BYTES // 1024 // 1024} MB"}, 413)
+        if size > limit + 1024 * 1024:
+            return JSONResponse({"detail": f"文件总大小超过 {limit // 1024 // 1024} MB"}, 413)
     return await call_next(request)
 
 
@@ -173,6 +177,24 @@ def upload(files: Annotated[list[UploadFile], File()], title: Annotated[str, For
     if not songs.is_score(store.load(sid)):
         recognize.start_parse(sid)
     return {"id": sid}
+
+
+@app.get("/api/export")
+def export(ids: Annotated[list[str], Query()] = []):  # noqa: B006 - FastAPI 的查询参数默认值
+    """导出曲子包（zip）。不带 ids 时导出整个曲库。"""
+    path, name = bundles.export_bundle(ids)
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=name,
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
+
+
+@app.post("/api/import")
+def import_bundles(files: Annotated[list[UploadFile], File()]):
+    """导入一个或多个曲子包，每个包里可以有多首曲子。"""
+    return bundles.import_bundles([(f.filename or "曲子包", f.file) for f in files])
 
 
 @app.get("/api/songs/{sid}")

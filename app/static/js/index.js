@@ -1,4 +1,4 @@
-// 曲库页：上传谱子、曲子列表（识别进度、重新识别、删除）、设置（API key、模型、主题）
+// 曲库页：上传谱子、曲子列表（识别进度、重新识别、删除）、曲子包导出 / 导入、设置（API key、模型、主题）
 const $ = id => document.getElementById(id);
 const { esc, icon, toast } = UI;
 async function api(path, opts = {}) {
@@ -27,7 +27,14 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', themeIcon)
 
 // ---------------- 上传 ----------------
 let picked = [];
+const isZip = f => /\.zip$/i.test(f.name);
 function setFiles(list) {
+  const zips = [...list].filter(isZip);
+  if (zips.length) {  // 曲子包直接导入，不走“上传并识别”
+    $('file').value = '';
+    if (zips.length < list.length) return toast('曲子包（.zip）请单独导入，不要和图片、GP 文件混在一起', 'err', 4000);
+    return importBundles(zips);
+  }
   picked = [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   $('pickedBox').hidden = !picked.length;
   $('picked').innerHTML = picked.map(f => `<span class="badge">${icon(f.type === 'application/pdf' ? 'book' : 'music', 12)}${esc(f.name)}</span>`).join('');
@@ -55,6 +62,81 @@ $('uploadBtn').onclick = async () => {
   }
 };
 
+// ---------------- 曲子包 ----------------
+async function importBundles(files) {
+  const fd = new FormData();
+  files.forEach(f => fd.append('files', f));
+  $('importBtn').disabled = true;
+  toast('正在导入…', 'info', 60000);
+  try {
+    const r = await api('/api/import', { method: 'POST', body: fd });
+    const n = r.imported.length, dup = r.skipped.filter(s => s.duplicate).length, bad = r.skipped.filter(s => !s.duplicate);
+    const parts = [`已导入 ${n} 首`];
+    if (dup) parts.push(`${dup} 首曲库里已有，跳过`);
+    if (bad.length) parts.push(`${bad.length} 首无法导入：` + bad.slice(0, 3).map(s => `“${s.title}”${s.reason}`).join('；') + (bad.length > 3 ? ' 等' : ''));
+    toast(parts.join('；'), bad.length ? (n ? 'info' : 'err') : 'ok', bad.length || dup ? 8000 : 2200);
+  } catch (e) {
+    toast(e.message, 'err', 5000);
+  } finally {
+    $('importBtn').disabled = false;
+    loadSongs();
+  }
+}
+$('importBtn').onclick = () => $('bundleFile').click();
+$('bundleFile').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) importBundles(f); };
+
+async function exportSongs(ids) {
+  toast(`正在打包 ${ids.length} 首…`, 'info', 60000);
+  try {
+    const r = await fetch('/api/export?' + ids.map(id => 'ids=' + encodeURIComponent(id)).join('&'));
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `导出失败 ${r.status}`);
+    const cd = r.headers.get('content-disposition') || '';
+    const m = cd.match(/filename\*=utf-8''([^;]+)/i) || cd.match(/filename="?([^";]+)/i);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(await r.blob());
+    a.download = m ? decodeURIComponent(m[1]) : '曲子包.zip';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast(`已导出 ${ids.length} 首`);
+    return true;
+  } catch (e) {
+    toast(e.message, 'err', 5000);
+    return false;
+  }
+}
+
+// 选择模式：勾选曲子，一起导出成一个包
+let selecting = false, lastSongs = [];
+const selected = new Set();
+const selectable = s => s.status !== 'corrupt';
+function setSelecting(on) {
+  selecting = on; selected.clear();
+  $('selectBar').hidden = !on;
+  $('selectBtn').hidden = on;
+  renderSongs();
+}
+function updateSelectBar() {
+  const all = lastSongs.filter(selectable);
+  for (const id of [...selected]) if (!all.some(s => s.id === id)) selected.delete(id);  // 已被删除的
+  $('selectCount').textContent = `已选 ${selected.size} 首`;
+  $('selectAll').checked = all.length > 0 && selected.size === all.length;
+  $('selectAll').indeterminate = selected.size > 0 && selected.size < all.length;
+  $('exportBtn').disabled = !selected.size;
+}
+$('selectBtn').onclick = () => setSelecting(true);
+$('selectCancel').onclick = () => setSelecting(false);
+$('selectAll').onchange = e => {
+  selected.clear();
+  if (e.target.checked) lastSongs.filter(selectable).forEach(s => selected.add(s.id));
+  renderSongs();
+};
+$('exportBtn').onclick = async () => {
+  const ids = lastSongs.filter(s => selected.has(s.id)).map(s => s.id);  // 按曲库顺序
+  $('exportBtn').disabled = true;
+  if (await exportSongs(ids)) setSelecting(false); else updateSelectBar();
+};
+addEventListener('keydown', e => { if (e.key === 'Escape' && selecting) setSelecting(false); });
+
 // ---------------- 曲库 ----------------
 const TILE_COLORS = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#64748b', '#ef4444'];
 const tileColor = s => TILE_COLORS[[...s].reduce((a, c) => a + c.codePointAt(0), 0) % TILE_COLORS.length];
@@ -80,6 +162,14 @@ let pollTimer = null;
 async function loadSongs() {
   let songs;
   try { songs = await api('/api/songs'); } catch (e) { $('songs').innerHTML = `<div class="empty-state"><b>加载失败</b>${esc(e.message)}</div>`; return; }
+  lastSongs = songs;
+  renderSongs();
+  clearTimeout(pollTimer);
+  if (songs.some(s => s.status === 'parsing' || s.status === 'queued' || s.job)) pollTimer = setTimeout(loadSongs, 2500);
+}
+function renderSongs() {
+  const songs = lastSongs;
+  if (selecting) updateSelectBar();
   if (!songs.length) {
     $('songs').innerHTML = `<div class="empty-state"><b>还没有曲子</b>上传一份谱子开始。</div>`;
   } else {
@@ -88,20 +178,30 @@ async function loadSongs() {
       const busy = s.status === 'parsing' || s.status === 'queued';
       const canPlay = !busy && (s.bars > 0 || s.kind === 'score');
       const sub = [s.artist, s.created].filter(Boolean).map(esc).join(' · ');
-      return `<div class="row song-row ${canPlay ? 'click' : ''}" data-id="${s.id}" data-play="${canPlay ? 1 : ''}">
+      const pick = selecting && selectable(s), on = pick && selected.has(s.id);
+      return `<div class="row song-row ${canPlay || pick ? 'click' : ''} ${on ? 'on' : ''}" data-id="${s.id}" data-play="${canPlay ? 1 : ''}" data-pick="${pick ? 1 : ''}">
+        ${selecting ? `<input type="checkbox" class="pick" aria-label="选择 ${esc(s.title)}" ${on ? 'checked' : ''} ${pick ? '' : 'disabled'}>` : ''}
         <div class="tile" style="background:${tileColor(s.title)}">${esc([...s.title][0] || '♪')}</div>
         <div class="who"><div class="name">${esc(s.title)}${SOURCE[s.source_type] ? ` <span class="badge">${SOURCE[s.source_type]}</span>` : ''}</div><div class="state">${songState(s)}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
-        <div class="ctl">
+        <div class="ctl" ${selecting ? 'hidden' : ''}>
           ${canPlay ? `<a class="btn primary sm" href="/trainer?id=${s.id}">${icon('play', 12)}练习</a>` : ''}
           <button class="icon-btn sm" data-more="${s.id}" data-busy="${busy ? 1 : ''}" data-corrupt="${s.status === 'corrupt' ? 1 : ''}" title="更多">${icon('more')}</button>
         </div>
       </div>`;
     }).join('');
   }
-  clearTimeout(pollTimer);
-  if (songs.some(s => s.status === 'parsing' || s.status === 'queued' || s.job)) pollTimer = setTimeout(loadSongs, 2500);
 }
 $('songs').addEventListener('click', e => {
+  if (selecting) {
+    const row = e.target.closest('.row[data-pick="1"]');
+    if (row) {
+      e.preventDefault();
+      const id = row.dataset.id;
+      if (selected.has(id)) selected.delete(id); else selected.add(id);
+      renderSongs();
+    }
+    return;
+  }
   const more = e.target.closest('[data-more]');
   if (more) {
     e.stopPropagation();
@@ -116,6 +216,7 @@ $('songs').addEventListener('click', e => {
     }
     UI.menu(more, [
       { label: '整首重新识别', icon: 'refresh', onClick: () => reparse(id) },
+      { label: '导出曲子包', icon: 'download', onClick: () => exportSongs([id]) },
       'sep',
       { label: '删除', icon: 'trash', danger: true, onClick: () => del(id) },
     ]);

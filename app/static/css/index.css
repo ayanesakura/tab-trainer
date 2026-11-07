@@ -13,3 +13,10 @@
 .keyline { display: flex; gap: 6px; align-items: center; }
 .keyline .input { width: 280px; }
 .test-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.head-actions { display: flex; gap: 6px; }
+.select-bar { position: sticky; top: 60px; z-index: 5; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent-soft); }
+.select-bar .grow { flex: 1; }
+.chk { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+.chk input, .song-row .pick { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex: none; }
+.song-row .pick { margin-right: 2px; }
+.song-row.on { background: var(--accent-soft); }

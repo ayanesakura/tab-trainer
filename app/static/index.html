@@ -25,6 +25,11 @@
   <section class="view" id="view-library">
     <div class="head">
       <div><h1>曲库</h1><p>上传谱子，生成可播放、可循环的练习页。</p></div>
+      <div class="head-actions">
+        <button class="btn sm" id="importBtn" data-ic="upload" title="导入曲子包（.zip），可以一次选多个">导入曲子包</button>
+        <button class="btn sm" id="selectBtn" data-ic="download" title="选择曲子打包导出（识别结果、提示、练习记录和原图都在里面）">导出…</button>
+        <input type="file" id="bundleFile" multiple accept=".zip,application/zip" hidden>
+      </div>
     </div>
 
     <div class="notice warn" id="keyNotice" hidden><span class="dot warn"></span><div>还没设置 API key，识别前请先到 <a href="#settings">设置</a> 填写。</div></div>
@@ -33,8 +38,8 @@
       <div>
         <label class="drop" id="drop">
           <span class="big" data-ic="upload"></span>
-          <span><span class="t">上传谱子</span><br><span class="hint">拖到这里或点击选择 · 图片 / PDF 由 AI 识别，Guitar Pro / MusicXML 直接导入</span></span>
-          <input type="file" id="file" multiple accept="image/*,application/pdf,.gp,.gpx,.gp3,.gp4,.gp5,.musicxml,.xml,.mxl" hidden>
+          <span><span class="t">上传谱子</span><br><span class="hint">拖到这里或点击选择 · 图片 / PDF 由 AI 识别，Guitar Pro / MusicXML 直接导入，曲子包（.zip）直接恢复</span></span>
+          <input type="file" id="file" multiple accept="image/*,application/pdf,.gp,.gpx,.gp3,.gp4,.gp5,.musicxml,.xml,.mxl,.zip" hidden>
         </label>
         <div id="pickedBox" hidden>
           <div class="picked" id="picked"></div>
@@ -46,6 +51,12 @@
         </div>
       </div>
 
+      <div class="select-bar" id="selectBar" hidden>
+        <label class="chk"><input type="checkbox" id="selectAll"><span id="selectCount">已选 0 首</span></label>
+        <span class="grow"></span>
+        <button class="btn ghost sm" id="selectCancel">取消</button>
+        <button class="btn primary sm" id="exportBtn" data-ic="download" disabled>导出曲子包</button>
+      </div>
       <div class="list" id="songs"><div class="empty-state"><div class="spinner" style="margin:0 auto"></div></div></div>
       <div class="hint" style="margin:0 4px">30–40 小节的曲子识别约需 1–3 分钟。</div>
     </div>
