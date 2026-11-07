@@ -406,3 +406,28 @@ def test_export_whole_library_skips_a_structurally_bad_song(data_dir):
         path.unlink()
     with pytest.raises(Invalid):
         bundles.export_bundle(["20260101-000000-aaaaaa"])
+
+
+def test_practice_times_must_look_like_local_times(client):
+    """练习记录的 at 会显示在曲库里：只认 "YYYY-MM-DD HH:MM"（可带秒）或空，别的（外来包里塞的 HTML 之类）整行不要。
+    包里的和磁盘上手改的都一样。"""
+    bad = '<img src=x onerror="alert(1)">'
+    lines = [
+        {"at": bad, "ids": ["b1"], "loops": 5, "bpm": 60, "seconds": 10},
+        {"at": "2026-01-01 10:00\n<b>", "ids": ["b1"], "loops": 5, "bpm": 60, "seconds": 10},
+        {"seed": True, "bars": {"b1": {"loops": 5, "last": bad}}, "last": {"a": "b1", "at": bad}},
+        {"seed": True, "bars": {}, "last": {"a": "b1", "at": bad}},
+        {"at": "2026-01-01 10:00", "ids": ["b1"], "loops": 2, "bpm": 60, "seconds": 30},
+        {"at": "2026-01-02 10:00:05", "ids": ["b1"], "loops": 1, "bpm": 60, "seconds": 30},
+        {"ids": ["b1"], "loops": 1, "bpm": 60, "seconds": 30},  # 没记时间的旧记录
+    ]
+    text = "\n".join(json.dumps(x) for x in lines) + "\n"
+    buf = _bundle(_v2("ok-song"), {"songs/ok-song/practice.jsonl": text.encode()})
+    r = client.post("/api/import", files={"files": ("b.zip", buf.getvalue())})
+    assert [s["id"] for s in r.json()["imported"]] == ["ok-song"]
+    kept = store.read_jsonl(store.practice_path("ok-song"))
+    assert [x["at"] for x in kept] == ["2026-01-01 10:00", "2026-01-02 10:00:05", ""]
+    store.practice_path("ok-song").write_text(text)  # 磁盘上被改成这样：读取时同样跳过
+    v = client.get("/api/songs/ok-song").json()
+    assert v["practice"]["bars"]["b1"]["loops"] == 4 and v["practice"]["last"]["at"] == ""
+    assert bad not in json.dumps(client.get("/api/songs").json())

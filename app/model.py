@@ -273,10 +273,15 @@ class _Rec(BaseModel):
     model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
 
 
+# 练习记录的时间：model.now() 写的本地时间 "YYYY-MM-DD HH:MM"（也认带秒的），空串 = 没记时间。
+# 会显示在曲库里：外来曲子包、手改的文件里别的内容（比如 HTML）这一条记录就不要
+LOCAL_TIME = r"^([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?)?$"
+
+
 class PracticeRecord(_Rec):
     """一段练习。"""
 
-    at: str = ""
+    at: str = Field("", pattern=LOCAL_TIME)
     ids: list[str] = Field(min_length=1)
     loops: int = Field(0, ge=0)
     bpm: int = Field(0, ge=0)
@@ -287,14 +292,14 @@ class SeedBar(_Rec):
     loops: int = Field(0, ge=0)
     seconds: float = Field(0, ge=0)
     best_bpm: int = Field(0, ge=0)
-    last: str = ""
+    last: str = Field("", pattern=LOCAL_TIME)
 
 
 class SeedLast(_Rec):
     a: str
     b: str | None = None
     bpm: int = Field(0, ge=0)
-    at: str = ""
+    at: str = Field("", pattern=LOCAL_TIME)
 
 
 class PracticeSeed(_Rec):
