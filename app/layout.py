@@ -185,6 +185,12 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
     return False
 
 
+def _line_cover(g: np.ndarray, lines: list[float], need: int) -> float:
+    """这组线横向有多大比例的地方至少 need 根是深色的（浅灰的谱线按 215 算）。"""
+    ys = [round(y) for y in lines]
+    return float((np.stack([g[max(0, y - 1) : y + 2] < 215 for y in ys]).any(1).sum(0) >= need).mean())
+
+
 def _chord_diagrams(dark: np.ndarray, tab: list[float], sp: float, x0: int, x1: int) -> bool:
     """这一段“六线谱”其实是一两个、两三个挨着的和弦图：段很短（不到 16 个线距），里面贯穿上下的竖线（弦）
     又多又密（一个线距左右一根）。真正的短行（只有一个小节的末行）里只有两三条小节线。
@@ -266,9 +272,16 @@ def detect_page(img: Image.Image) -> dict:
         sp = _spacing(tab)
         # 同一行的五线谱：紧挨在六线谱上方的 5 线谱
         first = tab
-        if ti > 0 and len(staves[ti - 1]) == 5 and tab[0] - staves[ti - 1][-1] < sp * 12:
-            first = staves[ti - 1]
-
+        # 同一行的五线谱：六线谱上方 12 个线距以内、横跨大半行的 5 线谱。弹唱谱上方一排和弦图的格子、
+        # 一组加线也会被当成 5 线谱，但它们只占一小部分宽度：跳过它们再往上找
+        tab_cover = _line_cover(g, tab, 4)
+        for j in range(ti - 1, max(-1, ti - 3), -1):
+            cand = staves[j]
+            if len(cand) != 5 or first[0] - cand[-1] >= sp * 12:
+                break
+            if _line_cover(g, cand, 3) >= 0.5 * tab_cover:
+                first = cand
+                break
         ys = [round(y) for y in tab]
         lines_dark = g < 215  # 谱线可能很浅（见 _staff_lines）
         on = np.stack([lines_dark[max(0, y - 1) : y + 2].any(0) for y in ys]).sum(0) >= 4
