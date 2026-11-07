@@ -216,16 +216,18 @@ def _row_split(upper: dict, lower: dict, dark: np.ndarray | None = None) -> floa
 
 def _diagram_block_above(dark: np.ndarray, row: dict, limit: float) -> float | None:
     """紧挨在这一行上方的一块和弦图（含上面的和弦名）的顶端；上方紧挨着的不是和弦图（歌词、简谱、文字）返回 None。
-    从谱线往上：先跳过一段空白（不超过 3 个线距），再把行间空白不到 0.8 个线距的墨迹连成一块。
+    从谱线往上：先跳过一段空白（不超过 3 个线距），再把行间空白不到 1 个线距的墨迹连成一块。
     和弦图里有贯穿好几个线距的竖线（弦），歌词、简谱、文字都没有。"""
     sp, x0, x1 = row["sp"], max(0, row["x0"]), row["x1"]
     band = dark[:, x0 : x1 + 1]
-    rows = band.any(1)
+    rows = band.sum(1) >= 3
     lo = max(0, int(limit))
     y = int(row["first_top"]) - 1
-    while y > lo and rows[y] and row["first_top"] - y <= sp * 0.6:  # 1 弦上的 ×、数字、连线会伸出谱线一点
+    # 连着谱线往上的墨迹（1 弦上伸出来的 ×、数字、连线；五线谱上方的符头、符干；画在谱表上方的节奏）先跳过，
+    # 最多 5 个线距；再往上隔着一段空白的才可能是和弦图
+    while y > lo and rows[y] and row["first_top"] - y <= sp * 5:
         y -= 1
-    if rows[y]:  # 墨迹一直连着谱线往上：符干、符杠（画在谱表上方的节奏），不是和弦图
+    if rows[y]:
         return None
     gap = 0
     while y > lo and not rows[y]:
@@ -241,7 +243,7 @@ def _diagram_block_above(dark: np.ndarray, row: dict, limit: float) -> float | N
             top, gap = y, 0
         else:
             gap += 1
-            if gap > sp * 0.8:
+            if gap > sp * 1.0:  # 和弦名（有的是手写体、浅灰色）和下面的格子之间隔得稍远
                 break
     h = bottom - top
     if not sp * 2.5 <= h <= sp * 10:
@@ -391,13 +393,15 @@ def detect_page(img: Image.Image) -> dict:
         s_["col"] = int((s_["x0"] + s_["x1"]) / 2 > w / 2) if two_col else 0
     systems.sort(key=lambda s_: (s_["col"], s_["tab_bottom"]))
 
+    # 找行与行的分界时只看真正的黑色印刷（谱子照片上斜着的灰色水印、灰底不算）
+    ink = g < 140
     # 纵向范围：同一栏里相邻两行之间取中点；首行向上、末行向下各留一行谱高度左右的余量
     for i, s_ in enumerate(systems):
         prev = systems[i - 1] if i > 0 and systems[i - 1]["col"] == s_["col"] else None
         nxt = systems[i + 1] if i + 1 < len(systems) and systems[i + 1]["col"] == s_["col"] else None
         height = s_["tab_bottom"] - s_["first_top"]
         top = (
-            _row_split(prev, s_, dark)
+            _row_split(prev, s_, ink)
             if prev
             else min(
                 s_["first_top"] - min(height * 0.6, s_["sp"] * 9),
@@ -405,7 +409,7 @@ def detect_page(img: Image.Image) -> dict:
             )
         )
         bottom = (
-            _row_split(s_, nxt, dark)
+            _row_split(s_, nxt, ink)
             if nxt
             else max(
                 s_["tab_bottom"] + min(height * 0.6, s_["sp"] * 6),

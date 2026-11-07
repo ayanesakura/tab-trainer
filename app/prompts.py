@@ -142,6 +142,7 @@ Techniques (put them on the note that receives them):
 - "nh": natural harmonic, written <n>; fret = the harmonic node n. A natural harmonic written with a fractional node, e.g. <21.7> or <14.7>, gets fret = the node rounded to the nearest whole number (22, 15). "ah": artificial harmonic (A.H., e.g. "2<14>"): fret = the fretted note (2), the node is 12 frets higher.
 - "roll": arpeggiated chord (wavy vertical line) - put it on every note of the chord.
 - "vib": vibrato. "bend": a bend; also set "bend" to the size in semitones (full = 2, 1/2 = 1).
+- Circled numbers ①-⑥ next to notes (common in classical scores) are string indications - which string the note is played on - not frets and not notes. In a header, "①=D ②=A ..." lists the tuning of each string.
 - A small grace note before a note: set "grace" on the main note to the grace note's fret (and add "h"/"sl"/"p" if the grace connects by that technique). Otherwise grace = -1.
 
 Chord sheets (accompaniment scores with chord names and chord diagrams printed above the tab, often with numbered-notation melody and lyrics below - ignore the melody and lyrics):
