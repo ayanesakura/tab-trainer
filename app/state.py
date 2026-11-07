@@ -47,8 +47,21 @@ def finish(
     s["progress"] = None
     if status:
         s["status"] = status
+    else:
+        _settle(s)
     if notice:
         set_notice(s, *notice, source=source)
+
+
+def _settle(s: dict) -> None:
+    """整首识别失败 / 取消后，用户逐行重新识别（或补页）把每一行都补成功了：曲子算识别完成，
+    不再一直显示“识别失败”。"""
+    systems = s.get("systems") or []
+    if s.get("status") in ("error", "cancelled") and s.get("meta") and systems:
+        if all(x.get("status") == "done" for x in systems):
+            s["status"] = "ready"
+            if (s.get("notice") or {}).get("source") == "parse":
+                s["notice"] = None
 
 
 def set_notice(s: dict, kind: str, msg: str, source: str = "") -> None:
