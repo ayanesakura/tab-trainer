@@ -300,6 +300,31 @@ def render(tex: str, scale: float, width: int, bpr: int):
         srv.shutdown()
 
 
+def degrade(img, seed: int):
+    """模拟真实的谱子截图：缩小到 1100–1300 像素宽、轻微模糊、JPEG 压缩，再盖一层斜着的半透明水印。"""
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+    rng = random.Random(seed)
+    w = rng.randint(1100, 1300)
+    img = img.convert("RGB").resize((w, round(img.height * w / img.width)), Image.LANCZOS)
+    img = img.filter(ImageFilter.GaussianBlur(rng.uniform(0.3, 0.7)))
+    mark = Image.new("L", img.size, 0)
+    d = ImageDraw.Draw(mark)
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/PingFang.ttc", 90)
+    except OSError:
+        font = ImageFont.load_default()
+    for y in range(0, img.height, 420):
+        d.text((rng.randint(0, 200), y), "吉他谱 GUITAR TAB 吉他社", fill=255, font=font)
+    mark = mark.rotate(rng.uniform(20, 35), expand=False)
+    img = Image.composite(
+        Image.new("RGB", img.size, (175, 175, 175)), img, mark.point(lambda v: int(v * 0.35))
+    )
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=rng.randint(45, 65))
+    return Image.open(io.BytesIO(buf.getvalue())).convert("RGB")
+
+
 def generate(seed: int, style: str, n_bars: int) -> tuple[dict, list[dict], list[list], str]:
     rng = random.Random(seed)
     prog = rng.choice(PROGRESSIONS)
@@ -340,6 +365,7 @@ def main() -> None:
     ap.add_argument("--width", type=int, default=1000)
     ap.add_argument("--per-page", type=int, default=5)
     ap.add_argument("--save-tex", type=Path)
+    ap.add_argument("--degrade", action="store_true", help="模拟真实截图：缩小、模糊、JPEG 压缩、水印")
     ap.add_argument("--save-full", type=Path, help="另存整张渲染图（排查版面检测用）")
     a = ap.parse_args()
 
@@ -348,6 +374,8 @@ def main() -> None:
     if a.save_tex:
         a.save_tex.write_text(tex)
     full, rows = render(tex, a.scale, a.width, a.bars_per_row)
+    if a.degrade:
+        full = degrade(full, a.seed)
     if a.save_full:
         full.save(a.save_full)
     systems = detect_page(full)["systems"]

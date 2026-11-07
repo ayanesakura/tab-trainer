@@ -22,8 +22,9 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
 
 
 def _staff_lines(gray: np.ndarray, thr: float | None = None) -> list[float]:
-    # 谱线常是 1 像素的浅灰细线，且可能跨在两行像素之间：放宽暗度阈值，并把相邻两行合并后再算覆盖率
-    dark = gray < 200
+    # 谱线常是 1 像素的浅灰细线，且可能跨在两行像素之间：放宽暗度阈值，并把相邻两行合并后再算覆盖率。
+    # 缩小、模糊、JPEG 压缩过的截图里，浅灰的谱线会摊到两行像素上、每行都只有 205 左右：门槛放到 215
+    dark = gray < 215
     dark = dark[:-1] | dark[1:]
     h, w = dark.shape
     frac = dark.sum(1) / w

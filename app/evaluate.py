@@ -41,8 +41,9 @@ def _onsets(events: list[dict]):
 
 
 def bar_sets(events: list[dict]) -> dict[str, set]:
-    """把一个小节拆成可比较的集合：起拍位置（不含休止）、(起拍, 弦, 品)、(起拍, 弦, 技巧)。"""
-    onsets, notes, techs = set(), set(), set()
+    """把一个小节拆成可比较的集合：起拍位置（不含休止）、(起拍, 弦, 品)、(起拍, 弦, 技巧)，
+    以及弹唱谱的 (起拍, 和弦名)、(起拍, 扫弦方向)、(起拍, 第 1 段歌词)。"""
+    onsets, notes, techs, chords, strums, lyrics = set(), set(), set(), set(), set(), set()
     for t, e in _onsets(events):
         if e["notes"]:
             onsets.add(t)
@@ -50,7 +51,20 @@ def bar_sets(events: list[dict]) -> dict[str, set]:
             notes.add((t, n["string"], n["fret"]))
             for k in n.get("tech", []):
                 techs.add((t, n["string"], k))
-    return {"onsets": onsets, "notes": notes, "techs": techs}
+        if e.get("chord"):
+            chords.add((t, e["chord"]))
+        if e.get("strum"):
+            strums.add((t, e["strum"]))
+        if e.get("lyrics") and e["lyrics"][0]:
+            lyrics.add((t, e["lyrics"][0]))
+    return {
+        "onsets": onsets,
+        "notes": notes,
+        "techs": techs,
+        "chords": chords,
+        "strums": strums,
+        "lyrics": lyrics,
+    }
 
 
 def _prf(truth: set, pred: set) -> tuple[int, int, int]:
@@ -79,11 +93,11 @@ def f1(hit: int, n_truth: int, n_pred: int) -> dict:
 
 
 def summarize(rows: list[dict]) -> dict:
-    tot = {k: [0, 0, 0] for k in ("onsets", "notes", "techs")}
+    tot = {k: [0, 0, 0] for k in ("onsets", "notes", "techs", "chords", "strums", "lyrics")}
     for r in rows:
         for k, acc in tot.items():
             for i in range(3):
-                acc[i] += r["cmp"][k][i]
+                acc[i] += r["cmp"].get(k, (0, 0, 0))[i]
     n = len(rows)
     return {
         "bars": n,
@@ -92,6 +106,9 @@ def summarize(rows: list[dict]) -> dict:
         "notes": f1(*tot["notes"]),
         "rhythm": f1(*tot["onsets"]),
         "techniques": f1(*tot["techs"]),
+        **({"chords": f1(*tot["chords"])} if tot["chords"][1] else {}),
+        **({"strums": f1(*tot["strums"])} if tot["strums"][1] else {}),
+        **({"lyrics": f1(*tot["lyrics"])} if tot["lyrics"][1] else {}),
     }
 
 
@@ -221,7 +238,12 @@ def to_markdown(rep: dict, worst: int = 12) -> str:
         ("音符（起拍+弦+品）", "notes"),
         ("节奏（起拍位置）", "rhythm"),
         ("技巧记号", "techniques"),
+        ("和弦名（起拍+名字）", "chords"),
+        ("扫弦（起拍+方向）", "strums"),
+        ("歌词（起拍+字）", "lyrics"),
     ):
+        if key not in s:
+            continue
         m = s[key]
         lines.append(f"| {name} | {m['precision']:.1%} | {m['recall']:.1%} | {m['f1']:.1%} |")
     lines += [
