@@ -327,3 +327,29 @@ def test_gap_before_a_coda_section_is_not_a_bar():
             d.line([(x, tab_top), (x, tab_top + 70)], fill=40, width=2)
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [4]
+
+
+def test_split_just_above_the_next_rows_chord_diagrams():
+    """两行挨得较近（呆头鸟这类排版）：上一行的歌词过了中点，下一行的和弦图只占它上方 5 个线距。
+    分界取在和弦图上方，歌词归上一行。"""
+    img = Image.new("L", (1200, 600), 255)
+    d = ImageDraw.Draw(img)
+    for t in (120, 350):
+        for i in range(6):
+            d.line([(60, t + i * 12), (1140, t + i * 12)], fill=170)
+        for x in (60, 600, 1140):
+            d.line([(x, t), (x, t + 60)], fill=40, width=2)
+        for x in range(80, 1120, 60):  # 符干
+            d.line([(x, t + 60), (x, t + 85)], fill=40)
+        d.text((100, t + 60 + 50), "5 6 1 1 2", fill=0)  # 简谱
+        d.text((100, t + 60 + 78), "LYRIC", fill=0)  # 歌词：过了两行之间的中点
+        for k in range(3):  # 和弦图：谱线上方 12–50 像素，名字在 65 像素处
+            x0 = 120 + k * 300
+            d.text((x0 + 10, t - 65), "Em", fill=0)
+            for i in range(5):
+                d.line([(x0, t - 50 + i * 9), (x0 + 50, t - 50 + i * 9)], fill=0)
+            for i in range(6):
+                d.line([(x0 + i * 10, t - 50), (x0 + i * 10, t - 14)], fill=0)
+    (a, b) = detect_page(img)["systems"]
+    assert a["bottom"] >= 120 + 60 + 78 + 11  # 第一行的歌词完整
+    assert b["top"] <= 350 - 65  # 第二行的和弦名、和弦图都在第二行里

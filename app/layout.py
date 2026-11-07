@@ -202,12 +202,60 @@ def _chord_diagrams(dark: np.ndarray, tab: list[float], sp: float, x0: int, x1: 
     return len(cols) >= 5 and float(np.median(np.diff(cols))) < sp * 1.2
 
 
-def _row_split(upper: dict, lower: dict) -> float:
+def _row_split(upper: dict, lower: dict, dark: np.ndarray | None = None) -> float:
     """相邻两行的分界：一般取中点。两行隔得很远时（弹唱谱：上一行下面有简谱和歌词，下一行上面有和弦图），
-    下一行只要它上方 9 个线距（和弦名、和弦图、速度记号都在这个范围里），剩下的都归上一行——
-    否则上一行的歌词会被拦腰切掉。"""
+    下一行只要它上方的和弦图那一块（找得到的话），否则只要它上方 9 个线距（和弦名、和弦图、速度记号一般都在这个
+    范围里），剩下的都归上一行——否则上一行的歌词会被拦腰切掉。"""
     mid = (upper["tab_bottom"] + lower["first_top"]) / 2
+    if dark is not None:
+        top = _diagram_block_above(dark, lower, upper["tab_bottom"])
+        if top is not None:
+            return max(top, upper["tab_bottom"] + upper["sp"])
     return max(mid, lower["first_top"] - lower["sp"] * 9)
+
+
+def _diagram_block_above(dark: np.ndarray, row: dict, limit: float) -> float | None:
+    """紧挨在这一行上方的一块和弦图（含上面的和弦名）的顶端；上方紧挨着的不是和弦图（歌词、简谱、文字）返回 None。
+    从谱线往上：先跳过一段空白（不超过 3 个线距），再把行间空白不到 0.8 个线距的墨迹连成一块。
+    和弦图里有贯穿好几个线距的竖线（弦），歌词、简谱、文字都没有。"""
+    sp, x0, x1 = row["sp"], max(0, row["x0"]), row["x1"]
+    band = dark[:, x0 : x1 + 1]
+    rows = band.any(1)
+    lo = max(0, int(limit))
+    y = int(row["first_top"]) - 1
+    while y > lo and rows[y] and row["first_top"] - y <= sp * 0.6:  # 1 弦上的 ×、数字、连线会伸出谱线一点
+        y -= 1
+    if rows[y]:  # 墨迹一直连着谱线往上：符干、符杠（画在谱表上方的节奏），不是和弦图
+        return None
+    gap = 0
+    while y > lo and not rows[y]:
+        y -= 1
+        gap += 1
+        if gap > sp * 3:
+            return None
+    bottom, gap = y, 0
+    top = y
+    while y > lo:
+        y -= 1
+        if rows[y]:
+            top, gap = y, 0
+        else:
+            gap += 1
+            if gap > sp * 0.8:
+                break
+    h = bottom - top
+    if not sp * 2.5 <= h <= sp * 10:
+        return None
+    block = band[top : bottom + 1]
+    # 每一列最长的连续墨迹（竖线）
+    longest = 0
+    run = np.zeros(block.shape[1], dtype=int)
+    for r in block:
+        run = (run + 1) * r
+        longest = max(longest, int(run.max()))
+    if longest < sp * 2.5:
+        return None
+    return top - sp * 0.5
 
 
 def _content_below(dark: np.ndarray, tab_bottom: float, x0: int, x1: int, sp: float) -> float:
@@ -349,7 +397,7 @@ def detect_page(img: Image.Image) -> dict:
         nxt = systems[i + 1] if i + 1 < len(systems) and systems[i + 1]["col"] == s_["col"] else None
         height = s_["tab_bottom"] - s_["first_top"]
         top = (
-            _row_split(prev, s_)
+            _row_split(prev, s_, dark)
             if prev
             else min(
                 s_["first_top"] - min(height * 0.6, s_["sp"] * 9),
@@ -357,7 +405,7 @@ def detect_page(img: Image.Image) -> dict:
             )
         )
         bottom = (
-            _row_split(s_, nxt)
+            _row_split(s_, nxt, dark)
             if nxt
             else max(
                 s_["tab_bottom"] + min(height * 0.6, s_["sp"] * 6),
