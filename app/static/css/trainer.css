@@ -28,6 +28,8 @@
 /* ---- 控制条（吸顶，一行）+ 分段 chips ---- */
 .transport { container-type: inline-size; position: sticky; top: calc(var(--top-h) + var(--sp-2)); z-index: 20; padding: 10px var(--sp-3) var(--sp-2); display: flex; flex-direction: column; gap: var(--sp-2); box-shadow: var(--shadow-sm); }
 .t-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; } /* 放不下时换行，不会把右边的按钮挤出去 */
+/* 吸顶时控制条和顶栏之间有 8px 缝，滚动的谱面会从缝里露出来：用一条页面底色盖住（没吸顶时盖的是本来就空着的间距） */
+.transport::before { content: ''; position: absolute; left: -12px; right: -12px; bottom: 100%; height: calc(var(--sp-2) + 1px); background: var(--bg); }
 .t-end { margin-left: auto; } /* 指板 / 更多一起靠右；换行时一起换 */
 .t-sep { width: 1px; height: 24px; background: var(--line); flex: none; }
 .play { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-fg); flex: none; box-shadow: var(--shadow-sm); transition: transform .12s var(--ease), background .15s; }
