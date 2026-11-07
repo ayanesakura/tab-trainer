@@ -169,3 +169,44 @@ def test_library_lists_old_songs(data_dir):
     row = views.list_library()[0]
     assert row["title"] == "押尾光太郎 - Fight" and row["source_type"] == "gp"
     assert row["practice"]["total_seconds"] == 90 and row["needs_review_bars"] == 2
+
+
+def test_old_notices_get_the_source_that_clears_them(data_dir, sync_jobs):
+    """reviewer 的 gp_notice：旧 GP 曲子解析失败的 error 没记 error_kind，升级后 source 是空的，
+    之后浏览器解析成功（set_derived）也清不掉，提示永远挂着。"""
+    from app import coach
+    from tests.fakes import derived_bars
+
+    gp = {"title": "x", "created": "2025", "kind": "score", "source": "source.gp", "meta": {}}
+    gp |= {"progress": None, "pages": [], "systems": [], "bars": [], "plan": None, "schema_version": 1}
+    cases = {
+        "20250101-000000-aaaaaa": ({**gp, "status": "error", "error": "曲谱文件无法读取"}, "import"),
+        "20250101-000000-bbbbbb": (
+            {
+                **gp,
+                "status": "ready",
+                "error": "服务重启，讲解生成中断，可以重新生成。",
+                "bars": [{"events": []}],
+            },
+            "explain",
+        ),
+        "20250101-000000-cccccc": (
+            {"title": "y", "status": "error", "error": "识别失败", "bars": []},
+            "parse",
+        ),
+        "20250101-000000-dddddd": (
+            {"title": "z", "status": "ready", "error": "补页失败", "error_kind": "pages"},
+            "reparse_row",
+        ),
+    }
+    for sid, (old, _) in cases.items():
+        _write_old(sid, {"id": sid, **old})
+    songs.recover_interrupted()
+    for sid, (_, source) in cases.items():
+        assert store.load(sid)["notice"]["source"] == source, sid
+
+    # 成功的路径清掉自己的提示
+    v = songs.set_derived("20250101-000000-aaaaaa", {"tuning": ["E4"] * 6}, derived_bars(1), 0, None)
+    assert v["status"] == "ready" and v["notice"] is None
+    coach.start_explain("20250101-000000-bbbbbb")
+    assert store.load("20250101-000000-bbbbbb")["notice"] is None

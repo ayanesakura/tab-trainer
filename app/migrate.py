@@ -144,6 +144,16 @@ def _state_to_v2(s: dict) -> None:
     s["notice"] = None
     if error:
         kind = "error" if s.get("status") == "error" else "warn"
-        source = {"pages": "reparse_row"}.get(error_kind or "", error_kind or "")
-        s["notice"] = {"kind": kind, "msg": str(error), "source": source}
+        s["notice"] = {"kind": kind, "msg": str(error), "source": _notice_source(s, error_kind)}
     s.setdefault("progress", None)
+
+
+def _notice_source(s: dict, error_kind: str | None) -> str:
+    """旧的 error 是哪类任务留下的（决定之后哪类任务成功时清掉它，见 state.begin / songs.set_derived）。
+    早期只有补页（pages）和讲解（explain）记了 error_kind；没记的按曲子类型推断：
+    GP / MusicXML 曲子不识别，出错（status=error）只能是浏览器解析失败，否则是讲解中断；图片曲子是识别留下的。"""
+    if error_kind:
+        return {"pages": "reparse_row"}.get(error_kind, error_kind)
+    if s["source_type"] in ("gp", "musicxml"):
+        return "import" if s.get("status") == "error" else "explain"
+    return "parse"
