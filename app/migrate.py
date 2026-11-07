@@ -8,7 +8,7 @@ store.load 每次读取都会调用（纯函数，在内存里升级）；升级
 - 2：kind 去掉（只用 source_type）；job / job_prev / restaging / error / error_kind 换成 status + activity + notice；
   小节警告从一句话变成 {code, msg}；手改过的小节有显式的 edited；曲名只存 song.title；
   练习记录从 song.practice 搬到 practice.jsonl（旧的聚合结果成为第一行“种子”记录）；
-  GP 导入的曲名 / 艺人修复 GBK 被当成 Latin-1 读出来的乱码。
+  曲名 / 艺人 / 编配修复 GBK 被当成 Latin-1 读出来的乱码（GP 文件读出来的，以及从 GP 复制了谱头的图片曲子）。
 """
 
 from __future__ import annotations
@@ -31,7 +31,10 @@ def migrate(song: dict, song_id: str) -> dict:
         song["meta"] = None
     song.setdefault("title", "")
     song.setdefault("rev", 0)
-    ver = int(song.get("schema_version") or 0)
+    try:
+        ver = int(song.get("schema_version") or 0)
+    except (TypeError, ValueError):
+        ver = 0
     if ver < 2:
         _to_v2(song)
         song["_migrated"] = True
@@ -66,7 +69,7 @@ def fix_mojibake(text: str) -> str:
 
 
 def fix_meta_text(meta: dict) -> dict:
-    """GP 文件里读出来的曲名、艺人、编配：修复乱码。"""
+    """谱头里的曲名、艺人、编配：修复乱码（见 fix_mojibake）。"""
     return {
         **meta,
         **{k: fix_mojibake(meta[k]) for k in ("title", "artist", "arranger") if isinstance(meta.get(k), str)},
@@ -77,10 +80,10 @@ def _to_v2(s: dict) -> None:
     s["source_type"] = source_type_of(s)
     s.pop("kind", None)
     meta = s.get("meta")
-    if s["source_type"] == "gp":
-        s["title"] = fix_mojibake(str(s.get("title") or ""))
-        if meta:
-            meta = s["meta"] = fix_meta_text(meta)
+    # 乱码修复不分来源：GP 文件里读出来的，以及从 GP 复制过谱头的图片曲子（如评测用的曲子）
+    s["title"] = fix_mojibake(str(s.get("title") or ""))
+    if meta:
+        meta = s["meta"] = fix_meta_text(meta)
     if meta is not None:
         s["title"] = str(s.get("title") or "").strip() or str(meta.get("title") or "").strip()
         meta.pop("title", None)
@@ -123,7 +126,8 @@ def _state_to_v2(s: dict) -> None:
             if isinstance(x, dict) and x.get("status") in ("parsing", "pending")
         ]
         activity = {"kind": "reparse_row", "restaging": False, "systems": rows}
-    elif restaging:
+    elif restaging:  # 以前重新识别期间 status 是 parsing；现在 status 只说结果（原来的结果还在，可以练）
+        s["status"] = "ready"
         activity = {"kind": "parse", "restaging": True, "systems": []}
     elif busy_status and s["source_type"] in ("gp", "musicxml"):  # GP 曲子不识别：是更早版本的讲解
         s["status"] = "ready"
@@ -134,5 +138,6 @@ def _state_to_v2(s: dict) -> None:
     s["notice"] = None
     if error:
         kind = "error" if s.get("status") == "error" else "warn"
-        s["notice"] = {"kind": kind, "msg": str(error), "source": error_kind or ""}
+        source = {"pages": "reparse_row"}.get(error_kind or "", error_kind or "")
+        s["notice"] = {"kind": kind, "msg": str(error), "source": source}
     s.setdefault("progress", None)

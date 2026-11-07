@@ -28,8 +28,9 @@ from pathlib import Path
 from typing import BinaryIO
 
 from PIL import Image
+from pydantic import ValidationError
 
-from app import migrate, songs, state, store
+from app import migrate, model, songs, state, store
 from app.config import settings
 from app.errors import CorruptSong, Invalid, NotFound
 from app.model import now
@@ -239,6 +240,7 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
         song["id"] = bid
         song = migrate.migrate(song, bid)
         state.recover(song)  # 导出时正在识别 / 讲解的，改成“已中断”
+        _check_shape(song)
         song["imported"] = now()
         store.write_song(tmp, song)
         if not store.install(tmp, bid):  # 目标已存在（同时导入了同一首）时失败，不会覆盖
@@ -248,6 +250,16 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return {"id": bid, "title": title}
+
+
+def _check_shape(song: dict) -> None:
+    """外来的 song.json（已升级到当前格式）要符合 model.Song，否则这首跳过，不让它在曲库里出错。"""
+    try:
+        model.Song.model_validate(model.strip(dict(song)))
+    except ValidationError as e:
+        err = e.errors()[0]
+        where = ".".join(str(x) for x in err.get("loc", ()))
+        raise Invalid(f"song.json 格式不对（{where}）") from None
 
 
 def _clean_jsonl(data: bytes) -> bytes:

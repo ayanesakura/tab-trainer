@@ -113,3 +113,16 @@ def test_plan_built_from_old_notes_stays_stale(data_dir, monkeypatch, sync_jobs)
     coach.start_explain(sid)
     plan = store.load(sid)["plan"]
     assert plan["stale"] and plan["changed_bars"] == [bar_id]
+
+
+def test_explain_keeps_the_edited_flag_and_undo_baseline(data_dir, sync_jobs):
+    """讲解给手改过的小节补写提示后，它仍然是“手改过”（整首重新识别时保留用户的音），撤销照样能回到识别结果。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bar = store.load(sid)["bars"][1]
+    songs.edit_bar(sid, bar["id"], [{"dur": "4", "notes": [{"string": 2, "fret": 3}]}], None)
+    coach.start_explain(sid)
+    b = store.load(sid)["bars"][1]
+    assert b["tip"] == "讲解 2" and b["edited"] and b["_orig"]["events"] == bar["events"]
+    b = songs.edit_bar(sid, bar["id"], bar["events"], None)["bars"][1]
+    assert not b["edited"] and b["tip"] == "tip 2"

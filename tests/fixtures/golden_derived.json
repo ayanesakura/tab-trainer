@@ -1,0 +1,293 @@
+{
+ "meta": {
+  "title": "Golden",
+  "artist": "",
+  "arranger": "",
+  "tuning": [
+   "D4",
+   "A3",
+   "F#3",
+   "C#3",
+   "A2",
+   "D2"
+  ],
+  "capo": 2,
+  "time_signature": [
+   4,
+   4
+  ],
+  "tempo": 60,
+  "notes": ""
+ },
+ "bars": [
+  {
+   "events": [
+    {
+     "dur": "1",
+     "notes": []
+    },
+    {
+     "dur": "1/4",
+     "notes": [
+      {
+       "string": 6,
+       "fret": 4,
+       "tech": [
+        "pm"
+       ],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "7/4",
+     "notes": [
+      {
+       "string": 6,
+       "fret": 7,
+       "tech": [
+        "sl",
+        "pm"
+       ],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "1",
+     "notes": [
+      {
+       "string": 5,
+       "fret": 0,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    }
+   ],
+   "repeat_start": true
+  },
+  {
+   "events": [
+    {
+     "dur": "2",
+     "notes": [
+      {
+       "string": 4,
+       "fret": 13,
+       "tech": [
+        "roll"
+       ],
+       "grace": -1,
+       "bend": 0
+      },
+      {
+       "string": 3,
+       "fret": 15,
+       "tech": [
+        "roll"
+       ],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "1",
+     "notes": [
+      {
+       "string": 3,
+       "fret": 11,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "1/2",
+     "notes": [
+      {
+       "string": 1,
+       "fret": 12,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "1/2",
+     "notes": [
+      {
+       "string": 2,
+       "fret": 12,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    }
+   ],
+   "repeat_end": 2,
+   "endings": [
+    1
+   ]
+  },
+  {
+   "events": [
+    {
+     "dur": "1/3",
+     "notes": [
+      {
+       "string": 1,
+       "fret": 7,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "1/3",
+     "notes": [
+      {
+       "string": 2,
+       "fret": 7,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "1/3",
+     "notes": [
+      {
+       "string": 3,
+       "fret": 8,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "1",
+     "notes": [
+      {
+       "string": 4,
+       "fret": 8,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "2",
+     "notes": [
+      {
+       "string": 2,
+       "fret": 5,
+       "tech": [
+        "nh"
+       ],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    }
+   ],
+   "endings": [
+    2
+   ]
+  },
+  {
+   "events": [
+    {
+     "dur": "1/6",
+     "notes": [
+      {
+       "string": 1,
+       "fret": 0,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "1/6",
+     "notes": [
+      {
+       "string": 1,
+       "fret": 2,
+       "tech": [],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "2/3",
+     "notes": [
+      {
+       "string": 1,
+       "fret": 4,
+       "tech": [
+        "h"
+       ],
+       "grace": 2,
+       "bend": 0
+      }
+     ]
+    },
+    {
+     "dur": "2",
+     "notes": [
+      {
+       "string": 2,
+       "fret": 5,
+       "tech": [
+        "si"
+       ],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    }
+   ],
+   "time_signature": [
+    3,
+    4
+   ]
+  },
+  {
+   "events": [
+    {
+     "dur": "4",
+     "notes": [
+      {
+       "string": 3,
+       "fret": 2,
+       "tech": [
+        "ah"
+       ],
+       "grace": -1,
+       "bend": 0
+      }
+     ]
+    }
+   ],
+   "directions": [
+    "fine"
+   ]
+  }
+ ],
+ "trackName": "Guitar",
+ "version": 4
+}

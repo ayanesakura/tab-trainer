@@ -265,7 +265,8 @@ def derive(song: dict) -> dict:
     meta = song.get("meta")
     if isinstance(meta, dict) and meta.get("tuning"):
         meta["tuning_midi"] = tuning_midi(meta["tuning"])
-        meta["title"] = song.get("title", "")
+        # 没起名字时先用谱头读出来的（保存时采用，见 strip）
+        meta["title"] = song.get("title") or str(meta.get("title") or "")
     for i, b in enumerate(song.get("bars") or []):
         b["n"] = i + 1
         if isinstance(meta, dict) and meta.get("time_signature"):
@@ -369,6 +370,8 @@ class SongView(_M):
     # 兼容旧前端，保留一版
     error: str | None = None  # = notice.msg
     running: bool = False  # = busy
+    kind: Literal["score", "image"] = "image"  # = source_type 是 gp / musicxml
+    job: Literal["explain", "pages"] | None = None  # = activity
 
 
 class LibraryPractice(_M):
@@ -404,3 +407,5 @@ class LibraryItem(_M):
     error: str | None = None
     warn_bars: int = 0
     last_practiced: str = ""
+    kind: Literal["score", "image"] = "image"
+    job: Literal["explain", "pages"] | None = None
