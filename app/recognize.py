@@ -350,6 +350,23 @@ def transcribe_system(
         else:
             if len(issues2) <= len(issues):
                 bars, issues = bars2, issues2
+    if spans and len(bars) != len(spans):
+        # 返修后小节数还是不对（模型漏了 / 合并了整小节，比读错一个音严重得多）：不带上次的结果重新读一遍，取问题少的
+        log.info(
+            "request_id=%s song=%s system=%d bar count still wrong, rereading",
+            claude.last_request_id,
+            sid,
+            si,
+        )
+        try:
+            _raw3, bars3, issues3 = run()
+        except Cancelled:
+            raise
+        except Exception as e:  # noqa: BLE001 - 重读出错：用前面的结果
+            log.warning("request_id=%s song=%s system=%d reread failed: %s", request_id_of(e), sid, si, e)
+        else:
+            if len(bars3) == len(spans) or len(issues3) < len(issues):
+                bars, issues = bars3, issues3
     if not bars:  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
         raise LLMError("模型没有读出这一行的小节，请重新识别这一行", getattr(claude, "last_request_id", None))
 

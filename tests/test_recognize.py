@@ -921,3 +921,23 @@ def test_rows_that_read_a_chord_diagram_differently_are_redone_with_the_majority
     assert recognize._rows_to_redo(bars, meta, used) == []
     # 只有两行、各读各的：没有多数，不重做
     assert recognize._rows_to_redo(bars[:2], meta, {0: [4, 4], 1: [4, 4]}, skip_edited=False) == []
+
+
+def test_wrong_bar_count_after_the_fix_up_is_read_once_more(data_dir, monkeypatch):
+    """返修后小节数还是不对：不带上次结果重新读一遍；这次对了就用它。"""
+    real = FakeClaude.transcribe
+    calls = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        out = real(self, img, meta, first_bar, spans, *a, **kw)
+        calls.append(first_bar)
+        if first_bar == 1 and calls.count(1) <= 2:  # 第一次和返修都只给 1 个小节
+            out["bars"] = out["bars"][:1]
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    s = store.load(sid)
+    assert calls.count(1) == 3
+    assert len([b for b in s["bars"] if b["system"] == 0]) == 3
