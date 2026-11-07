@@ -7,6 +7,7 @@ import { TICKS, eventIndexAt, scoreNeedsGbk } from '../score.js';
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
 import { loopLabel, stepSection as stepCalc, isScore } from './view.js';
+import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs } from './prefs.js';
 
 export { alphaTab };
 export const IDLE_HINT = '空格播放 · ←→ 换段 · ↑↓ 调速';
@@ -458,7 +459,10 @@ function paintLoop() {
   });
 }
 
-const PREFS = { metro: true, metroVol: 70, countIn: true, gtVol: 80, auto: false, autoEvery: 2, autoStep: 4, autoTarget: 72, bpmMax: 140 };
+// 跟着曲子走的默认值（加载谱子后按原速调整）；其余播放设置记在本机，见 prefs.js
+const SONG_DEFAULTS = { autoTarget: 72, bpmMax: 140 };
+const stored = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const remember = (k, v) => { try { localStorage.setItem(k, v); } catch { /* 只在这次打开时生效 */ } };
 
 /** 控制条和“更多”弹层里的输入框 ⇄ store 的 play 切片 */
 function bindInputs() {
@@ -472,16 +476,18 @@ function bindInputs() {
   };
   bind('metro', 'metro', 'check'); bind('metroVol', 'metroVol'); bind('countIn', 'countIn', 'check'); bind('gtVol', 'gtVol');
   bind('auto', 'auto', 'check'); bind('autoEvery', 'autoEvery'); bind('autoStep', 'autoStep'); bind('autoTarget', 'autoTarget');
+  bind('follow', 'follow', 'check');
 }
 
 export function initPlayer() {
-  set('play', { ...get('play'), ...PREFS, timbre: TIMBRES[localStorage.getItem('tt.timbre')] ? localStorage.getItem('tt.timbre') : 'steel' });
+  set('play', { ...get('play'), ...SONG_DEFAULTS, ...parsePrefs(stored(PREFS_KEY)), timbre: TIMBRES[stored('tt.timbre')] ? stored('tt.timbre') : 'steel' });
+  on(Object.keys(PREF_DEFAULTS).map(k => 'play.' + k), () => remember(PREFS_KEY, serializePrefs(get('play'))));
   // Shift + 点：alphaTab 的点击事件里没有按键状态，在谱面的 mousedown（捕获阶段，比 alphaTab 先）里记下。
   // 不用全局 keydown / keyup：按着 Shift 切到别的应用时 keyup 会丢，之后每次点小节都成了扩展循环
   $('score').addEventListener('mousedown', e => { shiftDown = e.shiftKey; }, true);
   bindInputs();
   on(['play.metro', 'play.metroVol', 'play.countIn', 'play.gtVol'], applyAudio);
-  on('play.timbre', v => { localStorage.setItem('tt.timbre', v); switchTimbre(); });
+  on('play.timbre', v => { remember('tt.timbre', v); switchTimbre(); });
   on('play.bpm', bpm => {
     $('bpm').value = bpm; $('bpmVal').textContent = bpm; UI.fillRange($('bpm'));
     if (api) api.playbackSpeed = bpm / baseTempo;
