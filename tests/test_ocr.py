@@ -120,3 +120,22 @@ def test_parse_retries_on_ocr_disagreement_and_warns_if_unresolved(data_dir, mon
     assert warned == [2, 5]  # 替身模型返修后还是那样：标出来
     msg = next(w["msg"] for w in song["bars"][1]["warn"] if w["code"] == "ocr_mismatch")
     assert msg.startswith("本地数字识别") and "谱上读到 2弦1品" in msg
+
+
+def test_rows_where_ocr_reads_little_are_not_compared():
+    """OCR 只读对了 AI 写的音的不到 60%（斜体数字、很糊的截图）：这一行不比较，免得把读错的 OCR 当成证据。"""
+    from collections import Counter
+
+    def bar(*notes):
+        return {
+            "events": [
+                {"dur": "1", "notes": [{"string": s, "fret": f, "tech": [], "grace": -1} for s, f in notes]}
+            ]
+        }
+
+    ai = [bar((1, 0), (2, 1), (3, 0), (4, 2), (5, 3)) for _ in range(4)]
+    # 只在两个小节里读到了数字（读到的大多对得上），其余小节什么都没读到：整行只对上 AI 的 9/20
+    ocr = [[(1, 0), (2, 1), (3, 0), (4, 2), (5, 3)], [(1, 0), (2, 1), (3, 0), (4, 2), (5, 8)], [], []]
+    assert recognize.ocr_disagreements(ai, ocr) == {}
+    good = [[(1, 0), (2, 1), (3, 0), (4, 2), (5, 3)]] * 3 + [[(1, 0), (2, 1), (3, 0), (4, 2), (5, 8)]]
+    assert recognize.ocr_disagreements(ai, good) == {3: (Counter({(5, 8): 1}), Counter({(5, 3): 1}))}

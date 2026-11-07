@@ -152,9 +152,10 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
     - OCR 在这个小节什么都没读到：不判断（可能是没读出来，不代表没有音）；
     - 死音（谱上写 x）OCR 不读，不比较；倚音的小数字 OCR 会读到，算进去；
     - 人工泛音旁边标的“品位 + 12”（如 2<14>）OCR 会多读一个 14，允许；
-    - 整行一致率不到一半：多半是 OCR 在这种排版上读不准，整行都不判断。
+    - 整行一致率不到一半，或 OCR 只读对了 AI 写的音的不到 60%：多半是 OCR 在这种排版上读不准，整行都不判断。
     """
     pairs = []
+    ai_total = 0  # 整行 AI 写的音（不含闷音）
     last_fret: dict[int, int] = {}  # 每根弦上最后一个音的品位（判断跨小节线、写成括号的延续音）
     for i, (bar, seen) in enumerate(zip(bars, ocr_bars, strict=False)):
         tied_ok = set(last_fret.items())
@@ -165,6 +166,7 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
                 if "x" in n["tech"]:
                     continue
                 ai[(n["string"], n["fret"])] += 1
+                ai_total += 1
                 last_fret[n["string"]] = n["fret"]
                 if n.get("grace", -1) >= 0:
                     ai[(n["string"], n["grace"])] += 1
@@ -190,6 +192,10 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
     agree = sum(sum((ai & got).values()) for _, ai, got in pairs)
     total = sum(max(sum(ai.values()), sum(got.values())) for _, ai, got in pairs)
     if not total or agree / total < 0.5:
+        return {}
+    # OCR 在整行里只读对了 AI 结果的一小部分（斜体 / 手写风格的数字、很糊的截图）：它在这种排版上靠不住，
+    # 这时的“不一致”多半是 OCR 读错，提示给模型反而会把对的改错。GP 等软件导出的谱子每行都在 78% 以上
+    if agree < 0.6 * ai_total:
         return {}
     return {i: (got - ai, ai - got) for i, ai, got in pairs if got != ai}
 
