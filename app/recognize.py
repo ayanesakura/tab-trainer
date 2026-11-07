@@ -416,8 +416,8 @@ def _bar_key(bar: dict) -> tuple:
 
 def _double_check(first: list[dict], read_once, n: int, sid: str, si: int) -> list[dict]:
     """双重校对：再独立读一遍；两遍不一样的小节读第三遍当裁判，和哪一遍一样就用哪一遍。
-    三遍都不一样的小节用第一遍的结果，标上“不确定”，提醒对照原谱。（评测：单遍约 89% 的小节完全正确，
-    这样约 95%，费用约 2 倍）"""
+    三遍都不一样的小节用第一遍的结果，标上“不确定”，提醒对照原谱。（评测：同一批难的小节，单遍三次 85%–93%，
+    双重校对一次 91%：能减少偶尔的读错，提升不稳定；费用约 2 倍）"""
     try:
         second, _ = read_once()
     except Cancelled:
