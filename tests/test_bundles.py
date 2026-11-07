@@ -8,7 +8,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bundles, main, practice, recognize, songs, store, views
+from app import bundles, main, model, practice, recognize, songs, store, views
 from app.errors import Invalid
 from tests.fakes import derived_bars, score_png
 
@@ -65,7 +65,7 @@ def test_roundtrip_keeps_everything(data_dir):
     for sid, old in before.items():
         new = store.load(sid)
         assert new.pop("imported")
-        assert new == old
+        assert new == model.with_defaults(old)  # 原有的都在，只多了有默认值的字段（tags: [] 之类）
     assert (store.song_dir(a) / "pages" / "p1.png").read_bytes()
     assert (store.song_dir(b) / "source.gp5").read_bytes() == GP5
     assert {s["id"] for s in views.list_library()} == {a, b}
@@ -325,7 +325,7 @@ def test_old_songs_with_empty_meta_roundtrip(data_dir):
     songs.recover_interrupted()
     for sid in old:
         assert json.loads((store.SONGS / sid / "song.json").read_text())["meta"] is None
-    before = {sid: views.song_view(store.load(sid)) for sid in old}
+    before = {sid: views.song_view(model.with_defaults(store.load(sid))) for sid in old}
     path, _ = bundles.export_bundle([])
     _wipe()
     with open(path, "rb") as f:
@@ -431,3 +431,15 @@ def test_practice_times_must_look_like_local_times(client):
     v = client.get("/api/songs/ok-song").json()
     assert v["practice"]["bars"]["b1"]["loops"] == 4 and v["practice"]["last"]["at"] == ""
     assert bad not in json.dumps(client.get("/api/songs").json())
+
+
+def test_import_fills_in_missing_fields(client):
+    """包里的小节缺 notes / tip 之类有默认值的字段：导入时补上，曲子能打开、能在曲库里看到。"""
+    sid = "20260101-000000-sparse"
+    song = _v2(sid, bars=[{"id": "b1", "events": [{"dur": "1"}]}])
+    r = bundles.import_bundles([("x.zip", _bundle(song, {}))])
+    assert [x["id"] for x in r["imported"]] == [sid]
+    assert client.get(f"/api/songs/{sid}").status_code == 200
+    assert sid in [x["id"] for x in client.get("/api/songs").json()]
+    saved = json.loads((store.SONGS / sid / "song.json").read_text())
+    assert saved["bars"][0]["events"][0]["notes"] == [] and "_orig" not in saved["bars"][0]

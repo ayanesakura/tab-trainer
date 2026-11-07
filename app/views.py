@@ -10,7 +10,7 @@ import logging
 from typing import Any
 
 from app import practice, state, store
-from app.errors import CorruptSong
+from app.errors import CorruptSong, NotFound
 from app.jobs import jobs
 from app.llm import DEFAULT_MODEL, price_of
 
@@ -116,7 +116,7 @@ def list_library() -> list[dict]:
             out.append(library_item(store.load(sid)))
         except CorruptSong as e:
             out.append(corrupt_item(sid, str(e)))
-        except LookupError:  # 刚被删掉
+        except NotFound:  # 刚被删掉（别的 KeyError 之类是数据不对，按下面的坏曲子列出来，能删）
             continue
         except Exception as e:  # 内容不对（手改坏的文件之类）算到这一首上，曲库照常能打开
             log.exception("song=%s 无法列进曲库", sid)

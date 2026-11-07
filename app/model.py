@@ -268,6 +268,37 @@ class Song(_M):
     derived: Derived | None = None
 
 
+def _dump(v):
+    if isinstance(v, BaseModel):
+        return v.model_dump(by_alias=True, exclude_none=True)
+    if isinstance(v, list):
+        return [_dump(x) for x in v]
+    return copy.deepcopy(v)
+
+
+def _fill_defaults(raw, obj) -> None:
+    if isinstance(obj, BaseModel) and isinstance(raw, dict):
+        for name, f in type(obj).model_fields.items():
+            key = f.alias or name
+            val = getattr(obj, name)
+            if key in raw:
+                _fill_defaults(raw[key], val)
+            elif name in raw:
+                _fill_defaults(raw[name], val)
+            elif val is not None:  # 可选、默认 None 的字段（_orig、plan…）不写：代码按“有没有这个键”判断
+                raw[key] = _dump(val)
+    elif isinstance(obj, list) and isinstance(raw, list):
+        for r, o in zip(raw, obj, strict=False):
+            _fill_defaults(r, o)
+
+
+def with_defaults(song: dict) -> dict:
+    """外来的 song.json（曲子包）：按 Song 校验，缺的字段补上默认值（小节里缺 notes、tip 之类），
+    其余原样保留（不在模型里的字段也不丢）。校验不过抛 pydantic.ValidationError。"""
+    _fill_defaults(song, Song.model_validate(song))
+    return song
+
+
 # ---------------------------------------------------------------------------
 # practice.jsonl 的一行（见 app/practice.py）
 # ---------------------------------------------------------------------------
