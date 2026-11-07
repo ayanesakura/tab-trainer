@@ -293,3 +293,23 @@ def test_rows_far_apart_keep_their_lyrics_below_and_chords_above():
     assert a["bottom"] >= lyric_bottom and b["top"] >= lyric_bottom  # 第一行的歌词完整地在第一行里
     assert b["top"] <= 520 - 95  # 第二行的和弦图在第二行里
     assert b["bottom"] >= 520 + 70 + 100 + 12  # 最后一行：下面的歌词也带上
+
+
+def test_chord_diagrams_with_finger_dots_are_not_a_tab_row():
+    """和弦图上按弦的圆点让竖线（弦）看着像扫弦箭头：两三个挨着的和弦图仍然不能当成一行六线谱。"""
+    img = Image.new("L", (1300, 700), 255)
+    d = ImageDraw.Draw(img)
+    tab_top = 400
+    for i in range(6):
+        d.line([(60, tab_top + i * 15), (1240, tab_top + i * 15)], fill=170)
+    for x in (60, 650, 1240):
+        d.line([(x, tab_top), (x, tab_top + 75)], fill=40, width=2)
+    for x0 in (120, 190, 420, 700, 770):  # 和弦图：6 根弦（间距 11）、6 根品线（间距 14）、几个圆点
+        for i in range(6):
+            d.line([(x0, 250 + i * 14), (x0 + 55, 250 + i * 14)], fill=0)
+            d.line([(x0 + i * 11, 250), (x0 + i * 11, 320)], fill=0)
+        for i, fr in ((1, 1), (3, 2), (4, 3)):
+            cx, cy = x0 + i * 11, 250 + fr * 14 - 7
+            d.ellipse([(cx - 4, cy - 4), (cx + 4, cy + 4)], fill=0)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2]

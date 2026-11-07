@@ -184,6 +184,17 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
     return False
 
 
+def _chord_diagrams(dark: np.ndarray, tab: list[float], sp: float, x0: int, x1: int) -> bool:
+    """这一段“六线谱”其实是一两个、两三个挨着的和弦图：段很短（不到 16 个线距），里面贯穿上下的竖线（弦）
+    又多又密（一个线距左右一根）。真正的短行（只有一个小节的末行）里只有两三条小节线。
+    （和弦图上按弦的圆点会让竖线看着像扫弦箭头，所以这里数的是还没按箭头筛过的竖线）"""
+    if x1 - x0 >= sp * 16:
+        return False
+    y_a, y_b = int(tab[0] + sp * 0.3), int(tab[-1] - sp * 0.3)
+    cols = [(a + b) / 2 for a, b in _runs(dark[y_a:y_b, x0 : x1 + 1].mean(0) >= 0.93)]
+    return len(cols) >= 5 and float(np.median(np.diff(cols))) < sp * 1.2
+
+
 def _row_split(upper: dict, lower: dict) -> float:
     """相邻两行的分界：一般取中点。两行隔得很远时（弹唱谱：上一行下面有简谱和歌词，下一行上面有和弦图），
     下一行只要它上方 9 个线距（和弦名、和弦图、速度记号都在这个范围里），剩下的都归上一行——
@@ -260,6 +271,8 @@ def detect_page(img: Image.Image) -> dict:
         ys = [round(y) for y in tab]
         on = np.stack([dark[max(0, y - 1) : y + 2].any(0) for y in ys]).sum(0) >= 4
         for x0, x1 in _segments(on, sp, sp * 6):
+            if _chord_diagrams(dark, tab, sp, x0, x1):
+                continue
             # 小节线：六线谱上下线之间（掐头去尾）几乎全暗的竖列
             y_a, y_b = int(tab[0] + sp * 0.3), int(tab[-1] - sp * 0.3)
             colfrac = dark[y_a:y_b].mean(0)
