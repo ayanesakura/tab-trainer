@@ -79,3 +79,17 @@ test('repeats, endings and jumps survive the round trip and drive playback order
   gen.generate();
   assert.deepEqual(gen.tickLookup.masterBars.map(m => m.masterBar.index + 1), [1, 2, 1, 3, 4, 5, 4, 5]);
 });
+
+test('retiming an onset keeps the bar length', async () => {
+  const { retimeEvent } = await import('../../app/static/js/score.js');
+  const bar = [{ dur: '1', notes: [N(1, 0)] }, { dur: '1', notes: [N(2, 1)] }, { dur: '2', notes: [N(3, 2)] }];
+  const total = evs => evs.reduce((a, e) => a + durToTicks(e.dur), 0);
+  const a = retimeEvent(bar, 0, '1/2');
+  assert.deepEqual(a.map(e => e.dur), ['1/2', '3/2', '2']);
+  const b = retimeEvent(bar, 2, '1/2'); // 最后一拍改短：补休止
+  assert.deepEqual(b.map(e => [e.dur, e.notes.length]), [['1', 1], ['1', 1], ['1/2', 1], ['3/2', 0]]);
+  assert.equal(total(a), total(bar)); assert.equal(total(b), total(bar));
+  assert.throws(() => retimeEvent(bar, 2, '3'), /只能改短/);
+  assert.throws(() => retimeEvent(bar, 0, '2'), /盖过下一个音/);
+  assert.equal(bar[0].dur, '1'); // 原数据不变
+});

@@ -231,3 +231,31 @@ export function deriveSong(score, trackIndex = 0) {
   });
   return { meta, bars, trackName: track.name };
 }
+
+/** 改音面板里可选的时值（到下一个音的时长，单位四分音符）。 */
+export const DUR_CHOICES = [
+  ['2', '二分'], ['3/2', '附点四分'], ['1', '四分'], ['3/4', '附点八分'], ['1/2', '八分'],
+  ['1/3', '三连音'], ['1/4', '十六分'], ['1/6', '六连音'],
+];
+
+/**
+ * 把第 ei 个起拍的时值改成 dur，小节总长不变：后面还有起拍时由下一个起拍补上差值；
+ * 是最后一个起拍时只能缩短，缩出来的时间补一个休止。做不到时抛出带中文说明的 Error。
+ */
+export function retimeEvent(events, ei, dur) {
+  const out = events.map(e => ({ ...e, notes: e.notes.map(n => ({ ...n })) }));
+  const ev = out[ei];
+  const oldT = durToTicks(ev.dur), newT = durToTicks(dur);
+  if (newT <= 0) throw new Error('时值必须大于 0');
+  if (newT === oldT) return out;
+  if (ei + 1 < out.length) {
+    const nextT = durToTicks(out[ei + 1].dur) + oldT - newT;
+    if (nextT <= 0) throw new Error('改长以后会盖过下一个音，先把下一个音改短或删掉');
+    out[ei + 1].dur = ticksToDur(nextT);
+  } else {
+    if (newT > oldT) throw new Error('这是小节里最后一拍，只能改短（改长会超出小节）');
+    out.push({ dur: ticksToDur(oldT - newT), notes: [] });
+  }
+  ev.dur = ticksToDur(newT);
+  return out;
+}

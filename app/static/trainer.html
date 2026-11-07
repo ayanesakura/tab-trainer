@@ -217,6 +217,7 @@ table.tune td b { font-variant-numeric: tabular-nums; }
         <div class="np-row"><span class="lbl">弦</span><div class="seg sm" id="npStr"><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button><button data-v="6">6</button></div><span class="hint">1 弦最细</span></div>
         <div class="np-row"><span class="lbl">品</span><button class="icon-btn sm" id="npFretDown" data-ic="minus"></button><input class="input num np-fret" type="number" id="npFret" min="0" max="30"><button class="icon-btn sm" id="npFretUp" data-ic="plus"></button><span class="hint">从变调夹算起，和谱上一致</span></div>
         <div class="np-row" style="align-items:flex-start"><span class="lbl" style="line-height:26px">技巧</span><div class="chips" id="npTech"></div></div>
+        <div class="np-row" style="align-items:flex-start"><span class="lbl" style="line-height:26px" title="这一拍到下一个音的时长，整拍的音一起改">时值</span><div class="chips" id="npDur"></div></div>
         <div class="np-msg hint" id="npMsg"></div>
         <div class="np-actions"><button class="btn sm danger" id="npDel" data-ic="trash">删除</button><button class="btn sm ghost" id="npAdd" data-ic="plus" title="在同一拍上再加一个音">同一拍加音</button><div class="grow"></div><button class="btn sm primary" id="npSave">保存</button></div>
       </div>
@@ -732,6 +733,15 @@ function applyAudio() {
 }
 
 let warnedUnplayed = '';
+function findLinearRun(played, a, b) {
+  const n = b - a + 1;
+  for (let i = 0; i + n <= played.length; i++) {
+    let ok = true;
+    for (let k = 0; k < n && ok; k++) ok = played[i + k].masterBar.index === a + k;
+    if (ok) return [played[i], played[i + n - 1]];
+  }
+  return null;
+}
 function applyLoopRange() {
   if (!api || !api.score || !api.tracks.length) return;
   const mbs = api.score.masterBars;
@@ -742,7 +752,11 @@ function applyLoopRange() {
   if (!(state.a === 0 && state.b === mbs.length - 1)) {
     const tc = api.tickCache;
     const first = mb => (tc && tc.getMasterBar(mb)) || { start: mb.start, end: mb.start + mb.calculateDuration() };
-    const la = first(mbs[state.a]), lb = first(mbs[state.b]);
+    let la = first(mbs[state.a]), lb = first(mbs[state.b]);
+    // 有反复时，优先找播放顺序里正好依次弹过 a..b 的那一段（比如 |: 1 2 3 4 :| 5 选 3–5，用第二遍的 3 4 5），
+    // 这样循环里只有选中的小节；找不到才用各自第一次被弹到的位置
+    const run = tc && findLinearRun(tc.masterBars, state.a, state.b);
+    if (run) { la = run[0]; lb = run[1]; }
     if (la.end <= la.start || lb.end <= lb.start) {
       // 按反复 / 跳转记号走，这个小节根本不会被弹到（比如 Fine 之后的小节）
       if (warnedUnplayed !== `${state.a}-${state.b}`) UI.toast('按谱上的反复和跳转记号，选中的小节不会被弹到，先循环全曲', 'info', 5000);
@@ -1146,7 +1160,7 @@ async function undoEdit() {
 // 在谱面上改音（只对识别出来的曲子：GP / MusicXML 导入的本来就是精确数据，播放也直接用原文件）
 // ---------------------------------------------------------------------
 const LEGEND_PLAY = '点击小节 = 只循环这一小节 · <kbd>Shift</kbd> + 点击 = 扩展循环范围 · 点击音符 = 试听 · 橙色小节号 = 可能识别有误';
-const LEGEND_EDIT = '改音模式：点击音符修改弦、品和技巧 · 点击休止符在这一拍加音 · 输入品位后按 <kbd>Enter</kbd> 保存，<kbd>Esc</kbd> 关闭 · <kbd>⌘Z</kbd> 撤销';
+const LEGEND_EDIT = '改音模式：点击音符修改弦、品、技巧和时值 · 点击休止符在这一拍加音 · 输入品位后按 <kbd>Enter</kbd> 保存，<kbd>Esc</kbd> 关闭 · <kbd>⌘Z</kbd> 撤销';
 const NP_TECH = [['h', '击弦'], ['p', '勾弦'], ['sl', '滑音'], ['si', '滑入'], ['pm', '闷音'], ['x', '死音'], ['nh', '泛音'], ['ah', '人工泛音'], ['vib', '揉弦'], ['roll', '琶音']];
 let editMode = false, np = null, pendingClick = null;
 const pointer = { x: 0, y: 0 };
@@ -1178,7 +1192,8 @@ function openNotePop(beat, note) {
   if (!ev) return;
   const ni = note ? ev.notes.findIndex(n => n.string === 7 - note.string) : -1; // alphaTab 的弦号 1 = 最低音弦
   const cur = ni >= 0 ? ev.notes[ni] : null;
-  np = { bi, ei, ni, barId: SONG.bars[bi].id, string: cur ? cur.string : freeString(ev, note ? 7 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []) };
+  np = { bi, ei, ni, barId: SONG.bars[bi].id, string: cur ? cur.string : freeString(ev, note ? 7 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []), dur: ev.dur };
+  if (!$('npDur').children.length) $('npDur').innerHTML = scoreConv.DUR_CHOICES.map(([d, l]) => `<button data-d="${d}">${l}</button>`).join('');
   showBar(bi);
   renderNotePop();
   $('npFret').value = np.fret;
@@ -1205,9 +1220,17 @@ function renderNotePop() {
   setNpStr(String(np.string));
   $('npTech').querySelectorAll('button').forEach(b => b.classList.toggle('on', np.tech.has(b.dataset.t)));
   $('npDel').hidden = $('npAdd').hidden = add;
+  const curT = scoreConv.durToTicks(np.dur);
+  let durOk = true;
+  $('npDur').querySelectorAll('button').forEach(b => {
+    b.classList.toggle('on', scoreConv.durToTicks(b.dataset.d) === curT);
+  });
+  let msg = '';
+  try { scoreConv.retimeEvent(barEvents(np.bi), np.ei, np.dur); } catch (e) { durOk = false; msg = e.message; }
   const clash = npConflict();
-  $('npMsg').textContent = clash ? `这一拍的 ${np.string} 弦上已经有一个音了，换一根弦或去改那个音` : '';
-  $('npSave').disabled = clash;
+  if (clash) msg = `这一拍的 ${np.string} 弦上已经有一个音了，换一根弦或去改那个音`;
+  $('npMsg').textContent = msg;
+  $('npSave').disabled = clash || !durOk;
 }
 const setNpStr = UI.seg($('npStr'), '1', v => { np.string = +v; renderNotePop(); });
 function closeNotePop() { np = null; $('notePop').hidden = true; }
@@ -1222,13 +1245,16 @@ async function saveNotePop() {
   const tech = NP_TECH.map(t => t[0]).filter(k => np.tech.has(k));
   if (old.tech && old.tech.includes('bend')) tech.push('bend'); // 推弦不在面板里，原样保留
   const n = { ...old, string: np.string, fret, tech };
-  const same = np.ni >= 0 && old.string === n.string && old.fret === n.fret && [...(old.tech || [])].sort().join() === [...tech].sort().join();
+  const retimed = scoreConv.durToTicks(np.dur) !== scoreConv.durToTicks(ev.dur);
+  const same = !retimed && np.ni >= 0 && old.string === n.string && old.fret === n.fret && [...(old.tech || [])].sort().join() === [...tech].sort().join();
   if (same) { closeNotePop(); return; } // 没改就不保存（保存会清掉这一小节的 AI 不确定说明）
   if (np.ni >= 0) ev.notes[np.ni] = n; else ev.notes.push(n);
   ev.notes.sort((a, b) => a.string - b.string);
+  let out = events;
+  try { out = scoreConv.retimeEvent(events, np.ei, np.dur); } catch (e) { $('npMsg').textContent = e.message; return; }
   const where = `第 ${np.bi + 1} 小节`;
   closeNotePop();
-  await putBar(bar.id, events, `已修改${where}`);
+  await putBar(bar.id, out, `已修改${where}`);
 }
 async function deleteNotePop() {
   if (!np || np.ni < 0) return;
@@ -1249,6 +1275,11 @@ const npStep = d => { if (!np) return; np.fret = Math.max(0, Math.min(30, (parse
 $('npFretDown').onclick = () => npStep(-1);
 $('npFretUp').onclick = () => npStep(1);
 $('npFret').addEventListener('input', () => { if (np) np.fret = $('npFret').value === '' ? '' : parseInt($('npFret').value, 10); });
+$('npDur').onclick = e => {
+  const b = e.target.closest('button[data-d]'); if (!b || !np) return;
+  np.dur = b.dataset.d;
+  renderNotePop();
+};
 $('npTech').onclick = e => {
   const b = e.target.closest('button[data-t]'); if (!b || !np) return;
   const k = b.dataset.t;
