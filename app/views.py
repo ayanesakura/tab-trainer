@@ -13,6 +13,7 @@ from app import practice, state, store
 from app.errors import CorruptSong, NotFound
 from app.jobs import jobs
 from app.llm import DEFAULT_MODEL, price_of
+from app.model import is_score
 
 log = logging.getLogger("tab_trainer.views")
 
@@ -60,8 +61,15 @@ def song_view(s: dict) -> dict:
         **flags,
         bars=[bar_view(s, b) for b in s.get("bars") or []],
         practice=practice.aggregate(s["id"], s),
+        is_score=is_score(s),
+        failed_rows=failed_rows(s),
     )
     return out
+
+
+def failed_rows(s: dict) -> int:
+    """识别失败的行数（“重试失败的行”只重新识别这些）。"""
+    return sum(1 for x in s.get("systems") or [] if isinstance(x, dict) and x.get("status") == "error")
 
 
 def library_item(s: dict) -> dict:
@@ -87,6 +95,8 @@ def library_item(s: dict) -> dict:
         "created": s.get("created"),
         "imported": s.get("imported"),
         "source_type": s.get("source_type"),
+        "is_score": is_score(s),
+        "failed_rows": failed_rows(s),
         "tags": [t for t in s.get("tags") or [] if isinstance(t, str)],
         "practice": p,
         **cost_summary(s.get("usage")),

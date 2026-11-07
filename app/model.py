@@ -566,6 +566,8 @@ class SongView(_M):
     tags: list[str] = Field(default_factory=list)
     track: int = 0
     derived: Derived | None = None
+    is_score: bool = False  # Guitar Pro / MusicXML（小节来自原文件）
+    failed_rows: int = 0  # 识别失败的行数
 
 
 class LibraryPractice(_M):
@@ -591,6 +593,8 @@ class LibraryItem(_M):
     created: str | None = None
     imported: str | None = None
     source_type: SourceType | None = None
+    is_score: bool = False
+    failed_rows: int = 0
     tags: list[str] = Field(default_factory=list)
     practice: LibraryPractice | None = None
     cost_usd: float = 0

@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from app import auth, bundles, coach, config, schemas, service, songs, store
+from app import auth, config, schemas, service, store
 from app.config import settings
 from app.errors import AppError
 
@@ -27,7 +27,7 @@ STATIC = store.ROOT / "app" / "static"
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    songs.recover_interrupted()  # 上次服务关掉时没跑完的任务标成中断；旧格式的曲子存成当前格式
+    service.startup()  # 上次服务关掉时没跑完的任务标成中断；旧格式的曲子存成当前格式
     yield
 
 
@@ -127,7 +127,7 @@ def upload(files: Annotated[list[UploadFile], File()], title: Annotated[str, For
 @app.get("/api/export")
 def export(ids: Annotated[list[str], Query()] = []):  # noqa: B006 - FastAPI 的查询参数默认值
     """导出曲子包（zip）。不带 ids 时导出整个曲库。"""
-    path, name = bundles.export_bundle(ids)
+    path, name = service.export_bundle(ids)
     return FileResponse(
         path,
         media_type="application/zip",
@@ -139,7 +139,7 @@ def export(ids: Annotated[list[str], Query()] = []):  # noqa: B006 - FastAPI 的
 @app.post("/api/import")
 def import_bundles(files: Annotated[list[UploadFile], File()]):
     """导入一个或多个曲子包，每个包里可以有多首曲子。"""
-    return bundles.import_bundles([(f.filename or "曲子包", f.file) for f in files])
+    return service.import_bundles([(f.filename or "曲子包", f.file) for f in files])
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +162,13 @@ def reparse_all(sid: str):
     return {"ok": True}
 
 
+@app.post("/api/songs/{sid}/retry-failed")
+def retry_failed(sid: str):
+    """只重新识别失败的行（一个小节都还没有时整首识别）。"""
+    service.retry_failed(sid)
+    return {"ok": True}
+
+
 @app.put("/api/songs/{sid}/derived")
 def put_derived(sid: str, body: schemas.DerivedIn):
     derived = body.derived.model_dump() if body.derived else None
@@ -180,17 +187,17 @@ def arrange_pages(
     files: Annotated[list[UploadFile], File()] = [],  # noqa: B006 - FastAPI 的表单参数默认值
 ):
     """补页、删页、调整页序（order 是 JSON 数组：已有页的文件名或 "new:k"）。新页上的行在后台识别。"""
-    return service.arrange_pages(sid, order, _files(files))
+    return service.arrange_pages(sid, schemas.page_order(order), _files(files))
 
 
 @app.put("/api/songs/{sid}/tags")
 def put_tags(sid: str, body: schemas.TagsIn):
-    return {"tags": songs.set_tags(sid, body.tags)}
+    return service.set_tags(sid, body.tags)
 
 
 @app.post("/api/songs/{sid}/explain")
 def explain(sid: str):
-    coach.start_explain(sid)
+    service.explain(sid)
     return {"ok": True}
 
 
@@ -214,7 +221,7 @@ def put_bar(sid: str, bar_id: str, body: schemas.BarIn):
 
 @app.post("/api/songs/{sid}/bars/{bar_id}/ask")
 def ask_bar(sid: str, bar_id: str, body: schemas.AskIn):
-    return coach.ask_bar(sid, bar_id, body.question)
+    return service.ask_bar(sid, bar_id, body.question)
 
 
 @app.post("/api/songs/{sid}/practice")

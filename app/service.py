@@ -1,19 +1,23 @@
-"""接口背后的编排：main.py 只做 HTTP（参数、文件、响应），这里把 songs / recognize / coach / bundles 串起来。
+"""接口背后的编排：main.py 只做 HTTP（参数、文件、响应），所有路由都经过这里，再分给 songs / recognize / pages /
+coach / bundles。多数函数只是一行转发，留着是为了让 main 只依赖这一个模块、返回的视图形状统一在这里决定。
 
 错误一律抛 app.errors 里的 AppError（main 统一转成 {"detail": 中文说明} 和对应的状态码）。
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import BinaryIO
 
-from app import config, practice, recognize, songs, store, views
+from app import bundles, coach, config, pages, practice, recognize, songs, store, views
 from app.config import settings
 from app.errors import Busy, Conflict, Invalid, NotFound
 from app.jobs import jobs
 from app.model import is_score
+
+
+def startup() -> None:
+    songs.recover_interrupted()
 
 
 # ---------------------------------------------------------------------------
@@ -39,17 +43,19 @@ def upload(uploads: list[tuple[str, bytes]], title: str) -> str:
     return sid
 
 
-def arrange_pages(sid: str, order: str, uploads: list[tuple[str, bytes]]) -> dict:
-    """补页、删页、调整页序（order 是 JSON 数组：已有页的文件名或 "new:k"）。新页上的行在后台识别。"""
+def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) -> dict:
+    """补页、删页、调整页序（order：已有页的文件名或 "new:k"）。新页上的行在后台识别。"""
     store.load(sid)
-    try:
-        order_list = json.loads(order)
-    except ValueError:
-        raise Invalid("页序格式不对") from None
-    if not isinstance(order_list, list) or not all(isinstance(x, str) for x in order_list):
-        raise Invalid("页序格式不对")
-    recognize.arrange_pages(sid, order_list, uploads)
+    pages.arrange_pages(sid, order, uploads)
     return song(sid)
+
+
+def export_bundle(ids: list[str]) -> tuple[Path, str]:
+    return bundles.export_bundle(ids)
+
+
+def import_bundles(files: list[tuple[str, BinaryIO]]) -> dict:
+    return bundles.import_bundles(files)
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +99,14 @@ def reparse_all(sid: str) -> None:
         raise Busy("已经在识别中")
 
 
+def retry_failed(sid: str) -> None:
+    recognize.start_retry_failed(sid)
+
+
+def explain(sid: str) -> None:
+    coach.start_explain(sid)
+
+
 def reparse_row(sid: str, si: int, hint: str) -> None:
     s = store.load(sid)
     if not 0 <= si < len(s.get("systems") or []):
@@ -130,6 +144,14 @@ def set_derived(sid: str, meta: dict, bars: list[dict], track: int, derived: dic
 
 def import_failed(sid: str, error: str) -> dict:
     return views.song_view(songs.import_failed(sid, error))
+
+
+def set_tags(sid: str, tags: list[str]) -> dict:
+    return {"tags": songs.set_tags(sid, tags)}
+
+
+def ask_bar(sid: str, bar_id: str, question: str) -> dict:
+    return coach.ask_bar(sid, bar_id, question)
 
 
 def record_practice(sid: str, bar_ids: list[str], loops: int, bpm: float, seconds: float) -> dict:

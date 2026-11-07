@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import errors, jobs, main, practice, recognize, songs, store, views
+from app import errors, jobs, main, pages, practice, recognize, songs, store, views
 from tests.fakes import FakeClaude, derived_bars, score_png
 
 
@@ -20,7 +20,7 @@ def test_reorder_moves_bars_without_recognizing(data_dir):
     practice.record(sid, [before["bars"][7]["id"]], 1, 60, 10)
     calls = len(FakeClaude.calls)
 
-    after = recognize.arrange_pages(sid, ["p2.png", "p1.png"], [])
+    after = pages.arrange_pages(sid, ["p2.png", "p1.png"], [])
 
     assert len(FakeClaude.calls) == calls  # 不花钱
     assert [p["file"] for p in after["pages"]] == ["p2.png", "p1.png"]
@@ -37,7 +37,7 @@ def test_deleting_a_page_drops_its_bars_and_file(data_dir):
     sid, before = _two_page_song()
     practice.record(sid, [before["bars"][7]["id"]], 1, 60, 10)
 
-    after = recognize.arrange_pages(sid, ["p1.png"], [])
+    after = pages.arrange_pages(sid, ["p1.png"], [])
 
     assert [b["id"] for b in after["bars"]] == [b["id"] for b in before["bars"][:6]]
     assert len(after["systems"]) == 2 and not practice.aggregate(sid, after)["bars"]
@@ -57,7 +57,7 @@ def test_added_page_is_recognized_alone(data_dir, sync_jobs, monkeypatch):
     before = store.load(sid)
     FakeClaude.calls = []
 
-    after = recognize.arrange_pages(sid, ["new:0", "p1.png"], [("c.png", score_png())])
+    after = pages.arrange_pages(sid, ["new:0", "p1.png"], [("c.png", score_png())])
 
     after = store.load(sid)
     assert [p["file"] for p in after["pages"]] == ["p2.png", "p1.png"]
@@ -82,7 +82,7 @@ def test_new_page_on_song_without_bars_runs_full_recognition(data_dir, sync_jobs
         return real(s, cancel)
 
     monkeypatch.setattr(recognize, "start_parse", spy)
-    recognize.arrange_pages(sid, ["p1.png", "new:0"], [("c.png", score_png())])
+    pages.arrange_pages(sid, ["p1.png", "new:0"], [("c.png", score_png())])
     assert started == [(sid, True)]
     song = store.load(sid)
     assert len(song["pages"]) == 2 and len(song["bars"]) == 12 and song["status"] == "ready"
@@ -103,7 +103,7 @@ def test_replacing_every_recognized_page_runs_full_recognition_without_stuck_row
 
     monkeypatch.setattr(recognize, "start_parse", no_start)
     with pytest.raises(RuntimeError):
-        recognize.arrange_pages(sid, ["new:0"], [("c.png", score_png())])
+        pages.arrange_pages(sid, ["new:0"], [("c.png", score_png())])
     assert seen == [["pending", "pending"]]  # 不是 parsing：不会锁住、也不会一直显示在识别
     assert not jobs.jobs.running(sid)
     song = store.load(sid)
@@ -124,7 +124,7 @@ def test_bad_orders_are_rejected(data_dir, order, n_up, match):
     sid = songs.create_song([("a.png", score_png())])
     recognize.run_parse(sid)
     with pytest.raises(errors.Invalid, match=match):
-        recognize.arrange_pages(sid, order, [("c.png", score_png())] * n_up)
+        pages.arrange_pages(sid, order, [("c.png", score_png())] * n_up)
     assert not jobs.jobs.running(sid)
     assert [p["file"] for p in store.load(sid)["pages"]] == ["p1.png"]
     assert sorted(f.name for f in (store.song_dir(sid) / "pages").iterdir()) == ["p1.png"]
@@ -136,12 +136,12 @@ def test_busy_and_score_songs_are_refused(data_dir):
     jobs.jobs.claim(sid)
     try:
         with pytest.raises(errors.Busy):
-            recognize.arrange_pages(sid, ["p1.png"], [])
+            pages.arrange_pages(sid, ["p1.png"], [])
     finally:
         jobs.jobs.release(sid)
     gp = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
     with pytest.raises(errors.Invalid, match="没有页面"):
-        recognize.arrange_pages(gp, [], [])
+        pages.arrange_pages(gp, [], [])
 
 
 def test_tags_and_cost_in_library(data_dir):
@@ -222,9 +222,60 @@ def test_edit_just_before_the_new_page_ts_rerun_is_not_overwritten(data_dir, syn
         return song
 
     monkeypatch.setattr(store, "load", load)
-    recognize.arrange_pages(sid, ["p1.png", "new:0"], [("c.png", score_png())])
+    pages.arrange_pages(sid, ["p1.png", "new:0"], [("c.png", score_png())])
     song = real_load(sid)
     bar = next(b for b in song["bars"] if b["id"] == edited[0])
     assert bar["edited"] and bar["events"][0]["notes"][0]["fret"] == 9
     assert [ts for fb, ts in calls if fb == 10] == [None]  # 新页第二行没有重做（和全曲拍号一样时不传）
     assert all(s["status"] == "done" for s in song["systems"])
+
+
+def test_retry_failed_rows_only_rereads_the_failed_ones(data_dir, sync_jobs, monkeypatch):
+    """第一次识别第二行失败：“重试失败的行”只重新识别这一行，成功后曲子没有失败的行，提示也清掉。"""
+    real = FakeClaude.transcribe
+    broken = {"on": True}
+
+    def transcribe(self, img, meta, first_bar, *a, **kw):
+        if first_bar > 1 and broken["on"]:
+            raise RuntimeError("网络断了")
+        return real(self, img, meta, first_bar, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    v = c.get(f"/api/songs/{sid}").json()
+    assert v["failed_rows"] == 1 and not v["is_score"] and v["notice"]
+    assert next(x for x in c.get("/api/songs").json() if x["id"] == sid)["failed_rows"] == 1
+    first_row = [b["id"] for b in store.load(sid)["bars"]]
+
+    broken["on"] = False
+    FakeClaude.calls = []
+    assert c.post(f"/api/songs/{sid}/retry-failed").status_code == 200
+    assert {x["first_bar"] for x in FakeClaude.calls} == {4}  # 只识别了第二行（第一行没动、没花钱）
+    s = store.load(sid)
+    assert [x["status"] for x in s["systems"]] == ["done", "done"] and s["activity"] is None
+    assert [b["id"] for b in s["bars"]][: len(first_row)] == first_row and len(s["bars"]) == 6
+    v = c.get(f"/api/songs/{sid}").json()
+    assert v["failed_rows"] == 0 and v["status"] == "ready" and v["notice"] is None
+
+    r = c.post(f"/api/songs/{sid}/retry-failed")
+    assert r.status_code == 400 and "没有识别失败的行" in r.json()["detail"]
+
+
+def test_retry_failed_with_nothing_recognized_runs_the_whole_song(data_dir, sync_jobs, monkeypatch):
+    real = FakeClaude.read_meta
+    monkeypatch.setattr(FakeClaude, "read_meta", lambda self, page: 1 / 0)
+    sid = songs.create_song([("p1.png", score_png())])
+    assert recognize.start_parse(sid)
+    assert store.load(sid)["status"] == "error"
+    monkeypatch.setattr(FakeClaude, "read_meta", real)
+    recognize.start_retry_failed(sid)
+    s = store.load(sid)
+    assert s["status"] == "ready" and len(s["bars"]) == 6
+
+
+def test_retry_failed_rejects_gp_songs(data_dir):
+    gp = songs.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    with pytest.raises(errors.Invalid):
+        recognize.start_retry_failed(gp)
