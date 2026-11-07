@@ -8,7 +8,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bundles, main, recognize, songs, store
+from app import bundles, main, practice, recognize, songs, store, views
 from app.errors import Invalid
 from tests.fakes import derived_bars, score_png
 
@@ -23,9 +23,9 @@ def _image_song(title="图片曲") -> str:
         s["bars"][0]["tip"] = "第一小节慢一点"
         s["bars"][0]["qa"] = [{"q": "怎么按", "a": "食指横按"}]
         s["plan"] = {"text": "先练前四小节"}
-        s["practice"] = {"bars": {s["bars"][0]["id"]: 3}}
 
     store.update(sid, extra)
+    practice.record(sid, [store.load(sid)["bars"][0]["id"]], 3, 60, 30)
     return sid
 
 
@@ -46,11 +46,15 @@ def _wipe():
 def test_roundtrip_keeps_everything(data_dir):
     a, b = _image_song(), _gp_song()
     before = {sid: store.load(sid) for sid in (a, b)}
+    played = practice.aggregate(a, before[a])
     path, name = bundles.export_bundle([a, b])
     assert name.startswith("曲子包 - 2 首")
     with _zip(path) as zf:
         names = set(zf.namelist())
         assert f"songs/{a}/pages/p1.png" in names and f"songs/{b}/source.gp5" in names
+        assert f"songs/{a}/practice.jsonl" in names and f"songs/{b}/practice.jsonl" not in names
+        stored = json.loads(zf.read(f"songs/{a}/song.json"))
+        assert "n" not in stored["bars"][0] and "title" not in stored["meta"]  # 派生字段不进包
         assert not any(n.endswith(".bak") for n in names)
         assert "config.json" not in " ".join(names)
     _wipe()
@@ -61,12 +65,11 @@ def test_roundtrip_keeps_everything(data_dir):
     for sid, old in before.items():
         new = store.load(sid)
         assert new.pop("imported")
-        if old.get("restaging") is None:  # 空值在导入时被清掉，不算差别
-            old.pop("restaging", None)
         assert new == old
     assert (store.song_dir(a) / "pages" / "p1.png").read_bytes()
     assert (store.song_dir(b) / "source.gp5").read_bytes() == GP5
-    assert {s["id"] for s in store.list_songs()} == {a, b}
+    assert {s["id"] for s in views.list_library()} == {a, b}
+    assert practice.aggregate(a, store.load(a)) == played
 
 
 def test_export_all_and_single_name(data_dir):
@@ -97,13 +100,19 @@ def test_import_multiple_bundles_and_skip_duplicates(data_dir):
 
 def test_import_normalizes_running_song(data_dir):
     sid = _image_song()
-    store.patch(sid, status="parsing", progress={"stage": "识别中", "done": 1, "total": 3}, running=True)
+    store.patch(
+        sid,
+        bars=[],
+        status="parsing",
+        activity={"kind": "parse", "restaging": False, "systems": []},
+        progress={"stage": "识别中", "done": 1, "total": 3},
+    )
     path, _ = bundles.export_bundle([sid])
     _wipe()
     with open(path, "rb") as f:
         bundles.import_bundles([("x.zip", f)])
     s = store.load(sid)
-    assert s["status"] == "error" and "中断" in s["error"] and "running" not in s
+    assert s["status"] == "error" and "中断" in s["notice"]["msg"] and s["activity"] is None
 
 
 def _bundle(song: dict, files: dict[str, bytes], manifest: dict | None = None) -> io.BytesIO:
@@ -136,7 +145,7 @@ def _bundle(song: dict, files: dict[str, bytes], manifest: dict | None = None) -
 def test_import_rejects_bad_songs(data_dir, song, files, reason):
     r = bundles.import_bundles([("x.zip", _bundle(song, files))])
     assert r["imported"] == [] and reason in r["skipped"][0]["reason"]
-    assert [p.name for p in store.SONGS.iterdir()] == []  # 临时目录也清理掉了
+    assert not store.SONGS.exists() or [p.name for p in store.SONGS.iterdir()] == []  # 临时目录也清理掉了
 
 
 def test_import_ignores_entries_outside_the_song(data_dir):
@@ -167,7 +176,7 @@ def test_import_size_budget(data_dir, monkeypatch):
     sid = _image_song()
     path, _ = bundles.export_bundle([sid])
     _wipe()
-    monkeypatch.setattr(bundles, "MAX_IMPORT_BYTES", 100)
+    monkeypatch.setattr(bundles.settings, "max_import_bytes", 100)
     with open(path, "rb") as f:
         r = bundles.import_bundles([("x.zip", f)])
     assert r["imported"] == [] and r["skipped"]
@@ -193,7 +202,7 @@ def test_http_export_then_import(client):
         "/api/import", files=[("files", ("all.zip", r.content)), ("files", ("one.zip", one.content))]
     ).json()
     assert {s["id"] for s in r["imported"]} == {a, b} and len(r["skipped"]) == 1
-    assert client.get(f"/api/songs/{a}").json()["plan"] == {"text": "先练前四小节"}
+    assert client.get(f"/api/songs/{a}").json()["plan"]["text"] == "先练前四小节"
 
     assert client.get("/api/export", params={"ids": ["nope-1234"]}).status_code == 400
     assert client.get("/api/export").status_code == 200  # 整个曲库

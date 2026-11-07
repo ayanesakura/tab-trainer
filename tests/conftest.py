@@ -1,6 +1,6 @@
 import pytest
 
-from app import jobs, recognize, store
+from app import config, jobs, recognize, store
 from tests.fakes import FakeClaude
 
 
@@ -10,7 +10,7 @@ def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DATA", tmp_path)
     monkeypatch.setattr(store, "SONGS", tmp_path / "songs")
     monkeypatch.setattr(store, "CONFIG", tmp_path / "config.json")
-    monkeypatch.setattr(jobs, "Claude", FakeClaude)
+    monkeypatch.setattr(config, "llm_factory", FakeClaude)
     FakeClaude.calls = []
     FakeClaude.tab_lines = []
     monkeypatch.setattr(recognize, "OCR_CHECK", False)  # 合成谱子上的数字和替身模型的结果对不上；OCR 单独测

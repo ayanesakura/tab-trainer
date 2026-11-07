@@ -116,6 +116,7 @@ def test_parse_retries_on_ocr_disagreement_and_warns_if_unresolved(data_dir, mon
     song = store.load(sid)
     retries = [c for c in FakeClaude.calls if c.get("retry")]
     assert {c["first_bar"] for c in retries} == {1, 4}  # 两行的第 2 小节都和 OCR 不一致
-    warned = [b["n"] for b in song["bars"] if any("本地数字识别" in w for w in b["warn"])]
+    warned = [b["n"] for b in song["bars"] if any(w["code"] == "ocr_mismatch" for w in b["warn"])]
     assert warned == [2, 5]  # 替身模型返修后还是那样：标出来
-    assert "谱上读到 2弦1品" in next(w for w in song["bars"][1]["warn"] if "本地数字识别" in w)
+    msg = next(w["msg"] for w in song["bars"][1]["warn"] if w["code"] == "ocr_mismatch")
+    assert msg.startswith("本地数字识别") and "谱上读到 2弦1品" in msg

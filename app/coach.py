@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import logging
-import time
 
-from app import jobs, staleness, store
-from app.errors import Invalid, Upstream
+from app import config, jobs, practice, staleness, state, store
+from app.config import settings
+from app.errors import AppError, Invalid, Upstream
 from app.jobs import Cancelled
-from app.llm import LLMError, request_id_of
+from app.llm import friendly, request_id_of
+from app.model import add_usage, now
 from app.songs import find_bar
 
 log = logging.getLogger("tab_trainer.coach")
-
-EXPLAIN_CHUNK = 16  # 一次请求讲解几个小节
-QA_KEEP = 20  # 每个小节保留最近几条问答
 
 
 # ---------------------------------------------------------------------------
@@ -30,17 +28,14 @@ def start_explain(sid: str) -> None:
     plan = song.get("plan")
     if not todo and plan and not plan.get("stale"):
         raise Invalid("每个小节都已经有提示，练习建议也是最新的")
-    jobs.check_llm_ready()
+    config.check_llm_ready()
     cancel = jobs.claim_or_busy(sid, "这首曲子正在处理中")
-    chunks = [todo[k : k + EXPLAIN_CHUNK] for k in range(0, len(todo), EXPLAIN_CHUNK)]
+    size = settings.explain_chunk
+    chunks = [todo[k : k + size] for k in range(0, len(todo), size)]
 
-    # 进度记在 job / progress 里，不动 status：讲解期间曲子照常能练，曲库也不会显示成“识别中”
+    # 进度记在 activity / progress 里，不动 status：讲解期间曲子照常能练，曲库也不会显示成“识别中”
     def begin(s):
-        s["job"] = "explain"
-        s["progress"] = {"stage": "生成讲解", "done": 0, "total": len(chunks)}
-        if s.get("error_kind") == "explain":  # 上次讲解失败的提示
-            s.pop("error_kind")
-            s["error"] = None
+        state.begin(s, "explain", progress={"stage": "生成讲解", "done": 0, "total": len(chunks)})
 
     try:
         store.update(sid, begin)
@@ -48,31 +43,25 @@ def start_explain(sid: str) -> None:
         jobs.jobs.release(sid)
         raise
 
-    def end(error=None):
-        def apply(s):
-            s.pop("job", None)
-            s["progress"] = None
-            if error:
-                s.update(error=error, error_kind="explain")
-
-        store.update(sid, apply)
+    def end(notice=None):
+        store.update(sid, lambda s: state.finish(s, notice=notice, source="explain"))
 
     def run():
         try:
             _explain(sid, chunks, cancel)
             end()
         except Cancelled:
-            end("讲解生成已取消，已完成的部分会保留。")
+            end(("warn", "讲解生成已取消，已完成的部分会保留。"))
         except Exception as e:
             rid = request_id_of(e)
             log.exception("request_id=%s song=%s explain failed", rid, sid)
-            end("生成讲解失败：" + jobs.friendly(e))
+            end(("error", "生成讲解失败：" + friendly(e)))
 
     jobs.spawn(sid, run)
 
 
 def _explain(sid: str, chunks: list[list[str]], cancel) -> None:
-    claude = jobs.new_claude()
+    claude = config.new_llm()
     for k, ids in enumerate(chunks):
         if cancel.is_set():
             raise Cancelled()
@@ -93,10 +82,9 @@ def _explain(sid: str, chunks: list[list[str]], cancel) -> None:
                     and b["n"] in tips
                     and not (b.get("tip") or "").strip()
                 ):
-                    b["tip"] = tips[b["n"]]
-                    b.pop("_orig", None)  # 提示是按现在的音新写的
+                    b["tip"] = tips[b["n"]]  # 按现在的音新写的（改过的小节撤销时仍恢复识别时的提示）
             s["progress"] = {"stage": "生成讲解", "done": k + 1, "total": len(chunks)}
-            jobs.add_usage(s, claude.usage, before)
+            add_usage(s, claude.usage, before)
 
         store.update(sid, apply)
 
@@ -107,7 +95,7 @@ def _explain(sid: str, chunks: list[list[str]], cancel) -> None:
 
     def finish(s, meta=cur["meta"]):
         staleness.store_plan(s, plan, seen, meta)
-        jobs.add_usage(s, claude.usage, before)
+        add_usage(s, claude.usage, before)
 
     store.update(sid, finish)
 
@@ -115,22 +103,9 @@ def _explain(sid: str, chunks: list[list[str]], cancel) -> None:
 # ---------------------------------------------------------------------------
 # 小节问答
 # ---------------------------------------------------------------------------
-def practice_summary(song: dict, bar_id: str) -> str:
-    """给 AI 看的练习记录（中文一句话）；没练过返回空串。"""
-    p = ((song.get("practice") or {}).get("bars") or {}).get(bar_id)
-    if not p:
-        return ""
-    mins = round(p.get("seconds", 0) / 60)
-    return f"已循环 {p.get('loops', 0)} 遍，累计约 {mins} 分钟，最快练到 {p.get('best_bpm', 0)} BPM，上次练习 {p.get('last', '')}"
-
-
 def ask_bar(sid: str, bar_id: str, question: str) -> dict:
-    """问一个小节的练习问题，回答存进这个小节的 qa 里。返回 {"answer", "qa"}。"""
-    question = (question or "").strip()
-    if not question:
-        raise Invalid("问题不能为空")
-    if len(question) > 500:
-        raise Invalid("问题太长了（最多 500 字）")
+    """问一个小节的练习问题（schemas.AskIn 已经去掉首尾空白、检查过长度），回答存进这个小节的 qa 里。
+    返回 {"answer", "qa"}。"""
     song = store.load(sid)
     bar = find_bar(song, bar_id)
     idx = song["bars"].index(bar)
@@ -139,10 +114,7 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
     if bar.get("region") and bar.get("page") is not None:
         x0, x1, y0, y1 = bar["region"]
         image = store.page_image(sid, song["pages"][bar["page"]]).crop((x0, y0, x1, y1))
-    try:
-        claude = jobs.new_claude()
-    except LLMError as e:
-        raise Invalid(str(e)) from None  # 没配 key：用户能自己解决的问题，返回 400
+    claude = config.new_llm()  # 没配 key：MissingKey，400
     try:
         answer = claude.coach(
             song["meta"],
@@ -150,22 +122,24 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
             neighbours,
             question,
             [q for q in bar.get("qa") or [] if not q.get("stale")],  # 改谱之前的问答说的是旧音，不再当上下文
-            practice_summary(song, bar_id),
+            practice.coach_text(sid, song, bar_id),
             image,
         )
+    except AppError:
+        raise
     except Exception as e:  # noqa: BLE001 - 网络 / API 错误统一转成中文说明
-        raise Upstream(jobs.friendly(e)) from None
+        raise Upstream(friendly(e)) from None
     if not answer.strip():
         raise Upstream("模型没有给出回答，换个问法再试一次")
-    entry = {"q": question, "a": answer.strip(), "at": time.strftime("%Y-%m-%d %H:%M")}
+    entry = {"q": question, "a": answer.strip(), "at": now()}
 
     def apply(s):
         b = next((x for x in s["bars"] if x.get("id") == bar_id), None)
         if b is not None and b["events"] != bar["events"]:
             entry["stale"] = True  # 等回答期间这个小节改过音：回答说的是改之前的谱
         if b is not None:  # 等回答期间小节被重新识别掉了，就不存
-            b["qa"] = [*(b.get("qa") or []), entry][-QA_KEEP:]
-        jobs.add_usage(s, claude.usage)
+            b["qa"] = [*(b.get("qa") or []), entry][-settings.qa_keep :]
+        add_usage(s, claude.usage)
 
     s = store.update(sid, apply)
     b = next((x for x in s["bars"] if x.get("id") == bar_id), None)

@@ -3,10 +3,11 @@
 import io
 from typing import ClassVar
 
+from app.llm import LLM
 from tests.test_layout import _score
 
 
-class FakeClaude:
+class FakeClaude(LLM):
     """替身模型：每行返回检测到的小节数；第一次识别第 1 行时故意把时值写错，验证返修。"""
 
     calls: ClassVar[list] = []
@@ -15,6 +16,9 @@ class FakeClaude:
 
     def __init__(self, cfg):
         self.usage = {"input_tokens": 10, "output_tokens": 20}
+
+    def ping(self):
+        return "ok"
 
     def read_meta(self, page):
         return {
