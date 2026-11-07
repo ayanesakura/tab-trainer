@@ -1,0 +1,104 @@
+// tab-trainer 共用的小工具：线条图标、主题、轻提示、弹出菜单、分段开关、滑块填充。
+(() => {
+  const P = {
+    logo: '<path d="M12 21.5c-3.2-3.1-8-9.2-8-13.2C4 5 7.6 2.5 12 2.5s8 2.5 8 5.8c0 4-4.8 10.1-8 13.2Z"/><path d="M9 9.5c.8-1 1.8-1.5 3-1.5s2.2.5 3 1.5"/>',
+    play: '<path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z" fill="currentColor" stroke="none"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
+    repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+    edit: '<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/>',
+    refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+    trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    left: '<path d="m15 18-6-6 6-6"/>',
+    right: '<path d="m9 18 6-6-6-6"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+    mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>',
+    ear: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
+    volume: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+    gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+    settings: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/>',
+    music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/>',
+    plus: '<path d="M5 12h14M12 5v14"/>',
+    minus: '<path d="M5 12h14"/>',
+    more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+    key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
+    book: '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+    list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    tuning: '<path d="M4 4v16M9 4v16M14 4v16M19 4v16"/><circle cx="9" cy="9" r="1.6" fill="currentColor"/><circle cx="14" cy="14" r="1.6" fill="currentColor"/>',
+    sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/>',
+    back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
+  };
+  const icon = (name, size) => `<span class="ic"${size ? ` style="width:${size}px;height:${size}px"` : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${P[name] || ''}</svg></span>`;
+  const hydrate = (root = document) => root.querySelectorAll('[data-ic]').forEach(el => {
+    el.insertAdjacentHTML('afterbegin', icon(el.dataset.ic, el.dataset.icSize));
+    el.removeAttribute('data-ic');
+  });
+
+  // 主题：system / light / dark，记在本机
+  const THEME_KEY = 'tt-theme';
+  const getTheme = () => localStorage.getItem(THEME_KEY) || 'system';
+  const applyTheme = t => { if (t === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = t; };
+  const setTheme = t => { localStorage.setItem(THEME_KEY, t); applyTheme(t); document.dispatchEvent(new CustomEvent('themechange', { detail: t })); };
+  applyTheme(getTheme());
+  const isDark = () => {
+    const t = getTheme();
+    return t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  };
+
+  // 轻提示
+  let toastTimer;
+  const toast = (msg, kind = 'ok', ms = 2200) => {
+    document.querySelectorAll('.toast').forEach(t => t.remove());
+    const el = document.createElement('div');
+    el.className = 'toast ' + kind; el.textContent = msg;
+    document.body.appendChild(el);
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => el.remove(), ms);
+  };
+
+  // 弹出菜单：items = [{label, icon, danger, onClick} | 'sep']
+  let openMenu = null;
+  const closeMenu = () => { if (openMenu) { openMenu.remove(); openMenu = null; } };
+  const menu = (anchor, items) => {
+    closeMenu();
+    const m = document.createElement('div'); m.className = 'menu';
+    for (const it of items) {
+      if (it === 'sep') { m.appendChild(document.createElement('hr')); continue; }
+      const b = document.createElement('button');
+      if (it.danger) b.className = 'danger';
+      b.innerHTML = (it.icon ? icon(it.icon) : '') + `<span>${it.label}</span>`;
+      b.onclick = e => { e.stopPropagation(); closeMenu(); it.onClick(); };
+      m.appendChild(b);
+    }
+    document.body.appendChild(m);
+    const r = anchor.getBoundingClientRect(), w = m.offsetWidth;
+    m.style.top = Math.min(innerHeight - m.offsetHeight - 8, r.bottom + 4) + 'px';
+    m.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.right - w)) + 'px';
+    openMenu = m;
+  };
+  document.addEventListener('click', e => { if (openMenu && !openMenu.contains(e.target)) closeMenu(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
+  addEventListener('scroll', closeMenu, true);
+
+  // 分段开关：<div class="seg" data-value="x"><button data-v="x">…</button></div>
+  const seg = (el, value, onChange) => {
+    const set = v => { el.dataset.value = v; el.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); };
+    set(value);
+    el.onclick = e => { const b = e.target.closest('button[data-v]'); if (!b || b.dataset.v === el.dataset.value) return; set(b.dataset.v); onChange && onChange(b.dataset.v); };
+    return set;
+  };
+
+  // 滑块已填充部分的颜色（WebKit 没有 ::range-progress）
+  const fillRange = el => { const p = (el.value - el.min) / (el.max - el.min) * 100; el.style.setProperty('--p', p + '%'); };
+  document.addEventListener('input', e => { if (e.target.matches('input[type=range]')) fillRange(e.target); });
+  const fillAll = () => document.querySelectorAll('input[type=range]').forEach(fillRange);
+
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  window.UI = { icon, hydrate, getTheme, setTheme, isDark, toast, menu, closeMenu, seg, fillRange, fillAll, esc };
+  document.addEventListener('DOMContentLoaded', () => { hydrate(); fillAll(); });
+})();

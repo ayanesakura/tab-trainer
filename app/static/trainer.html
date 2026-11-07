@@ -4,196 +4,255 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>吉他谱练习器</title>
+<link rel="stylesheet" href="/static/ui.css">
+<script src="/static/ui.js"></script>
 <style>
-:root{--bg:#14161a;--panel:#1d2026;--panel2:#252931;--line:#4a505a;--text:#e6e6e6;--muted:#9aa0a8;--accent:#e8b04f;--accent2:#5fb3d9;--good:#7cc47f;--bad:#e06c6c}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
-.wrap{max-width:1120px;margin:0 auto;padding:16px 16px 60px}
-h1{font-size:24px;margin:8px 0 2px}
-h2{font-size:18px;margin:0 0 10px}
-.sub{color:var(--muted)}
-section{background:var(--panel);border-radius:10px;padding:16px 18px;margin:14px 0}
-.note{background:#2a2418;border-left:3px solid var(--accent);padding:8px 12px;border-radius:6px;color:#d9cfbd;margin:10px 0}
-button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:5px 12px;cursor:pointer;font:inherit}
-button:hover{border-color:var(--accent)}
-button.primary{background:var(--accent);color:#1a1a1a;border-color:var(--accent);font-weight:600;min-width:92px}
-select,input[type=number]{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:3px 6px;font:inherit}
-input[type=number]{width:56px}
-label{white-space:nowrap}
-table{border-collapse:collapse;width:100%}
-td,th{border-bottom:1px solid #2e333b;padding:6px 8px;text-align:left}
-th{color:var(--muted);font-weight:500}
-.chg-down{color:var(--accent)} .chg-up{color:var(--accent2)} .chg-same{color:var(--good)}
-tr.hit td{background:#2b3340}
-/* transport */
-.transport{position:sticky;top:0;z-index:10;background:#191c21ee;backdrop-filter:blur(6px);border:1px solid #2e333b;border-radius:10px;padding:10px 14px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
-.transport .grp{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.bpm{font-variant-numeric:tabular-nums;font-weight:600;color:var(--accent);min-width:64px;display:inline-block}
-.status{color:var(--muted);min-width:120px}
-.status b{color:var(--accent2)}
-/* info grid */
-.info{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:14px;margin-top:14px}
-@media (max-width:820px){.info{grid-template-columns:1fr}}
-.cropbox{background:#fff;border-radius:8px;height:270px;display:flex;align-items:center;justify-content:center;overflow:hidden}
-.cropbox canvas{display:block}
-.tipbox{background:var(--panel2);border-radius:8px;padding:12px 14px}
-.tipbox h3{margin:0 0 6px;font-size:16px}
-.tiptags span{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:10px;padding:0 8px;margin:0 4px 4px 0;color:var(--muted)}
-/* fretboard */
-.fbwrap{margin-top:14px;background:var(--panel2);border-radius:8px;padding:8px;overflow-x:auto}
-.fbwrap svg{display:block;min-width:760px;width:100%}
-.legend{color:var(--muted);font-size:12px;margin:4px 6px 0}
-/* tab */
-.tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
-.barbox{border:1px solid transparent;border-radius:6px;cursor:pointer;background:#1a1d22}
-.barbox.sel{border-color:#55606e;background:#20252c}
-.barbox.cur{border-color:var(--accent2)}
-.barbox svg{display:block}
-.ev text.f{fill:#dcdcdc;font:12px ui-monospace,Menlo,monospace}
-.ev text.lab{fill:var(--muted);font:10px sans-serif}
-.barbox.sel .bgr{fill:#20252c}
-.ev.on text.f{fill:var(--accent);font-weight:700}
-.ev.next text.f{fill:#8fc6e0}
-.ev:hover text.f{fill:#fff}
-.sec-btns button{padding:3px 9px}
-a{color:var(--accent2)}
-.topbar{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.warnbox{background:#2d1f1f;border-left:3px solid var(--bad);padding:8px 12px;border-radius:6px;color:#e8c9c9;margin:8px 0 0;white-space:pre-wrap}
-.barbox.warn{border-color:#8a5a2a}
-.tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-.tools input{flex:1;min-width:160px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:3px 8px;font:inherit}
-textarea.ed{width:100%;height:260px;background:#121418;color:#ddd;border:1px solid var(--line);border-radius:6px;font:12px/1.5 ui-monospace,Menlo,monospace;padding:8px;margin-top:8px}
-.metaform{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px 12px;margin-top:10px}
-.metaform label{display:flex;flex-direction:column;gap:2px;color:var(--muted);font-size:12px;white-space:normal}
-.metaform input{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:4px 6px;font:inherit}
-details summary{cursor:pointer;color:var(--accent2);margin-top:10px}
-.plan li{margin:6px 0}
-.progress{background:#1d2a33;border-left:3px solid var(--accent2);padding:8px 12px;border-radius:6px;margin:10px 0}
-button.demo{padding:0 8px;font-size:12px;margin-left:10px;font-weight:400;color:var(--text)}
-dl.gl dt{font-weight:600;color:var(--accent);margin-top:8px}
-dl.gl dd{margin:2px 0 0 0;color:#d0d0d0}
-.tuner{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:12px;background:var(--panel2);padding:12px;border-radius:8px}
-.tnote{font-size:34px;font-weight:700;min-width:120px;text-align:center}
-.meter{position:relative;width:320px;height:28px;background:#14161a;border-radius:14px;overflow:hidden}
-.meter .mid{position:absolute;left:50%;top:0;bottom:0;width:2px;background:var(--good)}
-.meter .needle{position:absolute;top:3px;bottom:3px;width:8px;margin-left:-4px;border-radius:4px;background:var(--accent);left:50%;transition:left .08s}
-.tread{color:var(--muted);min-width:260px}
-ol li{margin:4px 0}
-kbd{background:#2a2e36;border:1px solid #444;border-radius:4px;padding:0 5px;font-size:12px}
+.top .seg button .ic { width: 14px; height: 14px; }
+.notices > * + * { margin-top: 8px; }
+.notices:not(:empty) { margin-bottom: 12px; }
+
+/* ---- 播放控制 ---- */
+.transport { position: sticky; top: 60px; z-index: 20; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 6px 18px rgba(20, 22, 30, .06); }
+.t-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.t-sep { width: 1px; height: 26px; background: var(--line-2); flex: none; }
+.play { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-fg); flex: none; box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent); transition: transform .12s var(--ease), background .15s; }
+.play:hover { background: var(--accent-hover); }
+.play:active { transform: scale(.94); }
+.play .ic { width: 18px; height: 18px; }
+.play.on { background: var(--fg); color: var(--bg); box-shadow: none; }
+.status { min-width: 150px; line-height: 1.35; }
+.status .l1 { font-weight: 600; font-variant-numeric: tabular-nums; }
+.status .l2 { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.grp { display: flex; align-items: center; gap: 6px; }
+.grp .lbl { font-size: 12px; color: var(--muted); }
+.bpm { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 66px; text-align: right; }
+#bpm { width: 150px; }
+.loop-label { font-weight: 500; font-variant-numeric: tabular-nums; min-width: 92px; text-align: center; }
+.chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
+.chips::-webkit-scrollbar { display: none; }
+.chips button { height: 26px; padding: 0 10px; border-radius: 13px; background: var(--pill); color: var(--ctl-fg); font-size: 12px; white-space: nowrap; flex: none; transition: background .15s, color .15s; font-variant-numeric: tabular-nums; }
+.chips button:hover { background: var(--pill-hover); color: var(--fg); }
+.chips button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.t-opts { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--fg-2); }
+.t-opts .vol { width: 90px; }
+
+/* ---- 原谱 + 小节说明 ---- */
+.info { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+@media (max-width: 860px) { .info { grid-template-columns: 1fr; } }
+.card-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-2); }
+.paper { height: 270px; display: flex; align-items: center; justify-content: center; background: #fff; border-radius: 0 0 var(--radius) var(--radius); overflow: hidden; }
+.paper canvas { display: block; }
+.detail { display: flex; flex-direction: column; }
+.detail .body { padding: 12px 16px 14px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+.tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.tip { line-height: 1.7; color: var(--fg); }
+.warns { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 9px; background: var(--amber-soft); font-size: 12.5px; white-space: pre-wrap; }
+.tools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+.tools .input { flex: 1; min-width: 160px; }
+.editor textarea { width: 100%; height: 240px; margin-top: 2px; }
+.editor .bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+
+/* ---- 指板 ---- */
+.fbwrap { margin-top: 12px; padding: 10px 12px 8px; overflow-x: auto; }
+.fbwrap svg { display: block; min-width: 760px; width: 100%; }
+.legend { color: var(--muted); font-size: 12px; margin: 4px 4px 0; display: flex; gap: 14px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+
+/* ---- 六线谱 ---- */
+.tabs { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; margin-top: 12px; }
+.barbox.wide { grid-column: span 2; }
+@media (max-width: 700px) { .barbox.wide { grid-column: auto; } }
+.barbox { position: relative; border-radius: 10px; cursor: pointer; background: var(--card); border: 1px solid var(--line); transition: border-color .15s, box-shadow .15s, background .15s; }
+.barbox:hover { border-color: var(--faint); }
+.barbox.sel { background: color-mix(in srgb, var(--accent-soft) 55%, var(--card)); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.barbox.cur { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.barbox.warn::after { content: ""; position: absolute; top: 8px; right: 9px; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+.barbox svg { display: block; width: 100%; height: auto; }
+.barbox .tl { stroke: var(--tab-line); }
+.barbox .bl { stroke: var(--tab-lab); }
+.barbox .bd { fill: var(--faint); }
+.barbox .bn { fill: var(--muted); font: 600 11px var(--font); }
+.barbox .ph { stroke: var(--accent); }
+.barbox .bgr { fill: var(--card); transition: fill .15s; }
+.barbox.sel .bgr { fill: color-mix(in srgb, var(--accent-soft) 55%, var(--card)); }
+.ev text.f { fill: var(--tab-num); font: 500 12px var(--code); }
+.ev text.lab { fill: var(--tab-lab); font: 10px var(--font); }
+.ev.on text.f { fill: var(--tab-on); font-weight: 800; }
+.ev.next text.f { fill: var(--tab-next); }
+.ev:hover text.f { fill: var(--accent); }
+
+/* ---- 调弦 ---- */
+table.tune { width: 100%; border-collapse: collapse; }
+table.tune th { text-align: left; font-size: 12px; font-weight: 500; color: var(--muted); padding: 10px 16px; border-bottom: 1px solid var(--line-2); }
+table.tune td { padding: 10px 16px; border-top: 1px solid var(--line-2); }
+table.tune tr:first-child td { border-top: 0; }
+table.tune tr.hit td { background: var(--accent-soft); }
+table.tune td b { font-variant-numeric: tabular-nums; }
+.chg-down { color: var(--amber); } .chg-up { color: var(--blue); } .chg-same { color: var(--green); }
+.tuner { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; padding: 16px 18px; }
+.tnote { font-size: 34px; font-weight: 700; min-width: 110px; text-align: center; font-variant-numeric: tabular-nums; }
+.meter { position: relative; width: 320px; max-width: 100%; height: 28px; background: var(--pill); border-radius: 14px; overflow: hidden; }
+.meter .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: var(--green); }
+.meter .needle { position: absolute; top: 4px; bottom: 4px; width: 8px; margin-left: -4px; border-radius: 4px; background: var(--amber); left: 50%; transition: left .08s; }
+.tread { color: var(--muted); margin-top: 6px; font-size: 12.5px; }
+.meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px 12px; padding: 14px 16px; }
+.meta-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+
+/* ---- 练习建议 ---- */
+.plan-row .step { width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 600; font-size: 12px; flex: none; }
+.plan-row .sub { white-space: normal; line-height: 1.6; color: var(--fg-2); font-size: 12.5px; margin-top: 3px; }
+
+@media (max-width: 760px) {
+  .transport { position: static; }
+  .crumb .t { max-width: 40vw; }
+}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="topbar"><h1 id="songTitle">加载中…</h1><a href="/">← 返回曲库</a></div>
-  <div class="sub" id="songSub"></div>
-  <div class="progress" id="progressBox" style="display:none"></div>
-  <div class="warnbox" id="errorBox" style="display:none"></div>
-  <div class="note" id="metaNote" style="display:none"></div>
-  <div class="note">谱面数据由 AI 从谱子图片识别，可能有误，<b>一切以原谱为准</b>。“原谱对照”显示当前小节的原图；识别有问题的小节用橙色框标出，可以手工修改或附上说明让 AI 重新识别那一行。示范音是浏览器合成的吉他音色，只用来把握节奏和音高。</div>
+<header class="top">
+  <a class="icon-btn" href="/" title="返回曲库" data-ic="back"></a>
+  <div class="crumb"><span class="t" id="songTitle">加载中…</span></div>
+  <div class="center">
+    <div class="seg" id="nav">
+      <button data-v="practice">练习</button>
+      <button data-v="tune">调弦</button>
+      <button data-v="plan">练习建议</button>
+      <button data-v="glossary">记号说明</button>
+    </div>
+  </div>
+  <div class="actions"><button class="icon-btn" id="themeBtn" title="切换外观"></button></div>
+</header>
+
+<main class="wrap">
+  <div class="hint" id="songSub" style="margin:-8px 2px 12px"></div>
+  <div class="notices">
+    <div class="notice info" id="progressBox" style="display:none"></div>
+    <div class="notice err" id="errorBox" style="display:none"></div>
+    <div class="notice" id="metaNote" style="display:none"></div>
+  </div>
+
+  <!-- ============ 练习 ============ -->
+  <section class="view" id="view-practice">
+    <div class="card transport">
+      <div class="t-row">
+        <button class="play" id="playBtn" title="播放 / 停止（空格）"></button>
+        <div class="status" id="status"><div class="l1">已停止</div><div class="l2">空格键播放</div></div>
+        <div class="t-sep"></div>
+        <div class="grp">
+          <span class="lbl">速度</span>
+          <button class="icon-btn sm" id="bpmDown" data-ic="minus" title="慢 4 BPM"></button>
+          <input type="range" id="bpm" min="30" max="140" value="50">
+          <button class="icon-btn sm" id="bpmUp" data-ic="plus" title="快 4 BPM"></button>
+          <span class="bpm" id="bpmVal">50 BPM</span>
+        </div>
+        <div class="t-sep"></div>
+        <div class="grp">
+          <span class="lbl" data-ic="repeat"></span>
+          <button class="icon-btn sm" id="loopPrev" data-ic="left" title="上一段"></button>
+          <span class="loop-label" id="loopLabel">第 1 小节</span>
+          <button class="icon-btn sm" id="loopNext" data-ic="right" title="下一段"></button>
+        </div>
+        <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="只循环当前小节并播放">示范当前小节</button>
+      </div>
+      <div class="chips" id="secBtns"></div>
+      <div class="t-opts">
+        <label class="switch"><input type="checkbox" id="metro" checked>节拍器</label>
+        <label class="switch"><input type="checkbox" id="countIn" checked>预备拍</label>
+        <span class="grp"><span class="lbl">节拍器</span><input class="vol" type="range" id="metroVol" min="0" max="100" value="70"></span>
+        <span class="grp"><span class="lbl">示范音</span><input class="vol" type="range" id="gtVol" min="0" max="100" value="80"></span>
+        <span class="grp"><label class="switch"><input type="checkbox" id="auto">自动提速</label>
+          <span class="lbl">每</span><input class="input num" type="number" id="autoEvery" value="2" min="1"><span class="lbl">遍 +</span><input class="input num" type="number" id="autoStep" value="4" min="1"><span class="lbl">到</span><input class="input num" type="number" id="autoTarget" value="72" min="30" max="140"></span>
+      </div>
+    </div>
+
+    <div class="info">
+      <div class="card">
+        <div class="card-h"><span class="card-title">原谱 · 第 <span id="cropNo">1</span> 小节</span><span class="hint">点下方任一小节切换</span></div>
+        <div class="paper"><canvas id="crop"></canvas><div id="cropMsg" style="display:none;color:#555;padding:20px"></div></div>
+      </div>
+      <div class="card detail">
+        <div class="card-h"><span class="card-title" id="tipTitle">第 1 小节</span><div class="tags" id="tipTags"></div></div>
+        <div class="body">
+          <div class="tip" id="tipText"></div>
+          <div class="warns" id="tipWarn" style="display:none"></div>
+          <div class="tools">
+            <button class="btn sm" id="editBtn" data-ic="edit">修改本小节</button>
+            <input class="input" id="hintInput" placeholder="告诉 AI 哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
+            <button class="btn sm" id="reparseBtn" data-ic="refresh">重新识别这一行</button>
+          </div>
+          <div class="editor" id="editor" style="display:none">
+            <textarea class="input" id="edText" spellcheck="false"></textarea>
+            <div class="hint">每行一个事件：dur = 到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string 弦（1 最细）、fret 品；tech 可用 h p sl si pm nh ah roll x vib bend；grace 倚音品位（-1 表示没有）。</div>
+            <div class="bar"><button class="btn sm primary" id="edSave">保存</button><button class="btn sm ghost" id="edCancel">取消</button><span class="hint" id="edMsg"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card fbwrap"><svg id="fb" viewBox="0 0 960 170"></svg>
+      <div class="legend"><span><i style="background:#e8b04f"></i>正在弹</span><span><i style="border:2px solid #8fc6e0"></i>下一个</span><span>◆ 泛音点：轻触品丝正上方</span><span>品格数字从变调夹算起，和谱上一致；圆点按真实品位标出</span></div>
+    </div>
+
+    <div class="legend" style="margin-top:14px">点击小节 = 只循环这一小节 · <kbd>Shift</kbd> + 点击 = 扩展循环范围 · 点击某个音 = 试听并在指板上显示 · 右上角橙点 = 可能识别有误</div>
+    <div class="tabs" id="tabs"></div>
+  </section>
 
   <!-- ============ 调弦 ============ -->
-  <section id="tune">
-    <h2 id="tuneTitle">① 调弦</h2>
-    <table>
-      <thead><tr><th>弦</th><th>标准音</th><th>目标音</th><th>怎么调</th><th>参考音</th></tr></thead>
-      <tbody id="tuneRows"></tbody>
-    </table>
-    <div class="tuner">
-      <button id="micBtn">🎤 开启麦克风调音器</button>
+  <section class="view" id="view-tune" hidden>
+    <div class="head"><div><h1 id="tuneTitle">调弦</h1><p>先调弦，再夹变调夹。改动的弦比较多时琴颈受力会变化，调完等一两分钟再全部复查一遍。</p></div></div>
+    <div class="card"><table class="tune"><thead><tr><th>弦</th><th>标准音</th><th>目标音</th><th>怎么调</th><th></th></tr></thead><tbody id="tuneRows"></tbody></table></div>
+
+    <div class="section-title">调音器</div>
+    <div class="card tuner">
+      <button class="btn lg" id="micBtn" data-ic="mic">开启麦克风</button>
       <div class="tnote" id="tNote">--</div>
       <div>
         <div class="meter"><div class="mid"></div><div class="needle" id="tNeedle"></div></div>
         <div class="tread" id="tRead">弹一根空弦，调音器会自动识别是哪根弦</div>
       </div>
     </div>
-    <div class="legend" style="margin-top:8px">提示：先调弦，再夹变调夹。改动的弦比较多时琴颈受力会变化，调完等一两分钟再全部复查一遍。</div>
-    <details id="metaDetails"><summary>识别的调弦 / 变调夹 / 拍号不对？点这里修改</summary>
-      <div class="metaform">
-        <label>曲名<input id="mTitle"></label>
-        <label>1 弦（最细）<input id="mT1"></label><label>2 弦<input id="mT2"></label><label>3 弦<input id="mT3"></label>
-        <label>4 弦<input id="mT4"></label><label>5 弦<input id="mT5"></label><label>6 弦（最粗）<input id="mT6"></label>
-        <label>变调夹（品）<input id="mCapo" type="number" min="0" max="12"></label>
-        <label>拍号（如 4/4、3/4、6/8）<input id="mTs"></label>
+
+    <div class="section-title">识别的调弦 / 变调夹 / 拍号不对？</div>
+    <div class="card">
+      <div class="meta-grid">
+        <label>曲名<input class="input" id="mTitle"></label>
+        <label>1 弦（最细）<input class="input" id="mT1"></label><label>2 弦<input class="input" id="mT2"></label><label>3 弦<input class="input" id="mT3"></label>
+        <label>4 弦<input class="input" id="mT4"></label><label>5 弦<input class="input" id="mT5"></label><label>6 弦（最粗）<input class="input" id="mT6"></label>
+        <label>变调夹（品）<input class="input" id="mCapo" type="number" min="0" max="12"></label>
+        <label>拍号<input class="input" id="mTs" placeholder="4/4"></label>
       </div>
-      <div class="tools"><button id="metaSave">保存</button><span class="legend" id="metaMsg">音名写法如 D2、F#3、C♯3；改完后示范音、指板、调弦表都会跟着变。</span></div>
-    </details>
-  </section>
-
-  <!-- ============ 练习 ============ -->
-  <section id="practice">
-    <h2>② 逐小节练习</h2>
-    <div class="transport">
-      <div class="grp"><button class="primary" id="playBtn">▶ 播放</button><button id="demoBarBtn">🎧 示范当前小节</button><span class="status" id="status">已停止</span></div>
-      <div class="grp">速度 <input type="range" id="bpm" min="30" max="110" value="50"><span class="bpm" id="bpmVal">50 BPM</span></div>
-      <div class="grp">循环 第 <select id="loopA"></select> – <select id="loopB"></select> 小节</div>
-      <div class="grp sec-btns" id="secBtns"></div>
-      <div class="grp"><label><input type="checkbox" id="metro" checked> 节拍器</label><label><input type="checkbox" id="countIn" checked> 预备拍</label>
-        节拍器音量 <input type="range" id="metroVol" min="0" max="100" value="70" style="width:80px">
-        示范音量 <input type="range" id="gtVol" min="0" max="100" value="80" style="width:80px"></div>
-      <div class="grp"><label><input type="checkbox" id="auto"> 自动提速</label>：每 <input type="number" id="autoEvery" value="2" min="1"> 遍 + <input type="number" id="autoStep" value="4" min="1"> BPM，直到 <input type="number" id="autoTarget" value="72" min="30" max="140"></div>
+      <div class="card-h" style="border-top:1px solid var(--line-2);border-bottom:0"><span class="hint" id="metaMsg">音名写法如 D2、F#3、C♯3。保存后示范音、指板、调弦表都会跟着变。</span><button class="btn primary sm" id="metaSave">保存</button></div>
     </div>
-    <div class="legend">快捷键 <kbd>空格</kbd> 播放/停止。点击某一小节 = 只循环这一小节；按住 <kbd>Shift</kbd> 点击 = 扩展循环范围；点击某个音 = 试听并在指板上显示。段落按钮按原谱的每一行划分。</div>
+  </section>
 
-    <div class="info">
-      <div>
-        <div class="legend" style="margin:0 0 4px">原谱对照（第 <span id="cropNo">1</span> 小节）</div>
-        <div class="cropbox"><canvas id="crop"></canvas><div id="cropMsg" style="display:none;color:#333;padding:20px"></div></div>
-      </div>
-      <div class="tipbox">
-        <h3 id="tipTitle">第 1 小节</h3>
-        <div class="tiptags" id="tipTags"></div>
-        <div id="tipText"></div>
-        <div class="warnbox" id="tipWarn" style="display:none"></div>
-        <div class="tools">
-          <button id="editBtn">✏️ 修改本小节</button>
-          <input id="hintInput" placeholder="可选：告诉 AI 哪里不对，如“第 3 拍应该是 2 弦 4 品”">
-          <button id="reparseBtn">🔄 重新识别这一行</button>
-        </div>
-        <div id="editor" style="display:none">
-          <textarea class="ed" id="edText" spellcheck="false"></textarea>
-          <div class="legend">每行一个事件：dur = 到下一个音的时长（四分音符为 1，如 "1/2" 八分、"1/3" 三连音）；notes 里 string = 弦（1 最细）、fret = 品；tech 可用 h p sl si pm nh ah roll x vib bend；grace = 倚音品位（-1 表示没有）。</div>
-          <div class="tools"><button id="edSave">保存</button><button id="edCancel">取消</button><span class="legend" id="edMsg"></span></div>
-        </div>
-      </div>
+  <!-- ============ 练习建议 ============ -->
+  <section class="view" id="view-plan" hidden>
+    <div class="head"><div><h1>练习建议</h1><p>AI 根据全曲内容生成。点“循环这段”直接去练。</p></div></div>
+    <div id="plan"><div class="list"><div class="empty-state"><b>还没有练习建议</b>识别完成后会自动生成。</div></div></div>
+    <div class="notice" style="margin-top:12px"><span class="dot"></span><div>通用方法：某一段弹不顺时，就缩到那一小节，降速到能连续弹对 3 遍的速度，再慢慢往上加。宁可慢，也不要带着错音提速。</div></div>
+  </section>
+
+  <!-- ============ 记号说明 ============ -->
+  <section class="view" id="view-glossary" hidden>
+    <div class="head"><div><h1>记号说明</h1><p>谱上常见的演奏记号，点“试听”听示范效果。</p></div></div>
+    <div class="list set">
+      <div class="row"><div class="who"><div class="name">P.M. · 闷音</div><div class="sub">右手掌根外侧轻轻搭在琴桥和琴弦交界处再拨弦，声音变短、变闷。</div></div><div class="ctl"><button class="btn sm demo" data-demo="pm" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">sl. · 滑音</div><div class="sub">只拨第一个音，左手手指保持按压，沿着琴弦滑到目标品，目标音不再拨弦。按压力度要稳，否则滑到一半声音就没了。</div></div><div class="ctl"><button class="btn sm demo" data-demo="sl" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">H · 击弦（捶弦）</div><div class="sub">拨响前一个音后，用另一根手指快速有力地“砸”到目标品，靠砸下去的力度发声。</div></div><div class="ctl"><button class="btn sm demo" data-demo="h" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">P · 勾弦</div><div class="sub">按着的手指离开琴弦时稍微往下勾一下，把弦带响，发出下一个音。H 和 P 连在一起时整组只拨一次，全程靠左手发声。</div></div><div class="ctl"><button class="btn sm demo" data-demo="p" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">&lt;n&gt; · 自然泛音</div><div class="sub">左手手指轻轻碰在标注品位的品丝<b>正上方</b>，不要按下去。右手拨响后左手立刻离开，就会出现清亮的“叮”声。</div></div><div class="ctl"><button class="btn sm demo" data-demo="nh" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">AH · 人工泛音</div><div class="sub">左手正常按住音（例如 2 品），右手食指轻点在高 12 品的品丝上方（2+12=14 品），用拇指或无名指在食指后面拨弦，拨完食指立刻离开。</div></div><div class="ctl"><button class="btn sm demo" data-demo="ah" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">竖波浪线 · 琶音</div><div class="sub">和弦不要一起拨响，从低音弦到高音弦快速依次拨开，像“刷”出来的效果。</div></div><div class="ctl"><button class="btn sm demo" data-demo="roll" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">3 · 三连音</div><div class="sub">一拍里平均放三个音，心里念“哒-哒-哒”，三个音长度要一样。六连音同理，一拍六个音。</div></div><div class="ctl"><button class="btn sm demo" data-demo="tri" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">(n) · 倚音</div><div class="sub">比正常音符小一号的音，在正式的音之前极快地带一下：先弹小音符的品位，马上击弦或滑到正式的音。</div></div><div class="ctl"><button class="btn sm demo" data-demo="grace" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">/n · 从下方滑入</div><div class="sub">数字前只有一条斜线、没有起始品：从低一两品的位置拨弦后立刻滑进目标品，起点不重要，重点是落在目标品上。</div></div><div class="ctl"><button class="btn sm demo" data-demo="si" data-ic="play">试听</button></div></div>
+      <div class="row"><div class="who"><div class="name">x · 闷音（死音）</div><div class="sub">左手轻搭琴弦不按实，拨出没有音高的“哒”声，用来做节奏。</div></div></div>
+      <div class="row"><div class="who"><div class="name">b · 推弦</div><div class="sub">按住后把琴弦往上推（或往下拉），让音高升高半音（1/2）或全音（full）。</div></div></div>
+      <div class="row"><div class="who"><div class="name">连线 · 延音</div><div class="sub">同一个音高之间的弧线表示延长，后面的音不要重新拨。</div></div></div>
     </div>
-
-    <div class="fbwrap"><svg id="fb" viewBox="0 0 960 170"></svg>
-      <div class="legend">指板方向与六线谱一致：上面是 1 弦（最细），下面是 6 弦。品格数字从变调夹算起，和谱上一致；指板上的圆点按真实品位（3、5、7、9、12…品）标出。<span style="color:var(--accent)">●</span> 正在弹　<span style="color:#8fc6e0">○</span> 下一个　◆ 泛音点（轻触品丝正上方）</div>
-    </div>
-
-    <div class="tabs" id="tabs"></div>
+    <div class="hint" style="margin:10px 4px">麦克风调音器第一次使用时浏览器会请求麦克风权限，允许即可。</div>
   </section>
-
-  <!-- ============ 技巧 ============ -->
-  <section>
-    <h2>③ 谱上的记号与技巧</h2>
-    <dl class="gl">
-      <dt>P.M.（Palm Mute 闷音）<button class="demo" data-demo="pm">▶ 试听（先闷音，再正常拨弦对比）</button></dt><dd>右手掌根外侧轻轻搭在琴桥和琴弦交界处再拨弦，声音变短、变闷。</dd>
-      <dt>sl.（滑音）<button class="demo" data-demo="sl">▶ 试听</button></dt><dd>只拨第一个音，左手手指保持按压，沿着琴弦滑到目标品，目标音不再拨弦。按压力度要稳，否则滑到一半声音就没了。</dd>
-      <dt>H（击弦 / 捶弦）<button class="demo" data-demo="h">▶ 试听</button></dt><dd>拨响前一个音后，用另一根手指快速有力地“砸”到目标品，靠砸下去的力度发声。</dd>
-      <dt>P（勾弦）<button class="demo" data-demo="p">▶ 试听</button></dt><dd>按着的手指离开琴弦时稍微往下（朝地面方向）勾一下，把弦带响，发出下一个音（低品或空弦）。H 和 P 连在一起时，整组只拨一次，全程靠左手发声。</dd>
-      <dt>&lt;n&gt;（自然泛音）<button class="demo" data-demo="nh">▶ 试听</button></dt><dd>左手手指轻轻碰在标注品位的品丝<b>正上方</b>（不是品格中间），不要按下去。右手拨响后左手立刻离开，就会出现清亮的“叮”声。</dd>
-      <dt>AH（人工泛音）<button class="demo" data-demo="ah">▶ 试听（先正常弹，再弹高八度的泛音）</button></dt><dd>左手正常按住音（例如 2 品），右手食指轻点在高 12 品的品丝上方（2+12=14 品），用右手拇指或无名指在食指后面拨弦，拨完食指立刻离开。</dd>
-      <dt>竖着的波浪线（琶音）<button class="demo" data-demo="roll">▶ 试听</button></dt><dd>和弦不要一起拨响，从低音弦到高音弦快速依次拨开，像“刷”出来的效果。</dd>
-      <dt>3（三连音）<button class="demo" data-demo="tri">▶ 试听</button></dt><dd>一拍里平均放三个音。可以边弹边心里念“哒-哒-哒”，三个音长度要一样。</dd>
-      <dt>小音符（倚音）<button class="demo" data-demo="grace">▶ 试听</button></dt><dd>谱上比正常音符小一号、带斜杠的音（六线谱上显示为括号里的品位，如 (2)4），表示在正式的音之前极快地带一下：先弹小音符的品位，马上击弦或滑到正式的音，几乎听成一个音的“装饰”。</dd>
-      <dt>/5（从下方滑入）<button class="demo" data-demo="si">▶ 试听</button></dt><dd>数字前面只有一条斜线、没有起始品，表示从低一两品的位置拨弦后立刻滑进目标品，起点不重要，重点是落在目标品上。</dd>
-      <dt>6（六连音）</dt><dd>一拍里平均放六个音，相当于两组三连音连在一起，先慢速练到均匀再提速。</dd>
-      <dt>x（闷音 / 死音）</dt><dd>左手轻搭琴弦不按实，拨出没有音高的“哒”声，用来做节奏。</dd>
-      <dt>bend（推弦）</dt><dd>按住后把琴弦往上推（或往下拉），让音高升高半音（1/2）或全音（full）。</dd>
-      <dt>连线（延音线）</dt><dd>同一个音高之间的弧线表示延长，后面的音不要重新拨。</dd>
-    </dl>
-  </section>
-
-  <!-- ============ 路线 ============ -->
-  <section>
-    <h2>④ 建议练习顺序</h2>
-    <div class="plan" id="plan"><div class="legend">识别完成后由 AI 根据全曲内容生成。</div></div>
-    <div class="note">通用方法：某一段弹不顺时，就缩到那一小节，降速到能连续弹对 3 遍的速度，再慢慢往上加。宁可慢，也不要带着错音提速。</div>
-  </section>
-
-  <div class="legend">麦克风调音器第一次使用时浏览器会请求麦克风权限，允许即可。</div>
-</div>
+</main>
 
 <script>
 // =====================================================================
@@ -428,11 +487,11 @@ function renderTabs() {
     const W = layouts[bi].W;
     const box = document.createElement('div'); box.className = 'barbox' + (SONG.bars[bi].warn?.length || SONG.bars[bi].uncertain ? ' warn' : '');
     const svg = el('svg', { width: W, height: BH, viewBox: `0 0 ${W} ${BH}` });
-    el('text', { x: 6, y: 14, fill: '#8a919b', 'font-size': 11 }, svg).textContent = bi + 1;
-    for (let s = 1; s <= 6; s++) el('line', { x1: PADL - 8, x2: W - PADR, y1: TOP + (s - 1) * SG, y2: TOP + (s - 1) * SG, stroke: '#555c66', 'stroke-width': 1 }, svg);
-    el('line', { x1: W - PADR, x2: W - PADR, y1: TOP, y2: TOP + 5 * SG, stroke: '#888', 'stroke-width': 1.2 }, svg);
-    for (let b = 0; b < BL; b++) el('circle', { cx: beatX(bi, b), cy: TOP + 5 * SG + 14, r: b === 0 ? 2.4 : 1.6, fill: '#6b727c' }, svg);
-    const ph = el('line', { x1: 0, x2: 0, y1: TOP - 8, y2: TOP + 5 * SG + 8, stroke: '#5fb3d9', 'stroke-width': 2, opacity: 0 }, svg);
+    el('text', { x: 8, y: 15, class: 'bn' }, svg).textContent = bi + 1;
+    for (let s = 1; s <= 6; s++) el('line', { x1: PADL - 8, x2: W - PADR, y1: TOP + (s - 1) * SG, y2: TOP + (s - 1) * SG, stroke: '#555c66', 'stroke-width': 1, class: 'tl' }, svg);
+    el('line', { x1: W - PADR, x2: W - PADR, y1: TOP, y2: TOP + 5 * SG, stroke: '#888', 'stroke-width': 1.2, class: 'bl' }, svg);
+    for (let b = 0; b < BL; b++) el('circle', { cx: beatX(bi, b), cy: TOP + 5 * SG + 14, r: b === 0 ? 2.4 : 1.6, fill: '#6b727c', class: 'bd' }, svg);
+    const ph = el('line', { x1: 0, x2: 0, y1: TOP - 8, y2: TOP + 5 * SG + 8, stroke: '#5fb3d9', 'stroke-width': 2, opacity: 0, class: 'ph' }, svg);
     playheads[bi] = ph;
     let lastLab = { y: 0, right: -1e9 };
     evs.forEach((e, i) => {
@@ -462,6 +521,7 @@ function renderTabs() {
       g.querySelector('.evhit').style.pointerEvents = 'all';
       evNodes[e.idx] = g;
     });
+    if (W > 420) box.classList.add('wide');
     box.appendChild(svg);
     box.addEventListener('click', evt => {
       const hit = evt.target.closest('.evhit');
@@ -547,10 +607,10 @@ function showBar(bi) {
   document.getElementById('tipText').textContent = TIPS[bi] || '';
   const sb = SONG.bars[bi], warn = [...(sb.warn || []), sb.uncertain].filter(Boolean);
   $('tipWarn').style.display = warn.length ? '' : 'none';
-  $('tipWarn').textContent = warn.length ? '⚠ ' + warn.join('\n⚠ ') : '';
+  $('tipWarn').innerHTML = warn.map(w => `<div>${UI.icon('alert', 13)} ${esc(w)}</div>`).join('');
   const sys = SONG.systems[sb.system];
   $('reparseBtn').disabled = !sys || sys.status === 'parsing' || SONG.running;
-  $('reparseBtn').textContent = sys && sys.status === 'parsing' ? '⏳ 正在重新识别…' : '🔄 重新识别这一行';
+  $('reparseBtn').innerHTML = sys && sys.status === 'parsing' ? '<span class="spinner"></span>正在重新识别…' : UI.icon('refresh') + '重新识别这一行';
   closeEditor();
   const tags = new Set();
   BARS[bi].forEach(e => {
@@ -559,7 +619,7 @@ function showBar(bi) {
   });
   if (BARS[bi].some(e => Math.abs(e.d - T3) < 1e-6)) tags.add('三连音');
   if (BARS[bi].some(e => Math.abs(e.d - S6) < 1e-6)) tags.add('六连音');
-  document.getElementById('tipTags').innerHTML = [...tags].map(t => `<span>${t}</span>`).join('');
+  document.getElementById('tipTags').innerHTML = [...tags].map(t => `<span class="badge accent">${t}</span>`).join('');
   drawCrop(bi);
 }
 function drawCrop(bi) {
@@ -610,12 +670,12 @@ function play() {
   state.playing = true;
   state.timer = setInterval(schedule, 25);
   schedule();
-  $('playBtn').textContent = '■ 停止';
+  setPlayBtn(true);
 }
 function stop() {
   state.playing = false; clearInterval(state.timer);
   if (ac) stopAllVoices();
-  $('playBtn').textContent = '▶ 播放'; $('status').textContent = '已停止';
+  setPlayBtn(false); setStatus('已停止', '空格键播放');
   clearHighlights();
   playheads.forEach(p => p.setAttribute('opacity', 0));
   barBoxes.forEach(b => b.classList.remove('cur'));
@@ -624,12 +684,13 @@ function setTempo(bpm) {
   bpm = Math.max(30, Math.min(140, Math.round(bpm)));
   if (state.playing && ac.currentTime >= state.anchorTime) { state.anchorBeat = nowBeat(); state.anchorTime = ac.currentTime; }
   state.bpm = bpm;
-  $('bpm').value = bpm; $('bpmVal').textContent = bpm + ' BPM';
+  $('bpm').value = bpm; $('bpmVal').textContent = bpm + ' BPM'; UI.fillRange($('bpm'));
 }
 function setLoop(a, b) {
   state.a = Math.min(a, b); state.b = Math.max(a, b);
-  $('loopA').value = state.a; $('loopB').value = state.b;
-  barBoxes.forEach((box, i) => box.classList.toggle('sel', i >= state.a && i <= state.b));
+  updateLoopUI();
+  const partial = state.b - state.a + 1 < BARS.length; // 循环全曲时不高亮，免得满屏都是选中色
+  barBoxes.forEach((box, i) => box.classList.toggle('sel', partial && i >= state.a && i <= state.b));
   showBar(state.a);
   if (state.playing) { stop(); play(); }
 }
@@ -647,7 +708,7 @@ function frame() {
   requestAnimationFrame(frame);
   if (!state.playing) return;
   const b = nowBeat();
-  if (b < 0) { $('status').innerHTML = `预备 <b>${Math.ceil(-b)}</b>`; return; }
+  if (b < 0) { setStatus(`预备 ${Math.ceil(-b)}`, '准备好…'); return; }
   const L = loopLen(), k = Math.floor(b / L), local = b - k * L;
   if (k > state.lastLoop) {
     state.lastLoop = k; state.loops++;
@@ -657,7 +718,7 @@ function frame() {
     }
   }
   const scoreBeat = state.a * BL + local, bi = Math.min(BARS.length - 1, Math.floor(scoreBeat / BL + 1e-9)), t = scoreBeat - bi * BL;
-  $('status').innerHTML = `第 <b>${bi + 1}</b> 小节 · 第 ${Math.floor(t) + 1} 拍 · 第 ${state.loops + 1} 遍`;
+  setStatus(`第 ${bi + 1} 小节 · 第 ${Math.floor(t) + 1} 拍`, `第 ${state.loops + 1} 遍`);
   barBoxes.forEach((box, i) => box.classList.toggle('cur', i === bi));
   playheads.forEach((p, i) => { if (i === bi) { const x = beatX(bi, t); p.setAttribute('x1', x); p.setAttribute('x2', x); p.setAttribute('opacity', 0.9); } else p.setAttribute('opacity', 0); });
   showBar(bi);
@@ -684,10 +745,10 @@ function howTo(d) {
 }
 function renderTune() {
   TUNE = [6, 5, 4, 3, 2, 1].map(s => { const [how, cls] = howTo(OPEN[s] - STD[s]); return { s, std: mname(STD[s]), m: OPEN[s], how, cls }; });
-  $('tuneRows').innerHTML = TUNE.map(t => `<tr id="tr${t.s}"><td>${t.s} 弦</td><td>${t.std}</td><td><b>${mname(t.m)}</b>（${mtof(t.m).toFixed(1)} Hz）</td><td class="${t.cls}">${t.how}</td><td><button data-m="${t.m}">▶ 听</button></td></tr>`).join('');
+  $('tuneRows').innerHTML = TUNE.map(t => `<tr id="tr${t.s}"><td><b>${t.s} 弦</b></td><td class="muted">${t.std}</td><td><b>${mname(t.m)}</b> <span class="hint">${mtof(t.m).toFixed(1)} Hz</span></td><td class="${t.cls}">${t.how}</td><td style="text-align:right"><button class="btn sm" data-m="${t.m}">${UI.icon('volume', 13)}听</button></td></tr>`).join('');
   const names = [6, 5, 4, 3, 2, 1].map(s => OPEN_NAME[s]).join('–');
   const std = TUNE.every(t => t.how === '不变');
-  $('tuneTitle').textContent = `① 调弦：${std ? '标准调弦' : names}${CAPO ? `，变调夹 ${CAPO} 品` : ''}（先调弦，再夹变调夹）`;
+  $('tuneTitle').textContent = `调弦：${std ? '标准调弦' : names}${CAPO ? ` · 变调夹 ${CAPO} 品` : ''}`;
 }
 function autoCorrelate(buf, sr) {
   let n = buf.length, rms = 0;
@@ -714,7 +775,7 @@ async function startMic() {
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
   catch (err) { $('tRead').textContent = '麦克风打开失败：' + err.message; return; }
-  micOn = true; $('micBtn').textContent = '🎤 调音器已开启';
+  micOn = true; $('micBtn').innerHTML = '<span class="dot ok"></span>调音器已开启';
   const an = ac.createAnalyser(); an.fftSize = 2048;
   ac.createMediaStreamSource(stream).connect(an);
   const buf = new Float32Array(an.fftSize), hist = [];
@@ -731,9 +792,9 @@ async function startMic() {
     $('tNote').textContent = mname(Math.round(m));
     $('tNeedle').style.left = (50 + Math.max(-50, Math.min(50, cents))) + '%';
     const ok = Math.abs(cents) <= 5;
-    $('tNeedle').style.background = ok ? 'var(--good)' : 'var(--accent)';
+    $('tNeedle').style.background = ok ? 'var(--green)' : 'var(--amber)';
     $('tRead').innerHTML = `${best.s} 弦 → 目标 <b>${mname(best.m)}</b>　当前 ${fm.toFixed(1)} Hz，${cents > 0 ? '+' : ''}${cents} 音分　` +
-      (ok ? '<span style="color:var(--good)">✓ 准了</span>' : Math.abs(cents) > 300 ? '差得较多，先大致拧到附近' : cents > 0 ? '偏高，往下调' : '偏低，往上调');
+      (ok ? '<span style="color:var(--green)">✓ 准了</span>' : Math.abs(cents) > 300 ? '差得较多，先大致拧到附近' : cents > 0 ? '偏高，往下调' : '偏低，往上调');
   }, 80);
 }
 
@@ -744,8 +805,10 @@ setTempo(50);
 $('playBtn').onclick = () => state.playing ? stop() : play();
 $('demoBarBtn').onclick = () => { if (state.playing) stop(); setLoop(state.a, state.a); play(); };
 $('bpm').oninput = e => setTempo(+e.target.value);
-$('loopA').onchange = () => setLoop(+$('loopA').value, +$('loopB').value);
-$('loopB').onchange = () => setLoop(+$('loopA').value, +$('loopB').value);
+$('bpmDown').onclick = () => setTempo(state.bpm - 4);
+$('bpmUp').onclick = () => setTempo(state.bpm + 4);
+$('loopPrev').onclick = () => { const n = state.b - state.a + 1, a = Math.max(0, state.a - n); setLoop(a, a + n - 1); };
+$('loopNext').onclick = () => { const n = state.b - state.a + 1, a = Math.min(BARS.length - n, state.a + n); setLoop(a, a + n - 1); };
 $('gtVol').oninput = e => { if (gtGain) gtGain.gain.value = e.target.value / 100; };
 $('metroVol').oninput = () => { if (metroGain) metroGain.gain.value = metroLevel(); };
 $('micBtn').onclick = startMic;
@@ -813,13 +876,13 @@ function renderHeader() {
     '变调夹 ' + (CAPO ? CAPO + ' 品' : '无'), m.time_signature && m.time_signature.join('/') + ' 拍', `共 ${SONG.bars.length} 小节`];
   $('songSub').textContent = parts.filter(Boolean).join(' · ');
   $('metaNote').style.display = m.notes ? '' : 'none';
-  $('metaNote').textContent = m.notes ? 'AI 读谱时注意到：' + m.notes : '';
+  $('metaNote').innerHTML = m.notes ? `<span class="dot" style="background:var(--accent)"></span><div><b>AI 读谱时注意到：</b>${esc(m.notes)}</div>` : '';
   const running = SONG.running || SONG.status === 'parsing' || SONG.status === 'queued';
   const pr = SONG.progress || {};
   $('progressBox').style.display = running ? '' : 'none';
-  $('progressBox').textContent = running ? `正在识别：${pr.stage || ''}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}…已识别的小节可以先练，页面会自动刷新。` : '';
+  $('progressBox').innerHTML = running ? `<span class="spinner" style="margin-top:2px"></span><div>正在识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}。已识别的小节可以先练，页面会自动刷新。</div>` : '';
   $('errorBox').style.display = SONG.error ? '' : 'none';
-  $('errorBox').textContent = SONG.error ? '识别出错：' + SONG.error : '';
+  $('errorBox').innerHTML = SONG.error ? `<span class="dot err" style="margin-top:4px"></span><div>识别出错：${esc(SONG.error)}</div>` : '';
   if (m.tuning) {
     $('mTitle').value = title;
     m.tuning.forEach((n, i) => { $('mT' + (i + 1)).value = n; });
@@ -834,22 +897,23 @@ function renderSections() {
     const g = groups[groups.length - 1];
     if (g && g.sys === b.system) g.z = i; else groups.push({ sys: b.system, a: i, z: i });
   });
-  const add = (label, a, z) => { const btn = document.createElement('button'); btn.textContent = label; btn.onclick = () => setLoop(a, z); host.appendChild(btn); };
+  const add = (label, a, z) => { const btn = document.createElement('button'); btn.textContent = label; btn.dataset.a = a; btn.dataset.z = z; btn.onclick = () => setLoop(a, z); host.appendChild(btn); };
   groups.forEach(g => add(g.a === g.z ? `${g.a + 1}` : `${g.a + 1}–${g.z + 1}`, g.a, g.z));
-  if (SONG.bars.length) add('全部', 0, SONG.bars.length - 1);
+  if (SONG.bars.length) add('全曲', 0, SONG.bars.length - 1);
+  updateLoopUI();
 }
 
 function renderPlan() {
   const p = SONG.plan;
   if (!p) return;
-  const steps = (p.steps || []).map(st => {
+  const steps = (p.steps || []).map((st, i) => {
     const m = /^(\d+)\s*[-–~]\s*(\d+)$/.exec(st.bars.trim()) || /^(\d+)$/.exec(st.bars.trim());
     const a = m ? +m[1] - 1 : null, z = m ? +(m[2] || m[1]) - 1 : null;
-    const link = a != null && a < BARS.length ? ` <button data-a="${a}" data-z="${Math.min(z, BARS.length - 1)}">循环这段</button>` : '';
-    return `<li><b>第 ${esc(st.bars)} 小节 · ${esc(st.title)}</b>${link}<br>${esc(st.advice)}</li>`;
+    const link = a != null && a < BARS.length ? `<button class="btn sm" data-a="${a}" data-z="${Math.min(z, BARS.length - 1)}">${UI.icon('repeat', 13)}循环这段</button>` : '';
+    return `<div class="row plan-row"><span class="step">${i + 1}</span><div class="who"><div class="name">${esc(st.title)} <span class="badge">第 ${esc(st.bars)} 小节</span></div><div class="sub">${esc(st.advice)}</div></div><div class="ctl">${link}</div></div>`;
   }).join('');
-  $('plan').innerHTML = `<p>${esc(p.overview)}</p><ol>${steps}</ol>`;
-  $('plan').querySelectorAll('button[data-a]').forEach(b => b.onclick = () => { setLoop(+b.dataset.a, +b.dataset.z); $('practice').scrollIntoView({ behavior: 'smooth' }); });
+  $('plan').innerHTML = (p.overview ? `<div class="card pad" style="margin-bottom:12px;line-height:1.7">${esc(p.overview)}</div>` : '') + `<div class="list">${steps}</div>`;
+  $('plan').querySelectorAll('button[data-a]').forEach(b => b.onclick = () => { setLoop(+b.dataset.a, +b.dataset.z); showView('practice'); });
 }
 
 let renderedKey = '', BARS_RENDERED = 0;
@@ -863,8 +927,7 @@ function render(force) {
   const wasAll = prevCount === 0 || (keepA === 0 && keepB === prevCount - 1);
   buildAll(); renderTune(); renderFretboard(); renderTabs(); renderSections(); renderPlan();
   if (!imgs.length || imgs.length !== PAGES.length) loadImages();
-  for (const sel of [$('loopA'), $('loopB')]) { sel.innerHTML = ''; BARS.forEach((_, i) => sel.add(new Option(i + 1, i))); }
-  if (!BARS.length) { $('tabs').innerHTML = '<div class="legend">还没有识别出的小节。</div>'; return; }
+  if (!BARS.length) { $('tabs').innerHTML = '<div class="list" style="width:100%"><div class="empty-state"><b>还没有识别出的小节</b>识别完成后会出现在这里。</div></div>'; return; }
   const n = BARS.length - 1;
   shownBar = -1;
   BARS_RENDERED = BARS.length;
@@ -901,17 +964,18 @@ $('editBtn').onclick = () => {
 $('edCancel').onclick = closeEditor;
 $('edSave').onclick = async () => {
   let events;
-  try { events = JSON.parse($('edText').value); } catch (e) { $('edMsg').textContent = 'JSON 格式不对：' + e.message; return; }
+  try { events = JSON.parse($('edText').value); } catch (e) { UI.toast('JSON 格式不对：' + e.message, 'err', 4000); return; }
   const n = SONG.bars[shownBar].n;
   const r = await fetch(`/api/songs/${SONG_ID}/bars/${n}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events }) });
-  if (!r.ok) { $('edMsg').textContent = (await r.json()).detail || '保存失败'; return; }
-  closeEditor(); await refresh(true);
+  if (!r.ok) { UI.toast((await r.json()).detail || '保存失败', 'err', 4000); return; }
+  closeEditor(); await refresh(true); UI.toast('已保存');
 };
 $('reparseBtn').onclick = async () => {
   if (shownBar < 0) return;
   const si = SONG.bars[shownBar].system;
   const r = await fetch(`/api/songs/${SONG_ID}/systems/${si}/reparse`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hint: $('hintInput').value }) });
-  if (!r.ok) { alert((await r.json()).detail || '请求失败'); return; }
+  if (!r.ok) { UI.toast((await r.json()).detail || '请求失败', 'err'); return; }
+  UI.toast('已开始重新识别这一行', 'info');
   $('hintInput').value = '';
   await refresh(true);
 };
@@ -920,12 +984,39 @@ $('metaSave').onclick = async () => {
   const ts = $('mTs').value.split('/').map(x => parseInt(x, 10));
   const body = { title: $('mTitle').value, tuning, capo: parseInt($('mCapo').value || '0', 10), time_signature: ts };
   const r = await fetch(`/api/songs/${SONG_ID}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  $('metaMsg').textContent = r.ok ? '已保存。' : '保存失败：' + ((await r.json()).detail || r.status);
+  if (r.ok) UI.toast('已保存'); else UI.toast('保存失败：' + ((await r.json()).detail || r.status), 'err', 4000);
   if (r.ok) await refresh(true);
 };
 
+// ---------------------------------------------------------------------
+// 界面：视图切换、主题、播放按钮、状态、循环显示
+// ---------------------------------------------------------------------
+const VIEWS = ['practice', 'tune', 'plan', 'glossary'];
+const setNav = UI.seg($('nav'), 'practice', v => showView(v));
+function showView(v) {
+  if (!VIEWS.includes(v)) v = 'practice';
+  VIEWS.forEach(x => { $('view-' + x).hidden = x !== v; });
+  setNav(v);
+  if (location.hash.slice(1) !== v) history.replaceState(null, '', '#' + v);
+  if (v === 'practice' && shownBar >= 0) { const b = shownBar; shownBar = -1; showBar(b); }
+  scrollTo({ top: 0 });
+}
+addEventListener('hashchange', () => showView(location.hash.slice(1)));
+const themeIcon = () => { $('themeBtn').innerHTML = UI.icon(UI.isDark() ? 'moon' : 'sun'); };
+$('themeBtn').onclick = () => UI.setTheme(UI.isDark() ? 'light' : 'dark');
+document.addEventListener('themechange', themeIcon);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', themeIcon);
+themeIcon();
+function setPlayBtn(on) { $('playBtn').classList.toggle('on', on); $('playBtn').innerHTML = UI.icon(on ? 'stop' : 'play'); }
+function setStatus(l1, l2) { $('status').innerHTML = `<div class="l1">${l1}</div><div class="l2">${l2}</div>`; }
+function updateLoopUI() {
+  $('loopLabel').textContent = !BARS.length ? '—' : state.a === state.b ? `第 ${state.a + 1} 小节` : `第 ${state.a + 1}–${state.b + 1} 小节`;
+  document.querySelectorAll('#secBtns button').forEach(b => b.classList.toggle('on', +b.dataset.a === state.a && +b.dataset.z === state.b));
+}
+setPlayBtn(false);
+
 if (!SONG_ID) $('songTitle').textContent = '缺少曲子 id，请从曲库进入';
-else refresh(true);
+else refresh(true).then(() => showView(location.hash.slice(1)));
 </script>
 </body>
 </html>
