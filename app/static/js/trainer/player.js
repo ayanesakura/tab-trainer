@@ -17,6 +17,7 @@ const AT_BASE = '/static/vendor/alphatab/';
 const SF_BASE = '/static/vendor/soundfont/sonivox.sf2', SF_GUITARS = '/static/vendor/soundfont/guitars.sf3';
 export const TIMBRES = { steel: 25, nylon: 24 };
 
+let pendingBeat = null; // 谱面上一次点击里先到的拍（见 beatMouseDown）
 let api = null, baseTempo = 60, soundFontsLoaded = 0, playerReadyOnce = false, lastTick = -1, shiftDown = false, warnedUnplayed = '';
 // tempoSet：速度已经由用户 / 接着练定下来了（setTempo 调过）。谱子加载好以后只在还没定的时候才用默认速度（原速六成）。
 // scoreTempoDone：第一次加载谱子时按原速放宽滑块上限这件事做过了。cursorPending：谱子没加载好时设了循环范围，加载好后把光标放到段首。
@@ -83,9 +84,20 @@ function ensureApi() {
   api.playerStateChanged.on(e => set('play.playing', e.state === 1));
   api.playerPositionChanged.on(e => onPosition(e.currentTick));
   api.playedBeatChanged.on(beat => onBeat(beat, false));
-  api.beatMouseDown.on(b => (get('ui.editMode') && hooks.editClick ? hooks.editClick(b, null) : onBeatClick(b)));
+  // 点音符时 alphaTab 先触发拍、再触发音符：攒到同一轮里，点在音符上就只试听（不改循环），点在别处才循环这一小节。
+  // 播放中点音符不试听，照常循环这一小节
+  api.beatMouseDown.on(b => {
+    if (get('ui.editMode') && hooks.editClick) { hooks.editClick(b, null); return; }
+    if (pendingBeat) return;
+    pendingBeat = { beat: b, note: null };
+    setTimeout(() => {
+      const c = pendingBeat; pendingBeat = null;
+      if (c.note && !playing() && get('play.ready')) api.playNote(c.note); else onBeatClick(c.beat);
+    }, 0);
+  });
   api.noteMouseDown.on(n => {
     if (get('ui.editMode') && hooks.editClick) hooks.editClick(n.beat, n);
+    else if (pendingBeat) pendingBeat.note = n;
     else if (!playing() && get('play.ready')) api.playNote(n);
   });
   api.scoreLoaded.on(onScoreLoaded);
@@ -168,6 +180,7 @@ async function onScoreLoaded(score) {
   }
   applyTimbre(score);
   baseTempo = score.tempo || 60;
+  api.playbackSpeed = get('play.bpm') / baseTempo; // 先设好：下面的 hook 失败提前返回时，实际速度也要和显示的 BPM 一致
   if (isScore(song) && hooks.scoreLoaded && !(await hooks.scoreLoaded(score))) return;
   if (!scoreTempoDone) {
     scoreTempoDone = true;
@@ -224,8 +237,12 @@ function applyLoopRange() {
       range.endTick = lb.end > la.start ? lb.end : la.end;
     }
   }
-  lastTick = -1; // 设置范围会把播放位置跳回起点：不能当成弹完了一遍
-  api.playbackRange = range;
+  // 设置范围会把播放位置跳回段首：谱面重画（拖窗口、切主题、通知出现）时范围没变，就别再设，否则播放中会跳回段首
+  const cur = api.playbackRange;
+  if (!(cur && range ? cur.startTick === range.startTick && cur.endTick === range.endTick : !cur && !range)) {
+    lastTick = -1; // 跳回起点不能当成弹完了一遍
+    api.playbackRange = range;
+  }
   api.isLooping = true;
   const bars = api.tracks[0].staves[0].bars;
   const first = bars[a].voices[0].beats[0];
@@ -348,7 +365,7 @@ function onBeat(beat, clicked) {
   const bi = beat.voice.bar.index, evs = v.bars[bi];
   if (!clicked) updateFollowBtn();
   if (!clicked) setStatus(`第 ${bi + 1} 小节 · 第 ${Math.floor(beat.playbackStart / TICKS) + 1} 拍`, `第 ${get('play.loops') + 1} 遍`);
-  if (bi < v.bars.length) set('ui.bar', bi);
+  if (bi < v.bars.length && (clicked || !(hooks.holdBar && hooks.holdBar()))) set('ui.bar', bi);
   if (!evs || !evs.length) return;
   const cur = evs[eventIndexAt(v.beatMap[bi] || [0], beat.playbackStart)];
   if (!cur) return;
@@ -456,8 +473,9 @@ function bindInputs() {
 
 export function initPlayer() {
   set('play', { ...get('play'), ...PREFS, timbre: TIMBRES[localStorage.getItem('tt.timbre')] ? localStorage.getItem('tt.timbre') : 'steel' });
-  addEventListener('keydown', e => { if (e.key === 'Shift') shiftDown = true; });
-  addEventListener('keyup', e => { if (e.key === 'Shift') shiftDown = false; });
+  // Shift + 点：alphaTab 的点击事件里没有按键状态，在谱面的 mousedown（捕获阶段，比 alphaTab 先）里记下。
+  // 不用全局 keydown / keyup：按着 Shift 切到别的应用时 keyup 会丢，之后每次点小节都成了扩展循环
+  $('score').addEventListener('mousedown', e => { shiftDown = e.shiftKey; }, true);
   bindInputs();
   on(['play.metro', 'play.metroVol', 'play.countIn', 'play.gtVol'], applyAudio);
   on('play.timbre', v => { localStorage.setItem('tt.timbre', v); switchTimbre(); });

@@ -491,3 +491,42 @@ def test_rhythm_calibration_measures_latency(trainer):
     assert b.js("document.querySelectorAll('#rhSvg .rh-note').length") == b.js(f"{rh}.prog.onsets.length")
     b.js("localStorage.removeItem('tt.tapLatency'); true")
     assert not b.errors, b.errors
+
+
+def test_rerender_during_playback_keeps_position(trainer):
+    """播放中谱面重画（拖窗口、切主题、通知出现）：循环范围没变，不跳回段首。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(1, 4); tt.setTempo(240); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    time.sleep(1.2)
+    start = b.js("tt.api.playbackRange.startTick")
+    t1 = b.js("tt.api.tickPosition")
+    assert t1 > start + 200
+    b.js("tt.api.render(); true")
+    time.sleep(0.5)
+    assert b.js("tt.api.tickPosition") > t1
+    b.js("tt.stop(); true")
+    assert not b.errors, b.errors
+
+
+def _mouse(b, x, y):
+    for t in ("mousePressed", "mouseReleased"):
+        b._run(b._send("Input.dispatchMouseEvent", type=t, x=x, y=y, button="left", clickCount=1))
+
+
+def test_clicking_a_note_auditions_without_changing_loop(trainer):
+    """点音符只试听，不把循环改成那一小节；点小节里的空白处才循环这一小节。"""
+    b = trainer()
+    b.wait_for("!!(tt.api.boundsLookup && tt.api.tracks[0].staves[0].bars.length === 6)")
+    b.js("tt.setLoop(0, 3); true")
+    b.js("document.querySelector('#score .at-surface').scrollIntoView({block: 'center'}); true")
+    time.sleep(0.3)
+    pos = b.js("""(() => {
+      const beat = tt.api.tracks[0].staves[0].bars[1].voices[0].beats.find(x => x.notes.length);
+      const nb = tt.api.boundsLookup.findBeat(beat).notes[0].noteHeadBounds;
+      const s = document.querySelector('#score .at-surface').getBoundingClientRect();
+      return [s.left + nb.x + nb.w / 2, s.top + nb.y + nb.h / 2]; })()""")
+    _mouse(b, *pos)
+    time.sleep(0.3)
+    assert b.js("[tt.state.a, tt.state.b]") == [0, 3]
+    assert not b.errors, b.errors
