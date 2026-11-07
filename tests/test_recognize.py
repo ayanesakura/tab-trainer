@@ -797,3 +797,25 @@ def test_header_cost_is_recorded_when_the_parse_stops_before_any_row(data_dir, s
     song = store.load(sid)
     assert song["status"] == ("cancelled" if how == "cancel" else "error")
     assert song["usage"]["input_tokens"] == 1000 and song["usage"]["output_tokens"] == 0
+
+
+def test_row_with_no_bars_fails_instead_of_wiping_the_row(data_dir, sync_jobs, monkeypatch):
+    """模型对一行（返修后也）返回 0 个小节：这一行算失败。重新识别时原来的结果整首保留。"""
+    sid, before = _parsed_song_with_user_data()
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, *a, **kw):
+        out = real(self, img, meta, first_bar, *a, **kw)
+        return {"bars": []} if first_bar > 1 else out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    assert after["bars"] == before["bars"] and "原来的结果保留不变" in after["notice"]["msg"]
+    assert "没有读出这一行的小节" in after["notice"]["msg"]
+
+    fresh = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(fresh)
+    s = store.load(fresh)
+    assert [x["status"] for x in s["systems"]] == ["done", "error"]
+    assert "没有读出" in s["systems"][1]["error"]

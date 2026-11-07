@@ -22,7 +22,7 @@ from pathlib import Path
 
 from app import config, recognize, store
 from app.errors import NotFound
-from app.llm import PRICES, Claude, LLMConfig, friendly
+from app.llm import Claude, LLMConfig, friendly, price_of
 from app.music import warn_code_of
 
 log = logging.getLogger("tab_trainer.evaluate")
@@ -155,8 +155,8 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
                     "pred_warn": pb.get("warn", []) if pb else [],
                 }
             )
-    price = PRICES.get(price_model or cfg.model, (0, 0))
     usage = claude.usage
+    price = price_of(price_model) if price_model else None
     return {
         "song": sid,
         "model": cfg.model,
@@ -168,8 +168,12 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
         "errors": errors,
         "summary": summarize(rows),
         "usage": usage,
+        # 指定了 --price-as 就按它估算；否则用客户端按实际模型记的钱（网关前缀的模型名也能查到价）
         "cost_usd": round(
-            usage["input_tokens"] / 1e6 * price[0] + usage["output_tokens"] / 1e6 * price[1], 4
+            usage["input_tokens"] / 1e6 * price[0] + usage["output_tokens"] / 1e6 * price[1]
+            if price
+            else usage.get("cost_usd", 0),
+            4,
         ),
         "seconds": round(time.time() - started, 1),
         "bars": rows,
@@ -276,7 +280,7 @@ def main() -> None:
     if a.base_url:
         cfg.base_url = a.base_url
     price_model = a.price_as or cfg.model
-    price = PRICES.get(price_model)
+    price = price_of(price_model)
     est = (
         f"约 ${n_sys * (EST_TOKENS_PER_CALL[0] * price[0] + EST_TOKENS_PER_CALL[1] * price[1]) / 1e6:.2f}"
         f"–{2 * n_sys * (EST_TOKENS_PER_CALL[0] * price[0] + EST_TOKENS_PER_CALL[1] * price[1]) / 1e6:.2f}"

@@ -16,7 +16,7 @@ from app.config import settings
 from app.errors import Busy, Invalid
 from app.jobs import Cancelled
 from app.layout import detect_page
-from app.llm import LLM, friendly, request_id_of
+from app.llm import LLM, LLMError, friendly, request_id_of
 from app.model import add_usage, is_score
 from app.music import (
     PLACEHOLDER_MSG,
@@ -339,6 +339,8 @@ def transcribe_system(
         else:
             if len(issues2) <= len(issues):
                 bars, issues = bars2, issues2
+    if not bars:  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
+        raise LLMError("模型没有读出这一行的小节，请重新识别这一行", getattr(claude, "last_request_id", None))
 
     out = []
     for b in bars:
@@ -479,7 +481,9 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
 
     # 各行是并行识别的，前面某行写的变拍号后面的行看不到，模型会把小节硬凑成全曲拍号（每小节一样长，查不出来）。
     # 按第一遍的结果算出每行开头实际的拍号，和全曲拍号不同的行带上它再识别一次（没有变拍号的曲子不多花钱）。
-    redo = [] if cancel.is_set() else _rows_needing_carried_ts(work["bars"], meta, len(systems))
+    # 重新识别已经有行失败：结果注定不会采用，不再为按变拍号重做花钱
+    doomed = restage and errors
+    redo = [] if cancel.is_set() or doomed else _rows_needing_carried_ts(work["bars"], meta, len(systems))
     if redo:
 
         def begin_redo(s):
