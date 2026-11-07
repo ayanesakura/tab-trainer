@@ -1033,8 +1033,31 @@ $('exportBtn').onclick = exportGp;
 $('bpm').oninput = e => setTempo(+e.target.value);
 $('bpmDown').onclick = () => setTempo(state.bpm - 4);
 $('bpmUp').onclick = () => setTempo(state.bpm + 4);
-$('loopPrev').onclick = () => { const n = state.b - state.a + 1, a = Math.max(0, state.a - n); setLoop(a, a + n - 1); };
-$('loopNext').onclick = () => { const n = state.b - state.a + 1, a = Math.min(BARS.length - n, state.a + n); setLoop(a, a + n - 1); };
+// 上一段 / 下一段：按原谱的行（就是那排段落按钮）切换。正在循环全曲时，从当前显示的小节所在的那一段开始；
+// 自己选的任意范围（不是某一段）就按范围长度平移
+function sections() {
+  const out = [];
+  SONG.bars.forEach((b, i) => { const g = out[out.length - 1]; if (g && g.sys === b.system) g.z = i; else out.push({ sys: b.system, a: i, z: i }); });
+  return out;
+}
+function stepSection(dir) {
+  if (!BARS.length) return;
+  const secs = sections(), all = state.a === 0 && state.b === BARS.length - 1;
+  const k = secs.findIndex(g => g.a === state.a && g.z === state.b);
+  if (all && secs.length > 1) {
+    const here = Math.max(0, secs.findIndex(g => g.a <= shownBar && shownBar <= g.z));
+    const g = secs[dir > 0 ? here : Math.max(0, here - 1)];
+    setLoop(g.a, g.z);
+  } else if (k >= 0) {
+    const g = secs[Math.max(0, Math.min(secs.length - 1, k + dir))];
+    if (g !== secs[k]) setLoop(g.a, g.z); else UI.toast(dir > 0 ? '已经是最后一段了' : '已经是第一段了', 'info');
+  } else {
+    const n = state.b - state.a + 1, a = Math.max(0, Math.min(BARS.length - n, state.a + dir * n));
+    setLoop(a, a + n - 1);
+  }
+}
+$('loopPrev').onclick = () => stepSection(-1);
+$('loopNext').onclick = () => stepSection(1);
 $('gtVol').oninput = applyAudio;
 $('metroVol').oninput = applyAudio;
 const MIC_BLOCKED = '浏览器只允许在本机地址（http://127.0.0.1）或 HTTPS 页面里用麦克风。用平板通过局域网打开时调音器用不了，可以用上面每根弦的“听”按钮对音。';
