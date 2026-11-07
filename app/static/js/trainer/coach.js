@@ -29,6 +29,8 @@ async function ask() {
   asking = bar.id; render();
   try {
     const d = await post(songUrl(`/bars/${encodeURIComponent(bar.id)}/ask`), { question: q });
+    // 回答写进了这个小节的 qa：只把 qa 并到 store 里（不用重新取整首曲子）。
+    // 问答不改小节的 rev 和曲子的 meta_rev，所以下一次改谱 / 改谱头带的版本号仍然是对的，不会误报 409
     const k = get('song').bars.findIndex(x => x.id === bar.id);
     if (k >= 0) set(`song.bars.${k}.qa`, d.qa);
     // 还停在这个小节、输入框里也还是刚才的问题时才清空（换到别的小节新打的字不能丢）

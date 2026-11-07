@@ -5,7 +5,7 @@
 
 import { get, set, on } from './store.js';
 import { $, UI, esc, songUrl, SONG_ID } from './dom.js';
-import { get as apiGet, post, put, withBusy, poll } from '../lib/api.js';
+import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.js';
 import { SOURCES } from '../vocab.js';
 import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
@@ -23,7 +23,16 @@ async function load() {
   try {
     s = await apiGet(songUrl());
   } catch (e) {
-    if (e.status === 404) { $('songTitle').textContent = '曲子不存在'; polling = false; poller.stop(); return null; }
+    if (e.name === 'AbortError') throw e;
+    if (!transient(e)) { // 404、数据损坏（500 带说明）……重试也没用：停止轮询，说清楚原因
+      polling = false; if (poller) poller.stop();
+      if (e.status === 404) $('songTitle').textContent = '曲子不存在';
+      else {
+        if (!get('song')) $('songTitle').textContent = '加载失败';
+        notice('offline', { kind: 'err', html: `加载失败：${esc(e.message)}`, actions: [{ label: '重试', onClick: () => refresh() }] });
+      }
+      return null;
+    }
     if (!get('song')) $('songTitle').textContent = '加载失败';
     notice('offline', { kind: 'err', html: `${esc(e.message)}，稍后自动重试。` });
     throw e; // poll 退避重试
@@ -197,7 +206,7 @@ async function saveMeta() {
   if (editable.includes('tuning')) body.tuning = [1, 2, 3, 4, 5, 6].map(i => tuningInput($('mT' + i).value));
   if (editable.includes('capo')) body.capo = parseInt($('mCapo').value || '0', 10);
   if (editable.includes('time_signature')) body.time_signature = $('mTs').value.split('/').map(x => parseInt(x, 10));
-  body.rev = s.rev;
+  body.rev = s.meta_rev; // 乐观锁只看谱头（meta_rev）：问 AI、练习记录、改小节都不影响它
   try {
     applySong(await put(songUrl('/meta'), body));
     UI.toast('已保存');
@@ -252,8 +261,10 @@ function onView(v) {
   if (nz < na) nz = na;
   const keep = prevIds[shown] ? v.ids.indexOf(prevIds[shown]) : -1;
   prevIds = v.ids;
-  setLoop(na, nz, false, keep < 0); // 正在看的小节还在就接着显示它，不跳到别的小节（否则编辑器会被关掉）
-  if (keep >= 0) set('ui.bar', keep);
+  // 范围真的变了才重设（问 AI 写了问答、识别中轮询到新数据都会走到这里：范围没变时不能把暂停的位置跳回段首）
+  if (na !== a || nz !== b) setLoop(na, nz, false, keep < 0);
+  else if (keep < 0) set('ui.bar', na);
+  if (keep >= 0) set('ui.bar', keep); // 正在看的小节还在就接着显示它，不跳到别的小节（否则编辑器会被关掉）
 }
 
 export function initSong() {

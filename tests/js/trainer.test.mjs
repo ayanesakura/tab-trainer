@@ -120,9 +120,31 @@ test('tags, plan ranges, subtitle, explain state, warnings, note names', () => {
   assert.ok(Number.isNaN(nameToMidi('H2')));
 });
 
-test('GBK mojibake from Guitar Pro 3-5 files is recognised', () => {
-  assert.equal(gbkFromMojibake('ÌìÂÕÖ®Áµ'), '天抡之恋'); // GBK 字节被当成 windows-1252
-  for (const s of ['Romance', 'Café', 'Für Elise', 'Jeux Interdits – Romance', '天空之城', '']) assert.equal(gbkFromMojibake(s), null, s);
-  assert.equal(scoreNeedsGbk({ title: 'Romance', artist: '', tracks: [{ name: 'Ã÷ÔÂ' }] }), true);
-  assert.equal(scoreNeedsGbk({ title: 'Romance', artist: 'Anon', tracks: [{ name: 'Guitar' }] }), false);
+// 和后端 migrate.fix_mojibake 同一套规则、同一批例子（FIX-CONTRACT.md）
+// 下面的乱码都是“GBK 字节按 windows-1252 读”的结果（0x80–0x9F 区的 ‚ƒ 和 C1 控制字符也在里面）
+const MUST_FIX = [
+  ['\u00d1\u00ba\u00ce\u00b2\u00b9\u00e2\u00cc\u00ab\u00c0\u00c9', '押尾光太郎'],
+  ['\u00ce\u00d2\u00c3\u00c7\u00b5\u00c4\u00b8\u00e8', '我们的歌'],
+  ['\u00c7\u00e7\u00cc\u00ec', '晴天'],
+  ['\u00d6\u00dc\u00bd\u00dc\u201a\u0090', '周杰倫'],
+  ['\u00ce\u00d2\u201a\u0192\u00b5\u00c4\u00b8\u00e8', '我們的歌'],
+  ['\u00c4\u00d6\u00c4\u00be \u00b0\u00c7\u00c6\u00d7\u00a3\u00a8TransfmrC\u00d0\u00de\u00b8\u00c4\u00a3\u00a9', '闹木 扒谱（TransfmrC修改）'],
+  ['ÌìÂÕÖ®Áµ', '天抡之恋'],
+];
+const MUST_NOT_CHANGE = ['Canção', 'Coração', 'Ação', 'Größe', 'Mötley Crüe', 'Café', 'Für Elise', 'Señor', 'Ñandú', 'Beyoncé',
+  'Romance', 'Jeux Interdits – Romance', '天空之城', ''];
+const GP5 = new Uint8Array([0x18, ...new TextEncoder().encode('FICHIER GUITAR PRO v5.10'), 0, 0, 0]);
+const GPX = new Uint8Array([...new TextEncoder().encode('BCFZ'), ...new Array(20).fill(0)]);
+const GP7 = new Uint8Array([0x50, 0x4b, 3, 4, ...new Array(20).fill(0)]); // zip
+
+test('GBK mojibake from Guitar Pro 3-5 / GPX files is recognised, Western titles are left alone', () => {
+  for (const [m, want] of MUST_FIX) assert.equal(gbkFromMojibake(m), want, want);
+  for (const s of MUST_NOT_CHANGE) assert.equal(gbkFromMojibake(s), null, s);
+  const cn = { title: 'Romance', artist: '', tracks: [{ name: 'Ã÷ÔÂ' }] };
+  assert.equal(scoreNeedsGbk(cn, GP5), true);
+  assert.equal(scoreNeedsGbk(cn, GPX), true);
+  assert.equal(scoreNeedsGbk(cn, GP7), false); // GP7 / MusicXML 本来就是 UTF-8
+  assert.equal(scoreNeedsGbk(cn), false);
+  assert.equal(scoreNeedsGbk({ title: 'Romance', artist: 'Anon', tracks: [{ name: 'Guitar' }] }, GP5), false);
+  assert.equal(scoreNeedsGbk({ title: 'Canção do Mar', artist: 'Mötley Crüe', tracks: [{ name: 'Größe' }] }, GP5), false);
 });

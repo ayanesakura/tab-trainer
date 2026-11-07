@@ -41,6 +41,10 @@ async function request(method, path, body, opts) {
   return data;
 }
 
+/** 值得自动重试的错误：连不上服务（status 0），或代理 / 服务暂时不可用（502 / 503 / 504）。
+ * 其他（404、曲子数据损坏的 500 等带说明的错误）重试也没用。 */
+export const transient = e => !!e && (!e.status || [502, 503, 504].includes(e.status));
+
 export const get = (path, opts) => request('GET', path, undefined, opts);
 export const post = (path, body, opts) => request('POST', path, body, opts);
 export const put = (path, body, opts) => request('PUT', path, body, opts);

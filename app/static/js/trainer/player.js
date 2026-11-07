@@ -18,7 +18,9 @@ const SF_BASE = '/static/vendor/soundfont/sonivox.sf2', SF_GUITARS = '/static/ve
 export const TIMBRES = { steel: 25, nylon: 24 };
 
 let api = null, baseTempo = 60, soundFontsLoaded = 0, playerReadyOnce = false, lastTick = -1, shiftDown = false, warnedUnplayed = '';
-let tempoSet = false, scoreBytes = null;
+// tempoSet：速度已经由用户 / 接着练定下来了（setTempo 调过）。谱子加载好以后只在还没定的时候才用默认速度（原速六成）。
+// scoreTempoDone：第一次加载谱子时按原速放宽滑块上限这件事做过了。cursorPending：谱子没加载好时设了循环范围，加载好后把光标放到段首。
+let tempoSet = false, scoreTempoDone = false, cursorPending = false, scoreBytes = null;
 export const getApi = () => api;
 
 // 曲子相关的处理由 song.js / editor.js 注册（播放模块不反过来依赖它们）
@@ -32,7 +34,13 @@ function guitarsFailed() {
   if (soundFontsLoaded >= 2) return;
   soundFontsLoaded = 2;
   UI.toast('木吉他音色加载失败，先用默认音色播放', 'err', 6000);
-  if (playerReadyOnce) set('play.ready', true);
+  if (playerReadyOnce) setReady();
+}
+// 播放器可以用了（两个音色库都好了，或木吉他库失败退回默认音色）：节拍器、预备拍、音量在这里一起设上，
+// 不然 alphaTab 默认的 0 音量会一直留着（另外 on('play.ready') 也会再设一次，哪条路径变成就绪都不会漏）
+function setReady() {
+  set('play.ready', true);
+  applyAudio();
 }
 
 function themeColors() {
@@ -65,8 +73,7 @@ function ensureApi() {
   api.playerReady.on(() => {
     playerReadyOnce = true;
     if (soundFontsLoaded < 2) return; // 等木吉他音色也加载完
-    set('play.ready', true);
-    applyAudio();
+    setReady();
   });
   api.playerStateChanged.on(e => set('play.playing', e.state === 1));
   api.playerPositionChanged.on(e => onPosition(e.currentTick));
@@ -79,7 +86,12 @@ function ensureApi() {
   api.scoreLoaded.on(onScoreLoaded);
   api.renderFinished.on(() => { if (nBars()) applyLoopRange(); });
   api.postRenderFinished.on(() => set('ui.renderGen', (get('ui.renderGen') || 0) + 1)); // 小节位置要等所有部分都画完才有
-  api.midiLoaded.on(() => { if (nBars()) applyLoopRange(); }); // 反复的播放时间要等 MIDI 生成后才知道
+  api.midiLoaded.on(() => { // 反复的播放时间要等 MIDI 生成后才知道
+    if (!nBars()) return;
+    const range = applyLoopRange();
+    if (range && cursorPending && !playing()) api.tickPosition = range.startTick;
+    if (range) cursorPending = false;
+  });
   api.error.on(e => {
     const msg = e && e.message ? e.message : String(e);
     if (hooks.error) hooks.error(msg); else UI.toast('谱面出错：' + msg, 'err', 6000);
@@ -137,8 +149,8 @@ function switchTimbre() {
 
 async function onScoreLoaded(score) {
   const song = get('song');
-  if (isScore(song) && scoreBytes && api.settings.importer.encoding !== 'gbk' && scoreNeedsGbk(score)) {
-    // 中文 GP3–5 文件：按 GBK 重新导入（曲名、艺人、音轨名才不是乱码）
+  if (isScore(song) && scoreBytes && api.settings.importer.encoding !== 'gbk' && scoreNeedsGbk(score, scoreBytes)) {
+    // 中文 GP3–5 / GPX 文件：按 GBK 重新导入（曲名、艺人、音轨名才不是乱码）
     api.settings.importer.encoding = 'gbk';
     const bytes = scoreBytes, track = (get('view.source') || {}).track || 0;
     setTimeout(() => api.load(bytes, [track]), 0);
@@ -147,13 +159,15 @@ async function onScoreLoaded(score) {
   applyTimbre(score);
   baseTempo = score.tempo || 60;
   if (isScore(song) && hooks.scoreLoaded && !(await hooks.scoreLoaded(score))) return;
-  if (!tempoSet) { // 默认用原速的六成练习；没有标速度就 50
-    tempoSet = true;
+  if (!scoreTempoDone) {
+    scoreTempoDone = true;
     const s = get('song'), t = (s.meta && s.meta.tempo) || (isScore(s) ? baseTempo : 0);
-    if (t) { // 原速比滑块上限快时把上限放宽，原速也能拖得到
-      set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10)), 'play.autoTarget': t });
+    if (t) { // 原速比滑块上限快时把上限放宽，原速也能拖得到（已经定下的速度更快时不收窄）
+      const bpm = get('play.bpm');
+      set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10, Math.ceil(bpm / 10) * 10)), 'play.autoTarget': t });
     }
-    setTempo(t ? Math.round(t * 0.6) : 50);
+    // 默认用原速的六成练习；没有标速度就 50。接着练 / 用户在谱子加载好之前已经定了速度的，不覆盖
+    if (!tempoSet) setTempo(t ? Math.round(t * 0.6) : 50);
   }
   if (api) api.playbackSpeed = get('play.bpm') / baseTempo;
 }
@@ -245,17 +259,29 @@ export function play() {
 }
 export function stop() { if (api) api.pause(); }
 export function setTempo(bpm) {
+  tempoSet = true;
+  setBpm(bpm);
+}
+function setBpm(bpm) {
   bpm = Math.max(20, Math.min(240, Math.round(bpm)));
   const max = get('play.bpmMax');
   set({ 'play.bpm': bpm, 'play.bpmMax': bpm > max ? Math.min(240, Math.ceil(bpm / 10) * 10) : max }); // ↑ 键 / + 按钮超过了滑块上限
 }
+/**
+ * 设循环范围 a..b（小节下标）。restart：播放中就从段首重新开始；暂停时把光标放到段首。
+ * restart = false 并且范围没变（比如后台刷新后重新对一遍范围）：什么都不动，暂停的位置不会跳回段首。
+ * show：侧栏切到段首小节。
+ */
 export function setLoop(a, b, restart = true, show = true) {
   const n = nBars();
   if (!n) return;
   const na = Math.max(0, Math.min(a, b, n - 1)), nb = Math.min(n - 1, Math.max(a, b));
+  const { a: oa, b: ob } = get('play');
+  if (!restart && na === oa && nb === ob) { if (show) set('ui.bar', na); return; }
   set({ 'play.a': na, 'play.b': nb }); // 练习记录（practice-log.js）跟着它记上一段、开始下一段
   const range = applyLoopRange();
   if (show) set('ui.bar', na);
+  if (!range) cursorPending = true; // 谱子还没加载好：加载好以后（midiLoaded）再把光标放到段首
   if (range && api) {
     if (playing() && restart) { api.stop(); set('play.loops', 0); api.play(); }
     else if (!playing()) api.tickPosition = range.startTick;
@@ -417,16 +443,16 @@ export function initPlayer() {
     updateFollowBtn();
     if (!now && was) setStatus('已暂停', '空格继续 · ←→ 换段 · ↑↓ 调速');
   });
-  on('play.ready', r => { if (r && !playing()) setStatus('已停止', IDLE_HINT); });
+  on('play.ready', r => { if (!r) return; applyAudio(); if (!playing()) setStatus('已停止', IDLE_HINT); });
   on(['play.a', 'play.b'], paintLoop);
   on('view', renderSections);
   on('view.source', loadSource);
   on('ui.renderGen', markReviewBars);
   on('ui.notation', () => { if (!api) return; api.settings.display.staveProfile = alphaTab.StaveProfile[staveProfile()]; api.updateSettings(); api.render(); });
 
-  setTempo(50);
+  setBpm(50); // 加载前的占位，不算“定下了速度”
   $('playBtn').onclick = () => (playing() ? stop() : play());
-  $('demoBarBtn').onclick = () => { const bi = get('ui.bar') >= 0 ? get('ui.bar') : get('play.a'); setLoop(bi, bi, false); if (!playing()) play(); };
+  $('demoBarBtn').onclick = () => { const bi = get('ui.bar') >= 0 ? get('ui.bar') : get('play.a'); setLoop(bi, bi, !playing()); if (!playing()) play(); };
   UI.seg($('timbreSeg'), get('play.timbre'), v => set('play.timbre', v));
   UI.seg($('notationSeg'), 'both', v => set('ui.notation', v));
   $('exportBtn').onclick = exportGp;

@@ -116,7 +116,7 @@ at.Logger.logLevel = at.LogLevel.None;
 const bytes = new Uint8Array(fs.readFileSync(process.argv[1]));
 let settings = new at.Settings(), encoding = '';
 let sc = at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings);
-if (scoreNeedsGbk(sc)) {{ // 中文 GP3–5 文件：按 GBK 重新读（和练习页一样）
+if (scoreNeedsGbk(sc, bytes)) {{ // 中文 GP3–5 / GPX 文件：按 GBK 重新读（和练习页一样）
   settings = new at.Settings(); settings.importer.encoding = encoding = 'gbk';
   sc = at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings);
 }}

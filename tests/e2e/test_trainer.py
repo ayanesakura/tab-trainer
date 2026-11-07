@@ -1,11 +1,14 @@
 """练习页的冒烟测试：加载、播放和练习记录、改音和撤销、方向键换段、调弦和记号示范音、GP 导入（成功 / 失败）、曲库页。"""
 
 import json
+import shutil
 import sys
 import time
 import urllib.request
 
 import pytest
+
+from tests.e2e.conftest import _gp_bytes
 
 pytestmark = pytest.mark.e2e
 UNDO_MOD = 4 if sys.platform == "darwin" else 2  # ⌘ / Ctrl
@@ -232,3 +235,150 @@ def test_resume_param_continues_last_practice(server, browser):
     assert b.js("tt.state.bpm") == 66
     assert "resume" not in b.js("location.search")  # 刷新页面不会再跳
     assert not b.js("document.querySelector('#notices [data-id=resume]')")
+
+
+# ---------------------------------------------------------------------------
+# 审查修复的回归测试
+# ---------------------------------------------------------------------------
+def _post_practice(server, sid, bar_ids, bpm):
+    body = json.dumps({"bar_ids": bar_ids, "loops": 1, "bpm": bpm, "seconds": 30}).encode()
+    req = urllib.request.Request(
+        f"{server['base']}/api/songs/{sid}/practice", data=body, headers={"Content-Type": "application/json"}
+    )
+    urllib.request.urlopen(req)
+
+
+def _edit_fret(b, bi, fret):
+    """在谱面上点第 bi 小节的第一个音，品位改成 fret，回车保存，等保存结束。"""
+    b.js(f"""(() => {{ tt.setEditMode(true);
+      const beat = tt.api.score.tracks[0].staves[0].bars[{bi}].voices[0].beats.find(x => x.notes.length);
+      tt.openNotePop(beat, beat.notes[0]); document.getElementById('npFret').value = '{fret}'; return true; }})()""")
+    b.key("Enter", vk=13)
+    b.wait_for("!tt.editor.saving && !tt.editor.np")
+    time.sleep(0.6)  # 谱面按新数据重画完
+
+
+def test_background_writes_do_not_cause_false_conflicts(server, trainer):
+    """乐观锁按对象：问 AI、别的小节被改都不让这个小节 / 谱头的保存报 409；这个小节真在别处改过才报，
+    并且只作废这个小节的撤销记录。"""
+    sid, store = server["image"], server["store"]
+    raw = store.load(sid)["bars"]
+    b = trainer()
+    try:
+        # 模拟问 AI：后端存了一次（写 qa，顶层 rev 变了），前端把返回的 qa 并进 store
+        store.update(sid, lambda s: s["bars"][0].update(qa=[{"q": "Q", "a": "A", "at": "now"}]))
+        b.js("""(() => { const of = window.fetch; window.fetch = (u, init) => String(u).includes('/ask')
+          ? Promise.resolve(new Response(JSON.stringify({answer: 'A', qa: [{q: 'Q', a: 'A', at: 'now'}]}), {status: 200, headers: {'Content-Type': 'application/json'}}))
+          : of(u, init); return true; })()""")
+        b.js(
+            "tt.set('ui.bar', 0); document.getElementById('askInput').value = 'Q'; document.getElementById('askBtn').click(); true"
+        )
+        b.wait_for("tt.song.bars[0].qa && tt.song.bars[0].qa.length === 1")
+        assert b.js("tt.song.rev") < _song(server, sid)["rev"]  # 前端的顶层 rev 已经旧了
+        _edit_fret(b, 2, 7)
+        _edit_fret(b, 4, 8)
+        server_bars = _song(server, sid)["bars"]
+        assert [server_bars[i]["events"][0]["notes"][0]["fret"] for i in (2, 4)] == [7, 8]  # 两次都没报 409
+        assert b.js("tt.editor.undoBars") == ["bar3", "bar5"]
+        b.js("document.getElementById('metaSave').click(); true")
+        b.wait_for("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('已保存'))")
+        # 第 5 小节在别处改了：再改它 → 409，刷新，第 5 小节的撤销记录作废，第 3 小节的留着
+        store.update(sid, lambda s: s["bars"][4]["events"][0]["notes"][0].update(fret=11))
+        _edit_fret(b, 4, 9)
+        b.wait_for("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('别处改过'))")
+        b.wait_for("tt.song.bars[4].events[0].notes[0].fret === 11")
+        assert b.js("tt.song.bars[4].rev") == _song(server, sid)["bars"][4]["rev"]
+        assert b.js("tt.editor.undoBars") == ["bar3"]
+        assert not b.errors, b.errors
+    finally:
+        store.update(sid, lambda s: s.update(bars=raw))
+
+
+def test_resume_applies_tempo_to_guitar_pro_songs(server, browser):
+    """GP 曲子的谱面是异步加载的：接着练定下的速度不能被“原速六成”的默认值盖掉（地址带 resume=1 和点“接着练”都一样）。"""
+    gp, b = server["gp"], browser
+    ready = (
+        "!!(window.tt && tt.state.ready && tt.song && tt.song.bars.length === 3 && tt.api && tt.api.score)"
+    )
+    b.open(f"{server['base']}/trainer?id={gp}")
+    b.wait_for(ready, timeout=40)
+    ids = [x["id"] for x in _song(server, gp)["bars"]]
+    _post_practice(server, gp, ids[1:3], 200)
+    b._run(b._send("Page.navigate", url=f"{server['base']}/trainer?id={gp}&resume=1"))
+    b.wait_for(ready + " && tt.state.a === 1 && tt.state.b === 2", timeout=40)
+    time.sleep(1.5)
+    assert b.js("tt.state.bpm") == 200
+    assert abs(b.js("tt.api.playbackSpeed") - 200 / b.js("tt.api.score.tempo")) < 1e-6
+    # 不带 resume：通知里的“接着练”一出现就点（这时音色多半还没加载好）
+    b.open(f"{server['base']}/trainer?id={gp}")
+    b.wait_for("!!document.querySelector('#notices [data-id=resume] .btn.primary')", timeout=40)
+    b.js("document.querySelector('#notices [data-id=resume] .btn.primary').click(); true")
+    b.wait_for(ready, timeout=40)
+    time.sleep(1.5)
+    assert b.js("[tt.state.a, tt.state.b, tt.state.bpm]") == [1, 2, 200]
+    assert not b.errors, b.errors
+
+
+def test_song_updates_keep_paused_position(trainer):
+    """问 AI 写了问答、轮询拿到新数据：循环范围没变时，暂停的位置不跳回段首。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(1, 4); tt.setTempo(240); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    time.sleep(2)
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
+    time.sleep(0.6)
+    t1 = b.js("tt.api.tickPosition")
+    start = b.js("tt.api.playbackRange.startTick")
+    assert t1 > start
+    b.js("tt.set('song.bars.2.qa', [{q: 'q', a: 'a', at: 'x'}]); true")
+    b.js("tt.set('song', {...tt.song, rev: tt.song.rev + 1, bars: tt.song.bars.map(x => ({...x}))}); true")
+    time.sleep(0.3)
+    assert b.js("tt.api.tickPosition") == t1
+    assert b.js("[tt.state.a, tt.state.b]") == [1, 4]
+    assert not b.errors, b.errors
+
+
+def test_notice_buttons_survive_song_updates(trainer):
+    """识别进度每次轮询都会更新：文字变了只换文字，按钮还是原来那个（按下和松开之间不会被换掉）。"""
+    b = trainer()
+    b.js("""tt.set('song', {...tt.song, activity: {kind: 'explain', restaging: false, systems: []}, progress: {done: 1, total: 3}});
+      window.__btn = document.querySelector('#notices [data-id=progress] button'); true""")
+    assert b.js("!!window.__btn")
+    b.js(
+        "tt.set('song', {...tt.song, progress: {done: 2, total: 3}}); tt.set('song', {...tt.song, rev: tt.song.rev + 1}); true"
+    )
+    assert b.js("document.querySelector('#notices [data-id=progress] button') === window.__btn")
+    assert "2/3" in b.js("document.querySelector('#notices [data-id=progress]').textContent")
+    b.js("tt.set('song', {...tt.song, activity: null, progress: null}); true")
+    assert not b.js("document.querySelector('#notices [data-id=progress]')")
+    assert not b.errors, b.errors
+
+
+def test_corrupt_song_stops_polling(server, browser):
+    """曲子数据损坏（500 带说明）：说清楚原因，不再“稍后自动重试”反复请求。"""
+    from app import songs
+
+    store = server["store"]
+    sid = songs.create_song([("bad.gp", _gp_bytes())])
+    try:
+        d = store.song_dir(sid)
+        for name in ("song.json", "song.json.bak"):
+            (d / name).write_text("{broken")
+        b = browser
+        b._run(
+            b._send(
+                "Page.addScriptToEvaluateOnNewDocument",
+                source=f"""window.__gets = 0; const of = window.fetch;
+                window.fetch = (u, i) => {{ if (String(u) === '/api/songs/{sid}') window.__gets++; return of(u, i); }};""",
+            )
+        )
+        b.open(f"{server['base']}/trainer?id={sid}")
+        b.wait_for("document.getElementById('notices').innerText.includes('数据损坏')", timeout=20)
+        time.sleep(6)  # 退避重试的话这段时间里至少还会再请求一次
+        assert b.js("window.__gets") == 1
+        text = b.js("document.getElementById('notices').innerText")
+        assert "自动重试" not in text and "重试" in text
+        assert b.js("document.getElementById('songTitle').textContent") == "加载失败"
+    finally:
+        shutil.rmtree(store.song_dir(sid), ignore_errors=True)
