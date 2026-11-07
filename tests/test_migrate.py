@@ -136,9 +136,31 @@ def test_mojibake_fix_only_touches_real_mojibake():
     assert migrate.fix_mojibake("Ñº¹ãÌ«ÀÉ") != "Ñº¹ãÌ«ÀÉ"
     for ok in ("Pokémon", "Café del Mar", "押尾光太郎", "Romance", "", "Ångström"):
         assert migrate.fix_mojibake(ok) == ok
-    # 图片曲子的曲名不动（只有 GP 文件里读出来的才可能是这种乱码）
+    assert MOJI == "Ñº\xce²¹âÌ«ÀÉ"
+
+
+def test_mojibake_is_fixed_for_every_source_type():
+    """评测用的图片曲子（eval-r-mother 等）是从 GP 复制的谱头，艺人也是乱码：不分来源都修。"""
+    for extra in (
+        {},
+        {"source_type": "pdf"},
+        {"source_type": "musicxml", "source": "source.xml"},
+        {"kind": "score", "source": "source.gp5"},
+    ):
+        meta = {
+            "title": "Mother",
+            "artist": MOJI,
+            "arranger": MOJI,
+            "tuning": ["E4"] * 6,
+            "time_signature": [4, 4],
+        }
+        s = migrate.migrate({"title": "", "bars": [], "status": "ready", "meta": meta, **extra}, "x")
+        assert s["meta"]["artist"] == "押尾光太郎" and s["meta"]["arranger"] == "押尾光太郎", extra
+        assert s["title"] == "Mother"
     s = migrate.migrate({"title": MOJI, "bars": [], "status": "ready"}, "x")
-    assert s["title"] == MOJI
+    assert s["title"] == "押尾光太郎"
+    s = migrate.migrate({"title": "Pokémon", "bars": [], "status": "ready", "schema_version": 2}, "x")
+    assert s["title"] == "Pokémon"  # 已经是 v2 的不再处理；正常西文本来也不动
 
 
 def test_library_lists_old_songs(data_dir):
