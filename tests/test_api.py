@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import config, main, recognize
-from tests.fakes import derived_bars, score_png
+from tests.fakes import FakeClaude, derived_bars, score_png
 
 
 @pytest.fixture
@@ -361,3 +361,33 @@ def test_song_view_while_recognizing(client):
     assert [b["needs_review"] for b in v["bars"][:3]] == [True, True, False]
     assert v["bars"][1]["warn"][0]["code"] == "length"
     assert next(x for x in client.get("/api/songs").json() if x["id"] == sid)["needs_review_bars"] == 2
+
+
+def test_job_and_file_routes_over_http(data_dir, sync_jobs):
+    """整首 / 单行重新识别、取消、原文件和页面图片：走一遍真正的 HTTP 路由（不替换 start_parse）。"""
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    sid = c.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
+    s = c.get(f"/api/songs/{sid}").json()
+    assert s["status"] == "ready" and len(s["bars"]) == 6 and s["failed_rows"] == 0  # 上传后同步识别完了
+
+    FakeClaude.calls = []
+    assert c.post(f"/api/songs/{sid}/parse").json() == {"ok": True}
+    assert len(FakeClaude.calls) >= 2 and c.get(f"/api/songs/{sid}").json()["status"] == "ready"
+
+    FakeClaude.calls = []
+    r = c.post(f"/api/songs/{sid}/systems/1/reparse", json={"hint": "第 4 小节第 2 拍是 2 弦"})
+    assert r.json() == {"ok": True} and {x["hint"] for x in FakeClaude.calls} == {"第 4 小节第 2 拍是 2 弦"}
+    assert c.post(f"/api/songs/{sid}/systems/9/reparse").status_code == 404
+    assert c.post(f"/api/songs/{sid}/cancel").status_code == 409  # 没有在跑的任务
+
+    page = s["pages"][0]["file"]
+    r = c.get(f"/files/{sid}/{page}")
+    assert r.status_code == 200 and r.content[:4] == b"\x89PNG"
+    assert c.get(f"/files/{sid}/..%2Fsong.json").status_code == 404
+    assert c.get(f"/files/{sid}/source").status_code == 404  # 图片曲子没有原文件
+
+    gp = c.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    r = c.get(f"/files/{gp}/source")
+    assert r.status_code == 200 and r.content.startswith(b"\x18FICHIER")
+    assert c.post(f"/api/songs/{gp}/parse").status_code == 400  # GP 曲子不用识别
+    assert c.get(f"/api/songs/{gp}").json()["is_score"]

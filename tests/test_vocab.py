@@ -4,7 +4,7 @@ import json
 from fractions import Fraction
 from pathlib import Path
 
-from app import llm, model, music
+from app import llm, model, music, prompts
 
 VOCAB = json.loads((Path(music.__file__).parent / "static" / "js" / "vocab.json").read_text(encoding="utf-8"))
 
@@ -26,7 +26,7 @@ def test_vocab_is_well_formed():
     assert len({t["code"] for t in VOCAB["techs"]}) == len(VOCAB["techs"])
     prompt = [d for d in VOCAB["directions"] if d["prompt"]]
     assert sorted(d["prompt_order"] for d in prompt) == list(range(len(prompt)))
-    assert llm.DIRECTIONS == music.PROMPT_DIRECTIONS and set(llm.DIRECTIONS) <= set(music.DIRECTIONS)
+    assert prompts.DIRECTIONS == music.PROMPT_DIRECTIONS and set(prompts.DIRECTIONS) <= set(music.DIRECTIONS)
     assert set(VOCAB["sources"]) == set(model.SourceType.__args__)
     assert set(model.SCORE_SOURCES) == {"gp", "musicxml"} <= set(VOCAB["sources"])
     assert set(music.GBK_EXT) <= set(music.SCORE_FILES["gp"])

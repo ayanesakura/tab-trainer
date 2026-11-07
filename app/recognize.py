@@ -35,8 +35,6 @@ from app.music import (
 
 log = logging.getLogger("tab_trainer.recognize")
 
-CONCURRENCY = settings.row_concurrency  # 一首曲子同时识别几行
-MAX_SYSTEMS = settings.max_rows_global  # 所有曲子加起来同时识别几行（连续上传多首时不会成倍地发请求、跑 OCR）
 LABEL_STRINGS = True  # 在裁剪图上标弦号（见 label_strings）
 OCR_CHECK = True  # 用本机数字识别校对 AI 读出的弦和品（见 app/ocr.py、ocr_disagreements）
 
@@ -198,7 +196,8 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
 # ---------------------------------------------------------------------------
 # 识别一行
 # ---------------------------------------------------------------------------
-_system_slots = threading.BoundedSemaphore(MAX_SYSTEMS)
+# 所有曲子加起来同时识别几行：信号量在导入时按 settings.max_rows_global 建好，之后改这个设置不生效（测试直接换掉 _system_slots）
+_system_slots = threading.BoundedSemaphore(settings.max_rows_global)
 
 
 def transcribe_queued(*args, cancel: threading.Event | None = None, **kw) -> list[dict]:
@@ -528,7 +527,7 @@ def _recognize_rows(
         (si, first_bar_of(song, si), ts or _row_start_ts(song["bars"], song["meta"], si)) for si, ts in rows
     ]
     errors: list[str] = []
-    with ThreadPoolExecutor(CONCURRENCY) as pool:
+    with ThreadPoolExecutor(settings.row_concurrency) as pool:
         futs = {
             pool.submit(
                 transcribe_queued,

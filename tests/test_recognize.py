@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from app import errors, jobs, music, practice, recognize, songs, state, store
+from app import config, errors, jobs, music, practice, recognize, songs, state, store
 from tests.fakes import FakeClaude, score_png
 
 
@@ -29,7 +29,7 @@ def test_full_parse(data_dir):
 def test_first_recognition_row_writes_keep_earlier_bar_revs(data_dir, monkeypatch):
     """第一次识别边识别边写：后面的行写进来不会让前面已经能改的小节的 rev 过期。"""
     sid = songs.create_song([("p1.png", score_png())])
-    monkeypatch.setattr(recognize, "CONCURRENCY", 1)
+    monkeypatch.setattr(config.settings, "row_concurrency", 1)
     seen = []
     real = FakeClaude.transcribe
 
@@ -108,7 +108,7 @@ def test_cancel_stops_remaining_systems(data_dir, monkeypatch):
         return real(self, *a, **kw)
 
     monkeypatch.setattr(FakeClaude, "transcribe", transcribe_then_cancel)
-    monkeypatch.setattr(recognize, "CONCURRENCY", 1)
+    monkeypatch.setattr(config.settings, "row_concurrency", 1)
     with pytest.raises(jobs.Cancelled):
         recognize.run_parse(sid, cancel)
     song = store.load(sid)
@@ -298,7 +298,7 @@ def test_failed_or_cancelled_reparse_keeps_the_old_result(data_dir, sync_jobs, m
     monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
     if how == "crash":
         monkeypatch.setattr(FakeClaude, "read_meta", lambda self, page: 1 / 0)
-    monkeypatch.setattr(recognize, "CONCURRENCY", 1)
+    monkeypatch.setattr(config.settings, "row_concurrency", 1)
     assert recognize.start_parse(sid)
     after = store.load(sid)
     assert after["status"] == "ready" and "原来的结果保留不变" in after["notice"]["msg"]
