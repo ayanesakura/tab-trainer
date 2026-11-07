@@ -6,23 +6,18 @@ import { put, post, withBusy } from '../lib/api.js';
 import { DUR_CHOICES, durToTicks, eventIndexAt, retimeEvent } from '../score.js';
 import { TECH_NAME, STRINGS } from '../vocab.js';
 import { stop, setPlayerHooks } from './player.js';
-import { refresh } from './song.js';
+import { refresh, applySong, conflict } from './song.js';
 
 // ---------------------------------------------------------------------
 // 修改小节（JSON）、重新识别这一行
 // ---------------------------------------------------------------------
 let editorBarId = null;
 const curBar = () => { const s = get('song'), bi = get('ui.bar'); return s && bi >= 0 ? s.bars[bi] : null; };
-const busy = s => !!(s.busy ?? (s.running || s.status === 'parsing' || s.status === 'queued'));
 
-/** 这个小节现在不能改的原因（后端给了 locked 就用它）：改了会被正在进行的识别结果覆盖 */
+/** 这个小节现在不能改的原因（后端算好的 locked），能改是空字符串 */
 export function barLocked(bi) {
   const s = get('song'), bar = s && s.bars[bi];
-  if (!bar) return '';
-  if (bar.locked !== undefined) return bar.locked || '';
-  if (s.restaging) return '正在重新识别整首，完成后再改';
-  const sys = s.systems[bar.system];
-  return sys && sys.status === 'parsing' ? '这一行正在重新识别，完成后再改' : '';
+  return (bar && bar.locked) || '';
 }
 function closeEditor() { $('editor').hidden = true; $('edMsg').textContent = ''; editorBarId = null; }
 function updateBarTools() {
@@ -30,7 +25,7 @@ function updateBarTools() {
   if (!bar) return;
   if (bar.id !== editorBarId) closeEditor();
   const sys = s.systems[bar.system], parsing = sys && sys.status === 'parsing';
-  $('reparseBtn').disabled = !sys || parsing || busy(s);
+  $('reparseBtn').disabled = !sys || parsing || s.busy;
   setButton($('reparseBtn'), parsing ? '<span class="spinner"></span>正在重新识别…' : UI.icon('refresh') + '重新识别这一行');
 }
 
@@ -43,16 +38,12 @@ async function putBar(barId, events, msg, isUndo = false) {
   if (entry) { undoStack.push(entry); if (undoStack.length > 50) undoStack.shift(); } // 先记上，按发出的顺序
   saving++;
   try {
-    const body = { events };
-    if (s.rev !== undefined) body.rev = s.rev;
-    await put(songUrl(`/bars/${encodeURIComponent(barId)}`), body);
+    applySong(await put(songUrl(`/bars/${encodeURIComponent(barId)}`), { events, rev: get('song').rev }));
   } catch (e) {
     if (entry) undoStack.splice(undoStack.lastIndexOf(entry), 1);
-    UI.toast(e.message || '保存失败', 'err', 4000);
-    if (e.status === 409) await refresh();
+    if (e.status === 409) await conflict(e); else UI.toast(e.message || '保存失败', 'err', 4000);
     return false;
   } finally { saving--; }
-  await refresh();
   UI.toast(msg + (isUndo ? '' : (get('ui.editMode') ? `（${UNDO_KEY} 撤销）` : '')));
   return true;
 }
@@ -68,8 +59,10 @@ async function undoEdit() {
 // ---------------------------------------------------------------------
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const UNDO_KEY = IS_MAC ? '⌘Z' : 'Ctrl+Z';
-const LEGEND_PLAY = '点小节 = 循环这一小节 · <kbd>Shift</kbd> + 点 = 扩展循环 · 点音符 = 试听 · <span class="review-key"></span> 待核对';
-const LEGEND_EDIT = '改音：点音符改弦、品、技巧和时值 · 点休止符加音 · <kbd>Enter</kbd> 保存 · <kbd>Esc</kbd> 关闭 · <kbd>' + UNDO_KEY + '</kbd> 撤销';
+// 谱面上方的操作说明：一项一个 <span>（.legend 是 flex，项与项之间有间距，项里面的文字和按键不能被拆开）
+const legend = items => items.map(x => `<span>${x}</span>`).join('');
+const LEGEND_PLAY = legend(['点小节：循环这一小节', '<kbd>Shift</kbd> + 点：扩展循环', '点音符：试听', '<i class="review-key"></i>待核对']);
+const LEGEND_EDIT = legend(['改音：点音符改弦、品、技巧和时值', '点休止符：加音', '<kbd>Enter</kbd> 保存', '<kbd>Esc</kbd> 关闭', `<kbd>${UNDO_KEY}</kbd> 撤销`]);
 // 改音面板里的技巧（推弦不在面板里，原样保留）
 const NP_TECH = ['h', 'p', 'sl', 'si', 'pm', 'x', 'nh', 'ah', 'vib', 'roll'];
 let np = null, npLayer = null, pendingClick = null, setNpStr = null;
@@ -77,7 +70,7 @@ const pointer = { x: 0, y: 0 };
 
 export function setEditMode(v) {
   const s = get('song');
-  set('ui.editMode', !!v && !!s && s.kind !== 'score' && !!(s.can_edit_bars ?? true));
+  set('ui.editMode', !!v && !!s && s.can_edit_bars);
 }
 function paintEditMode(on_) {
   $('editModeBtn').setAttribute('aria-pressed', on_);
@@ -260,7 +253,7 @@ export function initEditor() {
     if (k < 0 || JSON.stringify(bars[k].events) !== JSON.stringify(np.snap)) closeNotePop(); else np.bi = k;
   });
   on('song', s => {
-    const can = s && s.kind !== 'score' && (s.can_edit_bars ?? true);
+    const can = !!(s && s.can_edit_bars);
     $('fixBox').hidden = !can;
     $('editModeBtn').hidden = !can;
     if (!can && get('ui.editMode')) setEditMode(false);

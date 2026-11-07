@@ -5,10 +5,10 @@ import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
 import { barBox } from './player.js';
 import { images } from './bar-card.js';
-import { needsReview } from './view.js';
+import { needsReview, isScore } from './view.js';
 
 let origLayer = null;
-const hasOrig = bi => { const s = get('song'), v = get('view'); return !!(s && v && s.kind !== 'score' && v.regions[bi]); };
+const hasOrig = bi => { const s = get('song'), v = get('view'); return !!(s && v && !isScore(s) && v.regions[bi]); };
 
 function placeBtn() {
   const btn = $('origBtn'), bi = get('ui.pick');

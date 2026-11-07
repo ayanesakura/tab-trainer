@@ -6,7 +6,7 @@ import * as alphaTab from '/static/vendor/alphatab/alphaTab.min.mjs';
 import { TICKS, eventIndexAt, scoreNeedsGbk } from '../score.js';
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
-import { loopLabel, stepSection as stepCalc } from './view.js';
+import { loopLabel, stepSection as stepCalc, isScore } from './view.js';
 
 export { alphaTab };
 export const IDLE_HINT = '空格播放 · ←→ 换段 · ↑↓ 调速';
@@ -46,7 +46,8 @@ function ensureApi() {
   api = new alphaTab.AlphaTabApi($('score'), {
     core: { fontDirectory: AT_BASE + 'font/', includeNoteBounds: true }, // 不开这个 alphaTab 不会触发点击音符事件（试听、改音都靠它）
     display: { scale: 0.9, layoutMode: 'Page', staveProfile: staveProfile(), resources: themeColors() },
-    notation: { rhythmMode: 'ShowWithBars' },
+    // 曲名、艺人等页面顶栏已经有了，谱面上不再画（省出一大块地方）；调弦说明保留。alphaTab 署名不受影响
+    notation: { rhythmMode: 'ShowWithBars', elements: { scoreTitle: false, scoreSubTitle: false, scoreArtist: false, scoreAlbum: false, scoreWords: false, scoreMusic: false, scoreWordsAndMusic: false, scoreCopyright: false } },
     player: {
       playerMode: 'EnabledSynthesizer', soundFont: SF_BASE,
       enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true,
@@ -136,7 +137,7 @@ function switchTimbre() {
 
 async function onScoreLoaded(score) {
   const song = get('song');
-  if (song.kind === 'score' && scoreBytes && api.settings.importer.encoding !== 'gbk' && scoreNeedsGbk(score)) {
+  if (isScore(song) && scoreBytes && api.settings.importer.encoding !== 'gbk' && scoreNeedsGbk(score)) {
     // 中文 GP3–5 文件：按 GBK 重新导入（曲名、艺人、音轨名才不是乱码）
     api.settings.importer.encoding = 'gbk';
     const bytes = scoreBytes, track = (get('view.source') || {}).track || 0;
@@ -145,10 +146,10 @@ async function onScoreLoaded(score) {
   }
   applyTimbre(score);
   baseTempo = score.tempo || 60;
-  if (song.kind === 'score' && hooks.scoreLoaded && !(await hooks.scoreLoaded(score))) return;
+  if (isScore(song) && hooks.scoreLoaded && !(await hooks.scoreLoaded(score))) return;
   if (!tempoSet) { // 默认用原速的六成练习；没有标速度就 50
     tempoSet = true;
-    const s = get('song'), t = (s.meta && s.meta.tempo) || (s.kind === 'score' ? baseTempo : 0);
+    const s = get('song'), t = (s.meta && s.meta.tempo) || (isScore(s) ? baseTempo : 0);
     if (t) { // 原速比滑块上限快时把上限放宽，原速也能拖得到
       set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10)), 'play.autoTarget': t });
     }

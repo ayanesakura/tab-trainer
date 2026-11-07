@@ -11,12 +11,12 @@ import { gbkFromMojibake, scoreNeedsGbk } from '../../app/static/js/score.js';
 const N = (string, fret, tech = [], grace = -1) => ({ string, fret, tech, grace, bend: 0 });
 const bar = (id, system, events, extra = {}) => ({ id, n: 0, system, page: 0, region: [10, 50, 0, 80], events, tip: '', warn: [], uncertain: '', ...extra });
 const SONG = {
-  id: 's1', kind: 'image', title: '测试', pages: [{ file: 'p1.png' }],
+  id: 's1', source_type: 'image', title: '测试', pages: [{ file: 'p1.png' }],
   meta: { title: '测试', artist: '某人', tuning: ['D4', 'A3', 'F#3', 'D3', 'A2', 'D2'], tuning_midi: [62, 57, 54, 50, 45, 38], capo: 2, time_signature: [4, 4] },
   bars: [
     bar('a', 0, [{ dur: '1', notes: [N(1, 0), N(6, 0)] }, { dur: '1', notes: [N(2, 3, ['h'])] }, { dur: '2', notes: [] }]),
     bar('b', 0, [{ dur: '1/3', notes: [N(3, 2)] }, { dur: '1/3', notes: [N(3, 4, ['sl'])] }, { dur: '1/3', notes: [N(3, 5, [], 4)] }, { dur: '3', notes: [N(1, 12, ['nh'])] }]),
-    bar('c', 1, [], { time_signature: [3, 4], warn: [{ code: 'length', msg: '时值合计不对' }] }),
+    bar('c', 1, [], { time_signature: [3, 4], warn: [{ code: 'length', msg: '时值合计不对' }], needs_review: true }),
     bar('d', 1, [{ dur: '4', notes: [N(5, 7, ['xx'])] }, { dur: '1', notes: [N(1, 1)] }]), // 超出小节长度的事件不播放
   ],
 };
@@ -63,7 +63,7 @@ test('deriveView: events, pitches, bar lengths, regions, sections, review flags'
   assert.deepEqual(v.beatMap[1], [0, 320, 640, 960]);
   assert.equal(noteMidi(v.bars[0][0].notes[0], v), 62 + 2);
   assert.equal(noteMidi(v.bars[1][3].notes[0], v), 62 + 2 + 12); // 12 品泛音高八度
-  const gp = deriveView({ ...SONG, kind: 'score', track: 1 });
+  const gp = deriveView({ ...SONG, source_type: 'gp', track: 1 });
   assert.deepEqual(gp.source, { kind: 'score', id: 's1', track: 1 });
   assert.deepEqual(gp.beatMap[0], [0, 960, 1920]);
 });
@@ -107,13 +107,12 @@ test('tags, plan ranges, subtitle, explain state, warnings, note names', () => {
   assert.equal(songSubtitle(SONG, v), '某人 · 调弦 D A D F♯ A D · 变调夹 2 品 · 4/4 拍（有变拍号） · 4 小节');
   const std = { ...SONG, meta: { time_signature: [3, 4] } };
   assert.equal(songSubtitle(std, deriveView(std)), '标准调弦 · 3/4 拍（有变拍号） · 4 小节');
-  assert.deepEqual(explainState({ ...SONG, kind: 'score', plan: null }), { missing: 4, noPlan: true, planStale: false, fresh: true });
+  assert.deepEqual(explainState({ ...SONG, source_type: 'musicxml', plan: null }), { missing: 4, noPlan: true, planStale: false, fresh: true });
   assert.equal(explainState({ ...SONG, plan: { stale: true } }).planStale, true);
   assert.equal(needsReview({ needs_review: false, uncertain: '有点怪' }), false); // 后端说了算
-  assert.equal(needsReview({ uncertain: '有点怪' }), true);
+  assert.equal(needsReview({ needs_review: true }), true);
   assert.equal(warnText({ code: 'length', msg: '第 3 小节时值不对' }), '第 3 小节时值不对');
   assert.equal(warnText({ code: 'ocr_mismatch' }), '和本机 OCR 对不上');
-  assert.equal(warnText('旧格式'), '旧格式');
   assert.equal(showNote('F#3'), 'F♯3');
   assert.equal(tuningInput(' F♯3 '), 'F#3');
   assert.equal(nameToMidi('E4'), 64);

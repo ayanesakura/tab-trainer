@@ -2,7 +2,7 @@
 
 import { get, on } from './store.js';
 import { $, UI, esc } from './dom.js';
-import { barTags, warnText } from './view.js';
+import { barTags, warnText, isScore } from './view.js';
 
 // 原谱页面图片：按 view.pages 加载，加载好了重画（截图、原图弹窗都用）
 export const images = { list: [], src: [] };
@@ -35,7 +35,7 @@ function renderCard() {
 function drawCrop() {
   const bi = get('ui.bar'), v = get('view'), s = get('song');
   const card = $('cropBox');
-  card.hidden = !s || s.kind === 'score' || !v || !v.regions[bi];
+  card.hidden = !s || isScore(s) || !v || !v.regions[bi];
   if (card.hidden || $('view-practice').hidden) return;
   const [p, x0, x1, y0, y1] = v.regions[bi], im = images.list[p], c = $('crop'), msg = $('cropMsg');
   const bad = !im || im.bad;
@@ -51,7 +51,7 @@ function drawCrop() {
 
 export function initBarCard() {
   on('view', v => { if (v) loadImages(v.pages); });
-  on(['ui.bar', 'view', 'song.bars', 'song.kind'], renderCard);
+  on(['ui.bar', 'view', 'song.bars', 'song.source_type'], renderCard);
   on(['ui.view', 'ui.drawer'], drawCrop); // 隐藏时量不出大小：切回练习页 / 打开抽屉时重画
   let t = 0;
   addEventListener('resize', () => { clearTimeout(t); t = setTimeout(drawCrop, 100); });

@@ -21,10 +21,12 @@ export function nameToMidi(name) {
 export const STD_MIDI = STANDARD.map(nameToMidi); // 标准调弦，1 弦 → 6 弦
 const HARM = { 12: 12, 24: 24, 7: 19, 19: 19, 5: 24, 4: 28, 9: 28, 16: 28, 3: 31, 2: 36 }; // 自然泛音品位 → 比空弦高几个半音
 
-/** 小节要不要核对：后端给了 needs_review 就用它，旧数据按 warn / uncertain 推。 */
-export const needsReview = b => (b.needs_review !== undefined ? !!b.needs_review : !!((b.warn && b.warn.length) || b.uncertain));
-/** 警告的文字：新格式 {code, msg}，旧格式是字符串 */
-export const warnText = w => (w && typeof w === 'object' ? w.msg || WARN_CODES[w.code] || '' : String(w ?? ''));
+/** GP / MusicXML 导入的曲子（小节来自原文件，谱面直接用原文件渲染） */
+export const isScore = s => s.source_type === 'gp' || s.source_type === 'musicxml';
+/** 小节要不要核对（后端算好的） */
+export const needsReview = b => !!b.needs_review;
+/** 警告 {code, msg} 的文字 */
+export const warnText = w => (w && (w.msg || WARN_CODES[w.code])) || '';
 
 /** 原谱的一行是一段：[{sys, a, z}]（小节下标） */
 export function sectionsOf(bars) {
@@ -63,7 +65,7 @@ export function deriveView(song) {
   });
   bars.forEach(evs => evs.forEach(e => { e.idx = all.length; all.push(e); }));
   let beatMap = [], source = null;
-  if (song.kind === 'score') {
+  if (isScore(song)) {
     beatMap = song.bars.map(b => { let t = 0; return (b.events || []).map(e => { const o = t; t += durToTicks(e.dur); return o; }); });
     source = { kind: 'score', id: song.id, track: song.track || 0 };
   } else if (song.bars.length) {
@@ -171,6 +173,6 @@ export function songSubtitle(song, v) {
 export function explainState(song) {
   const missing = song.bars.filter(b => !(b.tip || '').trim()).length;
   const plan = song.plan, planStale = !!(plan && plan.stale);
-  const fresh = song.kind === 'score' && missing === song.bars.length;
+  const fresh = isScore(song) && missing === song.bars.length;
   return { missing, noPlan: !plan, planStale, fresh };
 }

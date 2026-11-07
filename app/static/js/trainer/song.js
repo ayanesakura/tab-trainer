@@ -7,13 +7,11 @@ import { get, set, on } from './store.js';
 import { $, UI, esc, songUrl, SONG_ID } from './dom.js';
 import { get as apiGet, post, put, withBusy, poll } from '../lib/api.js';
 import { SOURCES } from '../vocab.js';
-import { deriveView, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
+import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
 import { alphaTab, setLoop, setTempo, setPlayerHooks } from './player.js';
 import { notice } from './notices.js';
 
-const isBusy = s => !!(s.busy ?? (s.running || s.status === 'parsing' || s.status === 'queued' || (s.systems || []).some(x => x.status === 'parsing')));
-const recognizing = s => !!(s.recognizing ?? (s.status === 'parsing' || s.status === 'queued' || (s.running && s.job !== 'explain')));
 
 // ---------------------------------------------------------------------
 // 取曲子、轮询
@@ -36,16 +34,26 @@ async function load() {
   set('song', s);
   return s;
 }
+/** 写接口返回了最新的曲子：直接用它（比它早发出的读取结果作废） */
+export function applySong(s) {
+  applied = ++seq;
+  set('song', s);
+}
+/** 写接口报 409（别处改过）：提示并刷新 */
+export async function conflict(e) {
+  UI.toast(e.message, 'err', 5000);
+  await refresh();
+}
 /** 第一次加载并开始轮询：识别 / 讲解进行中每 2.5 秒取一次，出错时退避重试（不会停） */
 export function startLoading() {
   polling = true;
-  poller = poll(load, { interval: 2500, while: s => (polling = !!s && isBusy(s)) });
+  poller = poll(load, { interval: 2500, while: s => (polling = !!s && s.busy) });
 }
 /** 马上重新取一次（改谱、开始识别以后）；后台任务又开始了就恢复轮询 */
 export async function refresh() {
   let s;
   try { s = await load(); } catch (e) { UI.toast(e.message, 'err', 5000); return; }
-  if (s && isBusy(s) && !polling) { polling = true; poller.now(); }
+  if (s && s.busy && !polling) { polling = true; poller.now(); }
 }
 
 // ---------------------------------------------------------------------
@@ -68,13 +76,11 @@ const dismissed = new Set(); // 这次打开页面里关掉的通知（内容变
 function closable(key) { return dismissed.has(key) ? null : () => dismissed.add(key); }
 
 function progressText(s) {
-  const pr = s.progress || {}, n = pr.total ? `（${pr.done}/${pr.total} ${s.job === 'explain' ? '批' : '行'}）` : '';
-  const kind = s.activity ? s.activity.kind : s.job;
-  const restaging = s.activity ? s.activity.restaging : s.restaging;
-  if (kind === 'explain') return `正在生成讲解${n}，可以照常练习。`;
-  if (kind === 'pages') return `正在识别新加的页${n}，其他小节可以照常练习。`;
-  if (kind === 'reparse_row') return `正在重新识别一行${n}，其他小节可以照常练习。`;
-  if (restaging) return `正在重新识别：${esc(pr.stage || '')}${n}，完成前不能改谱。`;
+  const a = s.activity || {}, pr = s.progress || {};
+  const n = pr.total ? `（${pr.done}/${pr.total} ${a.kind === 'explain' ? '批' : '行'}）` : '';
+  if (a.kind === 'explain') return `正在生成讲解${n}，可以照常练习。`;
+  if (a.kind === 'reparse_row') return `${esc(pr.stage || '正在重新识别')}${n}，其他小节可以照常练习。`;
+  if (a.restaging) return `正在重新识别：${esc(pr.stage || '')}${n}，完成前不能改谱。`;
   return `正在识别：${esc(pr.stage || '')}${n}，已识别的小节可以先练。`;
 }
 
@@ -87,8 +93,8 @@ async function explain(btn) {
 }
 
 function renderNotices(s) {
-  const running = !!(s.busy ?? (s.running || s.status === 'parsing' || s.status === 'queued'));
-  const kind = s.activity ? s.activity.kind : s.job;
+  const running = !!s.activity;
+  const kind = running && s.activity.kind;
   notice('progress', running ? {
     kind: 'info', spinner: true, html: progressText(s),
     actions: [{ label: kind === 'explain' ? '取消' : '取消识别', onClick: btn => withBusy(btn, async () => {
@@ -98,13 +104,12 @@ function renderNotices(s) {
     }) }],
   } : null);
 
-  // 出错 / 警告：后端给 notice 就只显示它；旧接口看 error
-  const n = s.notice !== undefined ? s.notice
-    : s.error ? { kind: s.status === 'error' ? 'error' : 'warn', msg: s.error } : null;
+  // 出错 / 警告：只显示后端给的 notice
+  const n = s.notice;
   const errKey = n ? 'err:' + n.msg : '';
-  const scoreFail = s.kind === 'score' && s.status === 'error';
+  const scoreFail = isScore(s) && s.status === 'error';
   notice('error', n && !dismissed.has(errKey) ? {
-    kind: n.kind === 'error' ? 'err' : 'warn', lead: 'dot',
+    kind: n.kind === 'error' ? 'err' : 'warn',
     html: `${scoreFail ? '曲谱读取失败' : n.kind === 'error' ? '出错了' : '注意'}：${esc(n.msg)}`, onDismiss: closable(errKey),
   } : null);
 
@@ -113,7 +118,7 @@ function renderNotices(s) {
   const exKey = `ex:${ex.missing}:${ex.planStale}`;
   const showEx = !running && s.bars.length && (ex.missing || ex.planStale) && !dismissed.has(exKey);
   notice('explain', showEx ? {
-    kind: '', lead: 'sparkle',
+    kind: '',
     html: ex.fresh ? '让 AI 为每个小节写练习提示，并生成练习建议。'
       : [ex.missing ? `${ex.missing} 个小节还没有提示` : '', ex.planStale ? '练习建议是改谱之前写的，可能已过时' : ''].filter(Boolean).join('；') + '。',
     actions: [{ label: ex.fresh ? '让 AI 讲解这首曲子' : '让 AI 补写', icon: 'sparkle', primary: true, onClick: explain }],
@@ -154,7 +159,7 @@ function renderPlan() {
   if (!s || !v) return;
   const p = s.plan, n = v.bars.length;
   if (!p) {
-    const can = n && !recognizing(s);
+    const can = n && !s.recognizing;
     $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? '<p>让 AI 根据全曲生成分段练习建议。</p><button class="btn sm primary" id="planCreate">' + UI.icon('sparkle') + '生成练习建议</button>' : '识别完成后会自动生成。'}</div></div>`;
     if (can) $('planCreate').onclick = e => explain(e.currentTarget);
     return;
@@ -175,7 +180,7 @@ function renderPlan() {
 // ---------------------------------------------------------------------
 function fillMeta(s) {
   const m = s.meta || {}, v = get('view');
-  const editable = s.editable_meta || (s.kind === 'score' ? ['title'] : ['title', 'tuning', 'capo', 'time_signature']);
+  const editable = s.editable_meta || ['title'];
   $('mTitle').value = s.title || m.title || '';
   if (m.tuning) m.tuning.forEach((x, i) => { $('mT' + (i + 1)).value = showNote(x); });
   $('mCapo').value = v ? v.capo : m.capo || 0;
@@ -187,19 +192,18 @@ function fillMeta(s) {
 }
 async function saveMeta() {
   const s = get('song');
-  const editable = s.editable_meta || (s.kind === 'score' ? ['title'] : ['title', 'tuning', 'capo', 'time_signature']);
+  const editable = s.editable_meta || ['title'];
   const body = { title: $('mTitle').value };
   if (editable.includes('tuning')) body.tuning = [1, 2, 3, 4, 5, 6].map(i => tuningInput($('mT' + i).value));
   if (editable.includes('capo')) body.capo = parseInt($('mCapo').value || '0', 10);
   if (editable.includes('time_signature')) body.time_signature = $('mTs').value.split('/').map(x => parseInt(x, 10));
-  if (s.rev !== undefined) body.rev = s.rev;
+  body.rev = s.rev;
   try {
-    await put(songUrl('/meta'), body);
+    applySong(await put(songUrl('/meta'), body));
     UI.toast('已保存');
   } catch (e) {
-    UI.toast(e.status === 409 ? e.message : '保存失败：' + e.message, 'err', 5000);
+    if (e.status === 409) await conflict(e); else UI.toast('保存失败：' + e.message, 'err', 5000);
   }
-  await refresh();
 }
 
 // ---------------------------------------------------------------------
@@ -211,8 +215,7 @@ async function reportImportError(msg) {
   UI.toast('读取曲谱失败：' + msg, 'err', 8000);
   if (importErrorSent) return;
   importErrorSent = true;
-  await post(songUrl('/import-error'), { error: msg }).catch(() => {});
-  await refresh();
+  try { applySong(await post(songUrl('/import-error'), { error: msg })); } catch { await refresh(); }
 }
 async function onScoreLoaded(score) {
   const s = get('song');
@@ -225,8 +228,7 @@ async function onScoreLoaded(score) {
   if (s.bars.length && track === (s.track || 0) && !outdated) return true;
   try {
     const d = deriveSong(score, track);
-    await put(songUrl('/derived'), { meta: d.meta, bars: d.bars, track, derived });
-    await refresh();
+    applySong(await put(songUrl('/derived'), { meta: d.meta, bars: d.bars, track, derived }));
     return true;
   } catch (e) {
     if (!s.bars.length) reportImportError(e.message); else UI.toast('读取曲谱失败：' + e.message, 'err', 6000);
@@ -240,7 +242,7 @@ async function onScoreLoaded(score) {
 let prevIds = [];
 function onView(v) {
   const s = get('song'), n = v.bars.length;
-  $('scoreEmpty').hidden = !!n || s.kind === 'score';
+  $('scoreEmpty').hidden = !!n || isScore(s);
   if (!n) { prevIds = v.ids; return; }
   const { a, b } = get('play'), shown = get('ui.bar');
   const wasAll = !prevIds.length || (a === 0 && b === prevIds.length - 1);
@@ -257,9 +259,9 @@ function onView(v) {
 export function initSong() {
   setPlayerHooks({
     scoreLoaded: onScoreLoaded,
-    error: msg => { const s = get('song'); if (s && s.kind === 'score' && !s.bars.length) reportImportError(msg); else UI.toast('谱面出错：' + msg, 'err', 6000); },
+    error: msg => { const s = get('song'); if (s && isScore(s) && !s.bars.length) reportImportError(msg); else UI.toast('谱面出错：' + msg, 'err', 6000); },
   });
-  on(['song.bars', 'song.meta', 'song.pages', 'song.kind', 'song.track', 'song.id'], () => set('view', deriveView(get('song'))));
+  on(['song.bars', 'song.meta', 'song.pages', 'song.source_type', 'song.track', 'song.id'], () => set('view', deriveView(get('song'))));
   on('view', onView);
   on(['song', 'view'], () => renderHeader(get('song')));
   on('song', s => { renderNotices(s); renderResume(s); });

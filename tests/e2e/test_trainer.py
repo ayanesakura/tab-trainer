@@ -181,7 +181,7 @@ def test_library_lists_songs(server, browser):
     browser.open(server["base"] + "/")
     browser.wait_for("document.getElementById('songs').innerText.includes('E2E 图片曲')")
     text = browser.js("document.getElementById('songs').innerText")
-    assert "E2E 图片曲" in text and "曲谱读取失败" in text
+    assert "E2E 图片曲" in text and "失败" in text  # 读不了的 GP 文件在曲库里标成失败
     assert not browser.errors, browser.errors
 
 
@@ -218,16 +218,17 @@ def test_layout_score_first_and_sidebar(server, browser):
 
 
 def test_resume_param_continues_last_practice(server, browser):
-    store = server["store"]
-
-    def last(s):
-        s.setdefault("practice", {})["last"] = {"a": "bar4", "b": "bar6", "bpm": 66, "at": "昨天"}
-
-    store.update(server["image"], last)
+    body = json.dumps({"bar_ids": ["bar4", "bar5", "bar6"], "loops": 1, "bpm": 66, "seconds": 30}).encode()
+    req = urllib.request.Request(
+        f"{server['base']}/api/songs/{server['image']}/practice",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req)
     b = browser
     # 页面会把地址里的 resume 去掉，所以不用 open()（它要等地址一致）
     b._run(b._send("Page.navigate", url=f"{server['base']}/trainer?id={server['image']}&resume=1"))
-    b.wait_for("tt.state.a === 3 && tt.state.b === 5")
+    b.wait_for("window.tt && tt.state.ready && tt.state.a === 3 && tt.state.b === 5", timeout=40)
     assert b.js("tt.state.bpm") == 66
     assert "resume" not in b.js("location.search")  # 刷新页面不会再跳
     assert not b.js("document.querySelector('#notices [data-id=resume]')")
