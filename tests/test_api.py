@@ -92,6 +92,29 @@ def test_upload_limits(client, monkeypatch):
     assert len(list(store.SONGS.iterdir())) == 1  # 被拒的上传没有留下半成品目录
 
 
+def test_derived_with_absurd_numbers_is_cleaned_not_a_500(client):
+    """练习页转换出的数据里有超大的数（1e400 解析成 inf）、类型不对的字段：和别的坏值一样处理
+    （坏小节换成休止并写明原因、谱头用默认值、反复记号不要），不能 500。"""
+    sid = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    bad_bars = (
+        '[{"events": [{"dur": "4", "notes": [{"string": 1, "fret": 1e400}]}]},'
+        ' {"events": [{"dur": "4", "notes": 5}]},'
+        ' {"repeat_end": 1e400, "endings": [1e400], "directions": [[1]], "events": []}]'
+    )
+    for meta in ('{"capo": 1e400, "tempo": 1e400}', '{"tuning": 5}', '{"time_signature": 5}'):
+        r = client.put(
+            f"/api/songs/{sid}/derived",
+            content=f'{{"meta": {meta}, "bars": {bad_bars}}}',
+            headers={"content-type": "application/json"},
+        )
+        assert r.status_code == 200, (meta, r.status_code, r.text)
+        song = r.json()
+        assert song["meta"]["tuning"] == ["E4", "B3", "G3", "D3", "A2", "E2"]
+        assert [b["warn"][0]["code"] for b in song["bars"][:2]] == ["other", "other"]
+        assert "无法使用" in song["bars"][0]["warn"][0]["msg"]
+        assert "repeat_end" not in song["bars"][2] and "endings" not in song["bars"][2]
+
+
 def test_oversized_request_is_rejected_before_parsing(client, monkeypatch):
     monkeypatch.setattr(config.settings, "max_total_bytes", 1000)
     r = client.post("/api/songs", files={"files": ("p.png", b"x" * 3_000_000)})

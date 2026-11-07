@@ -63,7 +63,10 @@ def tuning_midi(tuning: list[str]) -> list[int]:
 
 def normalize_meta(raw: dict, fallback_title: str = "", strict: bool = False) -> dict:
     """整理谱头信息。模型的输出宽松处理（读不懂就退回默认值）；strict=True 用于用户手工修改，格式不对直接报错。"""
-    tuning = list(raw.get("tuning") or [])
+    try:
+        tuning = list(raw.get("tuning") or [])
+    except TypeError:  # 不是列表（比如一个数字）
+        tuning = []
     if len(tuning) != STRINGS:
         if strict:
             raise Invalid(f"调弦需要 {STRINGS} 根弦的音名")
@@ -85,13 +88,13 @@ def normalize_meta(raw: dict, fallback_title: str = "", strict: bool = False) ->
         ts = [4, 4]
     try:
         capo = int(raw.get("capo") or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError：JSON 里的 1e400 解析成 inf
         if strict:
             raise Invalid("变调夹应为 0–12 的整数") from None
         capo = 0
     try:
         tempo = max(0, int(raw.get("tempo") or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         tempo = 0
     return {
         "title": str(raw.get("title") or fallback_title or "").strip(),
@@ -148,13 +151,15 @@ def clean_events(events) -> list[dict]:
         if dur <= 0:
             raise Invalid(f"第 {i} 个事件的时值必须大于 0：{e['dur']!r}")
         notes = []
+        if not isinstance(e.get("notes") or [], list):
+            raise Invalid(f"第 {i} 个事件的 notes 必须是列表")
         for n in e.get("notes") or []:
             try:
                 st, fr = int(n["string"]), int(n["fret"])
                 grace = int(n.get("grace", -1))
                 bend = float(n.get("bend", 0) or 0)
                 tech = [t for t in (n.get("tech") or []) if t in TECHS]
-            except (KeyError, TypeError, ValueError, AttributeError):
+            except (KeyError, TypeError, ValueError, AttributeError, OverflowError):  # 1e400 → inf
                 raise Invalid(f"第 {i} 个事件里有音符格式不对（需要 string、fret）") from None
             if not 1 <= st <= STRINGS:
                 raise Invalid(f"第 {i} 个事件：弦号 {st} 超出 1–{STRINGS}")
@@ -191,17 +196,20 @@ def clean_repeats(b: dict) -> dict:
         out["repeat_start"] = True
     try:
         n = int(b.get("repeat_end") or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError：JSON 里的 1e400 解析成 inf
         n = 0
     if n >= 1:
         out["repeat_end"] = max(2, min(n, 8))
     try:
         endings = sorted({int(x) for x in b.get("endings") or [] if 1 <= int(x) <= 8})
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         endings = []
     if endings:
         out["endings"] = endings
-    dirs = [d for d in dict.fromkeys(b.get("directions") or []) if d in DIRECTIONS]
+    try:
+        dirs = [d for d in dict.fromkeys(b.get("directions") or []) if d in DIRECTIONS]
+    except TypeError:  # 不是列表，或者里面有列表之类
+        dirs = []
     if dirs:
         out["directions"] = dirs
     return out
