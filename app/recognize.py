@@ -502,7 +502,8 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
                 {**work["meta"], **(s.get("meta_user") or {})}, work["meta"]["title"]
             )
             changed = staleness.setting_changed(s.get("meta") or {}, work["meta"])
-            dropped = staleness.reconcile_bars(s, s["bars"], work["bars"], staleness.RESTAGE, changed)
+            metas = (s.get("meta") or {}, work["meta"])
+            dropped = staleness.reconcile_bars(s, s["bars"], work["bars"], staleness.RESTAGE, changed, metas)
             s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"])
             return dropped
 

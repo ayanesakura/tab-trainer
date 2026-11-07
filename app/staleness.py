@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass
 
 from app.model import touch_bar
+from app.music import bar_length
 
 # 影响音的设定：这些变了，所有小节的提示都按旧设定写的。曲名、艺人、备注之类不算（派生的 meta.title 跟着曲名变）
 SETTING_KEYS = ("tuning_midi", "capo", "time_signature")
@@ -119,7 +120,12 @@ ROW = Policy(ts_field="ts_change")  # 重新识别某一行（用户要的就是
 
 
 def reconcile_bars(
-    s: dict, old: list[dict], bars: list[dict], policy: Policy = DERIVE, setting_changed_: bool = False
+    s: dict,
+    old: list[dict],
+    bars: list[dict],
+    policy: Policy = DERIVE,
+    setting_changed_: bool = False,
+    metas: tuple[dict, dict] | None = None,
 ) -> int:
     """一批新小节（bars）取代原来的小节（old）：把原来小节的 id、提示、问答搬到新小节上（练习记录按 id 自然保留）。
     按内容做序列比对（小节数变了也能对上）：内容一样的原样保留；对不上但位置相当的（比对里的“替换”段）
@@ -127,7 +133,8 @@ def reconcile_bars(
 
     policy.keep_edits（重新识别图片谱子）：用户手改过的小节（edited）按改之前的识别结果（_orig）去比对，
     一一对应上的保留用户改的音，新识别的结果记成它的 _orig（撤销回识别结果用）。
-    setting_changed_：调弦 / 变调夹 / 拍号也变了（所有提示都按旧设定写的）。
+    setting_changed_：调弦 / 变调夹 / 拍号也变了（所有提示都按旧设定写的）。metas =（原来的谱头, 新的谱头）给出时，
+    设定变了也保留手改的音：品位和调弦、变调夹无关；拍号变了的话只保留小节长度没变的（见 _edit_fits）。
     返回因为对不上而没能保留的手改小节数。调用方之后自己把 bars 放进 s。"""
     keep_edits = policy.keep_edits
 
@@ -155,8 +162,10 @@ def reconcile_bars(
         if prev.get("qa"):
             new["qa"] = prev["qa"]
         edited = keep_edits and bool(prev.get("edited"))
-        if edited and not setting_changed_ and (same or one_to_one):
-            _keep_edit(prev, new)
+        if edited and (same or one_to_one) and (not setting_changed_ or _edit_fits(prev, new, metas)):
+            _keep_edit(prev, new, setting_changed_)
+            if setting_changed_:
+                mark_qa_stale(new)
             continue
         dropped += edited
         if same and not setting_changed_:
@@ -170,13 +179,25 @@ def reconcile_bars(
     return dropped
 
 
-def _keep_edit(prev: dict, new: dict) -> None:
-    """重新识别后保留用户手改的音：识别结果放进 _orig，改回去时还能恢复。"""
+def _edit_fits(prev: dict, new: dict, metas: tuple[dict, dict] | None) -> bool:
+    """设定变了时手改的音还能不能用：调弦、变调夹不影响品位；拍号变了，这个小节的长度不变才行。"""
+    if metas is None:
+        return False
+    old_meta, new_meta = metas
+    if old_meta.get("time_signature") == new_meta.get("time_signature"):
+        return True
+    return bar_length(old_meta, prev) == bar_length(new_meta, new)
+
+
+def _keep_edit(prev: dict, new: dict, setting_changed_: bool = False) -> None:
+    """重新识别后保留用户手改的音：识别结果放进 _orig，改回去时还能恢复。
+    setting_changed_：原来的提示是按旧设定写的，不再沿用（新识别结果自己的提示是按新设定写的，照常留着）。"""
     if prev["events"] == new["events"]:  # 新识别的正好就是用户改成的样子
-        new["tip"] = prev.get("tip") or new.get("tip", "")
+        if not setting_changed_:
+            new["tip"] = prev.get("tip") or new.get("tip", "")
         return
     new["_orig"] = {"events": new["events"], "tip": new.get("tip", ""), "uncertain": new.get("uncertain", "")}
     new["edited"] = True
     new["events"] = prev["events"]
-    new["tip"], new["uncertain"] = prev.get("tip", ""), ""
+    new["tip"], new["uncertain"] = "" if setting_changed_ else prev.get("tip", ""), ""
     new["warn"] = [w for w in new.get("warn") or [] if w.get("code") != "ocr_mismatch"]  # OCR 比的是识别结果

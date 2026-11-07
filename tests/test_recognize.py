@@ -727,3 +727,34 @@ def test_full_rerecognition_keeps_the_artist_set_by_hand(data_dir, monkeypatch):
     recognize.run_parse(sid)
     meta = store.load(sid)["meta"]
     assert (meta["artist"], meta["capo"]) == ("久石让", 3)
+
+
+@pytest.mark.parametrize(
+    "head, kept",
+    [
+        ({"capo": 0}, True),  # 品位和变调夹 / 调弦无关：手改的音照样对
+        ({"tuning": ["E", "B", "G", "D", "A", "E"]}, True),
+        ({"time_signature": [2, 2]}, True),  # 小节长度没变
+        ({"time_signature": [3, 4]}, False),  # 小节长度变了：手改的音凑不满 / 超出，按新结果
+    ],
+)
+def test_reparse_reading_other_settings_keeps_hand_edits(data_dir, sync_jobs, monkeypatch, head, kept):
+    """重新识别时模型把变调夹 / 调弦 / 拍号读得和上次不一样：手改的小节照样保留（能撤销回新识别结果），
+    提示、问答按旧设定写的照样作废。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bar = store.load(sid)["bars"][1]
+    songs.edit_bar(sid, bar["id"], [{"dur": "4", "notes": [{"string": 2, "fret": 7}]}], None)
+    store.update(sid, lambda s: s["bars"][1].update(tip="手写提示", qa=[{"q": "怎么弹", "a": "慢慢弹"}]))
+    real = FakeClaude.read_meta
+    monkeypatch.setattr(FakeClaude, "read_meta", lambda self, p: {**real(self, p), **head})
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    nb = next(b for b in after["bars"] if b["id"] == bar["id"])
+    assert nb["qa"][0]["stale"]
+    if kept:
+        assert nb["edited"] and nb["events"][0]["notes"][0]["fret"] == 7 and nb["_orig"]["events"]
+        assert nb["tip"] == "" and not after["notice"]
+    else:
+        assert not nb.get("edited") and "_orig" not in nb
+        assert "手改过的小节" in after["notice"]["msg"]
