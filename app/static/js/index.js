@@ -2,7 +2,7 @@
 // 词表：曲子 = 曲库里的一条；谱面 = 渲染出来的谱；原谱 = 上传的图片 / PDF。
 import { UI, $, esc, icon, toast } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
-import { SOURCES } from '/static/js/vocab.js';
+import { SOURCES, SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
 
 UI.initShell();
 
@@ -34,10 +34,11 @@ function setFiles(list) {
   picked = files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   $('pickedBox').hidden = !picked.length;
   $('picked').innerHTML = picked.map(f => `<span class="badge">${icon(fileIcon(f), 12)}${esc(f.name)}</span>`).join('');
-  const score = picked.length && picked.every(f => /\.(gpx?|gp[345]|musicxml|xml|mxl)$/i.test(f.name));
+  const score = picked.length && picked.every(f => isScoreFile(f.name));
   $('uploadBtn').lastChild.textContent = score ? '导入' : '上传并识别';
 }
 const fileIcon = f => (f.type === 'application/pdf' || /\.pdf$/i.test(f.name) ? 'file' : f.type.startsWith('image/') ? 'image' : 'score');
+$('file').accept = ['image/*', 'application/pdf', ...SCORE_EXT, '.zip'].join(','); // 曲谱扩展名和后端用同一份（vocab.json）
 $('file').onchange = e => setFiles(e.target.files);
 const drop = $('drop');
 drop.onclick = () => $('file').click();
@@ -49,7 +50,7 @@ $('clearPick').onclick = () => { setFiles([]); $('file').value = ''; drop.focus(
 $('uploadBtn').onclick = () => api.withBusy($('uploadBtn'), async () => {
   try {
     await api.upload('/api/songs', picked, { title: $('title').value });
-    toast(picked.some(f => !/\.(gpx?|gp[345]|musicxml|xml|mxl)$/i.test(f.name)) ? '已上传，开始识别' : '已导入');
+    toast(picked.some(f => !isScoreFile(f.name)) ? '已上传，开始识别' : '已导入');
     setFiles([]); $('title').value = ''; $('file').value = '';
     songsPoll.now();
   } catch (e) {
@@ -129,7 +130,7 @@ addEventListener('keydown', e => { if (e.key === 'Escape' && selecting && !UI.ha
 
 // ---------------- 曲库列表 ----------------
 const SOURCE_ICON = { image: 'image', pdf: 'file', gp: 'score', musicxml: 'score' };
-const isScore = s => s.source_type === 'gp' || s.source_type === 'musicxml'; // GP / MusicXML：没有原谱页面，不需要识别
+const isScore = s => !!s.is_score; // GP / MusicXML（后端给的）：没有原谱页面，不需要识别
 const canPlay = s => s.status !== 'corrupt' && (s.bars > 0 || isScore(s));
 
 // “3 天前”：练习时间是本地时间字符串 “YYYY-MM-DD HH:MM”

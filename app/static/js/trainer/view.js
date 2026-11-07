@@ -22,7 +22,7 @@ export const STD_MIDI = STANDARD.map(nameToMidi); // 标准调弦，1 弦 → 6 
 const HARM = { 12: 12, 24: 24, 7: 19, 19: 19, 5: 24, 4: 28, 9: 28, 16: 28, 3: 31, 2: 36 }; // 自然泛音品位 → 比空弦高几个半音
 
 /** GP / MusicXML 导入的曲子（小节来自原文件，谱面直接用原文件渲染） */
-export const isScore = s => s.source_type === 'gp' || s.source_type === 'musicxml';
+export const isScore = s => !!(s && s.is_score); // GP / MusicXML：后端给的（SongView.is_score），前端不再按来源推断
 /** 小节要不要核对（后端算好的） */
 export const needsReview = b => !!b.needs_review;
 /** 警告 {code, msg} 的文字 */

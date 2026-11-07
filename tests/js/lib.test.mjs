@@ -17,6 +17,8 @@ test('vocab：常量和 vocab.json 一致', () => {
   assert.equal(V.TECHS.length, raw.techs.length);
   assert.equal(V.DIRECTIONS[0], 'fine');
   assert.equal(V.SOURCES.gp, 'GP');
+  assert.deepEqual([...V.SCORE_EXT], [...raw.score_files.gp, ...raw.score_files.musicxml]);
+  assert.ok(V.isScoreFile('Song.GP5') && V.isScoreFile('a.mxl') && !V.isScoreFile('page.png') && !V.isScoreFile('x.zip'));
   assert.equal(V.WARN_CODES.length, '时值合计不对'); // code 'length'，不是数组长度
   assert.ok(Object.isFrozen(V.TECH_SYM));
 });

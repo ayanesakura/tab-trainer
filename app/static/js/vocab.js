@@ -1,4 +1,4 @@
-// 前后端共用的词表（js/vocab.json，后端 app/music.py 读同一个文件）：弦数和标准调弦、播放网格、技巧、反复记号、来源、警告代码。
+// 前后端共用的词表（js/vocab.json，后端 app/music.py 读同一个文件）：弦数和标准调弦、播放网格、技巧、反复记号、来源、曲谱文件扩展名、警告代码。
 import vocab from './vocab.json' with { type: 'json' };
 
 const freeze = o => Object.freeze(o);
@@ -20,6 +20,9 @@ export const TECH_NAME = freeze(Object.fromEntries(TECHS.map(t => [t.code, t.nam
 export const DIRECTIONS = freeze(vocab.directions.map(d => d.code));
 
 export const SOURCES = freeze({ ...vocab.sources }); // source_type → 显示名（图片 / PDF / GP / MusicXML）
+// 直接导入、不用 AI 识别的曲谱文件扩展名（GP + MusicXML；gbk 只是其中按 GBK 读文字的那些，不另算）
+export const SCORE_EXT = freeze([...vocab.score_files.gp, ...vocab.score_files.musicxml]);
+export const isScoreFile = name => SCORE_EXT.some(e => String(name).toLowerCase().endsWith(e));
 export const WARN_CODES = freeze({ ...vocab.warn_codes }); // 小节警告 code → 中文说明
 
 // 时值字符串 → 四分音符数："1" → 1，"3/2" → 1.5，"1/3" → 0.333…；数字原样返回，读不懂的是 NaN

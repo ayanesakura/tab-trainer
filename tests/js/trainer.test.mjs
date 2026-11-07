@@ -63,7 +63,7 @@ test('deriveView: events, pitches, bar lengths, regions, sections, review flags'
   assert.deepEqual(v.beatMap[1], [0, 320, 640, 960]);
   assert.equal(noteMidi(v.bars[0][0].notes[0], v), 62 + 2);
   assert.equal(noteMidi(v.bars[1][3].notes[0], v), 62 + 2 + 12); // 12 品泛音高八度
-  const gp = deriveView({ ...SONG, source_type: 'gp', track: 1 });
+  const gp = deriveView({ ...SONG, source_type: 'gp', is_score: true, track: 1 });
   assert.deepEqual(gp.source, { kind: 'score', id: 's1', track: 1 });
   assert.deepEqual(gp.beatMap[0], [0, 960, 1920]);
 });
@@ -109,7 +109,7 @@ test('tags, plan ranges, subtitle, explain state, warnings, note names', () => {
   assert.equal(songSubtitle(SONG, v), '某人 · 调弦 D A D F♯ A D · 变调夹 2 品 · 4/4 拍（有变拍号） · 4 小节');
   const std = { ...SONG, meta: { time_signature: [3, 4] } };
   assert.equal(songSubtitle(std, deriveView(std)), '标准调弦 · 3/4 拍（有变拍号） · 4 小节');
-  assert.deepEqual(explainState({ ...SONG, source_type: 'musicxml', plan: null }), { missing: 4, noPlan: true, planStale: false, fresh: true });
+  assert.deepEqual(explainState({ ...SONG, source_type: 'musicxml', is_score: true, plan: null }), { missing: 4, noPlan: true, planStale: false, fresh: true });
   assert.equal(explainState({ ...SONG, plan: { stale: true } }).planStale, true);
   assert.equal(needsReview({ needs_review: false, uncertain: '有点怪' }), false); // 后端说了算
   assert.equal(needsReview({ needs_review: true }), true);
