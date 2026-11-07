@@ -53,11 +53,14 @@
               <span class="loop-label" id="loopLabel">—</span>
               <button class="icon-btn sm" id="loopNext" data-ic="right" title="下一段（→）" aria-label="下一段"></button>
             </div>
-            <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="把循环换成正在看的这一小节并播放">只练这一小节</button>
-            <button class="btn sm ghost" id="rhythmBtn" data-ic="tap" aria-pressed="false" aria-controls="rhythmCard" title="只练节奏：不拿琴，跟着示范在键盘上敲出这一段的节奏，每个音判早晚、每遍打分">敲节奏</button>
-            <div class="grow"></div>
-            <button class="btn sm ghost" id="fbBtn" data-ic="tuning" aria-pressed="true" title="显示 / 收起底部的指板">指板</button>
-            <button class="btn sm ghost" id="moreBtn" data-ic="settings" aria-haspopup="true" aria-expanded="false" aria-controls="morePop">更多</button>
+            <div class="grp t-acts">
+              <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="把循环换成正在看的这一小节并播放">只练这一小节</button>
+              <button class="btn sm ghost" id="rhythmBtn" data-ic="tap" aria-pressed="false" aria-controls="rhythmCard" title="只练节奏：不拿琴，跟着示范在键盘上敲出这一段的节奏，每个音判早晚、每遍打分">敲节奏</button>
+            </div>
+            <div class="grp t-end">
+              <button class="btn sm ghost" id="fbBtn" data-ic="tuning" aria-pressed="true" title="显示 / 收起底部的指板">指板</button>
+              <button class="btn sm ghost" id="moreBtn" data-ic="settings" title="更多：节拍器、预备拍、音量、音色、自动提速" aria-haspopup="true" aria-expanded="false" aria-controls="morePop">更多</button>
+            </div>
           </div>
           <div class="chips sections" id="secBtns" role="group" aria-label="按原谱的行选段"></div>
 

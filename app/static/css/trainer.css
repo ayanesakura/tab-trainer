@@ -1,6 +1,6 @@
 /* 练习页（trainer.html）的样式；共用部分（变量、按钮、卡片、chips、legend、通知、对话框）在 /static/ui.css。
    颜色都用 ui.css 的变量，暗色由 :root[data-theme="dark"] 统一切换，这里不再单独写暗色。
-   布局：≥1200px 主栏（控制条 + 谱面）+ 右侧 360px 小节卡片；更窄时小节卡片落到谱面下面。指板是底部停靠条。
+   布局：≥1000px 主栏（控制条 + 谱面）+ 右侧小节卡片（≥1200px 宽 360px，更窄 300px）；再窄时小节卡片落到谱面下面。指板是底部停靠条。
    敲节奏打开时，侧栏里的小节卡片换成节奏卡片（.rh-card），指板停靠条收起。 */
 
 :root { --top-h: 52px; --side-w: 360px; --dock-h: 0px; }
@@ -25,15 +25,16 @@
 .notices .n-acts { margin: -2px -6px -2px 0; }
 
 /* ---- 控制条（吸顶，一行）+ 分段 chips ---- */
-.transport { position: sticky; top: calc(var(--top-h) + var(--sp-2)); z-index: 20; padding: 10px var(--sp-3) var(--sp-2); display: flex; flex-direction: column; gap: var(--sp-2); box-shadow: var(--shadow-sm); }
+.transport { container-type: inline-size; position: sticky; top: calc(var(--top-h) + var(--sp-2)); z-index: 20; padding: 10px var(--sp-3) var(--sp-2); display: flex; flex-direction: column; gap: var(--sp-2); box-shadow: var(--shadow-sm); }
 .t-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; } /* 放不下时换行，不会把右边的按钮挤出去 */
+.t-end { margin-left: auto; } /* 指板 / 更多一起靠右；换行时一起换 */
 .t-sep { width: 1px; height: 24px; background: var(--line); flex: none; }
 .play { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-fg); flex: none; box-shadow: var(--shadow-sm); transition: transform .12s var(--ease), background .15s; }
 .play:hover { background: var(--accent-hover); }
 .play:active { transform: scale(.94); }
 .play .ic { width: 17px; height: 17px; }
 .play.on { background: var(--fg); color: var(--bg); }
-.status { width: 140px; flex: none; line-height: 1.3; min-width: 0; }
+.status { width: 164px; flex: none; line-height: 1.3; min-width: 0; }
 .status .l1 { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status .l2 { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .grp { display: flex; align-items: center; gap: var(--sp-1); flex: none; }
@@ -262,7 +263,13 @@ table.tune td b { font-variant-numeric: tabular-nums; }
 .glossary .sym { flex: none; min-width: 44px; text-align: center; font-size: var(--fs-1); }
 
 /* ---- 窄屏：小节卡片落到谱面下面，控制条换行 ---- */
-@media (max-width: 1199px) {
+/* 控制条一行放不下时，按钮依次只留图标（都有 title）；宽度按控制条自己算，不按窗口 */
+@container (max-width: 995px) { .t-end .btn { font-size: 0; gap: 0; padding: 0 6px; } }
+@container (max-width: 925px) { .t-acts .btn { font-size: 0; gap: 0; padding: 0 6px; } }
+@container (max-width: 790px) { #bpm { width: 84px; } .status { width: 132px; } }
+@container (max-width: 700px) { .t-acts .btn, .t-end .btn { font-size: var(--fs-1); gap: 6px; padding: 0 9px; } } /* 反正要换成两行了：第二行放得下文字 */
+@media (min-width: 1000px) and (max-width: 1199px) { :root { --side-w: 300px; } }
+@media (max-width: 999px) {
   .practice-grid { grid-template-columns: minmax(0, 1fr); }
   .side { position: static; max-height: none; overflow: visible; }
   .bar-card .card-h { position: static; }

@@ -410,7 +410,7 @@ export function refreshScoreTheme() {
 // ---------------------------------------------------------------------
 // 控制条
 // ---------------------------------------------------------------------
-export function setStatus(l1, l2) { $('statusL1').textContent = l1; $('statusL2').textContent = l2; }
+export function setStatus(l1, l2) { $('statusL1').textContent = l1; $('statusL2').textContent = l2; $('statusL1').parentElement.title = l2 ? `${l1}\n${l2}` : l1; } // 窄的时候会截断：悬停看全文
 
 function renderSections(v) {
   const host = $('secBtns');
