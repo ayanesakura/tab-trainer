@@ -94,7 +94,9 @@ def test_json_editor_stays_open_while_playback_moves_on(trainer, image_song):
     b.wait_for("!document.getElementById('editor').hidden")
     b.js("tt.play(); true")
     b.wait_for("tt.state.playing")
-    b.wait_for("tt.api.tickPosition > tt.api.playbackRange.startTick + 4 * 960 + 100", timeout=8)  # 进了第 2 小节
+    b.wait_for(
+        "tt.api.tickPosition > tt.api.playbackRange.startTick + 4 * 960 + 100", timeout=8
+    )  # 进了第 2 小节
     assert b.js("tt.get('ui.bar')") == 0
     assert not b.js("document.getElementById('editor').hidden")
     b.js("tt.stop(); true")

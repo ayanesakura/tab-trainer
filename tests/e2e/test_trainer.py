@@ -539,11 +539,15 @@ def test_song_info_form_edits_artist(server, trainer):
     b = trainer()
     try:
         assert not b.js("document.getElementById('mArtistLbl').hidden")
-        b.js("document.getElementById('mArtist').value = '测试艺人'; document.getElementById('metaSave').click(); true")
+        b.js(
+            "document.getElementById('mArtist').value = '测试艺人'; document.getElementById('metaSave').click(); true"
+        )
         b.wait_for("tt.song.meta.artist === '测试艺人'")
         assert _song(server, sid)["meta"]["artist"] == "测试艺人"
     finally:
-        store.update(sid, lambda s: (s["meta"].update(artist=old), s.get("meta_user", {}).pop("artist", None)))
+        store.update(
+            sid, lambda s: (s["meta"].update(artist=old), s.get("meta_user", {}).pop("artist", None))
+        )
     b = trainer(server["gp"])
     b.wait_for("tt.song.status === 'ready'")
     assert b.js("document.getElementById('mArtistLbl').hidden")
