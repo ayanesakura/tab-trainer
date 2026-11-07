@@ -2,7 +2,8 @@
 
 - Host 校验：只接受 localhost、IP 地址和局域网的 .local 名字。挡住 DNS rebinding——恶意网页把自己的域名
   解析到 127.0.0.1 后，浏览器发来的 Host 还是那个域名；不挡的话它能读写所有接口（包括把模型地址改成
-  自己的服务器、骗走 API key）。
+  自己的服务器、骗走 API key）。本机来的请求不用令牌，所以更严：.local 只认这台电脑自己的名字
+  （局域网里别人可以用 mDNS 把任意 xxx.local 指向 127.0.0.1）。
 - 跨站写请求：POST / PUT / DELETE 带的 Origin 和 Host 不一致就拒绝（别的网站用表单偷偷上传、花模型额度）。
   不带 Origin 的（curl 等非浏览器客户端）放行。
 - 局域网访问令牌：服务绑定到非本机地址时 app.state.token 才会被设置（见 main.main）：
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import secrets
+import socket
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
@@ -32,11 +34,18 @@ def _same(a: str, b: str) -> bool:
     )  # 直接比较 str 时非 ASCII 会抛 TypeError
 
 
-def _host_ok(host: str) -> bool:
-    """Host 头（可能带端口）是不是本机 / 局域网能直接访问的名字。"""
-    name = urlsplit("//" + host).hostname or ""
-    if name == "localhost" or name.endswith(".local"):
+def _own_local_names() -> set[str]:
+    name = socket.gethostname().lower().removesuffix(".local")
+    return {name + ".local"} if name else set()
+
+
+def _host_ok(host: str, loopback: bool = False) -> bool:
+    """Host 头（可能带端口）是不是本机 / 局域网能直接访问的名字。loopback：请求来自本机（不需要令牌）。"""
+    name = (urlsplit("//" + host).hostname or "").lower()
+    if name == "localhost":
         return True
+    if name.endswith(".local"):
+        return not loopback or name in _own_local_names()
     try:
         ipaddress.ip_address(name)
     except ValueError:
@@ -72,7 +81,8 @@ def install(app: FastAPI) -> None:
     @app.middleware("http")
     async def check_origin(request: Request, call_next):
         host = request.headers.get("host", "")
-        if not _host_ok(host):
+        client = request.client.host if request.client else ""
+        if not _host_ok(host, loopback=client in LOOPBACK):
             return JSONResponse(
                 {"detail": "不接受这个访问地址，请用 127.0.0.1、localhost 或局域网 IP 打开"}, 403
             )
