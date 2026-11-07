@@ -110,6 +110,7 @@ export function stepSection({ a, b, n, shown, secs }, dir) {
     return g !== secs[k] ? { a: g.a, b: g.z } : { msg: dir > 0 ? '已经是最后一段了' : '已经是第一段了' };
   }
   const len = b - a + 1, na = Math.max(0, Math.min(n - len, a + dir * len));
+  if (na === a) return { msg: dir > 0 ? '已经到曲尾了' : '已经到开头了' }; // 不能平移时别从段首重新播放
   return { a: na, b: na + len - 1 };
 }
 

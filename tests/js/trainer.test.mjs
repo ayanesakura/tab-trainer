@@ -78,7 +78,9 @@ test('stepSection: whole song, whole sections, custom ranges', () => {
   assert.deepEqual(st(6, 6, 6, 1), { msg: '已经是最后一段了' });
   assert.deepEqual(st(0, 2, 0, -1), { msg: '已经是第一段了' });
   assert.deepEqual(st(1, 2, 1, 1), { a: 3, b: 4 }); // 自选范围按长度平移
-  assert.deepEqual(st(5, 6, 5, 1), { a: 5, b: 6 }); // 到头了不越界
+  assert.deepEqual(st(4, 5, 4, 1), { a: 5, b: 6 }); // 不够一整段时平移到头，不越界
+  assert.deepEqual(st(5, 6, 5, 1), { msg: '已经到曲尾了' }); // 已经在曲尾：不从段首重新播放
+  assert.deepEqual(st(0, 1, 0, -1), { msg: '已经到开头了' });
   assert.equal(stepSection({ a: 0, b: 0, n: 0, shown: 0, secs: [] }, 1), null);
   assert.deepEqual(sectionsOf([{ system: 0 }, { system: 0 }, { system: 2 }]), [{ sys: 0, a: 0, z: 1 }, { sys: 2, a: 2, z: 2 }]);
 });
