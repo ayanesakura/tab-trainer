@@ -313,3 +313,17 @@ def test_chord_diagrams_with_finger_dots_are_not_a_tab_row():
             d.ellipse([(cx - 4, cy - 4), (cx + 4, cy + 4)], fill=0)
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [2]
+
+
+def test_gap_before_a_coda_section_is_not_a_bar():
+    """D.S. 之后同一行另起一段 Coda：两段谱线之间断开 3 个线距左右，两头各有一条线，中间不是小节。"""
+    img = Image.new("L", (1200, 400), 255)
+    d = ImageDraw.Draw(img)
+    tab_top = 150
+    for x0, x1 in ((60, 640), (680, 1140)):
+        for i in range(6):
+            d.line([(x0, tab_top + i * 14), (x1, tab_top + i * 14)], fill=170)
+        for x in (x0, (x0 + x1) // 2, x1):
+            d.line([(x, tab_top), (x, tab_top + 70)], fill=40, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [4]
