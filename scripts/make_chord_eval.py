@@ -227,9 +227,12 @@ def to_tex(meta: dict, bars: list[dict], melodies: list[list], key: str) -> str:
             if dots:
                 fx.append("d")
             # 和弦音画成 ×（谱上看不到品位，要看和弦图）；过门音写出品位
+            # 击弦在 alphaTex 里标在起始音上：过门里下一个音是击弦的那个 0 带 {h}
+            k = b["events"].index(e)
+            nxt = b["events"][k + 1] if k + 1 < len(b["events"]) else None
+            hammer_from = bool(e.get("x_fill") and nxt and any("h" in n["tech"] for n in nxt["notes"]))
             ns = [
-                f"{n['fret']}.{n['string']}"
-                + ("{h}" if "h" in n["tech"] else "" if e.get("x_fill") else "{x}")
+                f"{n['fret']}.{n['string']}" + ("{h}" if hammer_from else "" if e.get("x_fill") else "{x}")
                 for n in e["notes"]
             ]
             body = ns[0] if len(ns) == 1 else f"({' '.join(ns)})"
@@ -348,9 +351,6 @@ def generate(seed: int, style: str, n_bars: int) -> tuple[dict, list[dict], list
         attach_lyrics(ev, mel)
         bars.append({"events": ev})
         melodies.append(mel)
-    for b in bars:
-        for e in b["events"]:
-            e.pop("x_fill", None)
     return meta, bars, melodies, key
 
 
@@ -371,6 +371,9 @@ def main() -> None:
 
     meta, truth_bars, melodies, key = generate(a.seed, a.style, a.bars)
     tex = to_tex(meta, truth_bars, melodies, key)
+    for b in truth_bars:  # 过门音（写出品位）的标记只给渲染用
+        for e in b["events"]:
+            e.pop("x_fill", None)
     if a.save_tex:
         a.save_tex.write_text(tex)
     full, rows = render(tex, a.scale, a.width, a.bars_per_row)
