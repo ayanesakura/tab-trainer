@@ -13,9 +13,10 @@ import uuid
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from fractions import Fraction
 
+import numpy as np
 from PIL import Image, ImageOps
 
-from app import store
+from app import ocr, store
 from app.layout import detect_page
 from app.llm import TECHS, Claude, LLMConfig, LLMError
 
@@ -23,6 +24,7 @@ log = logging.getLogger("tab_trainer.pipeline")
 
 CONCURRENCY = 4
 LABEL_STRINGS = True  # 在裁剪图上标弦号（见 _label_strings）
+OCR_CHECK = True  # 用本机数字识别校对 AI 读出的弦和品（见 app/ocr.py、ocr_disagreements）
 PDF_DPI = 200
 STANDARD = ["E4", "B3", "G3", "D3", "A2", "E2"]
 _NOTE = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
@@ -524,6 +526,43 @@ def _label_strings(img: Image.Image, lines: list[float], x_start: float) -> Imag
     return img
 
 
+def _note_names(bag) -> str:
+    return "、".join(f"{s}弦{f}品" + (f"×{n}" if n > 1 else "") for (s, f), n in sorted(bag.items()))
+
+
+def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -> dict[int, tuple]:
+    """逐小节比较 AI 结果和本机数字识别读到的（弦, 品）。返回 {小节序号: (只有 OCR 读到的, 只有 AI 写了的)}。
+
+    - OCR 在这个小节什么都没读到：不判断（可能是没读出来，不代表没有音）；
+    - 死音（谱上写 x）OCR 不读，不比较；倚音的小数字 OCR 会读到，算进去；
+    - 人工泛音旁边标的“品位 + 12”（如 2<14>）OCR 会多读一个 14，允许；
+    - 整行一致率不到一半：多半是 OCR 在这种排版上读不准，整行都不判断。
+    """
+    from collections import Counter
+
+    pairs = []
+    for i, (bar, seen) in enumerate(zip(bars, ocr_bars, strict=False)):
+        ai: Counter = Counter()
+        harmonic_marks: Counter = Counter()
+        for e in bar["events"]:
+            for n in e["notes"]:
+                if "x" in n["tech"]:
+                    continue
+                ai[(n["string"], n["fret"])] += 1
+                if n.get("grace", -1) >= 0:
+                    ai[(n["string"], n["grace"])] += 1
+                if "ah" in n["tech"]:
+                    harmonic_marks[(n["string"], n["fret"] + 12)] += 1
+        got = Counter(seen) - harmonic_marks
+        if got:
+            pairs.append((i, ai, got))
+    agree = sum(sum((ai & got).values()) for _, ai, got in pairs)
+    total = sum(max(sum(ai.values()), sum(got.values())) for _, ai, got in pairs)
+    if not total or agree / total < 0.5:
+        return {}
+    return {i: (got - ai, ai - got) for i, ai, got in pairs if got != ai}
+
+
 def _transcribe_system(
     claude: Claude,
     sid: str,
@@ -539,6 +578,12 @@ def _transcribe_system(
     img = _page_image(sid, page).crop((x0, y0, x1, y1))
     spans = [(a - x0, b - x0) for a, b in sysinfo["spans"]] if sysinfo["spans"] else None
     lines = _tab_lines(sid, song, sysinfo) if spans else None
+    ocr_bars = None
+    if spans and lines and OCR_CHECK:
+        try:
+            ocr_bars = ocr.read_system(np.asarray(img.convert("L")), lines, spans)
+        except Exception as e:  # noqa: BLE001 - 校对只是锦上添花，出错就跳过
+            log.warning("request_id=none song=%s system=%d ocr failed: %s", sid, si, e)
     labeled = bool(lines and LABEL_STRINGS)
     if labeled:
         img = _label_strings(img, lines, spans[0][0])
@@ -580,6 +625,19 @@ def _transcribe_system(
             )
         if spans and len(bars) != len(spans):
             issues.append(f"应有 {len(spans)} 个小节，返回了 {len(bars)} 个")
+        elif ocr_bars:
+            for i, (only_ocr, only_ai) in ocr_disagreements(bars, ocr_bars).items():
+                parts = []
+                if only_ocr:
+                    parts.append(f"本地数字识别在图上读到 {_note_names(only_ocr)}，你的结果里没有")
+                if only_ai:
+                    parts.append(f"你写的 {_note_names(only_ai)} 它没读到")
+                issues.append(
+                    f"第 {first_bar + i} 小节："
+                    + "；".join(parts)
+                    + "（它只读品位数字，也可能读错：请对照图片核对这几个位置，图上确实如此再改）"
+                )
+                bars[i]["_ocr"] = (only_ocr, only_ai)
         return raw, bars, issues
 
     raw, bars, issues = run()
@@ -590,6 +648,16 @@ def _transcribe_system(
             bars, issues = bars2, issues2
 
     out = []
+    for b in bars:
+        only = b.pop("_ocr", None)
+        if only:
+            only_ocr, only_ai = only
+            msg = "本地数字识别和 AI 结果不一致"
+            if only_ocr:
+                msg += f"：谱上读到 {_note_names(only_ocr)}"
+            if only_ai:
+                msg += f"{'，' if only_ocr else '：'}AI 写的是 {_note_names(only_ai)}"
+            b["warn"] = [*b["warn"], msg + "。请对照原谱核对"]
     for i, b in enumerate(bars):
         if spans and i < len(spans):
             a, c = sysinfo["spans"][i]
