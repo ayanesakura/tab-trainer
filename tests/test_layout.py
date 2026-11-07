@@ -1,3 +1,4 @@
+import pytest
 from PIL import Image, ImageDraw
 
 from app.layout import detect_page
@@ -202,3 +203,8 @@ def test_barline_touched_by_a_slur_is_still_a_barline():
         d.line([(420, t - 5), (421, t)], fill=0, width=2)  # 连线的端点接在 420 处小节线顶上，伸出 4 像素
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
+
+
+@pytest.mark.parametrize("size", [(1, 1), (5, 400), (400, 3)])
+def test_tiny_images_have_no_systems(size):
+    assert detect_page(Image.new("RGB", size, "white"))["systems"] == []

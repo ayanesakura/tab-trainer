@@ -45,6 +45,7 @@ log = logging.getLogger("tab_trainer.songs")
 SCORE_EXT = (".gp", ".gpx", ".gp3", ".gp4", ".gp5", ".musicxml", ".xml", ".mxl")
 MUSICXML_EXT = (".musicxml", ".xml", ".mxl")
 GBK_EXT = (".gp3", ".gp4", ".gp5", ".gpx")  # 中文系统上按 GBK 存文字的老格式（GP7+ 和 MusicXML 是 UTF-8）
+MIN_SIDE = 32  # 图片最短边（像素）：再小就不可能看清谱子
 
 
 def find_bar(song: dict, bar_id: str) -> dict:
@@ -155,6 +156,8 @@ def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
                 img = Image.open(io.BytesIO(data))  # 只读文件头，还没解码像素
                 if img.width * img.height > settings.max_pixels:
                     raise Invalid(f"“{name}”分辨率太大（{img.width}×{img.height}），请缩小后再上传")
+                if min(img.width, img.height) < MIN_SIDE:
+                    raise Invalid(f"“{name}”太小了（{img.width}×{img.height}），看不清谱子")
                 img = ImageOps.exif_transpose(img)
                 if img.mode in ("RGBA", "LA", "P"):
                     bg = Image.new("RGB", img.size, "white")

@@ -1,7 +1,10 @@
 """HTTP 接口：业务错误按类型映射成状态码，上传后只有图片曲子会启动识别。"""
 
+import io
+
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app import config, main, recognize
 from tests.fakes import derived_bars, score_png
@@ -28,6 +31,10 @@ def test_upload_rejects_bad_files(client):
     assert r.status_code == 400 and "不是有效" in r.json()["detail"]
     r = client.post("/api/songs", files={"files": ("p.png", b"not an image")})
     assert r.status_code == 400 and "文件无法读取" in r.json()["detail"]
+    tiny = io.BytesIO()
+    Image.new("RGB", (1, 1), "white").save(tiny, "PNG")
+    r = client.post("/api/songs", files={"files": ("p.png", tiny.getvalue())})
+    assert r.status_code == 400 and "太小" in r.json()["detail"]
     assert client.started == []
 
 
