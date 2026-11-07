@@ -455,20 +455,21 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     # 各行是并行识别的，前面某行写的变拍号后面的行看不到，模型会把小节硬凑成全曲拍号（每小节一样长，查不出来）。
     # 按第一遍的结果算出每行开头实际的拍号，和全曲拍号不同的行带上它再识别一次（没有变拍号的曲子不多花钱）。
     redo = [] if cancel.is_set() else _rows_needing_carried_ts(work["bars"], meta, len(systems))
-    if not restage:
-        song_now = store.load(sid)
-        edited = {b["system"] for b in song_now["bars"] if b.get("edited")}  # 用户已经改过的行不覆盖
-        redo = [(i, ts) for i, ts in redo if i not in edited]
     if redo:
-        log.info("song=%s rerun rows with carried time signature: %s", sid, redo)
 
         def begin_redo(s):
-            s["progress"] = {"stage": "按前面的变拍号重新识别", "done": 0, "total": len(redo)}
+            # 挑出要重做的行和把它们锁住在同一次读-改-写里：中间不会有用户的改动漏过去被覆盖
             if not restage:
+                edited = {b["system"] for b in s["bars"] if b.get("edited")}  # 用户已经改过的行不覆盖
+                redo[:] = [(i, ts) for i, ts in redo if i not in edited]
                 for i, _ in redo:
                     s["systems"][i].update(status="parsing", error=None)  # 识别期间这几行不能改
+            if redo:
+                s["progress"] = {"stage": "按前面的变拍号重新识别", "done": 0, "total": len(redo)}
 
         store.update(sid, begin_redo)
+    if redo:
+        log.info("song=%s rerun rows with carried time signature: %s", sid, redo)
         run_rows(redo)
 
     if cancel.is_set():

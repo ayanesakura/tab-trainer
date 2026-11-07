@@ -618,3 +618,27 @@ def test_reparse_unchanged_row_after_time_signature_change_keeps_ai_content(data
     assert not any(q.get("stale") for b in after["bars"] for q in b["qa"])
     assert not after["plan"]["stale"], after["plan"]
     assert [b["rev"] for b in after["bars"]] == [b["rev"] for b in before["bars"]]
+
+
+def test_edit_just_before_the_carried_ts_rerun_is_not_overwritten(data_dir, monkeypatch):
+    """挑要按变拍号重做的行和锁住它们在同一次 store.update 里：用户在两者之间改了那一行，也不会被重做覆盖。"""
+    transcribe, calls = _cramming_transcribe()
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    real_update = store.update
+    edited = []
+
+    def update(song_id, fn):
+        if getattr(fn, "__name__", "") == "begin_redo" and not edited:  # 恰好在锁住之前，用户改了第 2 行
+            bar = next(b for b in store.load(song_id)["bars"] if b["system"] == 1)
+            edited.append(bar["id"])
+            songs.edit_bar(song_id, bar["id"], [{"dur": "3", "notes": [{"string": 2, "fret": 9}]}], None)
+        return real_update(song_id, fn)
+
+    monkeypatch.setattr(store, "update", update)
+    recognize.run_parse(sid)
+    song = store.load(sid)
+    bar = next(b for b in song["bars"] if b["id"] == edited[0])
+    assert bar["edited"] and bar["events"][0]["notes"][0]["fret"] == 9
+    assert [c["start_ts"] for c in calls if c["first_bar"] == 4] == [None]  # 第 2 行没有重做
+    assert all(s["status"] == "done" for s in song["systems"])
