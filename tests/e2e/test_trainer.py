@@ -64,6 +64,26 @@ def test_playback_does_not_scroll_until_asked(trainer):
     assert not b.errors, b.errors
 
 
+def test_selected_bar_shows_original_image(trainer):
+    b = trainer()
+    assert b.js("document.getElementById('songSource').textContent") == "图片"
+    b.wait_for("!!(api.tracks && api.tracks[0].staves[0].bars.length === 6 && api.boundsLookup)")
+    b.js("onBeatClick(api.tracks[0].staves[0].bars[1].voices[0].beats[0]); true")
+    b.wait_for("!document.getElementById('origBtn').hidden")
+    b.js("document.getElementById('origBtn').click(); true")
+    assert not b.js("document.getElementById('origModal').hidden")
+    assert b.js("document.getElementById('origTitle').textContent") == "原图 · 第 2 小节"
+    b.wait_for("document.getElementById('origCanvas').width > 0")
+    b.js(
+        "document.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', code: 'ArrowRight'})); true"
+    )
+    assert b.js("document.getElementById('origTitle').textContent") == "原图 · 第 3 小节"
+    assert b.js("state.a") == 1  # 弹窗里换小节不影响练习页的选段（←→ 不会被当成换段）
+    b.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape'})); true")
+    assert b.js("document.getElementById('origModal').hidden")
+    assert not b.errors, b.errors
+
+
 def test_edit_note_then_undo(server, trainer):
     b = trainer()
     orig = _song(server, server["image"])["bars"][1]
@@ -164,4 +184,8 @@ def test_library_lists_songs(server, browser):
     browser.wait_for("document.getElementById('songs').innerText.includes('E2E 图片曲')")
     text = browser.js("document.getElementById('songs').innerText")
     assert "E2E 图片曲" in text and "曲谱读取失败" in text
+    badges = browser.js(
+        "[...document.querySelectorAll('#songs .name .badge')].map(x => x.textContent).sort().join(',')"
+    )
+    assert badges == "GP,GP,图片"  # 导入渠道：一首图片曲、两首 GP（一首读取失败）
     assert not browser.errors, browser.errors

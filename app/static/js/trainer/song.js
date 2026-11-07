@@ -38,6 +38,8 @@ function renderHeader() {
   const title = SONG.title || m.title || '未命名';
   document.title = title + ' · 吉他谱练习器';
   $('songTitle').textContent = title;
+  const src = { image: '图片', pdf: 'PDF', gp: 'GP', musicxml: 'MusicXML' }[SONG.source_type];
+  $('songSource').hidden = !src; $('songSource').textContent = src || '';
   const parts = [m.artist, m.arranger && m.arranger + ' 编配', m.tuning && '调弦 ' + [6, 5, 4, 3, 2, 1].map(s => OPEN_NAME[s]).join(' '),
     '变调夹 ' + (CAPO ? CAPO + ' 品' : '无'), m.time_signature && m.time_signature.join('/') + ' 拍' + (SONG.bars.some(b => b.time_signature) ? '（有变拍号）' : ''), `共 ${SONG.bars.length} 小节`];
   $('songSub').textContent = parts.filter(Boolean).join(' · ');

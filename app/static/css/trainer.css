@@ -137,3 +137,12 @@ table.tune td b { font-variant-numeric: tabular-nums; }
   background: var(--accent); color: var(--accent-fg); box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
 .follow-btn:hover { background: var(--accent-hover); }
 .follow-btn[hidden] { display: none; }
+
+/* 原图：谱面上选中小节时的按钮 + 弹窗 */
+.orig-btn { position: absolute; z-index: 3; height: 24px; padding: 0 8px; font-size: 12px; background: var(--card); box-shadow: 0 2px 8px rgba(0, 0, 0, .18); }
+.orig-btn[hidden] { display: none; }
+.orig-modal { position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .45); }
+.orig-modal[hidden] { display: none; }
+.orig-box { width: min(1400px, 94vw); max-height: 92vh; display: flex; flex-direction: column; border-radius: 12px; background: var(--card); box-shadow: var(--shadow); overflow: hidden; }
+.orig-h { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line-2); }
+.orig-body { padding: 12px; overflow: auto; background: #fff; display: flex; justify-content: center; }

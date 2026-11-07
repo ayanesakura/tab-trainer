@@ -19,7 +19,7 @@ const themeIcon = () => { $('themeBtn').innerHTML = UI.icon(UI.isDark() ? 'moon'
 const typing = el => el && el.closest && el.closest('textarea, [contenteditable], input:not([type=range]):not([type=checkbox])');
 function initShortcuts() {
   document.addEventListener('keydown', e => {
-    if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey || np || $('view-practice').hidden) return;
+    if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey || np || $('view-practice').hidden || !$('origModal').hidden) return;
     const k = { Space: () => (state.playing ? stop() : play()), ArrowLeft: () => $('loopPrev').click(), ArrowRight: () => $('loopNext').click(),
       ArrowUp: () => setTempo(state.bpm + 4), ArrowDown: () => setTempo(state.bpm - 4) }[e.code];
     if (!k) return;
@@ -47,6 +47,7 @@ initTuner();
 initDemos();
 initShortcuts();
 initCoach();
+initOrig();
 initPracticeLog();
 initEditor();
 initSong();

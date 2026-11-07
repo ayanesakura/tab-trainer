@@ -95,6 +95,7 @@ def create_song(uploads: list[tuple[str, bytes]], title: str = "") -> str:
             title=title.strip(),
             progress={"stage": "排队中", "done": 0, "total": 0},
             pages=pages,
+            source_type="pdf" if any(_is_pdf(n, data) for n, data in uploads) else "image",
         )
     )
     return sid
@@ -112,6 +113,10 @@ def check_upload_sizes(uploads: list[tuple[str, bytes]]) -> None:
         raise Invalid(f"文件总大小超过 {MAX_TOTAL_BYTES // 1024 // 1024} MB")
 
 
+def _is_pdf(name: str, data: bytes) -> bool:
+    return name.lower().endswith(".pdf") or data[:5] == b"%PDF-"
+
+
 def _page_images(uploads: list[tuple[str, bytes]]):
     """逐页产出 RGB 图片（PDF 一页一页渲染，不把整份文件的页面都留在内存里）。"""
     count = 0
@@ -123,7 +128,7 @@ def _page_images(uploads: list[tuple[str, bytes]]):
             raise Invalid(f"一首曲子最多 {MAX_PAGES} 页")
 
     for name, data in uploads:
-        if name.lower().endswith(".pdf") or data[:5] == b"%PDF-":
+        if _is_pdf(name, data):
             import fitz  # pymupdf
 
             with fitz.open(stream=data, filetype="pdf") as doc:
@@ -203,6 +208,7 @@ def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
             sid,
             kind="score",
             source=f"source{ext}",
+            source_type="musicxml" if ext in (".musicxml", ".xml", ".mxl") else "gp",
             title=title.strip() or stem,
             status="imported",  # 文件在浏览器里第一次成功解析后才变成 ready（见 set_derived / import_failed）
             track=0,

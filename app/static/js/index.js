@@ -83,13 +83,14 @@ async function loadSongs() {
   if (!songs.length) {
     $('songs').innerHTML = `<div class="empty-state"><b>还没有曲子</b>上传一份谱子开始。</div>`;
   } else {
+    const SOURCE = { image: '图片', pdf: 'PDF', gp: 'GP', musicxml: 'MusicXML' }; // 导入渠道
     $('songs').innerHTML = songs.map(s => {
       const busy = s.status === 'parsing' || s.status === 'queued';
       const canPlay = !busy && (s.bars > 0 || s.kind === 'score');
       const sub = [s.artist, s.created].filter(Boolean).map(esc).join(' · ');
       return `<div class="row song-row ${canPlay ? 'click' : ''}" data-id="${s.id}" data-play="${canPlay ? 1 : ''}">
         <div class="tile" style="background:${tileColor(s.title)}">${esc([...s.title][0] || '♪')}</div>
-        <div class="who"><div class="name">${esc(s.title)}${s.kind === 'score' ? ' <span class="badge accent">GP</span>' : ''}</div><div class="state">${songState(s)}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
+        <div class="who"><div class="name">${esc(s.title)}${SOURCE[s.source_type] ? ` <span class="badge">${SOURCE[s.source_type]}</span>` : ''}</div><div class="state">${songState(s)}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
         <div class="ctl">
           ${canPlay ? `<a class="btn primary sm" href="/trainer?id=${s.id}">${icon('play', 12)}练习</a>` : ''}
           <button class="icon-btn sm" data-more="${s.id}" data-busy="${busy ? 1 : ''}" data-corrupt="${s.status === 'corrupt' ? 1 : ''}" title="更多">${icon('more')}</button>

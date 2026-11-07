@@ -181,6 +181,7 @@ def song(sid: str):
     if any(not b.get("id") for b in s.get("bars", [])):  # 旧格式数据：补上小节 id，前端按 id 定位小节
         s = store.update(sid, songs.ensure_bar_ids)
     s["running"] = jobs.jobs.running(sid)
+    s["source_type"] = store.source_type(s)
     return s
 
 

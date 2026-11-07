@@ -55,6 +55,7 @@ async function ensureApi() {
     if (!state.playing && was) practiceFlush(false);
     setPlayBtn(state.playing);
     updateFollowBtn();
+    if ($('origBtn')) placeOrigBtn(state.playing ? -1 : +$('origBtn').dataset.bar);
     if (!state.playing) setStatus('已暂停', '空格继续 · ←→ 换段 · ↑↓ 调速');
   });
   api.playerPositionChanged.on(e => onPosition(e.currentTick));
@@ -66,7 +67,7 @@ async function ensureApi() {
   });
   api.scoreLoaded.on(onScoreLoaded);
   api.renderFinished.on(() => { if (BARS.length) applyLoopRange(); });
-  api.postRenderFinished.on(() => markWarnBars()); // 小节位置要等所有部分都画完才有
+  api.postRenderFinished.on(() => { markWarnBars(); if ($('origBtn') && !$('origBtn').hidden) placeOrigBtn(+$('origBtn').dataset.bar); }); // 小节位置要等所有部分都画完才有
   api.midiLoaded.on(() => { if (BARS.length) applyLoopRange(); }); // 反复的播放时间要等 MIDI 生成后才知道
   api.error.on(e => {
     const msg = e && e.message ? e.message : String(e);
@@ -317,6 +318,7 @@ function onBeatClick(beat) {
   if (shiftDown) setLoop(Math.min(state.a, bi), Math.max(state.b, bi));
   else setLoop(bi, bi);
   onBeat(beat, true);
+  placeOrigBtn(bi);
 }
 
 function exportGp() {

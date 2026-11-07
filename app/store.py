@@ -142,6 +142,18 @@ def page_image(song_id: str, page: dict) -> Image.Image:
     return Image.open(song_dir(song_id) / "pages" / page["file"]).convert("RGB")
 
 
+_MUSICXML_EXT = (".musicxml", ".xml", ".mxl")
+
+
+def source_type(s: dict) -> str:
+    """导入渠道：image / pdf / gp / musicxml。早期的曲子没记，按文件推断（图片和 PDF 当时没区分，算图片）。"""
+    if s.get("source_type"):
+        return s["source_type"]
+    if s.get("kind") == "score":
+        return "musicxml" if str(s.get("source", "")).lower().endswith(_MUSICXML_EXT) else "gp"
+    return "image"
+
+
 def list_songs() -> list[dict]:
     out = []
     if SONGS.exists():
@@ -169,6 +181,7 @@ def list_songs() -> list[dict]:
                     "warn_bars": sum(1 for b in s.get("bars", []) if b.get("warn")),
                     "created": s.get("created"),
                     "kind": s.get("kind", "image"),
+                    "source_type": source_type(s),
                 }
             )
     return out

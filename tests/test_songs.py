@@ -233,3 +233,30 @@ def test_rederive_with_a_different_bar_count_keeps_matching_bars(data_dir):
     assert b[0]["tip"] == "提示 0" and b[2]["tip"] == ""
     assert set(song["practice"]["bars"]) == set(ids)
     assert song["plan"]["stale"] and song["plan"].get("stale_all")  # 小节号整体移动了
+
+
+def test_source_type_is_recorded_and_guessed_for_old_songs(data_dir):
+    import fitz  # pymupdf
+
+    with fitz.open() as doc:  # 一页 PDF，内容就是那张谱子图片
+        page = doc.new_page()
+        page.insert_image(page.rect, stream=score_png())
+        pdf = doc.tobytes()
+    xml = b'<?xml version="1.0"?>\n<score-partwise version="4.0">'
+    cases = {
+        "image": [("p1.png", score_png())],
+        "pdf": [("谱子.pdf", pdf)],
+        "gp": [("a.gp5", b"\x18FICHIER GUITAR PRO v5.10")],
+        "musicxml": [("a.musicxml", xml)],
+    }
+    listed = {}
+    for want, uploads in cases.items():
+        sid = songs.create_song(uploads)
+        assert store.load(sid)["source_type"] == want
+        listed[sid] = want
+    assert {s["id"]: s["source_type"] for s in store.list_songs()} == listed
+    # 早期的曲子没有 source_type：GP / MusicXML 按文件扩展名，图片和 PDF 算图片
+    for sid, want in listed.items():
+        s = store.load(sid)
+        del s["source_type"]
+        assert store.source_type(s) == ("image" if want == "pdf" else want)
