@@ -18,7 +18,9 @@ const SF_BASE = '/static/vendor/soundfont/sonivox.sf2', SF_GUITARS = '/static/ve
 export const TIMBRES = { steel: 25, nylon: 24 };
 
 let api = null, baseTempo = 60, soundFontsLoaded = 0, playerReadyOnce = false, lastTick = -1, shiftDown = false, warnedUnplayed = '';
-let tempoSet = false, scoreBytes = null;
+// tempoSet：速度已经由用户 / 接着练定下来了（setTempo 调过）。谱子加载好以后只在还没定的时候才用默认速度（原速六成）。
+// scoreTempoDone：第一次加载谱子时按原速放宽滑块上限这件事做过了。cursorPending：谱子没加载好时设了循环范围，加载好后把光标放到段首。
+let tempoSet = false, scoreTempoDone = false, cursorPending = false, scoreBytes = null;
 export const getApi = () => api;
 
 // 曲子相关的处理由 song.js / editor.js 注册（播放模块不反过来依赖它们）
@@ -79,7 +81,12 @@ function ensureApi() {
   api.scoreLoaded.on(onScoreLoaded);
   api.renderFinished.on(() => { if (nBars()) applyLoopRange(); });
   api.postRenderFinished.on(() => set('ui.renderGen', (get('ui.renderGen') || 0) + 1)); // 小节位置要等所有部分都画完才有
-  api.midiLoaded.on(() => { if (nBars()) applyLoopRange(); }); // 反复的播放时间要等 MIDI 生成后才知道
+  api.midiLoaded.on(() => { // 反复的播放时间要等 MIDI 生成后才知道
+    if (!nBars()) return;
+    const range = applyLoopRange();
+    if (range && cursorPending && !playing()) api.tickPosition = range.startTick;
+    if (range) cursorPending = false;
+  });
   api.error.on(e => {
     const msg = e && e.message ? e.message : String(e);
     if (hooks.error) hooks.error(msg); else UI.toast('谱面出错：' + msg, 'err', 6000);
@@ -147,13 +154,15 @@ async function onScoreLoaded(score) {
   applyTimbre(score);
   baseTempo = score.tempo || 60;
   if (isScore(song) && hooks.scoreLoaded && !(await hooks.scoreLoaded(score))) return;
-  if (!tempoSet) { // 默认用原速的六成练习；没有标速度就 50
-    tempoSet = true;
+  if (!scoreTempoDone) {
+    scoreTempoDone = true;
     const s = get('song'), t = (s.meta && s.meta.tempo) || (isScore(s) ? baseTempo : 0);
-    if (t) { // 原速比滑块上限快时把上限放宽，原速也能拖得到
-      set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10)), 'play.autoTarget': t });
+    if (t) { // 原速比滑块上限快时把上限放宽，原速也能拖得到（已经定下的速度更快时不收窄）
+      const bpm = get('play.bpm');
+      set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10, Math.ceil(bpm / 10) * 10)), 'play.autoTarget': t });
     }
-    setTempo(t ? Math.round(t * 0.6) : 50);
+    // 默认用原速的六成练习；没有标速度就 50。接着练 / 用户在谱子加载好之前已经定了速度的，不覆盖
+    if (!tempoSet) setTempo(t ? Math.round(t * 0.6) : 50);
   }
   if (api) api.playbackSpeed = get('play.bpm') / baseTempo;
 }
@@ -245,6 +254,10 @@ export function play() {
 }
 export function stop() { if (api) api.pause(); }
 export function setTempo(bpm) {
+  tempoSet = true;
+  setBpm(bpm);
+}
+function setBpm(bpm) {
   bpm = Math.max(20, Math.min(240, Math.round(bpm)));
   const max = get('play.bpmMax');
   set({ 'play.bpm': bpm, 'play.bpmMax': bpm > max ? Math.min(240, Math.ceil(bpm / 10) * 10) : max }); // ↑ 键 / + 按钮超过了滑块上限
@@ -256,6 +269,7 @@ export function setLoop(a, b, restart = true, show = true) {
   set({ 'play.a': na, 'play.b': nb }); // 练习记录（practice-log.js）跟着它记上一段、开始下一段
   const range = applyLoopRange();
   if (show) set('ui.bar', na);
+  if (!range) cursorPending = true; // 谱子还没加载好：加载好以后（midiLoaded）再把光标放到段首
   if (range && api) {
     if (playing() && restart) { api.stop(); set('play.loops', 0); api.play(); }
     else if (!playing()) api.tickPosition = range.startTick;
@@ -424,7 +438,7 @@ export function initPlayer() {
   on('ui.renderGen', markReviewBars);
   on('ui.notation', () => { if (!api) return; api.settings.display.staveProfile = alphaTab.StaveProfile[staveProfile()]; api.updateSettings(); api.render(); });
 
-  setTempo(50);
+  setBpm(50); // 加载前的占位，不算“定下了速度”
   $('playBtn').onclick = () => (playing() ? stop() : play());
   $('demoBarBtn').onclick = () => { const bi = get('ui.bar') >= 0 ? get('ui.bar') : get('play.a'); setLoop(bi, bi, false); if (!playing()) play(); };
   UI.seg($('timbreSeg'), get('play.timbre'), v => set('play.timbre', v));
