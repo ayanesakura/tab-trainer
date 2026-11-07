@@ -129,10 +129,12 @@ def cost_summary(usage) -> dict:
     用了价格表里没有的模型（自定义）的那部分只有 token，没法算钱，也标出来。"""
     u = usage if isinstance(usage, dict) else {}
     tin, tout = u.get("input_tokens") or 0, u.get("output_tokens") or 0
-    if "cost_usd" in u:
-        cost, estimated = float(u.get("cost_usd") or 0), False
+    price = price_of(DEFAULT_MODEL) or (0, 0)
+    if "cost_usd" in u:  # 之后的调用都记了钱；早期只记 token 的那部分（legacy_*）按估算加上
+        lin, lout = u.get("legacy_input_tokens") or 0, u.get("legacy_output_tokens") or 0
+        cost = float(u.get("cost_usd") or 0) + (lin * price[0] + lout * price[1]) / 1e6
+        estimated = bool(lin or lout)
     else:
-        price = price_of(DEFAULT_MODEL) or (0, 0)
         cost, estimated = (tin * price[0] + tout * price[1]) / 1e6, bool(tin or tout)
     return {
         "cost_usd": round(cost, 4),

@@ -40,6 +40,8 @@ ActivityKind = Literal["parse", "reparse_row", "explain"]
 WarnCode = Literal[tuple(WARN_CODES)]  # type: ignore[valid-type]
 SCORE_SOURCES = ("gp", "musicxml")
 USAGE_KEYS = ("input_tokens", "output_tokens", "cost_usd", "unpriced_tokens")
+# 早期曲子只记了 token、没记钱：第一次再花钱时把这部分 token 记到这里，曲库按默认模型的价格估算
+LEGACY_USAGE_KEYS = ("legacy_input_tokens", "legacy_output_tokens")
 EDITABLE_META = (
     "title",
     "artist",
@@ -345,8 +347,13 @@ def is_score(song: dict) -> bool:
 
 def add_usage(s: dict, usage: dict, before: dict | None = None) -> None:
     """把这次任务用掉的 token / 费用（usage 减去开始时的 before）累加到曲子上。"""
-    old = s.get("usage") or {}
+    old = dict(s.get("usage") or {})
+    if "cost_usd" not in old and (old.get("input_tokens") or old.get("output_tokens")):
+        # 早期曲子：之前的 token 没有对应的钱数。不记下来的话，这次的 cost_usd 会被当成全部花费
+        old["legacy_input_tokens"] = old.get("input_tokens", 0)
+        old["legacy_output_tokens"] = old.get("output_tokens", 0)
     s["usage"] = {k: old.get(k, 0) + usage.get(k, 0) - (before or {}).get(k, 0) for k in USAGE_KEYS}
+    s["usage"].update({k: old[k] for k in LEGACY_USAGE_KEYS if old.get(k)})
 
 
 # ---------------------------------------------------------------------------
