@@ -26,9 +26,7 @@ def test_practice_page_loads_cleanly(trainer):
 
 def test_playback_records_completed_loops(server, trainer):
     b = trainer()
-    b.js(
-        "tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(240); tt.play(); true"
-    )
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(240); tt.play(); true")
     time.sleep(4)
     b.js("tt.stop(); true")
     b.wait_for("!tt.state.playing")
@@ -185,3 +183,51 @@ def test_library_lists_songs(server, browser):
     text = browser.js("document.getElementById('songs').innerText")
     assert "E2E 图片曲" in text and "曲谱读取失败" in text
     assert not browser.errors, browser.errors
+
+
+def test_layout_score_first_and_sidebar(server, browser):
+    """1440×1000：谱面在第一屏里，小节卡片在右边；“更多”弹层打开时快捷键不响应，Esc 关掉；指板开关记住。"""
+    browser._run(
+        browser._send(
+            "Emulation.setDeviceMetricsOverride", width=1440, height=1000, deviceScaleFactor=1, mobile=False
+        )
+    )
+    browser.open(f"{server['base']}/trainer?id={server['image']}")
+    browser.wait_for(
+        "window.tt && tt.state.ready && !!document.querySelector('#score .at-surface')", timeout=40
+    )
+    b = browser
+    assert b.js("document.querySelector('#score .at-surface').getBoundingClientRect().top") < 600
+    side = b.js(
+        "(() => { const r = document.getElementById('side').getBoundingClientRect(); return [r.left, r.top] })()"
+    )
+    score = b.js("document.getElementById('scoreCard').getBoundingClientRect().right")
+    assert side[0] > score and side[1] < 200
+    b.js("document.activeElement.blur(); document.getElementById('moreBtn').click(); true")
+    assert not b.js("document.getElementById('morePop').hidden")
+    bpm = b.js("tt.state.bpm")
+    b.key("ArrowUp", vk=38)
+    assert b.js("tt.state.bpm") == bpm  # 有浮层时不调速
+    b.key("Escape", vk=27)
+    assert b.js("document.getElementById('morePop').hidden")
+    was = b.js("tt.get('ui.fb')")
+    b.js("document.getElementById('fbBtn').click(); true")
+    assert b.js("localStorage.getItem('tt.fb')") == ("0" if was else "1")
+    assert b.js("document.getElementById('fbBody').hidden") == was
+    assert not b.errors, b.errors
+
+
+def test_resume_param_continues_last_practice(server, browser):
+    store = server["store"]
+
+    def last(s):
+        s.setdefault("practice", {})["last"] = {"a": "bar4", "b": "bar6", "bpm": 66, "at": "昨天"}
+
+    store.update(server["image"], last)
+    b = browser
+    # 页面会把地址里的 resume 去掉，所以不用 open()（它要等地址一致）
+    b._run(b._send("Page.navigate", url=f"{server['base']}/trainer?id={server['image']}&resume=1"))
+    b.wait_for("tt.state.a === 3 && tt.state.b === 5")
+    assert b.js("tt.state.bpm") == 66
+    assert "resume" not in b.js("location.search")  # 刷新页面不会再跳
+    assert not b.js("document.querySelector('#notices [data-id=resume]')")
