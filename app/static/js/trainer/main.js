@@ -15,6 +15,7 @@ import { initSong, startLoading, refresh } from './song.js';
 import { initTuner } from './tuner.js';
 import { initGlossary } from './glossary.js';
 import { ac } from './audio.js';
+import { DERIVE_VERSION } from '../score.js';
 
 // ---------------------------------------------------------------------
 // 视图切换（顶栏：练习 / 调弦 / 练习建议 / 记号说明）
@@ -111,6 +112,7 @@ window.tt = {
   get api() { return getApi(); },
   get ac() { return ac; },
   get editor() { return editorState; },
+  DERIVE_VERSION,
   play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, setEditMode, openNotePop, refresh, player,
 };
 

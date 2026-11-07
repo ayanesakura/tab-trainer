@@ -20,26 +20,26 @@ def test_practice_page_loads_cleanly(trainer):
     assert b.js("window.scrollY") == 0  # 打开时不会跳到谱面
     assert b.js("document.querySelectorAll('#secBtns button').length") == 3  # 全曲 + 两行
     assert b.js("document.getElementById('tipText').textContent") == "第 1 小节的提示"
-    assert b.js("SONG.bars.length") == 6
+    assert b.js("tt.song.bars.length") == 6
     assert not b.errors, b.errors
 
 
 def test_playback_records_completed_loops(server, trainer):
     b = trainer()
     b.js(
-        "document.getElementById('countIn').checked = false; applyAudio(); setLoop(0, 0); setTempo(240); play(); true"
+        "tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(240); tt.play(); true"
     )
     time.sleep(4)
-    b.js("stop(); true")
-    b.wait_for("!state.playing")
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
     time.sleep(0.8)
     p = _song(server, server["image"])["practice"]["bars"]["bar1"]
     assert p["loops"] >= 2 and p["best_bpm"] == 240
     # 播放中换段：不能把跳回起点误记成弹完一遍
     before = p["loops"]
-    b.js("setLoop(0, 0); play(); true")
+    b.js("tt.setLoop(0, 0); tt.play(); true")
     time.sleep(1.2)
-    b.js("setLoop(3, 3); setLoop(4, 4); stop(); true")
+    b.js("tt.setLoop(3, 3); tt.setLoop(4, 4); tt.stop(); true")
     time.sleep(0.8)
     bars = _song(server, server["image"])["practice"]["bars"]
     assert bars.get("bar4", {}).get("loops", 0) == 0 and bars.get("bar5", {}).get("loops", 0) == 0
@@ -53,50 +53,50 @@ def test_playback_does_not_scroll_until_asked(trainer):
     b.js("document.body.style.paddingBottom = '4000px'; scrollTo(0, document.body.scrollHeight); true")
     y = b.js("scrollY")
     assert y > 0 and b.js("document.getElementById('followBtn').hidden")
-    b.js("document.getElementById('countIn').checked = false; applyAudio(); setLoop(3, 3); play(); true")
-    b.wait_for("state.playing && !document.getElementById('followBtn').hidden")
+    b.js("tt.set('play.countIn', false); tt.setLoop(3, 3); tt.play(); true")
+    b.wait_for("tt.state.playing && !document.getElementById('followBtn').hidden")
     time.sleep(1.5)
     assert b.js("scrollY") == y  # 播放时不会自己滚到光标处
     b.js("document.getElementById('followBtn').click(); true")
     b.wait_for("document.getElementById('followBtn').hidden")  # 滚到光标处以后按钮消失
-    assert b.js("scrollY") < y and not b.js("cursorOutOfView()")
-    b.js("stop(); true")
+    assert b.js("scrollY") < y and not b.js("tt.cursorOutOfView()")
+    b.js("tt.stop(); true")
     assert not b.errors, b.errors
 
 
 def test_selected_bar_shows_original_image(trainer):
     b = trainer()
     assert b.js("document.getElementById('songSource').textContent") == "图片"
-    b.wait_for("!!(api.tracks && api.tracks[0].staves[0].bars.length === 6 && api.boundsLookup)")
-    b.js("onBeatClick(api.tracks[0].staves[0].bars[1].voices[0].beats[0]); true")
+    b.wait_for("!!(tt.api.tracks && tt.api.tracks[0].staves[0].bars.length === 6 && tt.api.boundsLookup)")
+    b.js("tt.onBeatClick(tt.api.tracks[0].staves[0].bars[1].voices[0].beats[0]); true")
     b.wait_for("!document.getElementById('origBtn').hidden")
     b.js("document.getElementById('origBtn').click(); true")
-    assert not b.js("document.getElementById('origModal').hidden")
-    assert b.js("document.getElementById('origTitle').textContent") == "原图 · 第 2 小节"
+    assert b.js("document.getElementById('origModal').open")
+    assert b.js("document.getElementById('origTitle').textContent") == "原谱 · 第 2 小节"
     b.wait_for("document.getElementById('origCanvas').width > 0")
     b.js(
         "document.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', code: 'ArrowRight'})); true"
     )
-    assert b.js("document.getElementById('origTitle').textContent") == "原图 · 第 3 小节"
-    assert b.js("state.a") == 1  # 弹窗里换小节不影响练习页的选段（←→ 不会被当成换段）
-    b.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape'})); true")
-    assert b.js("document.getElementById('origModal').hidden")
+    assert b.js("document.getElementById('origTitle').textContent") == "原谱 · 第 3 小节"
+    assert b.js("tt.state.a") == 1  # 弹窗里换小节不影响练习页的选段（←→ 不会被当成换段）
+    b.key("Escape", vk=27)
+    assert not b.js("document.getElementById('origModal').open")
     assert not b.errors, b.errors
 
 
 def test_edit_note_then_undo(server, trainer):
     b = trainer()
     orig = _song(server, server["image"])["bars"][1]
-    b.js("""(() => { setEditMode(true);
-      const beat = api.score.tracks[0].staves[0].bars[1].voices[0].beats.find(x => x.notes.length);
-      openNotePop(beat, beat.notes[0]); document.getElementById('npFret').value = '9'; return true; })()""")
+    b.js("""(() => { tt.setEditMode(true);
+      const beat = tt.api.score.tracks[0].staves[0].bars[1].voices[0].beats.find(x => x.notes.length);
+      tt.openNotePop(beat, beat.notes[0]); document.getElementById('npFret').value = '9'; return true; })()""")
     b.key("Enter", vk=13)
-    b.wait_for("!saving && undoStack.length === 1")
+    b.wait_for("!tt.editor.saving && tt.editor.undo === 1")
     edited = _song(server, server["image"])["bars"][1]
     assert edited["events"][0]["notes"][0]["fret"] == 9 and edited["tip"] == ""
     b.js("document.activeElement.blur(); true")
     b.key("z", code="KeyZ", vk=90, modifiers=UNDO_MOD)
-    b.wait_for("!saving && undoStack.length === 0")
+    b.wait_for("!tt.editor.saving && tt.editor.undo === 0")
     back = _song(server, server["image"])["bars"][1]
     assert back["events"] == orig["events"] and back["tip"] == orig["tip"]  # 撤销后提示也恢复
     assert not b.errors, b.errors
@@ -113,9 +113,9 @@ def test_arrow_keys_step_through_sections(trainer):
     assert b.js(label) == "第 4–6 小节"
     b.key("ArrowLeft", vk=37)
     assert b.js(label) == "第 1–3 小节"
-    bpm = b.js("state.bpm")
+    bpm = b.js("tt.state.bpm")
     b.key("ArrowUp", vk=38)
-    assert b.js("state.bpm") == bpm + 4
+    assert b.js("tt.state.bpm") == bpm + 4
 
 
 def test_tuner_and_glossary_demos_play(trainer):
@@ -134,23 +134,23 @@ def test_tuner_and_glossary_demos_play(trainer):
     for d in demos:  # 每个示范都点一遍：闷音、滑音、击勾弦、两种泛音、倚音各条发声路径都会走到
         b.js(f"document.querySelector('button.demo[data-demo={d}]').click(); true")
     time.sleep(0.3)
-    assert b.js("ac.state") == "running"
+    assert b.js("tt.ac.state") == "running"
     assert not b.errors, b.errors
 
 
 def test_guitar_pro_import_becomes_ready(server, trainer):
     b = trainer(server["gp"])
-    b.wait_for("SONG.bars.length === 3 && SONG.status === 'ready'")
+    b.wait_for("tt.song.bars.length === 3 && tt.song.status === 'ready'")
     s = _song(server, server["gp"])
     assert s["status"] == "ready" and s["meta"]["tuning"][5] == "E2" and len(s["bars"]) == 3
-    assert s["derived"]["version"] == b.js("scoreConv.DERIVE_VERSION") and s["derived"]["alphatab"]
+    assert s["derived"]["version"] == b.js("tt.DERIVE_VERSION") and s["derived"]["alphatab"]
     assert not b.errors, b.errors
 
 
 def test_outdated_derived_data_is_rebuilt_once(server, trainer):
     """转换规则升级以后（这里把记下的版本改旧）：打开时重新转换一次，内容没变的小节保留 id 和提示。"""
     store = server["store"]
-    trainer(server["gp"]).wait_for("SONG.bars.length === 3 && SONG.status === 'ready'")
+    trainer(server["gp"]).wait_for("tt.song.bars.length === 3 && tt.song.status === 'ready'")
 
     def age(s):
         s["derived"]["version"] = 0
@@ -159,7 +159,7 @@ def test_outdated_derived_data_is_rebuilt_once(server, trainer):
     store.update(server["gp"], age)
     before = _song(server, server["gp"])
     b = trainer(server["gp"])
-    b.wait_for("SONG.derived && SONG.derived.version === scoreConv.DERIVE_VERSION && state.ready")
+    b.wait_for("tt.song.derived && tt.song.derived.version === tt.DERIVE_VERSION && tt.state.ready")
     f = store.song_dir(server["gp"]) / "song.json"
     time.sleep(0.5)
     mtime = f.stat().st_mtime_ns
@@ -174,8 +174,8 @@ def test_outdated_derived_data_is_rebuilt_once(server, trainer):
 
 def test_broken_guitar_pro_file_is_reported(server, browser):
     browser.open(f"{server['base']}/trainer?id={server['broken']}")
-    browser.wait_for("typeof SONG !== 'undefined' && SONG && SONG.status === 'error'", timeout=30)
-    assert "曲谱读取失败" in browser.js("document.getElementById('errorBox').innerText")
+    browser.wait_for("window.tt && tt.song && tt.song.status === 'error'", timeout=30)
+    assert "曲谱读取失败" in browser.js("document.getElementById('notices').innerText")
     assert _song(server, server["broken"])["status"] == "error"
 
 
@@ -184,8 +184,8 @@ def test_library_lists_songs(server, browser):
     browser.wait_for("document.getElementById('songs').innerText.includes('E2E 图片曲')")
     text = browser.js("document.getElementById('songs').innerText")
     assert "E2E 图片曲" in text and "曲谱读取失败" in text
-    badges = browser.js(
-        "[...document.querySelectorAll('#songs .name .badge')].map(x => x.textContent).sort().join(',')"
+    sources = browser.js(
+        "[...document.querySelectorAll('#songs .src-ic')].map(x => x.title).sort().join(',')"
     )
-    assert badges == "GP,GP,图片"  # 导入渠道：一首图片曲、两首 GP（一首读取失败）
+    assert sources == "来源：GP,来源：GP,来源：图片"  # 导入渠道：一首图片曲、两首 GP（一首读取失败）
     assert not browser.errors, browser.errors
