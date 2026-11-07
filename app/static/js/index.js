@@ -474,7 +474,8 @@ $('pageGrid').addEventListener('drop', e => {
   const card = e.target.closest('.page-card');
   if (pg.drag < 0 || !card) return;
   e.preventDefault();
-  const to = +card.dataset.i, after = e.offsetX > card.offsetWidth / 2 ? 1 : 0;
+  const r = card.getBoundingClientRect(); // e.offsetX 是相对落点所在的子元素（图片、页脚按钮）的，不是相对卡片
+  const to = +card.dataset.i, after = e.clientX - r.left > r.width / 2 ? 1 : 0;
   if (to !== pg.drag) movePage(pg.drag, pg.drag < to ? to - 1 + after : to + after); // 放回自己身上（不管左半还是右半）不动
   pg.drag = -1;
 });
