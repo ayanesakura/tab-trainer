@@ -86,6 +86,32 @@ def test_guitar_pro_import_becomes_ready(server, trainer):
     b.wait_for("SONG.bars.length === 3 && SONG.status === 'ready'")
     s = _song(server, server["gp"])
     assert s["status"] == "ready" and s["meta"]["tuning"][5] == "E2" and len(s["bars"]) == 3
+    assert s["derived"]["version"] == b.js("scoreConv.DERIVE_VERSION") and s["derived"]["alphatab"]
+    assert not b.errors, b.errors
+
+
+def test_outdated_derived_data_is_rebuilt_once(server, trainer):
+    """转换规则升级以后（这里把记下的版本改旧）：打开时重新转换一次，内容没变的小节保留 id 和提示。"""
+    store = server["store"]
+    trainer(server["gp"]).wait_for("SONG.bars.length === 3 && SONG.status === 'ready'")
+
+    def age(s):
+        s["derived"]["version"] = 0
+        s["bars"][0]["tip"] = "保留的提示"
+
+    store.update(server["gp"], age)
+    before = _song(server, server["gp"])
+    b = trainer(server["gp"])
+    b.wait_for("SONG.derived && SONG.derived.version === scoreConv.DERIVE_VERSION && state.ready")
+    f = store.song_dir(server["gp"]) / "song.json"
+    time.sleep(0.5)
+    mtime = f.stat().st_mtime_ns
+    time.sleep(1.5)
+    assert f.stat().st_mtime_ns == mtime  # 写回之后不会再反复转换
+    after = _song(server, server["gp"])
+    assert after["derived"]["version"] > 0
+    assert [x["id"] for x in after["bars"]] == [x["id"] for x in before["bars"]]
+    assert after["bars"][0]["tip"] == "保留的提示"
     assert not b.errors, b.errors
 
 
