@@ -758,3 +758,42 @@ def test_reparse_reading_other_settings_keeps_hand_edits(data_dir, sync_jobs, mo
     else:
         assert not nb.get("edited") and "_orig" not in nb
         assert "手改过的小节" in after["notice"]["msg"]
+
+
+@pytest.mark.parametrize("how", ["error", "cancel"])
+def test_failed_row_reparse_still_records_its_cost(data_dir, sync_jobs, monkeypatch, how):
+    """单行重新识别失败 / 被取消：已经发出去的请求也花了钱，要记到曲子上。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    before = store.load(sid)["usage"]
+
+    def costly_fail(self, *a, **kw):
+        self.usage["input_tokens"] += 1000
+        raise jobs.Cancelled() if how == "cancel" else errors.Upstream("输出被截断")
+
+    monkeypatch.setattr(FakeClaude, "transcribe", costly_fail)
+    recognize.start_reparse(sid, 0)
+    after = store.load(sid)
+    assert after["systems"][0]["status"] == "error"
+    assert after["usage"]["input_tokens"] == before["input_tokens"] + 1010  # 替身一开始就带 10
+    assert after["usage"]["output_tokens"] == before["output_tokens"] + 20
+
+
+@pytest.mark.parametrize("how", ["error", "cancel"])
+def test_header_cost_is_recorded_when_the_parse_stops_before_any_row(data_dir, sync_jobs, monkeypatch, how):
+    real = FakeClaude.read_meta
+
+    def read_meta(self, page):
+        self.usage["input_tokens"] += 1000
+        if how == "error":
+            raise errors.Upstream("输出被截断")
+        cancel.set()
+        return real(self, page)
+
+    monkeypatch.setattr(FakeClaude, "read_meta", read_meta)
+    sid = songs.create_song([("p1.png", score_png())])
+    cancel = jobs.jobs.claim(sid)
+    assert recognize.start_parse(sid, cancel)
+    song = store.load(sid)
+    assert song["status"] == ("cancelled" if how == "cancel" else "error")
+    assert song["usage"]["input_tokens"] == 1000 and song["usage"]["output_tokens"] == 0

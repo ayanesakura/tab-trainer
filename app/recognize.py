@@ -386,8 +386,6 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     """
     cancel = cancel or threading.Event()
     claude = config.new_llm()
-    song = store.load(sid)
-    restage = bool(song.get("bars"))
     charged = dict(claude.usage)  # 已经记到曲子上的用量：每行完成就把新增的记上（中途失败也不漏记）
 
     def charge(s):
@@ -395,6 +393,23 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
         add_usage(s, now, charged)
         charged.update(now)
 
+    try:
+        _run_parse(sid, cancel, claude, charge)
+    finally:  # 失败 / 取消时还没记上的（读谱头、没跑完的行）：已经发出去的请求也花了钱
+        if dict(claude.usage) != charged:
+            _charge_leftover(sid, charge)
+
+
+def _charge_leftover(sid: str, charge) -> None:
+    try:
+        store.update(sid, charge)
+    except Exception as e:  # noqa: BLE001 - 曲子已经删掉之类：不能盖住原来的错误
+        log.warning("song=%s usage not recorded: %s", sid, e)
+
+
+def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
+    song = store.load(sid)
+    restage = bool(song.get("bars"))
     store.update(sid, lambda s: _begin_parse(s, "读取谱头"))
     head = claude.read_meta(store.page_image(sid, song["pages"][0]))
     # 用户手改过的艺人、调弦、变调夹、拍号以用户的为准
@@ -588,8 +603,10 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
         raise
 
     def run():
+        claude = None
         try:
-            reparse_system(sid, si, hint, cancel)
+            claude = config.new_llm()
+            reparse_system(sid, si, hint, cancel, claude)
         except Exception as e:
             rid = request_id_of(e)
             log.exception("request_id=%s song=%s system=%d reparse failed", rid, sid, si)
@@ -597,6 +614,8 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
 
             def failed(x):
                 x["systems"][si].update(status="error", error=msg)
+                if claude:  # 失败 / 取消的这次也花了钱（成功时在 reparse_system 里记，失败时那次写回没发生）
+                    add_usage(x, claude.usage)
                 state.finish(x)
 
             store.update(sid, failed)
@@ -604,8 +623,10 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
     jobs.spawn(sid, run)
 
 
-def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | None = None) -> None:
-    claude = config.new_llm()
+def reparse_system(
+    sid: str, si: int, hint: str = "", cancel: threading.Event | None = None, claude: LLM | None = None
+) -> None:
+    claude = claude or config.new_llm()
     song = store.load(sid)
     # 起始小节号：前面各行最后一个小节 + 1（这一行之前识别失败、没有小节时也对）
     first = max((b["n"] for b in song["bars"] if b["system"] < si), default=0) + 1

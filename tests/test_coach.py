@@ -226,3 +226,40 @@ def test_renaming_during_explain_or_recognition_keeps_ai_content(data_dir, sync_
     coach.start_explain(sid2)
     song = store.load(sid2)
     assert not any(b["tip"] for b in song["bars"]) and song["meta"]["capo"] == 5
+
+
+def test_failed_explain_still_records_its_cost(data_dir, sync_jobs, monkeypatch):
+    """讲解某一批失败：这一批的请求也花了钱，要记到曲子上（已经完成的批次不重复记）。"""
+    sid = songs.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    songs.set_derived(sid, {}, derived_bars(20))
+    real = FakeClaude.explain_bars
+
+    def explain_bars(self, meta, bars):
+        self.usage["input_tokens"] += 1000
+        if bars[0]["n"] > 1:
+            raise errors.Upstream("输出被截断")
+        return real(self, meta, bars)
+
+    monkeypatch.setattr(FakeClaude, "explain_bars", explain_bars)
+    coach.start_explain(sid)
+    song = store.load(sid)
+    assert song["notice"]["kind"] == "error"
+    assert song["usage"]["input_tokens"] == 2000
+
+
+@pytest.mark.parametrize("answer", [None, "  "])
+def test_failed_question_still_records_its_cost(data_dir, monkeypatch, answer):
+    sid = songs.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    song = songs.set_derived(sid, {}, derived_bars(2))
+    before = song["usage"]["input_tokens"]
+
+    def coach_(self, *a, **kw):
+        self.usage["input_tokens"] += 1000
+        if answer is None:
+            raise RuntimeError("connection reset")
+        return answer
+
+    monkeypatch.setattr(FakeClaude, "coach", coach_)
+    with pytest.raises(errors.Upstream):
+        coach.ask_bar(sid, song["bars"][0]["id"], "怎么弹")
+    assert store.load(sid)["usage"]["input_tokens"] == before + 1010  # 替身一开始就带 10

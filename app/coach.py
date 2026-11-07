@@ -62,6 +62,28 @@ def start_explain(sid: str) -> None:
 
 def _explain(sid: str, chunks: list[list[str]], cancel) -> None:
     claude = config.new_llm()
+    charged = dict(claude.usage)  # 已经记到曲子上的用量：每批写回时把新增的记上
+
+    def charge(s):
+        now = dict(claude.usage)
+        add_usage(s, now, charged)
+        charged.update(now)
+
+    try:
+        _explain_chunks(sid, chunks, cancel, claude, charge)
+    finally:  # 某一批或练习建议失败 / 取消：已经发出去的请求也花了钱
+        if dict(claude.usage) != charged:
+            _charge(sid, charge)
+
+
+def _charge(sid: str, fn) -> None:
+    try:
+        store.update(sid, fn)
+    except Exception as e:  # noqa: BLE001 - 曲子已经删掉之类：不能盖住原来的错误
+        log.warning("song=%s usage not recorded: %s", sid, e)
+
+
+def _explain_chunks(sid: str, chunks: list[list[str]], cancel, claude, charge) -> None:
     for k, ids in enumerate(chunks):
         if cancel.is_set():
             raise Cancelled()
@@ -70,10 +92,9 @@ def _explain(sid: str, chunks: list[list[str]], cancel) -> None:
         if not chunk:
             continue
         seen = {b["id"]: b["events"] for b in chunk}  # 写回时小节已经被改过的，就不写旧内容的提示
-        before = dict(claude.usage)
         tips = {t["number"]: t["tip"] for t in claude.explain_bars(cur["meta"], chunk).get("bars", [])}
 
-        def apply(s, tips=tips, k=k, seen=seen, before=before, meta=cur["meta"]):
+        def apply(s, tips=tips, k=k, seen=seen, meta=cur["meta"]):
             same_meta = not staleness.setting_changed(meta or {}, s["meta"] or {})  # 改曲名、艺人不影响提示
             for b in s["bars"]:
                 if (
@@ -84,18 +105,17 @@ def _explain(sid: str, chunks: list[list[str]], cancel) -> None:
                 ):
                     b["tip"] = tips[b["n"]]  # 按现在的音新写的（改过的小节撤销时仍恢复识别时的提示）
             s["progress"] = {"stage": "生成讲解", "done": k + 1, "total": len(chunks)}
-            add_usage(s, claude.usage, before)
+            charge(s)
 
         store.update(sid, apply)
 
     cur = store.load(sid)
     seen = {b["id"]: b["events"] for b in cur["bars"]}
-    before = dict(claude.usage)
     plan = claude.practice_plan(cur["meta"], cur["bars"])
 
     def finish(s, meta=cur["meta"]):
         staleness.store_plan(s, plan, seen, meta)
-        add_usage(s, claude.usage, before)
+        charge(s)
 
     store.update(sid, finish)
 
@@ -115,6 +135,14 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
         x0, x1, y0, y1 = bar["region"]
         image = store.page_image(sid, song["pages"][bar["page"]]).crop((x0, y0, x1, y1))
     claude = config.new_llm()  # 没配 key：MissingKey，400
+
+    def charge(s):
+        add_usage(s, claude.usage)
+
+    def charge_failed():  # 失败了这次请求也花了钱（连接都没建立起来时没有用量，不用写）
+        if any(claude.usage.values()):
+            _charge(sid, charge)
+
     try:
         answer = claude.coach(
             song["meta"],
@@ -126,10 +154,13 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
             image,
         )
     except AppError:
+        charge_failed()
         raise
     except Exception as e:  # noqa: BLE001 - 网络 / API 错误统一转成中文说明
+        charge_failed()
         raise Upstream(friendly(e)) from None
     if not answer.strip():
+        charge_failed()
         raise Upstream("模型没有给出回答，换个问法再试一次")
     entry = {"q": question, "a": answer.strip(), "at": now()}
 
@@ -139,7 +170,7 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
             entry["stale"] = True  # 等回答期间这个小节改过音：回答说的是改之前的谱
         if b is not None:  # 等回答期间小节被重新识别掉了，就不存
             b["qa"] = [*(b.get("qa") or []), entry][-settings.qa_keep :]
-        add_usage(s, claude.usage)
+        charge(s)
 
     s = store.update(sid, apply)
     b = next((x for x in s["bars"] if x.get("id") == bar_id), None)
