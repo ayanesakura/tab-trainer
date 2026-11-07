@@ -31,7 +31,10 @@ def migrate(song: dict, song_id: str) -> dict:
         song["meta"] = None
     song.setdefault("title", "")
     song.setdefault("rev", 0)
-    ver = int(song.get("schema_version") or 0)
+    try:
+        ver = int(song.get("schema_version") or 0)
+    except (TypeError, ValueError):
+        ver = 0
     if ver < 2:
         _to_v2(song)
         song["_migrated"] = True
@@ -123,7 +126,8 @@ def _state_to_v2(s: dict) -> None:
             if isinstance(x, dict) and x.get("status") in ("parsing", "pending")
         ]
         activity = {"kind": "reparse_row", "restaging": False, "systems": rows}
-    elif restaging:
+    elif restaging:  # 以前重新识别期间 status 是 parsing；现在 status 只说结果（原来的结果还在，可以练）
+        s["status"] = "ready"
         activity = {"kind": "parse", "restaging": True, "systems": []}
     elif busy_status and s["source_type"] in ("gp", "musicxml"):  # GP 曲子不识别：是更早版本的讲解
         s["status"] = "ready"
@@ -134,5 +138,6 @@ def _state_to_v2(s: dict) -> None:
     s["notice"] = None
     if error:
         kind = "error" if s.get("status") == "error" else "warn"
-        s["notice"] = {"kind": kind, "msg": str(error), "source": error_kind or ""}
+        source = {"pages": "reparse_row"}.get(error_kind or "", error_kind or "")
+        s["notice"] = {"kind": kind, "msg": str(error), "source": source}
     s.setdefault("progress", None)
