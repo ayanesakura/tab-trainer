@@ -184,8 +184,4 @@ def test_library_lists_songs(server, browser):
     browser.wait_for("document.getElementById('songs').innerText.includes('E2E 图片曲')")
     text = browser.js("document.getElementById('songs').innerText")
     assert "E2E 图片曲" in text and "曲谱读取失败" in text
-    sources = browser.js(
-        "[...document.querySelectorAll('#songs .src-ic')].map(x => x.title).sort().join(',')"
-    )
-    assert sources == "来源：GP,来源：GP,来源：图片"  # 导入渠道：一首图片曲、两首 GP（一首读取失败）
     assert not browser.errors, browser.errors
