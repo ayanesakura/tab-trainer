@@ -25,6 +25,7 @@ from app.music import (
     check_bar,
     clean_events,
     clean_repeats,
+    clean_shapes,
     clean_time_signature,
     new_bar_id,
     normalize_meta,
@@ -253,6 +254,9 @@ def transcribe_system(
             start_ts=start_ts,
         )
         bars, issues, lengths = [], [], []
+        # 弹唱谱：这一行印出来的和弦图（和弦名 → 1–6 弦品位）。有和弦图时谱上的 x 按和弦换算成了品位，
+        # 本机 OCR 只读数字、看不到这些音，“AI 写了、OCR 没读到”不再算不一致
+        shapes = clean_shapes({str(c.get("name")): c.get("frets") for c in raw.get("chords") or []})
         # 当前生效的拍号：这一行开头的（前面几行变过拍号时由调用方给出），遇到这一行里写的变拍号就换
         cur_ts = start_ts if start_ts and start_ts != meta["time_signature"] else None
         for i, b in enumerate(raw.get("bars", [])):
@@ -281,6 +285,9 @@ def transcribe_system(
             }
             if change:
                 bar["ts_change"] = change
+            used = {e["chord"]: shapes[e["chord"]] for e in events if e.get("chord") in shapes}
+            if used:
+                bar["shapes"] = used
             if not events:
                 bar.update(events=rest_bar(meta, ctx), placeholder=True)
                 bar["warn"] = [warn("placeholder", PLACEHOLDER_MSG)]
@@ -304,6 +311,10 @@ def transcribe_system(
             issues.append(("other", f"应有 {len(spans)} 个小节，返回了 {len(bars)} 个"))
         elif ocr_bars:
             for i, (only_ocr, only_ai) in ocr_disagreements(bars, ocr_bars).items():
+                if shapes:
+                    only_ai = []
+                    if not only_ocr:
+                        continue
                 parts = []
                 if only_ocr:
                     parts.append(f"本地数字识别在图上读到 {_note_names(only_ocr)}，你的结果里没有")

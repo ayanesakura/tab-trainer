@@ -66,7 +66,12 @@ class Note(_M):
         description="1 = highest (top tab line) ... 6 = lowest",
         json_schema_extra={"llm_enum": True},
     )
-    fret: int = Field(ge=0, le=MAX_FRET, description="fret number exactly as written in the tab")
+    fret: int = Field(
+        ge=0,
+        le=MAX_FRET,
+        description="fret number exactly as written in the tab (a chord-sheet x mark: the fret of this string "
+        "in the current chord diagram)",
+    )
     tech: list[str] = Field(default_factory=list, json_schema_extra={"llm_items_enum": TECHS})
     grace: int = Field(-1, description="fret of a grace note leading into this note, -1 if none")
     bend: float = Field(0, description="bend amount in semitones, 0 if no bend")
@@ -80,6 +85,18 @@ class Event(_M):
         '"1/6" = 16th sextuplet, "3/4" = dotted 8th, "1", "3/2", "2", "4" ...'
     )
     notes: list[Note] = Field(default_factory=list, description="empty for a rest")
+    chord: str = Field(
+        "",
+        max_length=24,
+        description='chord name printed above the staff where a new chord starts at this onset (e.g. "Em", '
+        '"Dsus2/G"); "" if no new chord name starts here',
+    )
+    strum: Literal["", "down", "up"] = Field(
+        "",
+        description='a strummed chord drawn as an arrow across the strings: "down" = downstroke from the low '
+        'strings to the high ones (arrow pointing toward string 1, the top tab line); "up" = upstroke (arrow '
+        'pointing toward string 6); "" if not strummed',
+    )
 
     @field_validator("dur")
     @classmethod
@@ -112,6 +129,8 @@ def llm_schema(cls: type[BaseModel]) -> dict:
                 if "llm_items_enum" in extra:
                     items["enum"] = list(extra["llm_items_enum"])
             prop: dict = {"type": "array", "items": items}
+        elif get_origin(ann) is Literal:
+            prop = {"type": "string", "enum": list(get_args(ann))}
         else:
             prop = {"type": _JSON_TYPES[ann]}
             if extra.get("llm_enum"):
@@ -134,6 +153,15 @@ def _check_ts(v: list[int]) -> list[int]:
 
 
 TimeSignature = Annotated[list[int], AfterValidator(_check_ts)]
+
+
+def _check_shape(v: list[int]) -> list[int]:
+    if len(v) != STRINGS or not all(-1 <= f <= MAX_FRET for f in v):
+        raise ValueError(f"和弦指法要有 {STRINGS} 根弦、品位 -1–{MAX_FRET}：{v!r}")
+    return v
+
+
+ChordShape = Annotated[list[int], AfterValidator(_check_shape)]
 
 
 class Warn(_M):
@@ -170,6 +198,8 @@ class Bar(_M):
     edited: bool = False  # 用户手改过（撤销回原样后变回 False）
     orig: Orig | None = Field(None, alias="_orig")
     placeholder: bool = False  # 识别失败、按整小节休止占位
+    # 弹唱谱：这个小节里出现的和弦（事件的 chord）的指法，和弦名 → 1–6 弦的品位（-1 = 不弹），给谱面画和弦图
+    shapes: dict[str, ChordShape] | None = None
     qa: list[QA] = Field(default_factory=list)
     time_signature: TimeSignature | None = None  # 和全曲拍号不同时才有
     ts_change: TimeSignature | None = None  # 图片谱子：谱上这一小节写了变拍号

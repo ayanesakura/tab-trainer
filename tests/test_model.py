@@ -13,7 +13,8 @@ FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "llm_schemas.json").r
 
 @pytest.mark.parametrize("name", ["NOTE", "EVENT", "BAR", "TRANSCRIBE", "META", "EXPLAIN", "COACH", "PLAN"])
 def test_llm_schemas_are_unchanged(name):
-    """tests/fixtures/llm_schemas.json 由重构前（6957d49）的 llm.py 导出；按 JSON 文本比较，连键的顺序都要一样。"""
+    """tests/fixtures/llm_schemas.json 是给模型的 schema 快照（最初由重构前 6957d49 的 llm.py 导出，弹唱谱加了 chord / strum / chords）；
+    按 JSON 文本比较，连键的顺序都要一样。有意改 schema 时重新导出。"""
     got = json.dumps(getattr(prompts, f"{name}_SCHEMA"), ensure_ascii=False)
     assert got == json.dumps(FIXTURE[name], ensure_ascii=False)
 

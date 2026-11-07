@@ -279,3 +279,13 @@ def test_source_type_is_recorded(data_dir):
 
     assert {s["id"]: s["source_type"] for s in views.list_library()} == listed
     # 早期的曲子没有 source_type：迁移时推断（见 test_migrate）
+
+
+def test_bar_text_shows_chords_and_strums():
+    from app.prompts import bar_text
+
+    b = {
+        "n": 2,
+        "events": [{"dur": "1", "chord": "Em", "strum": "down", "notes": [{"string": 1, "fret": 0}]}],
+    }
+    assert bar_text(b) == "第2小节: [Em] 1拍 下扫 1弦0品"

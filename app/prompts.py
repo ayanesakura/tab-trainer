@@ -56,7 +56,27 @@ BAR_SCHEMA = _obj(
         "uncertain": {"type": "string"},
     }
 )
-TRANSCRIBE_SCHEMA = _obj({"bars": {"type": "array", "items": BAR_SCHEMA}})
+CHORD_SCHEMA = _obj(
+    {
+        "name": {"type": "string", "description": 'the chord name exactly as printed, e.g. "Dsus2/G"'},
+        "frets": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "the diagram as actual frets for strings 1 (highest) to 6: 0 = open (o), -1 = not "
+            'played (x above the diagram); add the position marker ("3fr." = the top row of the grid is fret 3)',
+        },
+    }
+)
+TRANSCRIBE_SCHEMA = _obj(
+    {
+        "bars": {"type": "array", "items": BAR_SCHEMA},
+        "chords": {
+            "type": "array",
+            "items": CHORD_SCHEMA,
+            "description": "every chord diagram printed in this image (each name once); [] if there are none",
+        },
+    }
+)
 
 META_SCHEMA = _obj(
     {
@@ -116,11 +136,18 @@ Techniques (put them on the note that receives them):
 - "h": hammer-on into this note (arc + H from the previous note on the same string). "p": pull-off into this note.
 - "sl": slide into this note from the previous note on the same string; this note is not re-picked.
 - "si": slide in from an unspecified lower fret (a slash before the number with no starting note); the note is picked.
-- "pm": palm mute (P.M. line). "x": dead/muted note written as x (use fret 0).
+- "pm": palm mute (P.M. line). "x": dead/muted note written as x (use fret 0) - but not in chord sheets, see below.
 - "nh": natural harmonic, written <n>; fret = the harmonic node n. A natural harmonic written with a fractional node, e.g. <21.7> or <14.7>, gets fret = the node rounded to the nearest whole number (22, 15). "ah": artificial harmonic (A.H., e.g. "2<14>"): fret = the fretted note (2), the node is 12 frets higher.
 - "roll": arpeggiated chord (wavy vertical line) - put it on every note of the chord.
 - "vib": vibrato. "bend": a bend; also set "bend" to the size in semitones (full = 2, 1/2 = 1).
 - A small grace note before a note: set "grace" on the main note to the grace note's fret (and add "h"/"sl"/"p" if the grace connects by that technique). Otherwise grace = -1.
+
+Chord sheets (accompaniment scores with chord names and chord diagrams printed above the tab, often with numbered-notation melody and lyrics below - ignore the melody and lyrics):
+- First read every chord diagram in "chords": frets for strings 1-6, with the "Nfr." position marker added.
+- "chord": on the event where a chord name starts (the first onset at or after the name's horizontal position), write that name; otherwise "".
+- Small x marks on the tab lines are NOT dead notes here: each x means "play this string with the current chord" (the last chord name at or before this point, which may come from an earlier bar). Write a normal note with the fret of that string from the chord's diagram, no "x" technique. A fret number written on the line instead of an x is played as written (it overrides the diagram).
+- A vertical arrow drawn across the strings is a strum: one event whose notes are the strings the arrow covers, each with the fret from the current chord diagram (leave out strings the diagram marks as not played). "strum": "down" when the arrowhead points to the top line (string 1) - a downstroke that starts on the low strings; "up" when it points to the bottom line. Its duration comes from the stem and beams below the tab like any other note. A wavy arrow is a rolled chord: also add "roll" to every note.
+- A circled x (or x marks with a slash, often on several strings at once) is a percussive slap/hit: write those strings with tech "x" and fret 0.
 
 Repeats and navigation (the app follows them during playback):
 - repeat_start / repeat_end: repeat barlines. repeat_end is the total number of times the section is played (2 for a plain :| sign).
@@ -129,6 +156,12 @@ Repeats and navigation (the app follows them during playback):
 
 "tip": 1-4 sentences of practical Chinese guidance for this bar, naming strings and frets the way a teacher would, e.g. "5 弦空弦 + 2 弦空弦一起弹，2 弦击弦到 2 品再勾弦回空弦（只拨一次）。第 3 拍和弦：2 弦 4 品、3 弦 2 品、4 弦 3 品；第 4 拍三连音：4 弦 3 品、3 弦空弦、2 弦空弦。" Mention what is hard and how to practise it when it helps.
 "uncertain": in Chinese, anything you could not read with confidence (which beat, which string, what you assumed). Empty string if everything is clear."""
+
+
+def _event_text(e: dict) -> str:
+    head = (f"[{e['chord']}] " if e.get("chord") else "") + f"{e['dur']}拍 "
+    strum = {"down": "下扫 ", "up": "上扫 "}.get(e.get("strum", ""), "")
+    return head + strum + (" ".join(_note_text(n) for n in e["notes"]) or "休止")
 
 
 def _note_text(n: dict) -> str:
@@ -145,14 +178,13 @@ def bar_text(b: dict) -> str:
     return (
         head
         + ": "
-        + " | ".join(
-            f"{e['dur']}拍 " + (" ".join(_note_text(n) for n in e["notes"]) or "休止") for e in b["events"]
-        )
+        + " | ".join(_event_text(e) for e in b["events"])
     )
 
 
 NOTATION_KEY = (
     "each event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), "
+    "a chord name in [brackets] starts that chord, 下扫/上扫 = strummed down/up, "
     "techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, "
     "nh natural harmonic, ah artificial harmonic, roll arpeggio, x dead note, vib vibrato, bend)"
 )

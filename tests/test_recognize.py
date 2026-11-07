@@ -843,3 +843,59 @@ def test_fixing_every_failed_row_makes_the_song_ready(data_dir, sync_jobs, monke
     recognize.start_reparse(sid, 1)
     s = store.load(sid)
     assert s["status"] == "ready" and s["notice"] is None
+
+
+def test_chord_sheet_rows_keep_chord_names_strums_and_shapes(data_dir, monkeypatch):
+    """弹唱谱：事件上的和弦名、扫弦方向留着；这一行的和弦图按小节存进 shapes（只存这个小节用到的）。"""
+
+    def transcribe(self, img, meta, first_bar, spans, **kw):
+        g = [-1, 3, 2, 0, 3, 3]  # 不是真的 G，随便一个指法
+        bars = []
+        for i in range(len(spans)):
+            ev = {
+                "dur": "1",
+                "notes": [{"string": s, "fret": 0, "tech": [], "grace": -1, "bend": 0} for s in (1, 2)],
+            }
+            bars.append(
+                {
+                    "number": first_bar + i,
+                    "events": [
+                        {**ev, "chord": "Em" if i == 0 else "", "strum": "down"},
+                        ev,
+                        ev,
+                        {**ev, "strum": "up"},
+                    ],
+                    "tip": "",
+                    "uncertain": "",
+                }
+            )
+        return {
+            "bars": bars,
+            "chords": [{"name": "Em", "frets": [0, 0, 0, 2, 2, 0]}, {"name": "G?", "frets": g}],
+        }
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bars = store.load(sid)["bars"]
+    first = bars[0]
+    assert first["events"][0]["chord"] == "Em" and first["events"][0]["strum"] == "down"
+    assert first["events"][3]["strum"] == "up" and "chord" not in first["events"][1]
+    assert first["shapes"] == {"Em": [0, 0, 0, 2, 2, 0]} and "shapes" not in bars[1]
+
+
+def test_chord_names_and_strums_survive_editing(data_dir):
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bar = store.load(sid)["bars"][0]
+    ev = [{"dur": "4", "notes": [{"string": 1, "fret": 0}], "chord": " Am7 ", "strum": "up"}]
+    out = songs.edit_bar(sid, bar["id"], ev, None)
+    assert out["bars"][0]["events"] == [
+        {
+            "dur": "4",
+            "notes": [{"string": 1, "fret": 0, "tech": [], "grace": -1, "bend": 0}],
+            "chord": "Am7",
+            "strum": "up",
+        }
+    ]
+    assert music.clean_events([{"dur": "1", "notes": [], "strum": "sideways"}]) == [{"dur": "1", "notes": []}]

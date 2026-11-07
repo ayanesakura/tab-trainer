@@ -141,6 +141,20 @@ def parse_dur(s) -> Fraction:
     return Fraction(str(s).strip())
 
 
+def clean_shapes(shapes) -> dict[str, list[int]]:
+    """弹唱谱的和弦指法：{和弦名: [1–6 弦的品位，-1 = 不弹]}。格式不对的条目丢掉（只用来画和弦图）。"""
+    out: dict[str, list[int]] = {}
+    for name, frets in (shapes or {}).items() if isinstance(shapes, dict) else ():
+        name = str(name).strip()[:24]
+        try:
+            fr = [int(f) for f in frets]
+        except (TypeError, ValueError):
+            continue
+        if name and len(fr) == STRINGS and all(-1 <= f <= MAX_FRET for f in fr):
+            out[name] = fr
+    return out
+
+
 def clean_events(events) -> list[dict]:
     """把模型或用户提交的事件整理成统一结构。格式不对一律抛 Invalid（带中文说明）。"""
     if not isinstance(events, list):
@@ -181,7 +195,13 @@ def clean_events(events) -> list[dict]:
                     "bend": bend,
                 }
             )
-        out.append({"dur": str(dur), "notes": notes})
+        ev = {"dur": str(dur), "notes": notes}
+        chord = str(e.get("chord") or "").strip()[:24]
+        if chord:
+            ev["chord"] = chord
+        if e.get("strum") in ("down", "up"):
+            ev["strum"] = e["strum"]
+        out.append(ev)
     return out
 
 
