@@ -244,7 +244,7 @@ def test_failed_explain_still_records_its_cost(data_dir, sync_jobs, monkeypatch)
     coach.start_explain(sid)
     song = store.load(sid)
     assert song["notice"]["kind"] == "error"
-    assert song["usage"]["input_tokens"] == 2000
+    assert song["usage"]["input_tokens"] == 2010  # 替身一开始就带 10：新建的客户端用掉的全算
 
 
 @pytest.mark.parametrize("answer", [None, "  "])
