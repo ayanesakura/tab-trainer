@@ -111,6 +111,17 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
     truth = store.load(sid)
     sys_idx = systems if systems is not None else list(range(len(truth["systems"])))
     claude = Claude(cfg)
+    raw_calls: list[dict] = []  # 模型原始输出（含五线谱音名），清洗后的数据里没有，排查校验时用
+    real_transcribe = claude.transcribe
+
+    def recording_transcribe(img, meta, first_bar, *args, **kw):
+        out = real_transcribe(img, meta, first_bar, *args, **kw)
+        raw_calls.append(
+            {"first_bar": first_bar, "retry": kw.get("previous") is not None, "bars": out.get("bars", [])}
+        )
+        return out
+
+    claude.transcribe = recording_transcribe
     by_sys: dict[int, list[dict]] = {}
     for b in truth["bars"]:
         by_sys.setdefault(b["system"], []).append(b)
@@ -163,6 +174,7 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
         ),
         "seconds": round(time.time() - started, 1),
         "bars": rows,
+        "raw_calls": raw_calls,
     }
 
 

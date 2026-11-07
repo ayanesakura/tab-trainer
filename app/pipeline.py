@@ -206,68 +206,6 @@ def check_bar(events: list[dict], meta: dict) -> list[str]:
     return problems
 
 
-PITCH_SKIP = {"nh", "ah", "x", "bend"}  # 这些音的实际音高和“空弦 + 品”对不上，不参与校验
-
-
-def pitch_class(name: str) -> int | None:
-    m = _NOTE_RE.match(str(name or ""))
-    if not m:
-        return None
-    return (_NOTE[m.group(1).upper()] + {"#": 1, "♯": 1, "b": -1, "♭": -1}.get(m.group(2), 0)) % 12
-
-
-def pitch_mismatches(raw_bars: list[dict], meta: dict) -> dict[int, list[str]]:
-    """五线谱音高交叉校验：模型读出的五线谱音名 vs 调弦 + 弦 + 品算出的音。
-
-    只比较音级（五线谱可能高八度记谱）。五线谱可能按实际发音记（含变调夹）也可能按指法记，
-    所以先取这一行里最常见的差值当基准，和基准不一致的音才算可疑——多半是数字被读到了相邻的弦上。
-    一根弦上的音（≥ 3 个）全都偏同样的量，更可能是调弦读错了（如 Drop D 被当成标准调弦），
-    这时不算识读错误，免得返修时把本来正确的六线谱改错。
-    返回 {小节在这一行里的序号: [问题说明]}；五线谱音太少（< 4 个）或没有一致的基准时不判断。
-    """
-    tuning = meta.get("tuning_midi") or [note_to_midi(n) for n in meta["tuning"]]
-    found = []  # (bar_idx, event_idx, string, fret, written_pc, diff)
-    for bi, bar in enumerate(raw_bars):
-        events = bar.get("events") if isinstance(bar, dict) else None
-        for ei, ev in enumerate(events if isinstance(events, list) else []):
-            notes = ev.get("notes") if isinstance(ev, dict) else None
-            for n in notes if isinstance(notes, list) else []:
-                if not isinstance(n, dict):
-                    continue
-                pc = pitch_class(n.get("pitch", ""))
-                try:
-                    st, fr = int(n["string"]), int(n["fret"])
-                    bent = float(n.get("bend") or 0) > 0
-                except (KeyError, TypeError, ValueError):
-                    continue
-                tech = n.get("tech") if isinstance(n.get("tech"), list) else []
-                if pc is None or not 1 <= st <= 6 or bent or PITCH_SKIP & set(tech):
-                    continue
-                found.append((bi, ei, st, fr, pc, (pc - tuning[st - 1] - fr) % 12))
-    if len(found) < 4:
-        return {}
-    counts: dict[int, int] = {}
-    for f in found:
-        counts[f[5]] = counts.get(f[5], 0) + 1
-    base, hits = max(counts.items(), key=lambda kv: kv[1])
-    if hits < len(found) * 0.6:  # 没有明显一致的基准，说明读五线谱本身不可靠，不下结论
-        return {}
-    retuned = set()
-    for st in range(1, 7):
-        diffs = {f[5] for f in found if f[2] == st}
-        if len(diffs) == 1 and base not in diffs and sum(f[2] == st for f in found) >= 3:
-            retuned.add(st)
-    out: dict[int, list[str]] = {}
-    for bi, ei, st, fr, pc, diff in found:
-        if diff != base and st not in retuned:
-            expect = _NAMES[(tuning[st - 1] + fr + base) % 12]
-            out.setdefault(bi, []).append(
-                f"第 {ei + 1} 个起拍的 {st} 弦 {fr} 品对应五线谱上的 {_NAMES[pc]}，"
-                f"但按调弦这个位置应是 {expect}：弦号或品位可能读错了"
-            )
-    return out
-
-
 # ---------------------------------------------------------------------------
 # 上传
 # ---------------------------------------------------------------------------
@@ -592,10 +530,6 @@ def _transcribe_system(
                     **clean_repeats(b),
                 }
             )
-        for i, msgs in pitch_mismatches(raw.get("bars", []), meta).items():
-            if i < len(bars):
-                bars[i]["warn"] = bars[i]["warn"] + msgs
-                issues += [f"第 {first_bar + i} 小节：{m}" for m in msgs]
         if spans and len(bars) != len(spans):
             issues.append(f"应有 {len(spans)} 个小节，返回了 {len(bars)} 个")
         return raw, bars, issues

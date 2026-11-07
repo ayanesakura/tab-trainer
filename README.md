@@ -6,10 +6,7 @@
 
 - **导入 Guitar Pro / MusicXML**：`.gp/.gpx/.gp3–5/.musicxml/.mxl` 本来就是精确数据，不用 AI 识别、不花钱；可以再让 AI 根据谱子数据给每个小节写练习提示（只发文字，费用很低）。
 - **上传识别**：支持多张图片或 PDF。自动找出每一行六线谱，逐行交给 Claude 识读，读出品位、节奏和演奏技巧（击弦、勾弦、滑音、泛音、闷音、琶音、倚音、推弦等），并为每个小节写练习要点。
-- **自动校验**：
-  - 每个小节的时值加起来必须等于拍号；
-  - 谱子有五线谱时，模型同时读出每个音在五线谱上的音名，程序用调弦和品位算出应有的音来核对，抓出“数字读到了相邻的弦上”这类错误；
-  - 有问题的会反馈给模型返修一次，仍有问题的小节在练习页用橙色标出。
+- **自动校验**：每个小节的时值加起来必须等于拍号，凑不满会把问题反馈给模型返修一次；仍有问题的小节在练习页用橙色标出。
 - **练习页**：
   - 谱面渲染和播放用 [alphaTab](https://github.com/CoderLine/alphaTab)：五线谱 + 六线谱（显示节奏），跟随光标，节拍器和预备拍；
   - 示范音是逐音录制的真实木吉他采样，可以在钢弦和尼龙弦之间切换；
@@ -105,7 +102,18 @@ uv run python -m app.evaluate <曲子id> --yes           # 真正运行（产生
 uv run python -m app.evaluate <曲子id> --yes --systems 0,5 --model claude-sonnet-5-5
 ```
 
-结果写在 `data/evals/` 下，不改动曲库里的数据。
+结果写在 `data/evals/<时间>-<曲子>-<模型>/` 下，不改动曲库里的数据。`report.json` 里还保存了模型每次调用的原始输出，方便排查。
+
+### 用 Guitar Pro 文件做评测曲
+
+GP / MusicXML 文件本身就是精确数据，可以直接当标准答案。`scripts/make_eval_song.py` 用 alphaTab 在无头 Chrome 里把它渲染成五线谱 + 六线谱的图片（和 GP 导出的谱子截图差不多），按真实上传的流程做版面检测，再把文件里的小节按检测到的谱行分配进去：
+
+```bash
+uv run --with websockets python scripts/make_eval_song.py 曲子.gp5 eval-xxx --title "名字"
+uv run python -m app.evaluate eval-xxx --yes
+```
+
+版面检测找到的小节数和文件对不上时脚本会报错，这本身就说明版面检测在这种排版上有问题。
 
 ## 开发
 
