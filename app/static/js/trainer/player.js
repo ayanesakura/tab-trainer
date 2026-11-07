@@ -75,6 +75,8 @@ function themeColors() {
   const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim() || '#808080';
   return { mainGlyphColor: v('--fg'), secondaryGlyphColor: v('--muted'), staffLineColor: v('--faint'), barSeparatorColor: v('--muted'), barNumberColor: v('--muted'), scoreInfoColor: v('--fg') };
 }
+const CHORD_NOTATION_KEY = 'tt.notation.chordSheet';
+const hasChords = song => !!song && (song.bars || []).some(b => (b.events || []).some(e => e.chord));
 const staveProfile = () => (get('ui.notation') === 'tab' ? 'Tab' : 'ScoreTab');
 
 function ensureApi() {
@@ -198,6 +200,9 @@ async function onScoreLoaded(score) {
     return;
   }
   applyTimbre(score);
+  // 和弦图画在和弦变化的拍上方（像弹唱谱原谱那样），不在曲子开头列一排
+  score.stylesheet.globalDisplayChordDiagramsInScore = true;
+  score.stylesheet.globalDisplayChordDiagramsOnTop = false;
   baseTempo = score.tempo || 60;
   api.playbackSpeed = get('play.bpm') / baseTempo; // 先设好：下面的 hook 失败提前返回时，实际速度也要和显示的 BPM 一致
   if (isScore(song) && hooks.scoreLoaded && !(await hooks.scoreLoaded(score))) return;
@@ -527,7 +532,18 @@ export function initPlayer() {
   $('playBtn').onclick = () => (playing() || get('rhythm.running') ? stop() : play());
   $('demoBarBtn').onclick = () => { const bi = get('ui.bar') >= 0 ? get('ui.bar') : get('play.a'); setLoop(bi, bi, !playing()); if (!playing()) play(); };
   UI.seg($('timbreSeg'), get('play.timbre'), v => set('play.timbre', v));
-  UI.seg($('notationSeg'), 'both', v => set('ui.notation', v));
+  // 谱面样式：弹唱谱（有和弦名的曲子）默认只看六线谱（五线谱对弹唱没什么用，还占地方），换了就记住；其他曲子默认两种都显示
+  const setNotationSeg = UI.seg($('notationSeg'), 'both', v => {
+    set('ui.notation', v);
+    if (hasChords(get('song'))) try { localStorage.setItem(CHORD_NOTATION_KEY, v); } catch { /* 隐私模式 */ }
+  });
+  on('view', v => {
+    if (!v || get('ui.notation') || !hasChords(get('song'))) return;
+    let n = 'tab';
+    try { n = localStorage.getItem(CHORD_NOTATION_KEY) === 'both' ? 'both' : 'tab'; } catch { /* 隐私模式 */ }
+    setNotationSeg(n);
+    set('ui.notation', n);
+  });
   $('exportBtn').onclick = exportGp;
   $('bpm').oninput = e => setTempo(+e.target.value);
   $('bpmDown').onclick = () => setTempo(get('play.bpm') - 4);

@@ -91,6 +91,11 @@ class Event(_M):
         description='chord name printed above the staff where a new chord starts at this onset (e.g. "Em", '
         '"Dsus2/G"); "" if no new chord name starts here',
     )
+    lyrics: list[str] = Field(
+        default_factory=list,
+        description="lyrics sung from this onset until the next onset, one string per printed verse line "
+        "(verse 1 first); [] if no syllable starts here or the score has no lyrics",
+    )
     strum: Literal["", "down", "up"] = Field(
         "",
         description='a strummed chord drawn as an arrow across the strings: "down" = downstroke from the low '

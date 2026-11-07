@@ -141,6 +141,19 @@ def parse_dur(s) -> Fraction:
     return Fraction(str(s).strip())
 
 
+MAX_VERSES = 4
+
+
+def clean_lyrics(lyrics) -> list[str]:
+    """一个拍上的歌词：每段一个字符串（第 1 段在前），去掉首尾空白；后面空的段去掉，全空返回 []。"""
+    if not isinstance(lyrics, list):
+        return []
+    out = [str(x).strip()[:40] if isinstance(x, (str, int, float)) else "" for x in lyrics[:MAX_VERSES]]
+    while out and not out[-1]:
+        out.pop()
+    return out
+
+
 def clean_shapes(shapes) -> dict[str, list[int]]:
     """弹唱谱的和弦指法：{和弦名: [1–6 弦的品位，-1 = 不弹]}。格式不对的条目丢掉（只用来画和弦图）。"""
     out: dict[str, list[int]] = {}
@@ -201,6 +214,9 @@ def clean_events(events) -> list[dict]:
             ev["chord"] = chord
         if e.get("strum") in ("down", "up"):
             ev["strum"] = e["strum"]
+        lyrics = clean_lyrics(e.get("lyrics"))
+        if lyrics:
+            ev["lyrics"] = lyrics
         out.append(ev)
     return out
 

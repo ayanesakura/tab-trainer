@@ -300,3 +300,11 @@ def test_set_derived_keeps_chord_names_strums_and_shapes(data_dir):
     b = song["bars"][0]
     assert b["events"][0]["chord"] == "Em" and b["events"][0]["strum"] == "down"
     assert b["shapes"] == {"Em": [0, 0, 0, 2, 2, 0]}
+
+
+def test_lyrics_are_cleaned_per_verse():
+    assert music.clean_lyrics([" 天真 ", "多浅", "", ""]) == ["天真", "多浅"]
+    assert music.clean_lyrics(["", "第二段"]) == ["", "第二段"]
+    assert music.clean_lyrics(["", ""]) == [] and music.clean_lyrics("天真") == []
+    ev = music.clean_events([{"dur": "1", "notes": [], "lyrics": ["我", None]}])
+    assert ev == [{"dur": "1", "notes": [], "lyrics": ["我"]}]

@@ -126,6 +126,13 @@
     "type": "string",
     "description": "chord name printed above the staff where a new chord starts at this onset (e.g. \"Em\", \"Dsus2/G\"); \"\" if no new chord name starts here"
    },
+   "lyrics": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    },
+    "description": "lyrics sung from this onset until the next onset, one string per printed verse line (verse 1 first); [] if no syllable starts here or the score has no lyrics"
+   },
    "strum": {
     "type": "string",
     "enum": [
@@ -140,6 +147,7 @@
    "dur",
    "notes",
    "chord",
+   "lyrics",
    "strum"
   ],
   "additionalProperties": false
@@ -230,6 +238,13 @@
        "type": "string",
        "description": "chord name printed above the staff where a new chord starts at this onset (e.g. \"Em\", \"Dsus2/G\"); \"\" if no new chord name starts here"
       },
+      "lyrics": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "lyrics sung from this onset until the next onset, one string per printed verse line (verse 1 first); [] if no syllable starts here or the score has no lyrics"
+      },
       "strum": {
        "type": "string",
        "enum": [
@@ -244,6 +259,7 @@
       "dur",
       "notes",
       "chord",
+      "lyrics",
       "strum"
      ],
      "additionalProperties": false
@@ -396,6 +412,13 @@
           "type": "string",
           "description": "chord name printed above the staff where a new chord starts at this onset (e.g. \"Em\", \"Dsus2/G\"); \"\" if no new chord name starts here"
          },
+         "lyrics": {
+          "type": "array",
+          "items": {
+           "type": "string"
+          },
+          "description": "lyrics sung from this onset until the next onset, one string per printed verse line (verse 1 first); [] if no syllable starts here or the score has no lyrics"
+         },
          "strum": {
           "type": "string",
           "enum": [
@@ -410,6 +433,7 @@
          "dur",
          "notes",
          "chord",
+         "lyrics",
          "strum"
         ],
         "additionalProperties": false

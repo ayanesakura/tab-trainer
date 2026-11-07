@@ -151,6 +151,10 @@ Chord sheets (accompaniment scores with chord names and chord diagrams printed a
 - A vertical arrow drawn across the strings is a strum: one event whose notes are the strings the arrow covers, each with the fret from the current chord diagram (leave out strings the diagram marks as not played). "strum": "down" when the arrowhead points to the top line (string 1) - a downstroke that starts on the low strings; "up" when it points to the bottom line. Its duration comes from the stem and beams below the tab like any other note. A wavy arrow is a rolled chord: also add "roll" to every note.
 - A circled x (or x marks with a slash, often on several strings at once) is a percussive slap/hit: write those strings with tech "x" and fret 0.
 
+Lyrics (scores for singing, usually with a numbered-notation melody line and the lyrics under it):
+- Put each syllable on the guitar event that is sounding when it is sung: use the melody's rhythm (its beat positions in the bar) to place the syllable in time, then attach it to the last guitar onset at or before that time. When several syllables fall on the same guitar event, join them in order ("天真").
+- "lyrics" holds one string per printed verse line, verse 1 first (e.g. ["天真", "多浅"] when two verses are printed one under the other); [] on events where no syllable starts, and everywhere when the score has no lyrics. Copy the characters exactly; leave out punctuation.
+
 Repeats and navigation (the app follows them during playback):
 - repeat_start / repeat_end: repeat barlines. repeat_end is the total number of times the section is played (2 for a plain :| sign).
 - endings: the numbers of the 1st/2nd-ending (volta) bracket over this bar.
@@ -162,6 +166,8 @@ Repeats and navigation (the app follows them during playback):
 
 def _event_text(e: dict) -> str:
     head = (f"[{e['chord']}] " if e.get("chord") else "") + f"{e['dur']}拍 "
+    if e.get("lyrics") and e["lyrics"][0]:
+        head += f"「{e['lyrics'][0]}」"
     strum = {"down": "下扫 ", "up": "上扫 "}.get(e.get("strum", ""), "")
     return head + strum + (" ".join(_note_text(n) for n in e["notes"]) or "休止")
 
@@ -182,7 +188,7 @@ def bar_text(b: dict) -> str:
 
 NOTATION_KEY = (
     "each event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), "
-    "a chord name in [brackets] starts that chord, 下扫/上扫 = strummed down/up, "
+    "a chord name in [brackets] starts that chord, 下扫/上扫 = strummed down/up, 「」 = lyric sung there, "
     "techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, "
     "nh natural harmonic, ah artificial harmonic, roll arpeggio, x dead note, vib vibrato, bend)"
 )

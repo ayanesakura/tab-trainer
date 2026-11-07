@@ -46,6 +46,8 @@ def _chord_song(server):
                 _strum(second[0], "up"),
             ]
             b["shapes"] = {"C": C, "D11": D11}
+            b["events"][0]["lyrics"] = [f"第{i + 1}", "二段"]
+            b["events"][2]["lyrics"] = ["句"]
 
     store.update(sid, apply)
     return sid
@@ -58,7 +60,11 @@ def test_chord_names_diagrams_and_strums_are_drawn(chord_song, trainer):
     )
     assert beats == [["C", 2], ["", 1], ["D11", 2], ["", 1]]
     names = b.js("""[...document.querySelectorAll('#score text')].map(t => t.textContent)""")
-    assert "C" in names and "D11" in names
+    assert "C" in names and "D11" in names and "第1" in names and "二段" in names and "句" in names
+    # 弹唱谱默认只看六线谱；和弦图画在谱里（不在开头列一排）
+    assert b.js("tt.get('ui.notation')") == "tab"
+    assert b.js("tt.api.score.stylesheet.globalDisplayChordDiagramsInScore") is True
+    assert b.js("tt.api.score.stylesheet.globalDisplayChordDiagramsOnTop") is False
     if os.environ.get("E2E_SHOTS"):
         b.screenshot(os.path.join(os.environ["E2E_SHOTS"], "chords.png"))
     assert not b.errors, b.errors

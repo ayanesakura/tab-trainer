@@ -219,7 +219,7 @@ test('chord sheets: chord names, diagrams and strums survive the round trip', ()
     meta: { title: '弹唱', tuning: ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'], capo: 0, time_signature: [4, 4] },
     bars: [
       { shapes: { C, D11 }, events: [strum(C, 'down', 'C'), strum(C, 'up'), strum(D11, 'down', 'D11'), strum(D11, 'up')] },
-      { events: [{ dur: '1', notes: [N(5, 3)], chord: 'C' }, { dur: '3', notes: [N(4, 2)] }] },
+      { events: [{ dur: '1', notes: [N(5, 3)], chord: 'C', lyrics: ['天真', '多浅'] }, { dur: '3', notes: [N(4, 2)], lyrics: ['', '薄'] }] },
     ],
   };
   const { tex } = toAlphaTex(song);
@@ -236,5 +236,7 @@ test('chord sheets: chord names, diagrams and strums survive the round trip', ()
   assert.deepEqual(back.bars[0].shapes, { C, D11 });
   assert.equal(back.bars[1].events[0].chord, 'C');
   assert.equal(back.bars[1].events[0].strum, undefined); // 单音不算扫弦
+  assert.deepEqual(back.bars[1].events.map(e => e.lyrics), [['天真', '多浅'], ['', '薄']]);
+  assert.equal(back.bars[0].events[0].lyrics, undefined);
   assert.deepEqual(norm(back.bars), norm(song.bars));
 });

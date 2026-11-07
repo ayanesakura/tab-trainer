@@ -3,6 +3,7 @@
 // 我们的数据：bar.events = [{ dur: "1/2", notes: [{ string, fret, tech: [...], grace, bend }], chord?, strum? }]
 //   - dur：到下一个起拍的时长，单位是四分音符；string：1 = 最高音弦（最细）
 //   - chord：从这个拍开始的和弦名；strum："down" 下扫（从低音弦扫向高音弦）/ "up" 上扫
+//   - lyrics：从这个拍开始唱的歌词，每段一个字符串（第 1 段在前）
 //   - bar.shapes = { 和弦名: [1–6 弦的品位，-1 = 不弹] }：这个小节用到的和弦指法（谱面上方画和弦图）
 //   - 击弦 h / 勾弦 p / 滑音 sl 标在“目标音”上
 // alphaTab：alphaTex 里 string 1 也是最高音弦，但内部模型里 note.string 1 = 最低音弦；
@@ -20,7 +21,8 @@ export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数�
 // 5：中文 GP3–5 文件按 GBK 重新导入（曲名、艺人不再是乱码）
 // 6：GBK 乱码判断收紧（Canção、Größe 这类西文曲名不再被误当成乱码），只看 GP3–5 / GPX 文件
 // 8：弹唱谱：拍上的和弦名（chord）、扫弦方向（strum）、小节用到的和弦指法（shapes）
-export const DERIVE_VERSION = 8;
+// 9：歌词（lyrics，每段一个字符串）
+export const DERIVE_VERSION = 9;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -128,6 +130,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
       const roll = notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll'));
       const fx = [];
       if (e.chord) fx.push(`ch "${esc(e.chord)}"`);
+      (e.lyrics || []).forEach((l, i) => { if (l) fx.push(`lyrics ${i} "${esc(l)}"`); });
       // 扫弦：alphaTab 的 bd = 下扫（从低音弦扫到高音弦）、bu = 上扫；琶音（波浪线）按方向用 au / ad
       if (roll) fx.push(e.strum === 'up' ? 'ad' : 'au');
       else if (notes.length > 1 && e.strum === 'down') fx.push('bd');
@@ -281,6 +284,11 @@ export function deriveSong(score, trackIndex = 0) {
         if (!beat.isRest && (beat.brushType === 1 || beat.brushType === 2) && !info.strum) {
           info.strum = beat.brushType === 2 ? 'down' : 'up';
         }
+        if (beat.lyrics && beat.lyrics.some(Boolean) && !info.lyrics) {
+          const l = beat.lyrics.map(x => String(x || '').trim().slice(0, 40));
+          while (l.length && !l[l.length - 1]) l.pop();
+          if (l.length) info.lyrics = l;
+        }
         beatInfo.set(start, info);
         if (beat.isRest) continue;
         for (const n of beat.notes) {
@@ -319,6 +327,7 @@ export function deriveSong(score, trackIndex = 0) {
       const info = beatInfo.get(t) || {};
       if (info.chord) ev.chord = info.chord;
       if (info.strum && ev.notes.length > 1) ev.strum = info.strum;
+      if (info.lyrics) ev.lyrics = info.lyrics;
       return ev;
     });
     const mb = score.masterBars[bi], out = { events };
