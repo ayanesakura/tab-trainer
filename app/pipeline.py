@@ -151,8 +151,9 @@ def clean_events(events) -> list[dict]:
 
 # 反复和跳转记号（名字和 alphaTex 的 \jump 一致）。播放时 alphaTab 会按它们跳转。
 DIRECTIONS = (
-    "segno", "segnosegno", "coda", "doublecoda", "fine",
-    "dacapo", "dacapoalcoda", "dacapoalfine", "dalsegno", "dalsegnoalcoda", "dalsegnoalfine", "dacoda",
+    "fine", "segno", "segnosegno", "coda", "doublecoda", "dacapo", "dacapoalcoda", "dacapoaldoublecoda",
+    "dacapoalfine", "dalsegno", "dalsegnoalcoda", "dalsegnoaldoublecoda", "dalsegnoalfine", "dalsegnosegno",
+    "dalsegnosegnoalcoda", "dalsegnosegnoaldoublecoda", "dalsegnosegnoalfine", "dacoda", "dadoublecoda",
 )  # fmt: skip
 
 
@@ -220,19 +221,27 @@ def pitch_mismatches(raw_bars: list[dict], meta: dict) -> dict[int, list[str]]:
 
     只比较音级（五线谱可能高八度记谱）。五线谱可能按实际发音记（含变调夹）也可能按指法记，
     所以先取这一行里最常见的差值当基准，和基准不一致的音才算可疑——多半是数字被读到了相邻的弦上。
-    返回 {小节在这一行里的序号: [问题说明]}；五线谱音太少（< 4 个）时不判断。
+    一根弦上的音（≥ 3 个）全都偏同样的量，更可能是调弦读错了（如 Drop D 被当成标准调弦），
+    这时不算识读错误，免得返修时把本来正确的六线谱改错。
+    返回 {小节在这一行里的序号: [问题说明]}；五线谱音太少（< 4 个）或没有一致的基准时不判断。
     """
     tuning = meta.get("tuning_midi") or [note_to_midi(n) for n in meta["tuning"]]
     found = []  # (bar_idx, event_idx, string, fret, written_pc, diff)
     for bi, bar in enumerate(raw_bars):
-        for ei, ev in enumerate(bar.get("events") or []):
-            for n in ev.get("notes") or []:
+        events = bar.get("events") if isinstance(bar, dict) else None
+        for ei, ev in enumerate(events if isinstance(events, list) else []):
+            notes = ev.get("notes") if isinstance(ev, dict) else None
+            for n in notes if isinstance(notes, list) else []:
+                if not isinstance(n, dict):
+                    continue
                 pc = pitch_class(n.get("pitch", ""))
                 try:
                     st, fr = int(n["string"]), int(n["fret"])
+                    bent = float(n.get("bend") or 0) > 0
                 except (KeyError, TypeError, ValueError):
                     continue
-                if pc is None or not 1 <= st <= 6 or PITCH_SKIP & set(n.get("tech") or []):
+                tech = n.get("tech") if isinstance(n.get("tech"), list) else []
+                if pc is None or not 1 <= st <= 6 or bent or PITCH_SKIP & set(tech):
                     continue
                 found.append((bi, ei, st, fr, pc, (pc - tuning[st - 1] - fr) % 12))
     if len(found) < 4:
@@ -243,9 +252,14 @@ def pitch_mismatches(raw_bars: list[dict], meta: dict) -> dict[int, list[str]]:
     base, hits = max(counts.items(), key=lambda kv: kv[1])
     if hits < len(found) * 0.6:  # 没有明显一致的基准，说明读五线谱本身不可靠，不下结论
         return {}
+    retuned = set()
+    for st in range(1, 7):
+        diffs = {f[5] for f in found if f[2] == st}
+        if len(diffs) == 1 and base not in diffs and sum(f[2] == st for f in found) >= 3:
+            retuned.add(st)
     out: dict[int, list[str]] = {}
     for bi, ei, st, fr, pc, diff in found:
-        if diff != base:
+        if diff != base and st not in retuned:
             expect = _NAMES[(tuning[st - 1] + fr + base) % 12]
             out.setdefault(bi, []).append(
                 f"第 {ei + 1} 个起拍的 {st} 弦 {fr} 品对应五线谱上的 {_NAMES[pc]}，"

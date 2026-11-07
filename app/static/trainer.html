@@ -597,8 +597,11 @@ function drawCrop(bi) {
 const state = { playing: false, ready: false, bpm: 50, a: 0, b: 0, loops: 0, lastTick: -1, tempoSet: false };
 const $ = id => document.getElementById(id);
 const AT_BASE = '/static/vendor/alphatab/';
-const SOUNDFONT = '/static/vendor/soundfont/guitars.sf3';
-const TIMBRES = { steel: 25, nylon: 24 }; // 音色库里只有这两个 GM 音色（和节拍器）
+// 两个音色库：Sonivox 是完整的通用音色库（节拍器、GP 文件里的贝斯和鼓等都靠它）；
+// 木吉他库后加载，alphaTab 查音色时后加载的优先，所以 24 / 25 号用的是真实木吉他采样。
+const SF_BASE = '/static/vendor/soundfont/sonivox.sf2', SF_GUITARS = '/static/vendor/soundfont/guitars.sf3';
+const TIMBRES = { steel: 25, nylon: 24 };
+let soundFontsLoaded = 0;
 const atReady = new Promise(r => (window.alphaTab ? r() : addEventListener('alphatab-ready', r, { once: true })));
 let api = null, baseTempo = 60, beatMap = [], scoreKey = '', shiftDown = false;
 addEventListener('keydown', e => { if (e.key === 'Shift') shiftDown = true; });
@@ -618,13 +621,17 @@ async function ensureApi() {
     display: { scale: 0.9, layoutMode: 'Page', staveProfile: staveProfile(), resources: themeColors() },
     notation: { rhythmMode: 'ShowWithBars' },
     player: {
-      playerMode: 'EnabledSynthesizer', soundFont: SOUNDFONT,
+      playerMode: 'EnabledSynthesizer', soundFont: SF_BASE,
       enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true,
       enablePlaybackRangeSelection: false, scrollOffsetY: -230,
     },
   });
   api.soundFontLoad.on(e => { if (!state.ready) setStatus('加载音色…', `${Math.round(100 * e.loaded / Math.max(1, e.total))}%`); });
-  api.playerReady.on(() => { state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格键播放'); });
+  api.soundFontLoaded.on(() => { if (++soundFontsLoaded === 1) api.loadSoundFont(SF_GUITARS, true); });
+  api.playerReady.on(() => {
+    if (soundFontsLoaded < 2) return; // 等木吉他音色也加载完
+    state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格键播放');
+  });
   api.playerStateChanged.on(e => {
     state.playing = e.state === 1;
     setPlayBtn(state.playing);
@@ -665,13 +672,20 @@ async function loadScore() {
 
 // 所有音轨都用选中的木吉他音色：GP 文件里可能是电吉他等音色，而音色库里只有木吉他。
 // scoreLoaded 在生成 MIDI 之前同步触发，所以在这里改就会生效；中途切换时再重新生成 MIDI。
-function applyTimbre(score) {
+// 只换吉他音轨（GM 24–31，包括电吉他）：贝斯、鼓、钢琴等保持原音色。原来的音色记在 _orig 里，导出 GP 时还原。
+const isGuitarProgram = p => p >= 24 && p <= 31;
+function applyTimbre(score, restore = false) {
   const prog = TIMBRES[$('timbreSeg').dataset.value] ?? 25;
   for (const t of score.tracks) {
     if (t.isPercussion) continue;
-    t.playbackInfo.program = prog;
+    if (t._origProgram === undefined) t._origProgram = t.playbackInfo.program;
+    if (!isGuitarProgram(t._origProgram)) continue;
+    t.playbackInfo.program = restore ? t._origProgram : prog;
     for (const st of t.staves) for (const bar of st.bars) for (const v of bar.voices) for (const b of v.beats)
-      for (const a of b.automations) if (a.type === alphaTab.model.AutomationType.Instrument) a.value = prog;
+      for (const a of b.automations) if (a.type === alphaTab.model.AutomationType.Instrument) {
+        if (a._orig === undefined) a._orig = a.value;
+        if (isGuitarProgram(a._orig)) a.value = restore ? a._orig : prog;
+      }
   }
 }
 function switchTimbre(v) {
@@ -815,7 +829,9 @@ function onBeatClick(beat) {
 
 function exportGp() {
   if (!api || !api.score) return;
-  const bytes = new alphaTab.exporter.Gp7Exporter().export(api.score, api.settings);
+  applyTimbre(api.score, true); // 导出原来的音色，不是练习时临时换的木吉他
+  let bytes;
+  try { bytes = new alphaTab.exporter.Gp7Exporter().export(api.score, api.settings); } finally { applyTimbre(api.score); }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
   a.download = ((SONG.title || (SONG.meta && SONG.meta.title) || 'tab').replace(/[\\/:*?"<>|]/g, '_')) + '.gp';
@@ -945,6 +961,7 @@ const frac = s => { const [a, b] = String(s).split('/'); return b === undefined 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 function applySong(song) {
+  if (np) closeNotePop(); // 数据变了，面板里记的位置可能已经不对
   SONG = song;
   const meta = song.meta || {};
   const tm = meta.tuning_midi || [64, 59, 55, 50, 45, 40];
@@ -1116,10 +1133,13 @@ async function putBar(barId, events, msg, isUndo = false) {
   UI.toast(msg + (isUndo ? '' : (editMode ? '（⌘Z 撤销）' : '')));
   return true;
 }
+let undoing = false;
 async function undoEdit() {
+  if (undoing) return;
   const u = undoStack.pop();
   if (!u) { UI.toast('没有可以撤销的修改', 'info'); return; }
-  await putBar(u.barId, u.events, `已撤销第 ${u.n} 小节的修改`, true);
+  undoing = true;
+  try { await putBar(u.barId, u.events, `已撤销第 ${u.n} 小节的修改`, true); } finally { undoing = false; }
 }
 
 // ---------------------------------------------------------------------
@@ -1158,7 +1178,7 @@ function openNotePop(beat, note) {
   if (!ev) return;
   const ni = note ? ev.notes.findIndex(n => n.string === 7 - note.string) : -1; // alphaTab 的弦号 1 = 最低音弦
   const cur = ni >= 0 ? ev.notes[ni] : null;
-  np = { bi, ei, ni, string: cur ? cur.string : freeString(ev, note ? 7 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []) };
+  np = { bi, ei, ni, barId: SONG.bars[bi].id, string: cur ? cur.string : freeString(ev, note ? 7 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []) };
   showBar(bi);
   renderNotePop();
   $('npFret').value = np.fret;
@@ -1197,10 +1217,13 @@ async function saveNotePop() {
   const fret = parseInt($('npFret').value, 10);
   if (!(fret >= 0 && fret <= 30)) { $('npMsg').textContent = '品位要在 0–30 之间'; return; }
   const bar = SONG.bars[np.bi], events = structuredClone(barEvents(np.bi)), ev = events[np.ei];
+  if (!bar || bar.id !== np.barId || !ev || (np.ni >= 0 && !ev.notes[np.ni])) { closeNotePop(); UI.toast('谱子刚刚更新过，请重新点一下这个音', 'info'); return; }
   const old = np.ni >= 0 ? ev.notes[np.ni] : { grace: -1, bend: 0 };
   const tech = NP_TECH.map(t => t[0]).filter(k => np.tech.has(k));
   if (old.tech && old.tech.includes('bend')) tech.push('bend'); // 推弦不在面板里，原样保留
   const n = { ...old, string: np.string, fret, tech };
+  const same = np.ni >= 0 && old.string === n.string && old.fret === n.fret && [...(old.tech || [])].sort().join() === [...tech].sort().join();
+  if (same) { closeNotePop(); return; } // 没改就不保存（保存会清掉这一小节的 AI 不确定说明）
   if (np.ni >= 0) ev.notes[np.ni] = n; else ev.notes.push(n);
   ev.notes.sort((a, b) => a.string - b.string);
   const where = `第 ${np.bi + 1} 小节`;
@@ -1210,6 +1233,7 @@ async function saveNotePop() {
 async function deleteNotePop() {
   if (!np || np.ni < 0) return;
   const bar = SONG.bars[np.bi], events = structuredClone(barEvents(np.bi));
+  if (!bar || bar.id !== np.barId || !events[np.ei] || !events[np.ei].notes[np.ni]) { closeNotePop(); return; }
   events[np.ei].notes.splice(np.ni, 1);
   const where = `第 ${np.bi + 1} 小节`;
   closeNotePop();
@@ -1245,7 +1269,7 @@ document.addEventListener('mousedown', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && np) { closeNotePop(); return; }
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey && editMode && !(e.target.closest && e.target.closest('input, textarea'))) { e.preventDefault(); undoEdit(); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey && editMode && !np && !(e.target.closest && e.target.closest('input, textarea'))) { e.preventDefault(); undoEdit(); }
 });
 $('reparseBtn').onclick = async () => {
   if (shownBar < 0) return;

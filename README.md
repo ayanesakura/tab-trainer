@@ -38,7 +38,7 @@
 
 - alphaTab 1.9.0（`app/static/vendor/alphatab/`，MPL-2.0）：谱面渲染、播放和 Guitar Pro 读写。它要求渲染出的谱面上保留“♪ alphaTab.net”署名，不得去掉、隐藏或遮挡（见 https://alphatab.net/docs/attribution）。
 - Bravura 字体（SIL OFL 1.1）：随 alphaTab 附带，许可证文件在同一目录。
-- 吉他音色（`app/static/vendor/soundfont/guitars.sf3`）：FreePats 的 FSS 钢弦吉他（GPL-3.0+，附音色库例外条款）和西班牙古典吉他（CC0），节拍器声取自 Sonivox（Apache-2.0）。来源、改动和重新生成的方法见该目录的 README。
+- 吉他音色（`app/static/vendor/soundfont/guitars.sf3`）：FreePats 的 FSS 钢弦吉他（GPL-3.0+，附音色库例外条款）和西班牙古典吉他（CC0），节拍器和 GP 文件里的其他乐器用 alphaTab 自带的 Sonivox（Apache-2.0）。来源、改动和重新生成的方法见该目录的 README。
 
 ## 快速开始
 

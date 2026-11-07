@@ -374,3 +374,37 @@ def test_set_derived_keeps_repeats(data_dir):
     song = pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, bars)
     assert song["bars"][0]["repeat_start"] is True
     assert song["bars"][1]["repeat_end"] == 3 and song["bars"][1]["directions"] == ["fine"]
+
+
+def test_pitch_check_treats_whole_string_offset_as_tuning_not_misread():
+    # 实际是 Drop D（6 弦 D2），谱头却读成了标准调弦：6 弦上的音全部偏 2 个半音，不应让模型去“改”六线谱
+    notes = [
+        (6, 0, "D", []),
+        (6, 2, "E", []),
+        (6, 3, "F", []),
+        (5, 2, "B", []),
+        (4, 2, "E", []),
+        (3, 2, "A", []),
+    ]
+    notes += [(2, 1, "C", []), (1, 0, "E", []), (5, 0, "A", []), (4, 0, "D", [])]
+    assert (
+        pipeline.pitch_mismatches(_raw([notes]), pipeline.normalize_meta({"tuning": pipeline.STANDARD})) == {}
+    )
+    # 但同一根弦上只有个别音不对，仍然是识读错误
+    one_off = [*notes, (6, 5, "G", [])]
+    one_off[0] = (6, 0, "E", [])
+    one_off[1] = (6, 2, "F#", [])
+    one_off[2] = (6, 3, "G", [])
+    out = pipeline.pitch_mismatches(_raw([one_off]), pipeline.normalize_meta({"tuning": pipeline.STANDARD}))
+    assert list(out) == [0] and "6 弦 5 品" in out[0][0]
+
+
+def test_pitch_check_ignores_malformed_entries_and_bends():
+    ok = [(5, 2, "C#4", []), (4, 2, "F#4", []), (3, 2, "B4", []), (2, 3, "E5", [])]
+    raw = _raw([ok])
+    raw[0]["events"].append(
+        {"dur": "1", "notes": [{"string": 2, "fret": 5, "pitch": "G5", "tech": [], "bend": 2}]}
+    )
+    raw.append("garbage")
+    raw[0]["events"].append("garbage")
+    assert pipeline.pitch_mismatches(raw, STD_META) == {}
