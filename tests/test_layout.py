@@ -88,3 +88,92 @@ def test_dashed_let_ring_line_above_tab_is_not_a_seventh_string():
     r = detect_page(img)
     assert len(r["systems"]) == 2
     assert all(len(s["bars"]) == 3 for s in r["systems"])
+
+
+def _draw_tab(d, tab_top, x0, x1, barlines, sp=14):
+    for i in range(6):
+        d.line([(x0, tab_top + i * sp), (x1, tab_top + i * sp)], fill=170)
+    for x in barlines:
+        d.line([(x, tab_top), (x, tab_top + 5 * sp)], fill=40, width=2)
+
+
+def test_short_screenshot_with_one_tab_row():
+    """只截了一行六线谱的短图（页高很小）：线距相对页高很大，也要能组成谱表。"""
+    img = Image.new("L", (1200, 160), 255)
+    _draw_tab(ImageDraw.Draw(img), 40, 40, 1160, (40, 600, 1160))
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2]
+
+
+def test_very_short_last_row_is_kept():
+    """最后一行只有一个全音符小节，占不到页宽的十分之一。"""
+    img = Image.new("L", (1800, 900), 255)
+    d = ImageDraw.Draw(img)
+    _draw_system(d, 120, 60, 1740, (60, 900, 1740))
+    _draw_system(d, 520, 60, 220, (60, 220))  # 160 像素 ≈ 11 个线距、页宽的 9%
+    d.text((120, 520 + 110 + 14 * 2 - 6), "0", fill=0)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2, 1]
+
+
+def test_strum_arrows_are_not_barlines():
+    """扫弦箭头几乎贯穿六线谱：尾巴到不了 6 弦，或者箭头、尾巴伸出谱线外半个线距。"""
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        t = top + 110
+        for x, y0, y1 in ((150, t + 4, t + 64), (500, t - 8, t + 78), (860, t, t + 78)):
+            d.line([(x, y0), (x, y1)], fill=0, width=2)
+            d.polygon([(x - 5, y0 + 10), (x + 6, y0 + 10), (x + 1, y0)], fill=0)  # 箭头
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
+
+
+def test_dashed_line_further_above_does_not_eat_string_one():
+    """let ring 虚线离 1 弦 1.6–2 个线距：不能和 1 弦配成一组、把六线谱拆成 5 根。"""
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        y = top + 110 - 26
+        for x in range(70, 1130, 12):
+            d.line([(x, y), (x + 9, y)], fill=120)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
+    assert all(abs(s["lines"][0] - (t + 110)) <= 2 for s, t in zip(r["systems"], (120, 520)))
+
+
+def test_page_with_only_a_short_row():
+    """切页后最后一页只剩一个短小节：整页没有占满页宽的线，也要找到。"""
+    img = Image.new("L", (1800, 360), 255)
+    d = ImageDraw.Draw(img)
+    _draw_system(d, 60, 60, 300, (60, 300))
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [1]
+
+
+def test_chord_diagrams_are_not_a_tab_row():
+    """一排和弦图：格子也是 6 根等距横线，竖线一个线距左右一根。"""
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for k in range(8):  # 谱子上方一排和弦图，每个 5 格宽、6 根横线
+        x = 80 + k * 130
+        for i in range(6):
+            d.line([(x, 20 + i * 14), (x + 75, 20 + i * 14)], fill=40)
+        for j in range(6):
+            d.line([(x + j * 15, 20), (x + j * 15, 90)], fill=40)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
+
+
+def test_staff_with_ledger_lines_is_not_a_tab():
+    """五线谱下面一排加线（连在一起的低音）和五线谱凑成 6 根等距线，符干又贯穿它们：不能当成六线谱。
+    靠和这页其他谱表比线距来认（Greensleeves 里只有一行这样），所以这里只有第二行有加线。"""
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for top in (520,):
+        y = top + 50  # 五线谱线距 10，第 6 根位置
+        for x in range(80, 1120, 24):
+            d.line([(x, y), (x + 14, y)], fill=60)  # 加线
+            d.line([(x + 12, top - 20), (x + 12, y + 4)], fill=0, width=2)  # 符干
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3]

@@ -37,55 +37,113 @@ def _spacing(staff: list[float]) -> float:
 
 
 def _find_staves(gray: np.ndarray) -> list[list[float]]:
-    h = gray.shape[0]
-    staves = _group_staves(_staff_lines(gray), h)
+    h, w = gray.shape
+    staves = _group_staves(_staff_lines(gray), h, w)
     if not staves:
-        return []
-    # 第二遍：低门槛补找没占满页宽的短行（如一页的最后一行、双栏排版）。
+        # 整页都是没占满页宽的短行（比如切页后最后一页只剩一个小节）：放低门槛再找，但要真找到六线谱才算
+        for thr in (0.1, 0.05):
+            staves = _group_staves(_staff_lines(gray, thr), h, w)
+            if any(len(t) == 6 for t in staves):
+                break
+        else:
+            return []
+    # 第二遍：低门槛补找没占满页宽的短行（如一页的最后一行、双栏排版；只有一个全音符小节的末行不到页宽的十分之一）。
     # 只接受线距和已找到的谱表一致、且不与它们重叠的，避免把文字行当成谱线。
     sps = [_spacing(t) for t in staves]
-    for cand in _group_staves(_staff_lines(gray, 0.1), h):
+    # 门槛太低时普通的短行反而会和音符连成一片，所以先 0.1 再 0.05，后一遍只补前面没找到的
+    for cand in [c for thr in (0.1, 0.05) for c in _group_staves(_staff_lines(gray, thr), h, w)]:
         sp = _spacing(cand)
         if not any(abs(sp - x) <= x * 0.15 for x in sps):
             continue
         if any(cand[0] <= t[-1] + sp and t[0] <= cand[-1] + sp for t in staves):
             continue
         staves.append(cand)
-    return sorted(staves, key=lambda t: t[0])
+    return _drop_ledger_groups(sorted(staves, key=lambda t: t[0]))
+
+
+def _drop_ledger_groups(staves: list[list[float]]) -> list[list[float]]:
+    """五线谱加上一排加线也是 6 根等距的线：线距和五线谱一样、和这页其他六线谱差得远的“六线谱”丢掉。
+    （GP、alphaTab、MuseScore 导出的六线谱线距都比五线谱大）"""
+    tabs = [_spacing(t) for t in staves if len(t) == 6]
+    fives = [_spacing(t) for t in staves if len(t) == 5]
+    if len(tabs) < 2 or not fives:
+        return staves
+    med = float(np.median(tabs))
+
+    def ledger(t: list[float]) -> bool:
+        sp = _spacing(t)
+        return abs(sp - med) > med * 0.15 and any(abs(sp - f) <= f * 0.08 for f in fives)
+
+    return [t for t in staves if len(t) != 6 or not ledger(t)]
 
 
 def _segments(on: np.ndarray, sp: float, min_len: float) -> list[tuple[int, int]]:
-    """六线谱横向覆盖的连续段：被品格数字打断的小缺口合并，大的空白（双栏之间）分开。"""
+    """六线谱横向覆盖的连续段：被品格数字打断的小缺口合并，大的空白（双栏之间）分开。
+    合并后谱线覆盖不到一半的段丢掉（五线谱加一根加线凑成的“6 根线”，只在有加线的地方连着）。"""
     segs: list[list[int]] = []
     for a, b in _runs(on):
         if segs and a - segs[-1][1] < sp * 4:
             segs[-1][1] = b
         else:
             segs.append([a, b])
-    return [(a, b - 1) for a, b in segs if b - a >= min_len]
+    return [(a, b - 1) for a, b in segs if b - a >= min_len and on[a:b].mean() >= 0.5]
 
 
-def _group_staves(lines: list[float], h: int) -> list[list[float]]:
+def _group_staves(lines: list[float], h: int, w: int) -> list[list[float]]:
+    """按等间距把谱线分组。第一个线距要足够小：取页高的 3% 和页宽的 3% 中较大的
+    （只截了一两行的短图页高很小，只按页高算的话谱线永远组不起来）。"""
+    first_gap = max(h, w) * 0.03
     staves: list[list[float]] = []
     cur: list[float] = []
     for y in lines:
-        if not cur:
-            cur = [y]
-            continue
-        gap = y - cur[-1]
-        sp = cur[1] - cur[0] if len(cur) > 1 else None
-        tol = max(2.0, sp * 0.25) if sp else 0
-        if (sp is None and gap < h * 0.03) or (sp is not None and abs(gap - sp) <= tol):
-            cur.append(y)
-        elif sp is not None and len(cur) <= 4 and abs(gap - 2 * sp) <= tol:
-            # 中间一根线被一排数字挡得太多没检出来：补上
-            cur += [cur[-1] + gap / 2, y]
-        else:
-            staves.append(cur)
-            cur = [y]
+        while True:
+            if not cur:
+                cur = [y]
+                break
+            gap = y - cur[-1]
+            sp = cur[1] - cur[0] if len(cur) > 1 else None
+            tol = max(2.0, sp * 0.25) if sp else 0
+            if (sp is None and gap < first_gap) or (sp is not None and abs(gap - sp) <= tol):
+                cur.append(y)
+            elif sp is not None and len(cur) <= 4 and abs(gap - 2 * sp) <= tol:
+                # 中间一根线被一排数字挡得太多没检出来：补上
+                cur += [cur[-1] + gap / 2, y]
+            elif len(cur) == 2:
+                # 前两根的间距对不上后面的：第一根多半是谱表上方的虚线（let ring 等，离 1 弦一两个线距），
+                # 丢掉它、从第二根重新开始（否则 1 弦跟着它一起丢掉，六线谱只剩 5 根）
+                staves.append(cur[:1])
+                cur = cur[1:]
+                continue
+            else:
+                staves.append(cur)
+                cur = [y]
+            break
     if cur:
         staves.append(cur)
     return [t for t in (_trim(s) for s in staves) if len(t) in (5, 6)]
+
+
+def _overhang(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) -> float:
+    """竖线在六线谱上下各伸出去多远（线距为单位，取较长的一端）。"""
+    cols = dark[:, max(0, a - 1) : b + 1].any(1)
+    h, gap = len(cols), max(2, round(sp * 0.15))  # 从谱线外侧一点开始量，避开谱线本身的粗细
+    out = 0
+    for y, step in ((round(tab[0]) - gap, -1), (round(tab[-1]) + gap, 1)):
+        n = 0
+        while 0 <= y + step * n < h and cols[y + step * n]:
+            n += 1
+        out = max(out, n)
+    return out / sp
+
+
+def _is_barline(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float, ends: np.ndarray) -> bool:
+    """贯穿六线谱的竖线里分出小节线：
+    - 两端要连到 1 弦和 6 弦（扫弦箭头的尾巴常常到不了最下面那根线）；
+    - 不能只在上下伸出去一点：扫弦箭头的箭头、尾巴会超出谱线半个线距左右，
+      小节线正好停在谱线上（和五线谱连通的小节线、左边的谱表括号伸得远，不受影响）。"""
+    if ends[max(0, a - 1) : b + 1].max() < 0.8:
+        return False
+    return not 0.2 <= _overhang(dark, a, b, tab, sp) <= 2.5
 
 
 def _trim(group: list[float]) -> list[float]:
@@ -120,11 +178,20 @@ def detect_page(img: Image.Image) -> dict:
 
         ys = [round(y) for y in tab]
         on = np.stack([dark[max(0, y - 1) : y + 2].any(0) for y in ys]).sum(0) >= 4
-        for x0, x1 in _segments(on, sp, max(sp * 12, w * 0.12)):
+        for x0, x1 in _segments(on, sp, sp * 6):
             # 小节线：六线谱上下线之间（掐头去尾）几乎全暗的竖列
             y_a, y_b = int(tab[0] + sp * 0.3), int(tab[-1] - sp * 0.3)
             colfrac = dark[y_a:y_b].mean(0)
-            bl = [(a + b - 1) / 2 for a, b in _runs(colfrac >= 0.93) if x0 - 6 <= a <= x1 + 6]
+            ends = np.minimum(
+                dark[int(tab[0]) : y_a + 1].mean(0), dark[y_b : int(np.ceil(tab[-1])) + 1].mean(0)
+            )
+            bl = [
+                (a + b - 1) / 2
+                for a, b in _runs(colfrac >= 0.93)
+                if x0 - 6 <= a <= x1 + 6 and _is_barline(dark, a, b, tab, sp, ends)
+            ]
+            if len(bl) >= 8 and float(np.median(np.diff(bl))) < sp * 2:
+                continue  # 一排和弦图：格子的竖线一个线距左右一根，也是 6 根等距横线，不是六线谱
             merged: list[float] = []
             for x in bl:  # 双小节线、终止线合并成一条
                 if merged and x - merged[-1] < sp * 1.2:

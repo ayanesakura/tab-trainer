@@ -184,16 +184,26 @@ async def _screenshot(ws_url: str, url: str, scale: float, width: int) -> tuple[
             returnByValue=True,
         )
         w, h = r["result"]["value"]
-        shot = await send(
-            "Page.captureScreenshot",
-            format="png",
-            captureBeyondViewport=True,
-            clip={"x": 0, "y": 0, "width": w, "height": h, "scale": 1},
-        )
+        # Chrome 一张截图最高约 16384 物理像素，再高的部分会重复页面开头：分段截再拼起来
+        step = int(12000 / scale)
+        tiles = []
+        for y in range(0, h, step):
+            shot = await send(
+                "Page.captureScreenshot",
+                format="png",
+                captureBeyondViewport=True,
+                clip={"x": 0, "y": y, "width": w, "height": min(step, h - y), "scale": 1},
+            )
+            tiles.append(Image.open(io.BytesIO(base64.b64decode(shot["data"]))).convert("RGB"))
+        full = Image.new("RGB", (tiles[0].width, sum(t.height for t in tiles)), "white")
+        y = 0
+        for t in tiles:
+            full.paste(t, (0, y))
+            y += t.height
         rows = (await send("Runtime.evaluate", expression="window.rows", returnByValue=True))["result"][
             "value"
         ]
-        return Image.open(io.BytesIO(base64.b64decode(shot["data"]))).convert("RGB"), rows
+        return full, rows
 
 
 def render(
