@@ -125,10 +125,12 @@ export function poll(fn, { interval = 2500, while: keep = () => true, maxInterva
     if (cont) timer = setTimeout(tick, delay);
   }
   const onVis = () => { if (!document.hidden && idle && !stopped) tick(); };
-  document.addEventListener('visibilitychange', onVis);
+  let listening = false; // stop() 摘掉监听，now() 重新开始时再挂上（只挂一次）
+  const listen = on => { if (on !== listening) { listening = on; document[on ? 'addEventListener' : 'removeEventListener']('visibilitychange', onVis); } };
+  listen(true);
   tick();
   return {
-    now() { stopped = false; tick(); },
-    stop() { stopped = true; clearTimeout(timer); timer = null; document.removeEventListener('visibilitychange', onVis); },
+    now() { stopped = false; listen(true); tick(); },
+    stop() { stopped = true; clearTimeout(timer); timer = null; listen(false); },
   };
 }

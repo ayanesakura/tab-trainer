@@ -84,3 +84,24 @@ test('api：transient 只把连不上和 502 / 503 / 504 当成可以自动重�
   for (const st of [502, 503, 504]) assert.equal(api.transient(new api.ApiError('x', st)), true, st);
   for (const st of [400, 404, 409, 500]) assert.equal(api.transient(new api.ApiError('x', st, { detail: 'x' })), false, st);
 });
+
+test('api：poll stop() 之后 now() 重新开始，页面从后台回来照样补一次（监听只挂一个）', async () => {
+  const listeners = new Set();
+  globalThis.document = { hidden: false, addEventListener: (t, f) => listeners.add(f), removeEventListener: (t, f) => listeners.delete(f) };
+  let n = 0;
+  const p = api.poll(async () => { n++; return true; }, { interval: 5 });
+  try {
+    assert.equal(listeners.size, 1);
+    p.stop();
+    assert.equal(listeners.size, 0);
+    p.now(); p.now(); // “重试”：重新开始
+    assert.equal(listeners.size, 1);
+    document.hidden = true;
+    await new Promise(r => setTimeout(r, 30)); // 在后台：跳过
+    const before = n;
+    document.hidden = false;
+    listeners.forEach(f => f());
+    await new Promise(r => setTimeout(r, 2));
+    assert.ok(n > before, '回到前台没有恢复轮询');
+  } finally { p.stop(); }
+});
