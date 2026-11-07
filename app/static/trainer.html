@@ -150,6 +150,7 @@ table.tune td b { font-variant-numeric: tabular-nums; }
         <label class="switch"><input type="checkbox" id="countIn" checked>预备拍</label>
         <span class="grp"><span class="lbl">节拍器</span><input class="vol" type="range" id="metroVol" min="0" max="100" value="70"></span>
         <span class="grp"><span class="lbl">示范音</span><input class="vol" type="range" id="gtVol" min="0" max="100" value="80"></span>
+        <span class="grp"><span class="lbl">音色</span><div class="seg sm" id="timbreSeg"><button data-v="steel" title="钢弦木吉他（民谣吉他）">钢弦</button><button data-v="nylon" title="尼龙弦古典吉他，更柔和">尼龙</button></div></span>
         <span class="grp"><label class="switch"><input type="checkbox" id="auto">自动提速</label>
           <span class="lbl">每</span><input class="input num" type="number" id="autoEvery" value="2" min="1"><span class="lbl">遍 +</span><input class="input num" type="number" id="autoStep" value="4" min="1"><span class="lbl">到</span><input class="input num" type="number" id="autoTarget" value="72" min="30" max="140"></span>
       </div>
@@ -574,6 +575,8 @@ function drawCrop(bi) {
 const state = { playing: false, ready: false, bpm: 50, a: 0, b: 0, loops: 0, lastTick: -1, tempoSet: false };
 const $ = id => document.getElementById(id);
 const AT_BASE = '/static/vendor/alphatab/';
+const SOUNDFONT = '/static/vendor/soundfont/guitars.sf3';
+const TIMBRES = { steel: 25, nylon: 24 }; // 音色库里只有这两个 GM 音色（和节拍器）
 const atReady = new Promise(r => (window.alphaTab ? r() : addEventListener('alphatab-ready', r, { once: true })));
 let api = null, baseTempo = 60, beatMap = [], scoreKey = '', shiftDown = false;
 addEventListener('keydown', e => { if (e.key === 'Shift') shiftDown = true; });
@@ -593,7 +596,7 @@ async function ensureApi() {
     display: { scale: 0.9, layoutMode: 'Page', staveProfile: staveProfile(), resources: themeColors() },
     notation: { rhythmMode: 'ShowWithBars' },
     player: {
-      playerMode: 'EnabledSynthesizer', soundFont: AT_BASE + 'soundfont/sonivox.sf2',
+      playerMode: 'EnabledSynthesizer', soundFont: SOUNDFONT,
       enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true,
       enablePlaybackRangeSelection: false, scrollOffsetY: -230,
     },
@@ -634,7 +637,28 @@ async function loadScore() {
   }
 }
 
+// 所有音轨都用选中的木吉他音色：GP 文件里可能是电吉他等音色，而音色库里只有木吉他。
+// scoreLoaded 在生成 MIDI 之前同步触发，所以在这里改就会生效；中途切换时再重新生成 MIDI。
+function applyTimbre(score) {
+  const prog = TIMBRES[$('timbreSeg').dataset.value] ?? 25;
+  for (const t of score.tracks) {
+    if (t.isPercussion) continue;
+    t.playbackInfo.program = prog;
+    for (const st of t.staves) for (const bar of st.bars) for (const v of bar.voices) for (const b of v.beats)
+      for (const a of b.automations) if (a.type === alphaTab.model.AutomationType.Instrument) a.value = prog;
+  }
+}
+function switchTimbre(v) {
+  localStorage.setItem('tt.timbre', v);
+  if (!api || !api.score) return;
+  if (state.playing) api.pause();
+  applyTimbre(api.score);
+  api.loadMidiForScore();
+  applyLoopRange();
+}
+
 async function onScoreLoaded(score) {
+  applyTimbre(score);
   baseTempo = score.tempo || 60;
   if (SONG.kind === 'score') {
     // 第一次打开（或换了音轨）：把谱子转成我们的小节数据存起来，指板、提示和 AI 讲解都靠它
@@ -836,6 +860,7 @@ async function startMic() {
 setTempo(50);
 $('playBtn').onclick = () => (state.playing ? stop() : play());
 $('demoBarBtn').onclick = () => { const b = shownBar >= 0 ? shownBar : state.a; setLoop(b, b, false); if (!state.playing) play(); };
+UI.seg($('timbreSeg'), TIMBRES[localStorage.getItem('tt.timbre')] ? localStorage.getItem('tt.timbre') : 'steel', switchTimbre);
 UI.seg($('notationSeg'), 'both', () => { if (!api) return; api.settings.display.staveProfile = alphaTab.StaveProfile[staveProfile()]; api.updateSettings(); api.render(); });
 $('exportBtn').onclick = exportGp;
 ['metro', 'countIn'].forEach(id => $(id).addEventListener('change', applyAudio));

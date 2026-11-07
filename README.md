@@ -8,7 +8,8 @@
 - **上传识别**：支持多张图片或 PDF。自动找出每一行六线谱，逐行交给 Claude 识读，读出品位、节奏和演奏技巧（击弦、勾弦、滑音、泛音、闷音、琶音、倚音、推弦等），并为每个小节写练习要点。
 - **自动校验**：每个小节的时值加起来必须等于拍号，凑不满会把问题反馈给模型返修一次；仍有问题的小节在练习页用橙色框标出。
 - **练习页**：
-  - 谱面渲染和播放用 [alphaTab](https://github.com/CoderLine/alphaTab)：五线谱 + 六线谱（显示节奏），SoundFont 吉他音色，跟随光标，节拍器和预备拍；
+  - 谱面渲染和播放用 [alphaTab](https://github.com/CoderLine/alphaTab)：五线谱 + 六线谱（显示节奏），跟随光标，节拍器和预备拍；
+  - 示范音是逐音录制的真实木吉他采样，可以在钢弦和尼龙弦之间切换；
   - 可以导出 Guitar Pro 文件（`.gp`），在其他软件里继续用；
   - 可以循环任意小节，按原谱的每一行一键选段，支持自动提速；
   - 指板实时显示正在弹和下一个要弹的位置；
@@ -32,7 +33,8 @@
 ## 第三方组件
 
 - alphaTab 1.9.0（`app/static/vendor/alphatab/`，MPL-2.0）：谱面渲染、播放和 Guitar Pro 读写。它要求渲染出的谱面上保留“♪ alphaTab.net”署名，不得去掉、隐藏或遮挡（见 https://alphatab.net/docs/attribution）。
-- Bravura 字体（SIL OFL 1.1）、Sonivox 音色库（Apache-2.0）：随 alphaTab 附带，许可证文件在同一目录。
+- Bravura 字体（SIL OFL 1.1）：随 alphaTab 附带，许可证文件在同一目录。
+- 吉他音色（`app/static/vendor/soundfont/guitars.sf3`）：FreePats 的 FSS 钢弦吉他（GPL-3.0+，附音色库例外条款）和西班牙古典吉他（CC0），节拍器声取自 Sonivox（Apache-2.0）。来源、改动和重新生成的方法见该目录的 README。
 
 ## 快速开始
 
@@ -68,7 +70,7 @@ key 只保存在本机 `data/config.json`（权限 600）。也可以不在页�
 3. `app/pipeline.py`：
    - 4 路并发识别，校验时值、返修，再给全曲统一编号；
    - 最后根据全曲内容生成分段练习建议。
-4. `app/static/`：曲库页和练习页。示范音用浏览器的 Web Audio 合成，不需要额外资源。
+4. `app/static/`：曲库页和练习页。谱面和示范音由 alphaTab 在浏览器里渲染和合成，音色库是本地文件，不需要联网。
 
 如果某一页检测不到六线谱（比如手机拍的照片有倾斜和透视），会退回为把整页交给模型识别。这种情况准确率较低，原谱对照也只能显示整页。
 
@@ -102,7 +104,7 @@ uv run python -m app.evaluate <曲子id> --yes --systems 0,5 --model claude-sonn
 ```bash
 uv run pytest tests/
 node --test tests/js/*.test.mjs     # 数据 ⇄ alphaTab 往返校验
-uvx ruff check app tests && uvx ruff format --check app tests
+uvx ruff check app tests scripts && uvx ruff format --check app tests scripts
 ```
 
 上传的谱子、识别结果和配置都在 `data/` 下，不进版本库。
