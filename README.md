@@ -187,10 +187,10 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/service.py` | 接口背后的编排：上传后启动识别、删除、整首 / 单行重新识别、取消、文件路径、写接口返回改完的曲子视图 |
 | `app/views.py` | 接口返回的形状：曲子详情（SongView）和曲库列表项，忙不忙 / 能不能改 / 小节锁定 / 待核对都在这里算好（见下面的接口约定） |
 | `app/auth.py` | 局域网访问令牌、Host / Origin 检查 |
-| `app/songs.py` | 曲库：新建（图片 / PDF / GP / MusicXML）、保存浏览器转换的小节（GP 小节是只读的缓存）、手工修改（rev 乐观锁）、启动恢复 |
+| `app/songs.py` | 曲库：新建（图片 / PDF / GP / MusicXML）、保存浏览器转换的小节（GP 小节是只读的缓存）、手工修改（按小节 `rev` / 谱头 `meta_rev` 的乐观锁）、启动恢复 |
 | `app/recognize.py` | 图片谱子识别：版面 → 逐行调模型 → OCR 校对 → 返修 → 练习建议；单行重新识别、补页 |
 | `app/coach.py` | AI 讲解（补写小节提示、重新生成练习建议）和小节问答 |
-| `app/practice.py` | 练习记录：`practice.jsonl` 追加写，读取时按小节 id 聚合（按文件修改时间缓存），练习历史 |
+| `app/practice.py` | 练习记录：`practice.jsonl` 追加写，读取时按小节 id 聚合（按文件修改时间缓存；格式不对的行跳过），练习历史 |
 | `app/state.py` | 曲子的运行状态 `status` + `activity` + `notice`，以及由它们算出的忙 / 可改 / 锁定（唯一一处） |
 | `app/staleness.py` | 改谱后 AI 内容的失效与恢复；`reconcile_bars`：新旧两批小节按内容 + 位置对上（GP 重新转换、整首 / 单行重新识别共用） |
 | `app/model.py` | 唯一的数据定义（Pydantic）：song.json 的形状、派生字段“读时算、写时去”（`derive` / `strip`）、给模型的音符 schema、接口返回的模型 |
@@ -201,18 +201,18 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/errors.py` | 错误类型：Invalid 400 / NotFound 404 / Busy、Conflict 409 / CorruptSong 500 / Upstream 502（`llm.LLMError` 也是） |
 | `app/llm.py`、`app/layout.py`、`app/ocr.py` | 模型调用（`LLM` 接口、错误说明 `friendly`）、版面检测、本机数字识别 |
 | `app/schemas.py` | 接口请求体的类型、长度和数值范围（只在这里检查），格式不对返回 400 和中文说明 |
-| `app/bundles.py` | 曲子包：多首曲子（含练习记录）打包成 zip 导出、导入（只按清单和 song.json 取文件，检查大小 / 图片 / 原文件 / 数据形状，先解到临时目录再改名） |
-| `app/store.py` | `data/` 下的文件读写：加锁的读-改-写、`.bak` 备份、坏文件回退、rev、锁内删除、`practice.jsonl` 追加、单实例锁 |
+| `app/bundles.py` | 曲子包：多首曲子（含练习记录）打包成 zip 导出、导入（只按清单和 song.json 取文件，检查大小 / 图片 / 原文件 / 数据形状（时值、拍号、练习记录按 `model` 检查），先解到临时目录再改名；单首有问题只跳过那一首） |
+| `app/store.py` | `data/` 下的文件读写：加锁的读-改-写（顺带维护 `rev` 和按对象的 `bar.rev` / `meta_rev`）、`.bak` 备份、坏文件回退、锁内删除、`practice.jsonl` 追加、单实例锁 |
 | `app/evaluate.py` | 识别准确率评测 |
 
 数据文件：`data/songs/<id>/song.json`（只存一份事实：小节编号、时值等按内容算的警告、`meta.title`、`meta.tuning_midi`、`plan.stale` 都是读取时算的）、`practice.jsonl`（一段练习一行）、`pages/` 或 `source.gp5` 等原文件；`data/config.json` 存模型设置。
 
 ### 接口约定（前端只显示，不自己推断）
 
-- `GET /api/songs/{id}`：曲子本身的字段（不含 `_` 开头的内部字段），另加 `rev`（每次保存 +1）、`busy`（有任何后台任务）、`recognizing`（整首或某几行在识别，讲解不算）、`activity`（`null` 或 `{kind: parse|reparse_row|explain, restaging, systems}`）、`can_edit_bars`（GP / MusicXML 为 false）、`editable_meta`、`notice`（`null` 或 `{kind: warn|error, msg}`）、`practice`（`{bars: {id: {loops, seconds, best_bpm, last}}, last: {a, b, bpm, at, a_n, b_n} | null, total_seconds}`）。每个小节另有 `n`、`warn: [{code, msg}]`（code 见 `vocab.json` 的 `warn_codes`）、`needs_review`、`locked`（不能改的原因或 null）、`edited`。
+- `GET /api/songs/{id}`：曲子本身的字段（不含 `_` 开头的内部字段），另加 `rev`（每次保存 +1，只用来判断要不要重绘，不用于 409）、`meta_rev`（谱头版本号，见下）、`busy`（有任何后台任务）、`recognizing`（整首或某几行在识别，讲解不算）、`activity`（`null` 或 `{kind: parse|reparse_row|explain, restaging, systems}`）、`can_edit_bars`（GP / MusicXML 为 false）、`editable_meta`、`notice`（`null` 或 `{kind: warn|error, msg}`）、`practice`（`{bars: {id: {loops, seconds, best_bpm, last}}, last: {a, b, bpm, at, a_n, b_n} | null, total_seconds}`）。每个小节另有 `rev`（这个小节内容的版本号，见下）、`n`、`warn: [{code, msg}]`（code 见 `vocab.json` 的 `warn_codes`）、`needs_review`、`locked`（不能改的原因或 null）、`edited`。
 - `GET /api/songs`：每首另有 `busy`、`recognizing`、`activity`、`notice`、`needs_review_bars`、`practice`（`null` 或 `{last_at, total_seconds, last: {a, b, bpm, a_n, b_n}}`）。
 - 整首重新识别已有结果的曲子时 `status` 不变（原来的结果照常能练），看 `recognizing` / `activity.restaging`。
-- 改小节 / 改谱头的 PUT 可以带 `rev`：和当前不一致返回 409。改 GP / MusicXML 曲子的小节返回 400。
+- 乐观锁按对象：`PUT /api/songs/{id}/bars/{bar_id}` 可以带 `rev` = 这个小节的 `rev`，`PUT /api/songs/{id}/meta` 可以带 `rev` = 曲子的 `meta_rev`；和当前不一致返回 409（“曲子在别处改过了，已刷新，请再改一次”），不带照旧。小节的 `rev` 只在它的内容变了时 +1（手改音符或提示、重新识别 / GP 重新转换换了内容、改调弦清掉了提示）；`meta_rev` 只在可改的谱头字段（曲名、艺人、调弦、变调夹、拍号）变了时 +1。问 AI、讲解补提示、练习记录、进度、识别别的行、改别的小节都不会让手里的版本号过期。旧数据没有的按 0 算。改 GP / MusicXML 曲子的小节返回 400。
 - `GET /api/songs/{id}/practice/history` → `{sessions: [{at, a, b, bpm, seconds, loops}]}`。
 
 前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。练习页从 `js/trainer/main.js` 进入，按功能拆成模块：`store.js`（一个小 store：`song` 后端数据、`view` 派生结构、`play` 播放状态、`ui` 界面状态，按路径 `set` / `get` / `on`，值没变不通知）、`view.js`（纯函数：`deriveView(song)`、段落、换段、练习记录文案等，Node 测试直接用）、`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `setTempo` / `setStatus`）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息）、`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅 `ui.bar` 等状态，互不直接调用）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）。页面上 `window.tt` 是给端到端测试和调试用的句柄。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`），也负责认出中文 GP3–5 文件的 GBK 乱码（练习页和 `scripts/make_eval_song.py` 遇到时按 GBK 重新读）。
