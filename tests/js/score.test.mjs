@@ -238,5 +238,15 @@ test('chord sheets: chord names, diagrams and strums survive the round trip', ()
   assert.equal(back.bars[1].events[0].strum, undefined); // 单音不算扫弦
   assert.deepEqual(back.bars[1].events.map(e => e.lyrics), [['天真', '多浅'], ['', '薄']]);
   assert.equal(back.bars[0].events[0].lyrics, undefined);
+});
+
+test('rolled chords keep their direction (wavy arrow toward string 1 = low to high)', () => {
+  const roll = (dir) => ({ dur: '2', ...(dir ? { strum: dir } : {}), notes: [N(1, 0, ['roll']), N(2, 1, ['roll']), N(3, 0, ['roll'])] });
+  const song = { meta: { tuning: ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'], capo: 0, time_signature: [4, 4] }, bars: [{ events: [roll('down'), roll('up')] }, { events: [roll(), roll()] }] };
+  const score = parse(toAlphaTex(song).tex);
+  const types = score.tracks[0].staves[0].bars.map(b => b.voices[0].beats.map(x => x.brushType));
+  assert.deepEqual(types, [[4, 3], [4, 4]]); // 4 = ArpeggioDown（画 ▲），没标方向的琶音也是它
+  const back = deriveSong(score);
+  assert.deepEqual(back.bars[0].events.map(e => e.strum), ['down', 'up']);
   assert.deepEqual(norm(back.bars), norm(song.bars));
 });

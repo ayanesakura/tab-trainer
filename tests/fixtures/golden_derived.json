@@ -93,7 +93,8 @@
        "grace": -1,
        "bend": 0
       }
-     ]
+     ],
+     "strum": "down"
     },
     {
      "dur": "1",

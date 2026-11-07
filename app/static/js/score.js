@@ -131,8 +131,9 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
       const fx = [];
       if (e.chord) fx.push(`ch "${esc(e.chord)}"`);
       (e.lyrics || []).forEach((l, i) => { if (l) fx.push(`lyrics ${i} "${esc(l)}"`); });
-      // 扫弦：alphaTab 的 bd = 下扫（从低音弦扫到高音弦）、bu = 上扫；琶音（波浪线）按方向用 au / ad
-      if (roll) fx.push(e.strum === 'up' ? 'ad' : 'au');
+      // 扫弦：alphaTab 的 bd = 下扫（从低音弦扫到高音弦，六线谱上画 ▲）、bu = 上扫（▼）。
+      // 琶音（波浪线）正好反过来：ad 画 ▲（从低音弦到高音弦，最常见的写法）、au 画 ▼
+      if (roll) fx.push(e.strum === 'up' ? 'au' : 'ad');
       else if (notes.length > 1 && e.strum === 'down') fx.push('bd');
       else if (notes.length > 1 && e.strum === 'up') fx.push('bu');
       return { ticks: durToTicks(e.dur), q: parseDur(e.dur), notes, fx };
@@ -281,8 +282,9 @@ export function deriveSong(score, trackIndex = 0) {
           const frets = [...(chord.strings || [])];
           if (frets.length === STRINGS && frets.some(f => f >= 0)) shapes[info.chord] = frets.map(f => (f < 0 ? -1 : f));
         }
-        if (!beat.isRest && (beat.brushType === 1 || beat.brushType === 2) && !info.strum) {
-          info.strum = beat.brushType === 2 ? 'down' : 'up';
+        // 方向：1 上扫、2 下扫；琶音 3 / 4 的方向和扫弦相反（4 = 从低音弦到高音弦，记成下扫 + roll）
+        if (!beat.isRest && beat.brushType >= 1 && beat.brushType <= 4 && !info.strum) {
+          info.strum = beat.brushType === 2 || beat.brushType === 4 ? 'down' : 'up';
         }
         if (beat.lyrics && beat.lyrics.some(Boolean) && !info.lyrics) {
           const l = beat.lyrics.map(x => String(x || '').trim().slice(0, 40));
