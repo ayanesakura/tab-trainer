@@ -29,29 +29,37 @@ function updateBarTools() {
   setButton($('reparseBtn'), parsing ? '<span class="spinner"></span>正在重新识别…' : UI.icon('refresh') + '重新识别这一行');
 }
 
-// 保存一个小节；记下改之前的内容，⌘Z / Ctrl+Z 可以撤销
+// 保存一个小节；记下改之前的内容，⌘Z / Ctrl+Z 可以撤销。
+// 乐观锁按小节：带上这个小节的 rev（只在小节内容变了时才 +1；写问答、练习记录、别的小节改动都不影响它）。
 export const undoStack = [];
 export let saving = 0; // 进行中的保存：这期间不能撤销，否则可能撤销错步骤
+/** → 'ok' | 'conflict'（别处改过这个小节，已刷新）| 'error' */
 async function putBar(barId, events, msg, isUndo = false) {
   const s = get('song'), before = s.bars.find(b => b.id === barId);
   const entry = before && !isUndo ? { barId, events: before.events, n: before.n } : null;
   if (entry) { undoStack.push(entry); if (undoStack.length > 50) undoStack.shift(); } // 先记上，按发出的顺序
   saving++;
   try {
-    applySong(await put(songUrl(`/bars/${encodeURIComponent(barId)}`), { events, rev: get('song').rev }));
+    applySong(await put(songUrl(`/bars/${encodeURIComponent(barId)}`), { events, rev: before ? before.rev : undefined }));
   } catch (e) {
     if (entry) undoStack.splice(undoStack.lastIndexOf(entry), 1);
-    if (e.status === 409) await conflict(e); else UI.toast(e.message || '保存失败', 'err', 4000);
-    return false;
+    if (e.status === 409) {
+      // 这个小节在别处改过：它的撤销记录都是按旧内容记的，作废；别的小节的撤销记录保留
+      for (let i = undoStack.length - 1; i >= 0; i--) if (undoStack[i].barId === barId) undoStack.splice(i, 1);
+      await conflict(e);
+      return 'conflict';
+    }
+    UI.toast(e.message || '保存失败', 'err', 4000);
+    return 'error';
   } finally { saving--; }
   UI.toast(msg + (isUndo ? '' : (get('ui.editMode') ? `（${UNDO_KEY} 撤销）` : '')));
-  return true;
+  return 'ok';
 }
 async function undoEdit() {
   if (saving) { UI.toast('正在保存，稍等一下再撤销', 'info'); return; }
   const u = undoStack.pop();
   if (!u) { UI.toast('没有可以撤销的修改', 'info'); return; }
-  if (!(await putBar(u.barId, u.events, `已撤销第 ${u.n} 小节的修改`, true))) undoStack.push(u); // 撤销失败：记录放回去
+  if ((await putBar(u.barId, u.events, `已撤销第 ${u.n} 小节的修改`, true)) === 'error') undoStack.push(u); // 撤销失败：记录放回去（冲突时这个小节的记录已作废）
 }
 
 // ---------------------------------------------------------------------
@@ -171,7 +179,7 @@ async function deleteNotePop() {
   await putBar(bar.id, events, `已删除${where}的一个音`);
 }
 
-export const editorState = { get saving() { return saving; }, get undo() { return undoStack.length; }, get np() { return np; } };
+export const editorState = { get saving() { return saving; }, get undo() { return undoStack.length; }, get undoBars() { return undoStack.map(u => u.barId); }, get np() { return np; } };
 
 export function initEditor() {
   setPlayerHooks({ editClick: queueEditClick });
@@ -189,7 +197,7 @@ export function initEditor() {
   $('edSave').onclick = () => withBusy($('edSave'), async () => {
     let events;
     try { events = JSON.parse($('edText').value); } catch (e) { UI.toast('JSON 格式不对：' + e.message, 'err', 4000); return; }
-    if (await putBar(editorBarId, events, '已保存')) closeEditor();
+    if ((await putBar(editorBarId, events, '已保存')) === 'ok') closeEditor();
   });
   $('reparseBtn').onclick = async () => {
     const bar = curBar();

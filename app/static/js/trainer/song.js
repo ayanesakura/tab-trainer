@@ -197,7 +197,7 @@ async function saveMeta() {
   if (editable.includes('tuning')) body.tuning = [1, 2, 3, 4, 5, 6].map(i => tuningInput($('mT' + i).value));
   if (editable.includes('capo')) body.capo = parseInt($('mCapo').value || '0', 10);
   if (editable.includes('time_signature')) body.time_signature = $('mTs').value.split('/').map(x => parseInt(x, 10));
-  body.rev = s.rev;
+  body.rev = s.meta_rev; // 乐观锁只看谱头（meta_rev）：问 AI、练习记录、改小节都不影响它
   try {
     applySong(await put(songUrl('/meta'), body));
     UI.toast('已保存');
