@@ -66,6 +66,7 @@ function songState(s) {
     const unit = s.job === 'explain' ? '批' : '行';
     return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${p.done}/${p.total} ${unit}` : ''}</span><span class="progress"><i style="width:${pct}%"></i></span>`;
   }
+  if (s.status === 'corrupt') return `<span class="dot err"></span><span class="err-text">${esc(s.error)}（可以在“…”菜单里删除）</span>`;
   if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">${s.kind === 'score' ? '曲谱读取失败' : '识别失败'}：${esc(s.error)}</span>`;
   if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${s.bars} 小节` : ''}</span>`;
   if (s.kind === 'score' && !s.bars) return `<span class="dot ok"></span><span>已导入，打开练习页读取曲谱</span>`;
@@ -91,7 +92,7 @@ async function loadSongs() {
         <div class="who"><div class="name">${esc(s.title)}${s.kind === 'score' ? ' <span class="badge accent">GP</span>' : ''}</div><div class="state">${songState(s)}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
         <div class="ctl">
           ${canPlay ? `<a class="btn primary sm" href="/trainer?id=${s.id}">${icon('play', 12)}练习</a>` : ''}
-          <button class="icon-btn sm" data-more="${s.id}" data-busy="${busy ? 1 : ''}" title="更多">${icon('more')}</button>
+          <button class="icon-btn sm" data-more="${s.id}" data-busy="${busy ? 1 : ''}" data-corrupt="${s.status === 'corrupt' ? 1 : ''}" title="更多">${icon('more')}</button>
         </div>
       </div>`;
     }).join('');
@@ -106,6 +107,10 @@ $('songs').addEventListener('click', e => {
     const id = more.dataset.more;
     if (more.dataset.busy) {
       UI.menu(more, [{ label: '取消识别', icon: 'x', onClick: () => cancel(id) }]);
+      return;
+    }
+    if (more.dataset.corrupt) {
+      UI.menu(more, [{ label: '删除', icon: 'trash', danger: true, onClick: () => del(id) }]);
       return;
     }
     UI.menu(more, [

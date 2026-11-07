@@ -172,7 +172,7 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/music.py` | 数据模型：调弦、拍号、时值、事件和反复记号的整理与校验（纯函数） |
 | `app/errors.py` | 业务错误类型（Invalid 400 / NotFound 404 / Busy 409 / Upstream 502） |
 | `app/llm.py`、`app/layout.py`、`app/ocr.py` | 模型调用、版面检测、本机数字识别 |
-| `app/store.py` | `data/` 下的 JSON 读写（加锁的读-改-写） |
+| `app/store.py` | `data/` 下的 JSON 读写（加锁的读-改-写、`.bak` 备份、坏文件回退、单实例锁） |
 | `app/evaluate.py` | 识别准确率评测 |
 
 前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`。练习页的脚本按功能拆在 `js/trainer/` 下（core → synth / tuner / fretboard / bar-info → player → coach / practice-log / editor → song → main），用普通 `<script>` 按顺序加载：前面的文件只做声明，事件绑定放在各自的 `initXxx()` 里，由 `main.js` 统一调用并在 alphaTab 模块就绪后第一次加载曲子。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`）。
@@ -186,4 +186,4 @@ scripts/check.sh           # lint + 格式 + Python 单元测试 + JS 数据转�
 scripts/check.sh --e2e     # 再加浏览器端到端测试（需要 Chrome，约 20 秒）
 ```
 
-上传的谱子、识别结果和配置都在 `data/` 下，不进版本库。
+上传的谱子、识别结果和配置都在 `data/` 下，不进版本库。每次写入 `song.json` / `config.json` 前，上一版会留成同名的 `.bak`；文件损坏时自动用备份，两份都坏的曲子在曲库里显示“数据损坏”，可以删除。同一个数据目录只能有一个 tab-trainer 在运行。

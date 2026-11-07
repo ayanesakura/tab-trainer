@@ -34,6 +34,12 @@ app = FastAPI(title="tab-trainer", lifespan=lifespan)
 auth.install(app)
 
 
+@app.exception_handler(store.CorruptSong)
+async def corrupt_song(_request: Request, e: store.CorruptSong):
+    """song.json 和备份都坏了：说明情况，曲库里可以删掉这首。"""
+    return JSONResponse({"detail": str(e)}, status_code=500)
+
+
 @app.exception_handler(AppError)
 async def app_error(_request: Request, e: AppError):
     """业务错误（见 app/errors.py）：按类型返回 400 / 404 / 409 / 502，消息原样给前端显示。"""
@@ -174,7 +180,10 @@ def song(sid: str):
 
 @app.delete("/api/songs/{sid}")
 def delete_song(sid: str):
-    _song(sid)
+    try:
+        _song(sid)
+    except store.CorruptSong:
+        pass  # 数据坏了的曲子也要能删掉
     if jobs.jobs.running(sid):
         raise HTTPException(409, "正在识别中，完成后再删除")
     shutil.rmtree(store.song_dir(sid))
@@ -276,6 +285,12 @@ def main() -> None:
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     import uvicorn
+
+    if not store.lock_data_dir():
+        # 任务登记和存储锁都在进程内：两个实例同时用一个数据目录会重复识别、互相覆盖
+        raise SystemExit(
+            f"\n  另一个 tab-trainer 正在使用数据目录 {store.DATA}，请先关掉它（或用 TAB_TRAINER_DATA 指定别的目录）。\n"
+        )
 
     if a.host in auth.LOOPBACK:
         print(f"\n  tab-trainer 已启动：http://{a.host}:{a.port}\n")

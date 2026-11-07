@@ -1,8 +1,14 @@
-"""本地存储：data/ 目录下一首曲子一个文件夹（song.json + 页面图片），另有 config.json 存模型设置。"""
+"""本地存储：data/ 目录下一首曲子一个文件夹（song.json + 页面图片），另有 config.json 存模型设置。
+
+写入：先写临时文件并 fsync，再把旧文件改名成 .bak、临时文件改名成正式文件。断电或崩溃时最多丢最后一次修改；
+读取时正式文件坏了（截断、不是合法 JSON）就用 .bak。两份都坏的曲子在曲库里显示成“数据损坏”，不影响其他曲子。
+song.json 带 schema_version，以后改数据结构时在 _migrate 里升级旧数据。
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -20,6 +26,16 @@ CONFIG = DATA / "config.json"
 
 _lock = threading.RLock()
 _ID_RE = re.compile(r"^[a-z0-9-]{4,64}$")
+SCHEMA_VERSION = 1
+log = logging.getLogger("tab_trainer.store")
+
+
+class CorruptSong(ValueError):
+    """song.json 和备份都读不出来。"""
+
+    def __init__(self, song_id: str, reason: str):
+        super().__init__(f"曲子数据损坏，无法读取：{reason}")
+        self.song_id = song_id
 
 
 def new_id() -> str:
@@ -32,25 +48,78 @@ def song_dir(song_id: str) -> Path:
     return SONGS / song_id
 
 
+def _bak(path: Path) -> Path:
+    return path.with_name(path.name + ".bak")
+
+
 def _write_json(path: Path, data: dict, private: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(data, ensure_ascii=False, indent=1))
+        f.flush()
+        os.fsync(f.fileno())
     if private:
         tmp.chmod(0o600)
-    tmp.replace(path)
+    if path.exists():
+        os.replace(path, _bak(path))  # 上一版留作备份；这两次改名之间崩溃的话，读取时会用备份
+    os.replace(tmp, path)
+    try:  # 目录项也落盘（改名在断电后才不会丢）
+        fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def _read_json(path: Path) -> dict:
+    """读正式文件，坏了或不见了就读备份。两份都不行时抛出第一个错误（文件都不存在时是 FileNotFoundError）。"""
+    first: Exception | None = None
+    for p in (path, _bak(path)):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("内容不是 JSON 对象")  # noqa: TRY004 - 和 JSON 解析错误一样按“文件坏了”处理
+        except (OSError, ValueError) as e:
+            first = first or e
+            continue
+        if p != path:
+            log.warning("%s 读不出来（%s），用了备份 %s", path, first, p.name)
+        return data
+    raise first  # type: ignore[misc]
+
+
+def _migrate(song: dict, song_id: str) -> dict:
+    """旧数据补齐字段、升级到当前 schema_version。"""
+    song.setdefault("id", song_id)
+    for k, default in (("bars", []), ("systems", []), ("pages", []), ("meta", {})):
+        if not isinstance(song.get(k), type(default)):
+            song[k] = default
+    song.setdefault("status", "ready" if song["bars"] else "error")
+    song.setdefault("title", "")
+    song["schema_version"] = SCHEMA_VERSION
+    return song
 
 
 def load(song_id: str) -> dict:
-    p = song_dir(song_id) / "song.json"
-    if not p.exists():
-        raise KeyError(song_id)
+    path = song_dir(song_id) / "song.json"
     with _lock:
-        return json.loads(p.read_text())
+        if not path.exists() and not _bak(path).exists():
+            raise KeyError(song_id)
+        try:
+            data = _read_json(path)
+        except FileNotFoundError:
+            raise KeyError(song_id) from None
+        except (OSError, ValueError) as e:
+            raise CorruptSong(song_id, str(e)) from None
+    return _migrate(data, song_id)
 
 
 def save(song: dict) -> None:
     with _lock:
+        song["schema_version"] = SCHEMA_VERSION
         _write_json(song_dir(song["id"]) / "song.json", song)
 
 
@@ -77,11 +146,16 @@ def list_songs() -> list[dict]:
     out = []
     if SONGS.exists():
         for d in sorted(SONGS.iterdir(), reverse=True):
+            if not d.is_dir():
+                continue
             try:
                 s = load(d.name)
-            except (KeyError, json.JSONDecodeError):
+            except KeyError:
                 continue
-            meta = s.get("meta") or {}
+            except CorruptSong as e:  # 一首坏了不能让整个曲库打不开：列出来，可以删除
+                out.append({"id": d.name, "title": d.name, "status": "corrupt", "error": str(e), "bars": 0})
+                continue
+            meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
             out.append(
                 {
                     "id": s["id"],
@@ -101,11 +175,44 @@ def list_songs() -> list[dict]:
 
 
 def load_config() -> dict:
-    if CONFIG.exists():
-        return json.loads(CONFIG.read_text())
-    return {}
+    """模型设置。文件和备份都坏了时，把坏文件改名留着（里面可能有 key，方便手工找回），按没有设置处理。"""
+    with _lock:
+        if not CONFIG.exists() and not _bak(CONFIG).exists():
+            return {}
+        try:
+            return _read_json(CONFIG)
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as e:
+            keep = CONFIG.with_name(f"config.corrupt-{time.strftime('%Y%m%d-%H%M%S')}.json")
+            log.error("模型设置文件损坏（%s），已改名为 %s，请重新填写设置", e, keep.name)
+            if CONFIG.exists():
+                os.replace(CONFIG, keep)
+            return {}
 
 
 def save_config(cfg: dict) -> None:
     with _lock:
         _write_json(CONFIG, cfg, private=True)
+
+
+_lock_file = None
+
+
+def lock_data_dir() -> bool:
+    """服务启动时调用：锁住数据目录，同一个目录只能有一个 tab-trainer 在跑（进程退出时自动释放）。
+    已经被别的进程锁住时返回 False。不支持文件锁的系统上不做限制。"""
+    global _lock_file
+    try:
+        import fcntl
+    except ImportError:  # Windows
+        return True
+    DATA.mkdir(parents=True, exist_ok=True)
+    f = open(DATA / ".lock", "w")  # noqa: SIM115 - 进程运行期间一直打开着，锁才有效
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return False
+    _lock_file = f
+    return True
