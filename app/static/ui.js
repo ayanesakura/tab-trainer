@@ -55,7 +55,7 @@
   const toast = (msg, kind = 'ok', ms = 2200) => {
     document.querySelectorAll('.toast').forEach(t => t.remove());
     const el = document.createElement('div');
-    el.className = 'toast ' + kind; el.textContent = msg;
+    el.className = 'toast ' + kind; el.textContent = msg; el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite');
     document.body.appendChild(el);
     clearTimeout(toastTimer); toastTimer = setTimeout(() => el.remove(), ms);
   };

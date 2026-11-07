@@ -12,7 +12,7 @@
 .notices:not(:empty) { margin-bottom: 12px; }
 
 /* ---- 播放控制 ---- */
-.transport { position: sticky; top: 60px; z-index: 20; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 6px 18px rgba(20, 22, 30, .06); }
+.transport { position: sticky; top: 52px; z-index: 20; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 6px 18px rgba(20, 22, 30, .06); }
 .t-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .t-sep { width: 1px; height: 26px; background: var(--line-2); flex: none; }
 .play { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-fg); flex: none; box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent); transition: transform .12s var(--ease), background .15s; }
@@ -34,13 +34,20 @@
 .chips button:hover { background: var(--pill-hover); color: var(--fg); }
 .chips button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .t-opts { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--fg-2); }
+.t-opts[hidden] { display: none; }
+#optsBtn.on { background: var(--accent-soft); color: var(--accent); }
+.t-row .spacer { flex: 1; }
 .t-opts .vol { width: 90px; }
 
 /* ---- 原谱 + 小节说明 ---- */
-.info { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 12px; margin-top: 12px; }
-@media (max-width: 860px) { .info { grid-template-columns: 1fr; } }
+.info-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+@media (max-width: 860px) { .info-grid { grid-template-columns: 1fr; } }
 .card-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-2); }
-.paper { height: 270px; display: flex; align-items: center; justify-content: center; background: #fff; border-radius: 0 0 var(--radius) var(--radius); overflow: hidden; }
+#cropCard { display: flex; flex-direction: column; }
+.paper { flex: 1; min-height: 270px; display: flex; align-items: center; justify-content: center; background: #fff; border-radius: 0 0 var(--radius) var(--radius); overflow: hidden; }
+:root[data-theme="dark"] .paper { background: #1d1d21; }
+:root[data-theme="dark"] .paper canvas { filter: invert(.88) hue-rotate(180deg); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .paper { background: #1d1d21; } :root:not([data-theme="light"]) .paper canvas { filter: invert(.88) hue-rotate(180deg); } }
 .paper canvas { display: block; }
 .detail { display: flex; flex-direction: column; }
 .detail .body { padding: 12px 16px 14px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
@@ -58,7 +65,15 @@
 .coach .ask .input { flex: 1; }
 .practice-line { color: var(--muted); font-size: 12px; }
 .warns { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 9px; background: var(--amber-soft); font-size: 12.5px; white-space: pre-wrap; }
-.tools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+.tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.tip:empty::before { content: '这一小节还没有提示。'; color: var(--muted); }
+.fix { border-top: 1px solid var(--line); padding-top: 8px; margin-top: auto; }
+.fix summary { cursor: pointer; color: var(--muted); font-size: 12.5px; list-style: none; display: flex; align-items: center; gap: 6px; }
+.fix summary::-webkit-details-marker { display: none; }
+.fix summary::before { content: '▸'; font-size: 10px; transition: transform .15s; }
+.fix[open] summary::before { transform: rotate(90deg); }
+.fix[open] summary { margin-bottom: 8px; }
+.fix .editor { margin-top: 8px; }
 .tools .input { flex: 1; min-width: 160px; }
 .editor textarea { width: 100%; height: 240px; margin-top: 2px; }
 .editor .bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
@@ -71,6 +86,9 @@
 
 /* ---- 谱面（alphaTab） ---- */
 .score-card { margin-top: 12px; position: relative; }
+#score { isolation: isolate; z-index: 0; } /* alphaTab 的光标和选区高亮不能盖到吸顶的播放栏上 */
+.warn-mark { position: absolute; pointer-events: none; border-radius: 4px; background: color-mix(in srgb, var(--amber) 14%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--amber) 70%, transparent); z-index: 1; }
+.chips button.warn::after { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); margin-left: 5px; vertical-align: 1px; }
 #editModeBtn.on { background: var(--accent-soft); color: var(--accent); }
 .score-card.editing #score { cursor: crosshair; }
 .note-pop { position: absolute; z-index: 30; width: 320px; background: var(--pop-bg); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); box-shadow: var(--shadow); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
@@ -80,7 +98,8 @@
 .note-pop .np-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .note-pop .np-row > .lbl { width: 30px; flex: none; color: var(--muted); }
 .note-pop .chips { flex-wrap: wrap; overflow: visible; flex: 1; }
-.note-pop .np-fret { width: 64px; text-align: center; }
+.note-pop .np-fret { width: 64px; text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.note-pop .np-fret::-webkit-inner-spin-button, .note-pop .np-fret::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .note-pop .np-msg { color: var(--amber); min-height: 0; }
 .note-pop .np-actions { display: flex; gap: 6px; align-items: center; }
 .note-pop .np-actions .grow { flex: 1; }
@@ -92,7 +111,7 @@
 .at-cursor-beat { background: var(--accent); width: 3px; }
 .at-selection div { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .at-highlight * { fill: var(--accent); stroke: var(--accent); }
-.info.nocrop { grid-template-columns: 1fr; }
+.info-grid.nocrop { grid-template-columns: 1fr; }
 .grow { flex: 1; }
 
 /* ---- 调弦 ---- */
@@ -144,6 +163,11 @@ table.tune td b { font-variant-numeric: tabular-nums; }
     <div class="notice err" id="errorBox" style="display:none"></div>
     <div class="notice" id="metaNote" style="display:none"></div>
     <div class="notice info" id="resumeNote" style="display:none"></div>
+    <div class="notice" id="explainBox" hidden>
+      <span class="dot" style="background:var(--accent);margin-top:6px"></span>
+      <div style="flex:1" class="hint" id="explainHint">根据谱子数据给每个小节写练习提示，并生成练习建议（只发文字，费用很低）。</div>
+      <button class="btn sm primary" id="explainBtn" data-ic="sparkle">让 AI 讲解这首曲子</button>
+    </div>
   </div>
 
   <!-- ============ 练习 ============ -->
@@ -167,21 +191,22 @@ table.tune td b { font-variant-numeric: tabular-nums; }
           <span class="loop-label" id="loopLabel">第 1 小节</span>
           <button class="icon-btn sm" id="loopNext" data-ic="right" title="下一段"></button>
         </div>
-        <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="只循环当前小节并播放">示范当前小节</button>
+        <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="把循环换成当前这一小节并播放">只练这一小节</button>
+        <div class="spacer"></div>
+        <button class="btn sm ghost" id="optsBtn" data-ic="settings" title="节拍器、音色、自动提速">播放设置</button>
       </div>
       <div class="chips" id="secBtns"></div>
-      <div class="t-opts">
-        <label class="switch"><input type="checkbox" id="metro" checked>节拍器</label>
+      <div class="t-opts" id="tOpts">
+        <span class="grp"><label class="switch"><input type="checkbox" id="metro" checked>节拍器</label><input class="vol" type="range" id="metroVol" min="0" max="100" value="70" aria-label="节拍器音量" title="节拍器音量"></span>
         <label class="switch"><input type="checkbox" id="countIn" checked>预备拍</label>
-        <span class="grp"><span class="lbl">节拍器</span><input class="vol" type="range" id="metroVol" min="0" max="100" value="70"></span>
-        <span class="grp"><span class="lbl">示范音</span><input class="vol" type="range" id="gtVol" min="0" max="100" value="80"></span>
+        <span class="grp"><span class="lbl">示范音量</span><input class="vol" type="range" id="gtVol" min="0" max="100" value="80" aria-label="示范音量"></span>
         <span class="grp"><span class="lbl">音色</span><div class="seg sm" id="timbreSeg"><button data-v="steel" title="钢弦木吉他（民谣吉他）">钢弦</button><button data-v="nylon" title="尼龙弦古典吉他，更柔和">尼龙</button></div></span>
         <span class="grp"><label class="switch"><input type="checkbox" id="auto">自动提速</label>
           <span class="lbl">每</span><input class="input num" type="number" id="autoEvery" value="2" min="1"><span class="lbl">遍 +</span><input class="input num" type="number" id="autoStep" value="4" min="1"><span class="lbl">到</span><input class="input num" type="number" id="autoTarget" value="72" min="30" max="140"></span>
       </div>
     </div>
 
-    <div class="info" id="infoGrid">
+    <div class="info-grid" id="infoGrid">
       <div class="card" id="cropCard">
         <div class="card-h"><span class="card-title">原谱 · 第 <span id="cropNo">1</span> 小节</span><span class="hint">点下方任一小节切换</span></div>
         <div class="paper"><canvas id="crop"></canvas><div id="cropMsg" style="display:none;color:#555;padding:20px"></div></div>
@@ -191,28 +216,27 @@ table.tune td b { font-variant-numeric: tabular-nums; }
         <div class="body">
           <div class="tip" id="tipText"></div>
           <div class="warns" id="tipWarn" style="display:none"></div>
-          <div class="practice-line" id="practiceLine"></div>
-          <div class="tools">
-            <button class="btn sm" id="editBtn" data-ic="edit">修改本小节</button>
-            <input class="input" id="hintInput" placeholder="告诉 AI 哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
-            <button class="btn sm" id="reparseBtn" data-ic="refresh">重新识别这一行</button>
-          </div>
           <div class="coach" id="coachBox">
             <div class="qa-list" id="qaList"></div>
             <div class="ask">
-              <input class="input" id="askInput" maxlength="500" placeholder="问 AI 这一小节，如“左手怎么安排指法”“这个泛音总弹不响怎么办”">
+              <input class="input" id="askInput" maxlength="500" aria-label="问 AI 这一小节" placeholder="问 AI 这一小节，如“左手怎么安排指法”“这个泛音总弹不响怎么办”">
               <button class="btn sm" id="askBtn" data-ic="sparkle">问 AI</button>
             </div>
           </div>
-          <div class="tools" id="explainBox" hidden>
-            <button class="btn sm primary" id="explainBtn" data-ic="sparkle">让 AI 讲解这首曲子</button>
-            <span class="hint" id="explainHint">根据谱子数据给每个小节写练习提示，并生成练习建议（只发文字，费用很低）。</span>
-          </div>
+          <div class="practice-line" id="practiceLine"></div>
+          <details class="fix" id="fixBox">
+            <summary>识别有误？修改这一小节，或让 AI 重新识别这一行</summary>
+            <div class="tools">
+              <button class="btn sm" id="editBtn" data-ic="edit">修改本小节</button>
+              <input class="input" id="hintInput" aria-label="重新识别时告诉 AI 哪里不对" placeholder="重新识别时告诉 AI 哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
+              <button class="btn sm" id="reparseBtn" data-ic="refresh">重新识别这一行</button>
+            </div>
           <div class="editor" id="editor" style="display:none">
             <textarea class="input" id="edText" spellcheck="false"></textarea>
             <div class="hint">每行一个事件：dur = 到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string 弦（1 最细）、fret 品；tech 可用 h p sl si pm nh ah roll x vib bend；grace 倚音品位（-1 表示没有）。</div>
             <div class="bar"><button class="btn sm primary" id="edSave">保存</button><button class="btn sm ghost" id="edCancel">取消</button><span class="hint" id="edMsg"></span></div>
           </div>
+          </details>
         </div>
       </div>
     </div>
@@ -293,7 +317,7 @@ table.tune td b { font-variant-numeric: tabular-nums; }
       <div class="row"><div class="who"><div class="name">3 · 三连音</div><div class="sub">一拍里平均放三个音，心里念“哒-哒-哒”，三个音长度要一样。六连音同理，一拍六个音。</div></div><div class="ctl"><button class="btn sm demo" data-demo="tri" data-ic="play">试听</button></div></div>
       <div class="row"><div class="who"><div class="name">(n) · 倚音</div><div class="sub">比正常音符小一号的音，在正式的音之前极快地带一下：先弹小音符的品位，马上击弦或滑到正式的音。</div></div><div class="ctl"><button class="btn sm demo" data-demo="grace" data-ic="play">试听</button></div></div>
       <div class="row"><div class="who"><div class="name">/n · 从下方滑入</div><div class="sub">数字前只有一条斜线、没有起始品：从低一两品的位置拨弦后立刻滑进目标品，起点不重要，重点是落在目标品上。</div></div><div class="ctl"><button class="btn sm demo" data-demo="si" data-ic="play">试听</button></div></div>
-      <div class="row"><div class="who"><div class="name">x · 闷音（死音）</div><div class="sub">左手轻搭琴弦不按实，拨出没有音高的“哒”声，用来做节奏。</div></div></div>
+      <div class="row"><div class="who"><div class="name">x · 死音</div><div class="sub">左手轻搭琴弦不按实，拨出没有音高的“哒”声，用来做节奏。</div></div></div>
       <div class="row"><div class="who"><div class="name">b · 推弦</div><div class="sub">按住后把琴弦往上推（或往下拉），让音高升高半音（1/2）或全音（full）。</div></div></div>
       <div class="row"><div class="who"><div class="name">连线 · 延音</div><div class="sub">同一个音高之间的弧线表示延长，后面的音不要重新拨。</div></div></div>
     </div>
@@ -584,6 +608,7 @@ function showBar(bi) {
   document.getElementById('cropNo').textContent = bi + 1;
   document.getElementById('tipTitle').textContent = `第 ${bi + 1} 小节`;
   document.getElementById('tipText').textContent = TIPS[bi] || '';
+  if (!state.playing && BARS[bi] && BARS[bi].length) showFb(BARS[bi].find(e => e.notes.length) || null, null); // 停着时指板也显示这一小节的第一个音
   const sb = SONG.bars[bi], warn = [...(sb.warn || []), sb.uncertain].filter(Boolean);
   $('tipWarn').style.display = warn.length ? '' : 'none';
   $('tipWarn').innerHTML = warn.map(w => `<div>${UI.icon('alert', 13)} ${esc(w)}</div>`).join('');
@@ -629,7 +654,7 @@ function guitarsFailed() {
   if (soundFontsLoaded >= 2) return;
   soundFontsLoaded = 2;
   UI.toast('木吉他音色加载失败，先用默认音色播放', 'err', 6000);
-  if (playerReadyOnce && !state.ready) { state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格键播放'); }
+  if (playerReadyOnce && !state.ready) { state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格播放 · ←→ 换段 · ↑↓ 调速'); }
 }
 const atReady = new Promise(r => (window.alphaTab ? r() : addEventListener('alphatab-ready', r, { once: true })));
 let api = null, baseTempo = 60, beatMap = [], scoreKey = '', shiftDown = false;
@@ -653,6 +678,7 @@ async function ensureApi() {
       playerMode: 'EnabledSynthesizer', soundFont: SF_BASE,
       enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true,
       enablePlaybackRangeSelection: false, scrollOffsetY: -230,
+      scrollMode: 'Off', // 只在播放时跟着光标滚动（见 playerStateChanged）；否则一打开页面就会跳到谱面
     },
   });
   api.soundFontLoad.on(e => { if (!state.ready) setStatus('加载音色…', `${Math.round(100 * e.loaded / Math.max(1, e.total))}%`); });
@@ -665,15 +691,16 @@ async function ensureApi() {
   api.playerReady.on(() => {
     playerReadyOnce = true;
     if (soundFontsLoaded < 2) return; // 等木吉他音色也加载完
-    state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格键播放');
+    state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格播放 · ←→ 换段 · ↑↓ 调速');
   });
   api.playerStateChanged.on(e => {
     const was = state.playing;
     state.playing = e.state === 1;
+    if (state.playing !== was) { api.settings.player.scrollMode = state.playing ? alphaTab.ScrollMode.Continuous : alphaTab.ScrollMode.Off; api.updateSettings(); }
     if (state.playing && !was) practiceStart();
     if (!state.playing && was) practiceFlush(false);
     setPlayBtn(state.playing);
-    if (!state.playing) setStatus('已暂停', '空格键继续');
+    if (!state.playing) setStatus('已暂停', '空格继续 · ←→ 换段 · ↑↓ 调速');
   });
   api.playerPositionChanged.on(e => onPosition(e.currentTick));
   api.playedBeatChanged.on(beat => onBeat(beat, false));
@@ -683,7 +710,8 @@ async function ensureApi() {
     else if (!state.playing && state.ready) api.playNote(n);
   });
   api.scoreLoaded.on(onScoreLoaded);
-  api.renderFinished.on(() => { if (BARS.length) applyLoopRange(); markWarnBars(); });
+  api.renderFinished.on(() => { if (BARS.length) applyLoopRange(); });
+  api.postRenderFinished.on(() => markWarnBars()); // 小节位置要等所有部分都画完才有
   api.midiLoaded.on(() => { if (BARS.length) applyLoopRange(); }); // 反复的播放时间要等 MIDI 生成后才知道
   api.error.on(e => {
     const msg = e && e.message ? e.message : String(e);
@@ -708,7 +736,9 @@ async function loadScore() {
     api.load(new Uint8Array(await r.arrayBuffer()), [SONG.track || 0]);
   } else {
     if (!BARS.length) return;
-    const { tex, beatMap: bm } = scoreConv.toAlphaTex(SONG, { tempo: 60 });
+    const known = (SONG.meta && SONG.meta.tempo) || 0; // 谱上没标速度时不显示速度记号（否则总是写着 ♩ = 60）
+    api.settings.notation.elements.set(alphaTab.NotationElement.EffectTempo, !!known);
+    const { tex, beatMap: bm } = scoreConv.toAlphaTex(SONG, { tempo: known || 60 });
     beatMap = bm;
     if ('tex:' + tex === scoreKey) return;
     scoreKey = 'tex:' + tex;
@@ -826,11 +856,23 @@ function applyLoopRange() {
 }
 
 function markWarnBars() {
-  // 可能识别有误的小节：把 alphaTab 画的小节号染成橙色
-  // （小节号是 SVG 文字，内容就是小节号；只在本页面的谱面里找）
-  const warn = new Set(SONG.bars.filter(b => b.warn && b.warn.length || b.uncertain).map(b => String(b.n)));
-  if (!warn.size) return;
-  $('score').querySelectorAll('text').forEach(t => { if (warn.has(t.textContent.trim()) && t.getAttribute('font-size')) t.style.fill = 'var(--amber)'; });
+  // 可能识别有误的小节：在谱面上这一小节的位置画一层淡橙色（alphaTab 只给每行第一个小节标号，染小节号不够用）
+  let layer = $('warnLayer');
+  if (!layer) { layer = document.createElement('div'); layer.id = 'warnLayer'; $('score').appendChild(layer); }
+  layer.innerHTML = '';
+  const look = api && (api.boundsLookup || (api.renderer && api.renderer.boundsLookup)), surface = $('score').querySelector('.at-surface');
+  if (!look || !surface) return;
+  const dx = surface.offsetLeft, dy = surface.offsetTop;
+  SONG.bars.forEach((b, i) => {
+    if (!((b.warn && b.warn.length) || b.uncertain)) return;
+    const mb = look.findMasterBarByIndex(i);
+    if (!mb) return;
+    const r = mb.realBounds, el = document.createElement('div');
+    el.className = 'warn-mark';
+    Object.assign(el.style, { left: dx + r.x + 'px', top: dy + r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
+    el.title = `第 ${b.n} 小节可能识别有误`;
+    layer.appendChild(el);
+  });
 }
 
 function play() {
@@ -950,7 +992,7 @@ function autoCorrelate(buf, sr) {
 let micOn = false;
 async function startMic() {
   if (micOn) return;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('tRead').textContent = '当前页面无法使用麦克风，请按页面底部说明用 localhost 打开。'; return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('tRead').textContent = MIC_BLOCKED; return; }
   initAudio();
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
@@ -995,7 +1037,9 @@ $('loopPrev').onclick = () => { const n = state.b - state.a + 1, a = Math.max(0,
 $('loopNext').onclick = () => { const n = state.b - state.a + 1, a = Math.min(BARS.length - n, state.a + n); setLoop(a, a + n - 1); };
 $('gtVol').oninput = applyAudio;
 $('metroVol').oninput = applyAudio;
+const MIC_BLOCKED = '浏览器只允许在本机地址（http://127.0.0.1）或 HTTPS 页面里用麦克风。用平板通过局域网打开时调音器用不了，可以用上面每根弦的“听”按钮对音。';
 $('micBtn').onclick = startMic;
+if (!window.isSecureContext) { $('micBtn').disabled = true; $('tRead').textContent = MIC_BLOCKED; }
 $('tuneRows').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; initAudio(); pluck(0, +b.dataset.m, ac.currentTime + 0.02); });
 const DEMOS = {
   pm: [ev(0,1,'5-0','pm'), ev(1,.25,'6-4','pm'), ev(1.25,1.75,'6-7','sl pm'), ev(3.5,1,'5-0'), ev(4.5,.25,'6-4'), ev(4.75,1.75,'6-7','sl')],
@@ -1015,8 +1059,16 @@ document.querySelectorAll('button.demo').forEach(b => b.onclick = () => {
   const spb = 60 / 72, t0 = ac.currentTime + 0.05;
   for (const e of DEMOS[b.dataset.demo]) playEvent(e, t0 + e.t * spb);
 });
+// 键盘：空格 播放 / 停止；← → 上一段 / 下一段；↑ ↓ 快 / 慢 4 BPM。只在文字输入框里不响应（滑块、按钮用过之后照样能用空格）
+const typing = el => el && el.closest && el.closest('textarea, [contenteditable], input:not([type=range]):not([type=checkbox])');
 document.addEventListener('keydown', e => {
-  if (e.code === 'Space' && !e.target.closest('input, textarea, select, button, [contenteditable]')) { e.preventDefault(); state.playing ? stop() : play(); }
+  if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey || np || $('view-practice').hidden) return;
+  const k = { Space: () => (state.playing ? stop() : play()), ArrowLeft: () => $('loopPrev').click(), ArrowRight: () => $('loopNext').click(),
+    ArrowUp: () => setTempo(state.bpm + 4), ArrowDown: () => setTempo(state.bpm - 4) }[e.code];
+  if (!k) return;
+  e.preventDefault();
+  if (e.target.blur && e.target !== document.body) e.target.blur(); // 免得空格再“按”一次刚点过的按钮
+  k();
 });
 window.addEventListener('resize', () => { if (shownBar < 0) return; const b = shownBar; shownBar = -1; showBar(b); });
 
@@ -1064,7 +1116,7 @@ function renderHeader() {
   const title = SONG.title || m.title || '未命名';
   document.title = title + ' · 吉他谱练习器';
   $('songTitle').textContent = title;
-  const parts = [m.artist, m.arranger && m.arranger + ' 编配', m.tuning && '调弦 ' + [6, 5, 4, 3, 2, 1].map(s => OPEN_NAME[s]).join(''),
+  const parts = [m.artist, m.arranger && m.arranger + ' 编配', m.tuning && '调弦 ' + [6, 5, 4, 3, 2, 1].map(s => OPEN_NAME[s]).join(' '),
     '变调夹 ' + (CAPO ? CAPO + ' 品' : '无'), m.time_signature && m.time_signature.join('/') + ' 拍', `共 ${SONG.bars.length} 小节`];
   $('songSub').textContent = parts.filter(Boolean).join(' · ');
   $('metaNote').style.display = m.notes ? '' : 'none';
@@ -1093,16 +1145,23 @@ function renderSections() {
     const g = groups[groups.length - 1];
     if (g && g.sys === b.system) g.z = i; else groups.push({ sys: b.system, a: i, z: i });
   });
-  const add = (label, a, z) => { const btn = document.createElement('button'); btn.textContent = label; btn.dataset.a = a; btn.dataset.z = z; btn.onclick = () => setLoop(a, z); host.appendChild(btn); };
+  const warnAt = i => { const b = SONG.bars[i]; return (b.warn && b.warn.length) || b.uncertain; };
+  const add = (label, a, z) => {
+    const btn = document.createElement('button'); btn.textContent = label; btn.dataset.a = a; btn.dataset.z = z; btn.onclick = () => setLoop(a, z);
+    if (label !== '全曲' && SONG.bars.slice(a, z + 1).some((_, k) => warnAt(a + k))) { btn.classList.add('warn'); btn.title = '这一段有可能识别有误的小节'; }
+    host.appendChild(btn);
+  };
+  if (SONG.bars.length) add('全曲', 0, SONG.bars.length - 1); // 放最前面：窄屏时也不会被挤出可见范围
   groups.forEach(g => add(g.a === g.z ? `${g.a + 1}` : `${g.a + 1}–${g.z + 1}`, g.a, g.z));
-  if (SONG.bars.length) add('全曲', 0, SONG.bars.length - 1);
   updateLoopUI();
 }
 
 function renderPlan() {
   const p = SONG.plan;
   if (!p) {
-    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${SONG.status === 'ready' ? '这次识别没有生成练习建议，可以整首重新识别。' : '识别完成后会自动生成。'}</div></div>`;
+    const can = SONG.bars.length && SONG.status !== 'parsing' && SONG.status !== 'queued';
+    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? `可以根据现在的谱子生成（只发文字，费用很低）。<div style="margin-top:10px"><button class="btn sm primary" id="planCreate">${UI.icon('sparkle')}生成练习建议</button></div>` : '识别完成后会自动生成。'}</div></div>`;
+    if (can) $('planCreate').onclick = () => $('explainBtn').click();
     return;
   }
   const staleNote = p.stale ? `<div class="notice" style="margin-bottom:12px"><span class="dot warn" style="margin-top:4px"></span><div style="flex:1">谱子在生成这些建议之后改过（改音、重新识别或改调弦），下面的内容可能已过时。</div><button class="btn sm" id="planRefresh">${UI.icon('refresh')}重新生成</button></div>` : '';
@@ -1140,8 +1199,8 @@ function render(force) {
   setButton($('explainBtn'), UI.icon('sparkle') + (fresh ? '让 AI 讲解这首曲子' : '让 AI 补写提示和练习建议'));
   $('explainHint').textContent = fresh
     ? '根据谱子数据给每个小节写练习提示，并生成练习建议（只发文字，费用很低）。'
-    : `${[missing ? `${missing} 个小节还没有提示` : '', planOld ? '练习建议需要更新' : ''].filter(Boolean).join('，')}（只发文字，费用很低）`;
-  $('editBtn').hidden = $('reparseBtn').hidden = $('hintInput').hidden = isScore;
+    : `${[missing ? `${missing} 个小节还没有提示` : '', !SONG.plan ? '还没有练习建议' : planOld ? '练习建议是改谱之前写的，需要更新' : ''].filter(Boolean).join('，')}（只发文字，费用很低）。`;
+  $('fixBox').hidden = isScore;
   $('editModeBtn').hidden = isScore;
   if (isScore && editMode) setEditMode(false);
   loadScore();
@@ -1264,7 +1323,7 @@ function renderResume() {
   if (!last) return;
   const a = SONG.bars.findIndex(b => b.id === last.a), z = SONG.bars.findIndex(b => b.id === last.b);
   if (a < 0 || z < 0) return;
-  const label = a === z ? `第 ${a + 1} 小节` : `第 ${a + 1}–${z + 1} 小节`;
+  const label = a === 0 && z === SONG.bars.length - 1 ? '全曲' : a === z ? `第 ${a + 1} 小节` : `第 ${a + 1}–${z + 1} 小节`;
   $('resumeNote').innerHTML = `${UI.icon('repeat', 14)}<div style="flex:1">上次（${esc(last.at)}）练到 <b>${label}</b>，${last.bpm} BPM。</div><button class="btn sm primary" id="resumeBtn">接着练</button><button class="icon-btn sm" id="resumeClose" data-ic="x" title="关闭"></button>`;
   UI.hydrate($('resumeNote'));
   $('resumeNote').style.display = '';
@@ -1316,7 +1375,7 @@ async function putBar(barId, events, msg, isUndo = false) {
     }
   } finally { saving--; }
   await refresh(true);
-  UI.toast(msg + (isUndo ? '' : (editMode ? '（⌘Z 撤销）' : '')));
+  UI.toast(msg + (isUndo ? '' : (editMode ? `（${UNDO_KEY} 撤销）` : '')));
   return true;
 }
 async function undoEdit() {
@@ -1329,8 +1388,10 @@ async function undoEdit() {
 // ---------------------------------------------------------------------
 // 在谱面上改音（只对识别出来的曲子：GP / MusicXML 导入的本来就是精确数据，播放也直接用原文件）
 // ---------------------------------------------------------------------
-const LEGEND_PLAY = '点击小节 = 只循环这一小节 · <kbd>Shift</kbd> + 点击 = 扩展循环范围 · 点击音符 = 试听 · 橙色小节号 = 可能识别有误';
-const LEGEND_EDIT = '改音模式：点击音符修改弦、品、技巧和时值 · 点击休止符在这一拍加音 · 输入品位后按 <kbd>Enter</kbd> 保存，<kbd>Esc</kbd> 关闭 · <kbd>⌘Z</kbd> 撤销';
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const UNDO_KEY = IS_MAC ? '⌘Z' : 'Ctrl+Z';
+const LEGEND_PLAY = '点击小节 = 只循环这一小节 · <kbd>Shift</kbd> + 点击 = 扩展循环范围 · 点击音符 = 试听 · 淡橙色框 = 可能识别有误';
+const LEGEND_EDIT = '改音模式：点击音符修改弦、品、技巧和时值 · 点击休止符在这一拍加音 · 输入品位后按 <kbd>Enter</kbd> 保存，<kbd>Esc</kbd> 关闭 · <kbd>' + UNDO_KEY + '</kbd> 撤销';
 const NP_TECH = [['h', '击弦'], ['p', '勾弦'], ['sl', '滑音'], ['si', '滑入'], ['pm', '闷音'], ['x', '死音'], ['nh', '泛音'], ['ah', '人工泛音'], ['vib', '揉弦'], ['roll', '琶音']];
 let editMode = false, np = null, pendingClick = null;
 const pointer = { x: 0, y: 0 };
@@ -1356,7 +1417,7 @@ const barEvents = bi => { const b = SONG.bars[bi]; return b.events && b.events.l
 function openNotePop(beat, note) {
   const bi = beat.voice.bar.index;
   if (bi >= SONG.bars.length) return;
-  if (beat.graceType) { UI.toast('倚音请用下方的“修改本小节”来改', 'info'); return; }
+  if (beat.graceType) { UI.toast('倚音请在小节说明里的“识别有误？→ 修改本小节”里改', 'info'); return; }
   const ei = scoreConv.eventIndexAt(beatMap[bi] || [0], beat.playbackStart);
   const ev = barEvents(bi)[ei];
   if (!ev) return;
@@ -1386,7 +1447,7 @@ function npConflict() {
 function renderNotePop() {
   const add = np.ni < 0;
   $('npTitle').textContent = add ? '在这一拍加一个音' : '修改这个音';
-  $('npSub').textContent = `第 ${np.bi + 1} 小节 · 第 ${np.ei + 1} 个起拍`;
+  $('npSub').textContent = `第 ${np.bi + 1} 小节 · 从左数第 ${np.ei + 1} 个音`;
   setNpStr(String(np.string));
   $('npTech').querySelectorAll('button').forEach(b => b.classList.toggle('on', np.tech.has(b.dataset.t)));
   $('npDel').hidden = $('npAdd').hidden = add;
@@ -1437,6 +1498,10 @@ async function deleteNotePop() {
 }
 
 $('editModeBtn').onclick = () => setEditMode(!editMode);
+// 播放设置（节拍器、音色、自动提速）可以收起来：笔记本、平板上吸顶的播放栏别占太多地方
+function setOpts(open) { $('tOpts').hidden = !open; $('optsBtn').classList.toggle('on', open); localStorage.setItem('tt.opts', open ? '1' : '0'); }
+$('optsBtn').onclick = () => setOpts($('tOpts').hidden);
+setOpts(localStorage.getItem('tt.opts') ? localStorage.getItem('tt.opts') === '1' : innerWidth >= 1280);
 $('npClose').onclick = closeNotePop;
 $('npSave').onclick = saveNotePop;
 $('npDel').onclick = deleteNotePop;
@@ -1475,6 +1540,8 @@ document.addEventListener('keydown', e => {
 $('reparseBtn').onclick = async () => {
   if (shownBar < 0) return;
   const si = SONG.bars[shownBar].system;
+  const row = SONG.bars.filter(b => b.system === si).map(b => b.n);
+  if (!confirm(`重新识别第 ${row[0]}–${row[row.length - 1]} 小节这一行？\n\n会调用一次模型（产生少量费用），这一行里手工改过的音、AI 写的提示和问答都会被新的识别结果替换。`)) return;
   const r = await fetch(`/api/songs/${SONG_ID}/systems/${si}/reparse`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hint: $('hintInput').value }) });
   if (!r.ok) { UI.toast((await r.json()).detail || '请求失败', 'err'); return; }
   UI.toast('已开始重新识别这一行', 'info');

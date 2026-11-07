@@ -15,7 +15,7 @@
   --line-2: #ececf0;
   --fg: #1c1c21;
   --fg-2: #4b4b53;
-  --muted: #85858d;
+  --muted: #6e6e76; /* 白底上约 5:1 */
   --faint: #b9b9c2;
   --accent: #4f46e5;
   --accent-hover: #4338ca;
@@ -48,7 +48,7 @@
   :root:not([data-theme="light"]) {
     --bg: #1a1a1e; --card: #232327; --card-2: #1f1f23; --pill: #2d2d33; --pill-hover: #36363d;
     --seg-track: rgba(255, 255, 255, .05); --seg-thumb: rgba(255, 255, 255, .15); --seg-edge: inset 0 .5px 0 rgba(255, 255, 255, .08), 0 1px 2px rgba(0, 0, 0, .3);
-    --ctl-fg: #a1a1aa; --line: #333339; --line-2: #2c2c32; --fg: #ededf1; --fg-2: #b9b9c1; --muted: #8b8b94; --faint: #56565f;
+    --ctl-fg: #a1a1aa; --line: #333339; --line-2: #2c2c32; --fg: #ededf1; --fg-2: #b9b9c1; --muted: #8b8b94; --faint: #56565f; --placeholder: #7a7a83;
     --accent: #a5b4fc; --accent-hover: #c7d2fe; --accent-soft: #2b2c47; --accent-fg: #14142a;
     --green: #6fd99b; --green-soft: #1e3a2b; --red: #f28b82; --red-soft: #45272a; --amber: #f2b544; --amber-soft: #3f3220; --blue: #7dd3fc; --blue-soft: #1c3341;
     --pop-bg: rgba(38, 38, 43, .96);
@@ -61,7 +61,7 @@
 :root[data-theme="dark"] {
   --bg: #1a1a1e; --card: #232327; --card-2: #1f1f23; --pill: #2d2d33; --pill-hover: #36363d;
   --seg-track: rgba(255, 255, 255, .05); --seg-thumb: rgba(255, 255, 255, .15); --seg-edge: inset 0 .5px 0 rgba(255, 255, 255, .08), 0 1px 2px rgba(0, 0, 0, .3);
-  --ctl-fg: #a1a1aa; --line: #333339; --line-2: #2c2c32; --fg: #ededf1; --fg-2: #b9b9c1; --muted: #8b8b94; --faint: #56565f;
+  --ctl-fg: #a1a1aa; --line: #333339; --line-2: #2c2c32; --fg: #ededf1; --fg-2: #b9b9c1; --muted: #8b8b94; --faint: #56565f; --placeholder: #7a7a83;
   --accent: #a5b4fc; --accent-hover: #c7d2fe; --accent-soft: #2b2c47; --accent-fg: #14142a;
   --green: #6fd99b; --green-soft: #1e3a2b; --red: #f28b82; --red-soft: #45272a; --amber: #f2b544; --amber-soft: #3f3220; --blue: #7dd3fc; --blue-soft: #1c3341;
   --pop-bg: rgba(38, 38, 43, .96);
@@ -154,7 +154,7 @@ code, kbd { font: 11.5px var(--code); background: var(--pill); border-radius: 4p
 /* ---- 输入 ---- */
 .input { height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font-size: 12.5px; min-width: 0; transition: border-color .15s, box-shadow .15s; }
 .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.input::placeholder { color: var(--faint); }
+.input::placeholder { color: var(--placeholder, #8e8e96); } /* 例句只写在占位符里：至少 3:1 */
 .input.num { width: 58px; text-align: center; font-variant-numeric: tabular-nums; padding: 0 4px; }
 textarea.input { height: auto; padding: 8px 10px; font: 12px/1.55 var(--code); resize: vertical; }
 
