@@ -172,6 +172,7 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/music.py` | 数据模型：调弦、拍号、时值、事件和反复记号的整理与校验（纯函数） |
 | `app/errors.py` | 业务错误类型（Invalid 400 / NotFound 404 / Busy 409 / Upstream 502） |
 | `app/llm.py`、`app/layout.py`、`app/ocr.py` | 模型调用、版面检测、本机数字识别 |
+| `app/schemas.py` | 接口请求体的类型和长度校验（Pydantic），格式不对返回 400 和中文说明 |
 | `app/store.py` | `data/` 下的 JSON 读写（加锁的读-改-写、`.bak` 备份、坏文件回退、单实例锁） |
 | `app/evaluate.py` | 识别准确率评测 |
 

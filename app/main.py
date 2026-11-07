@@ -13,11 +13,12 @@ import shutil
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import auth, coach, jobs, recognize, songs, store
+from app import auth, coach, jobs, recognize, schemas, songs, store
 from app.errors import AppError
 from app.llm import DEFAULT_MODEL
 
@@ -32,6 +33,12 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="tab-trainer", lifespan=lifespan)
 auth.install(app)
+
+
+@app.exception_handler(RequestValidationError)
+async def bad_request(_request: Request, e: RequestValidationError):
+    """请求体格式不对：400 + 一句中文（默认的 422 是一串英文，前端没法直接显示）。"""
+    return JSONResponse({"detail": schemas.describe(e.errors())}, status_code=400)
 
 
 @app.exception_handler(store.CorruptSong)
@@ -103,15 +110,14 @@ def get_settings():
 
 
 @app.put("/api/settings")
-def put_settings(body: Annotated[dict, Body()]):
+def put_settings(body: schemas.SettingsIn):
     c = store.load_config()
-    if body.get("api_key"):
-        c["api_key"] = body["api_key"].strip()
-    if body.get("clear_api_key"):
+    if body.api_key:
+        c["api_key"] = body.api_key.strip()
+    if body.clear_api_key:
         c.pop("api_key", None)
-    for k in ("base_url", "model", "effort"):
-        if k in body:
-            c[k] = (body[k] or "").strip()
+    for k in body.model_fields_set & {"base_url", "model", "effort"}:
+        c[k] = (getattr(body, k) or "").strip()
     store.save_config(c)
     return get_settings()
 
@@ -201,17 +207,16 @@ def reparse_all(sid: str):
 
 
 @app.put("/api/songs/{sid}/derived")
-def put_derived(sid: str, body: Annotated[dict, Body()]):
+def put_derived(sid: str, body: schemas.DerivedIn):
     _song(sid)
-    return songs.set_derived(
-        sid, body.get("meta") or {}, body.get("bars") or [], body.get("track") or 0, body.get("derived")
-    )
+    derived = body.derived.model_dump() if body.derived else None
+    return songs.set_derived(sid, body.meta, body.bars, body.track, derived)
 
 
 @app.post("/api/songs/{sid}/import-error")
-def import_error(sid: str, body: Annotated[dict, Body()]):
+def import_error(sid: str, body: schemas.ImportErrorIn):
     _song(sid)
-    return songs.import_failed(sid, str(body.get("error") or ""))
+    return songs.import_failed(sid, body.error)
 
 
 @app.post("/api/songs/{sid}/explain")
@@ -230,37 +235,35 @@ def cancel(sid: str):
 
 
 @app.put("/api/songs/{sid}/meta")
-def put_meta(sid: str, body: Annotated[dict, Body()]):
+def put_meta(sid: str, body: schemas.MetaIn):
     _song(sid)
-    return songs.edit_meta(sid, body)
+    return songs.edit_meta(sid, body.model_dump(exclude_unset=True))
 
 
 @app.put("/api/songs/{sid}/bars/{bar_id}")
-def put_bar(sid: str, bar_id: str, body: Annotated[dict, Body()]):
+def put_bar(sid: str, bar_id: str, body: schemas.BarIn):
     _song(sid)
-    if "events" not in body:
-        raise HTTPException(400, "缺少 events")
-    return songs.edit_bar(sid, bar_id, body["events"], body.get("tip"))
+    return songs.edit_bar(sid, bar_id, body.events, body.tip)
 
 
 @app.post("/api/songs/{sid}/bars/{bar_id}/ask")
-def ask_bar(sid: str, bar_id: str, body: Annotated[dict, Body()]):
+def ask_bar(sid: str, bar_id: str, body: schemas.AskIn):
     _song(sid)
-    return coach.ask_bar(sid, bar_id, str(body.get("question") or ""))
+    return coach.ask_bar(sid, bar_id, body.question)
 
 
 @app.post("/api/songs/{sid}/practice")
-def practice(sid: str, body: Annotated[dict, Body()]):
+def practice(sid: str, body: schemas.PracticeIn):
     _song(sid)
-    return songs.record_practice(sid, body)
+    return songs.record_practice(sid, body.model_dump())
 
 
 @app.post("/api/songs/{sid}/systems/{si}/reparse")
-def reparse_line(sid: str, si: int, body: Annotated[dict | None, Body()] = None):
+def reparse_line(sid: str, si: int, body: schemas.ReparseIn | None = None):
     s = _song(sid)
     if not 0 <= si < len(s.get("systems", [])):
         raise HTTPException(404, "这一行不存在")
-    recognize.start_reparse(sid, si, str((body or {}).get("hint") or "").strip())
+    recognize.start_reparse(sid, si, (body.hint if body else "").strip())
     return {"ok": True}
 
 

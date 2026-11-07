@@ -89,3 +89,33 @@ def test_oversized_request_is_rejected_before_parsing(client, monkeypatch):
     monkeypatch.setattr(songs, "MAX_TOTAL_BYTES", 1000)
     r = client.post("/api/songs", files={"files": ("p.png", b"x" * 3_000_000)})
     assert r.status_code == 413
+
+
+def test_malformed_bodies_get_a_400_with_a_chinese_reason(client):
+    sid = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    assert client.put(f"/api/songs/{sid}/derived", json={"bars": derived_bars(2)}).status_code == 200
+    bar = client.get(f"/api/songs/{sid}").json()["bars"][0]["id"]
+    cases = [
+        ("put", "/api/settings", {"api_key": ["not", "a", "string"]}, "API key"),
+        ("put", "/api/settings", {"effort": "turbo"}, "识别精细度"),
+        ("put", f"/api/songs/{sid}/bars/{bar}", {"tip": "x"}, "缺少"),
+        ("put", f"/api/songs/{sid}/bars/{bar}", {"events": "abc"}, "events"),
+        ("put", f"/api/songs/{sid}/meta", {"capo": "三"}, "变调夹"),
+        ("put", f"/api/songs/{sid}/derived", {"track": -1}, "音轨"),
+        ("post", f"/api/songs/{sid}/practice", {"bar_ids": "b1", "loops": 1, "bpm": 60}, "小节"),
+        ("post", f"/api/songs/{sid}/bars/{bar}/ask", {"question": "x" * 2000}, "太长"),
+    ]
+    for method, url, body, word in cases:
+        r = getattr(client, method)(url, json=body)
+        assert r.status_code == 400, (url, body, r.status_code, r.text)
+        assert r.json()["detail"].startswith("请求格式不对") and word in r.json()["detail"], r.json()
+    # 正常的请求照常
+    assert (
+        client.put("/api/settings", json={"model": "claude-x", "effort": "high"}).json()["model"]
+        == "claude-x"
+    )
+    r = client.post(
+        f"/api/songs/{sid}/practice", json={"bar_ids": [bar], "loops": 1, "bpm": 61.5, "seconds": 9}
+    )
+    assert r.status_code == 200
+    assert client.put(f"/api/songs/{sid}/meta", json={"title": "新名"}).json()["title"] == "新名"
