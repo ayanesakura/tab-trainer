@@ -23,7 +23,7 @@ _MUSICXML_EXT = (".musicxml", ".xml", ".mxl")
 
 def migrate(song: dict, song_id: str) -> dict:
     """升级到当前格式（原地修改并返回）。升级过的曲子带 _migrated 标记（不存盘），旧练习记录放在 _practice_seed。"""
-    song.setdefault("id", song_id)
+    song["id"] = song_id  # 以目录名为准：复制出来的目录里 song.json 写的还是原来那首的 id
     for k, default in (("bars", []), ("systems", []), ("pages", [])):
         if not isinstance(song.get(k), type(default)):
             song[k] = default

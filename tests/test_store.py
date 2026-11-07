@@ -63,6 +63,18 @@ def test_old_songs_get_missing_fields(data_dir):
     assert any(x["id"] == sid for x in views.list_library())
 
 
+def test_copied_song_folder_saves_into_its_own_folder(data_dir):
+    """手动复制了一份曲子目录：song.json 里的 id 是原来那首的，以目录名为准，改副本不能写到原曲子里。"""
+    import shutil
+
+    sid = _gp("原曲")
+    copy = "20991231-000000-copy01"
+    shutil.copytree(store.song_dir(sid), store.SONGS / copy)
+    assert store.load(copy)["id"] == copy
+    songs.edit_meta(copy, {"title": "改的是副本"})
+    assert store.load(sid)["title"] == "原曲" and store.load(copy)["title"] == "改的是副本"
+
+
 def test_corrupt_config_is_set_aside(data_dir):
     store.save_config({"api_key": "sk-1"})
     store.save_config({"api_key": "sk-2"})
