@@ -11,7 +11,7 @@ import { refresh, applySong, conflict } from './song.js';
 // ---------------------------------------------------------------------
 // 修改小节（JSON）、重新识别这一行
 // ---------------------------------------------------------------------
-let editorBarId = null;
+let editorBarId = null, editorRev; // 编辑器打开时的小节和它的 rev（保存时带这个，期间别处改过就报 409）
 const curBar = () => { const s = get('song'), bi = get('ui.bar'); return s && bi >= 0 ? s.bars[bi] : null; };
 
 /** 这个小节现在不能改的原因（后端算好的 locked），能改是空字符串 */
@@ -19,7 +19,7 @@ export function barLocked(bi) {
   const s = get('song'), bar = s && s.bars[bi];
   return (bar && bar.locked) || '';
 }
-function closeEditor() { $('editor').hidden = true; $('edMsg').textContent = ''; editorBarId = null; }
+function closeEditor() { $('editor').hidden = true; $('edMsg').textContent = ''; editorBarId = null; editorRev = undefined; }
 function updateBarTools() {
   const s = get('song'), bar = curBar();
   if (!bar) return;
@@ -30,17 +30,26 @@ function updateBarTools() {
 }
 
 // 保存一个小节；记下改之前的内容，⌘Z / Ctrl+Z 可以撤销。
-// 乐观锁按小节：带上这个小节的 rev（只在小节内容变了时才 +1；写问答、练习记录、别的小节改动都不影响它）。
-export const undoStack = [];
+// 乐观锁按小节：rev 是这次修改所基于的小节版本（打开编辑器 / 改音面板时记下的；撤销用的是那次保存后的版本）。
+// 小节的 rev 只在内容变了时才 +1（写问答、练习记录、别的小节改动都不影响它），所以它过期 = 真的在别处改过。
+export const undoStack = []; // {barId, events: 改之前的内容, n, rev: 这次保存后的版本}
 export let saving = 0; // 进行中的保存：这期间不能撤销，否则可能撤销错步骤
-/** → 'ok' | 'conflict'（别处改过这个小节，已刷新）| 'error' */
-async function putBar(barId, events, msg, isUndo = false) {
+const savingBars = new Set(); // 正在保存的小节：同一小节一次只发一个保存（否则第二个带的是旧 rev）
+const barBusy = barId => { if (!savingBars.has(barId)) return false; UI.toast('这个小节正在保存，稍等一下再改', 'info'); return true; };
+/** → 'ok' | 'conflict'（别处改过这个小节，已刷新）| 'error' | 'busy'（这个小节还在保存上一次的修改） */
+async function putBar(barId, events, rev, msg, isUndo = false) {
+  if (barBusy(barId)) return 'busy';
   const s = get('song'), before = s.bars.find(b => b.id === barId);
-  const entry = before && !isUndo ? { barId, events: before.events, n: before.n } : null;
+  const entry = before && !isUndo ? { barId, events: before.events, n: before.n, rev: undefined } : null;
   if (entry) { undoStack.push(entry); if (undoStack.length > 50) undoStack.shift(); } // 先记上，按发出的顺序
-  saving++;
+  saving++; savingBars.add(barId);
   try {
-    applySong(await put(songUrl(`/bars/${encodeURIComponent(barId)}`), { events, rev: before ? before.rev : undefined }));
+    const res = await put(songUrl(`/bars/${encodeURIComponent(barId)}`), { events, rev });
+    const after = (res.bars || []).find(b => b.id === barId);
+    if (entry) entry.rev = after && after.rev;
+    // 撤销成功：内容回到了上一条记录保存后的样子，那条记录改用现在的版本号
+    else if (isUndo) { const prev = undoStack.findLast(u => u.barId === barId); if (prev) prev.rev = after && after.rev; }
+    applySong(res);
   } catch (e) {
     if (entry) undoStack.splice(undoStack.lastIndexOf(entry), 1);
     if (e.status === 409) {
@@ -51,7 +60,7 @@ async function putBar(barId, events, msg, isUndo = false) {
     }
     UI.toast(e.message || '保存失败', 'err', 4000);
     return 'error';
-  } finally { saving--; }
+  } finally { saving--; savingBars.delete(barId); }
   UI.toast(msg + (isUndo ? '' : (get('ui.editMode') ? `（${UNDO_KEY} 撤销）` : '')));
   return 'ok';
 }
@@ -59,7 +68,8 @@ async function undoEdit() {
   if (saving) { UI.toast('正在保存，稍等一下再撤销', 'info'); return; }
   const u = undoStack.pop();
   if (!u) { UI.toast('没有可以撤销的修改', 'info'); return; }
-  if ((await putBar(u.barId, u.events, `已撤销第 ${u.n} 小节的修改`, true)) === 'error') undoStack.push(u); // 撤销失败：记录放回去（冲突时这个小节的记录已作废）
+  const r = await putBar(u.barId, u.events, u.rev, `已撤销第 ${u.n} 小节的修改`, true);
+  if (r === 'error' || r === 'busy') undoStack.push(u); // 撤销失败：记录放回去（冲突时这个小节的记录已作废）
 }
 
 // ---------------------------------------------------------------------
@@ -101,13 +111,14 @@ export function openNotePop(beat, note) {
   const locked = barLocked(bi);
   if (locked) { UI.toast(locked, 'info'); return; }
   if (beat.graceType) { UI.toast('倚音请在“识别有误？→ 修改本小节”里改', 'info'); return; }
+  if (barBusy(s.bars[bi].id)) return; // 上一次修改还没存好：这时的内容是旧的
   const ei = eventIndexAt(get('view').beatMap[bi] || [0], beat.playbackStart);
   const ev = barEvents(bi)[ei];
   if (!ev) return;
   const ni = note ? ev.notes.findIndex(n => n.string === STRINGS + 1 - note.string) : -1; // alphaTab 的弦号 1 = 最低音弦
   const cur = ni >= 0 ? ev.notes[ni] : null;
   if (npLayer) npLayer.close('replaced'); // 点了另一个音：换成新的
-  np = { bi, ei, ni, barId: s.bars[bi].id, snap: s.bars[bi].events, string: cur ? cur.string : freeString(ev, note ? STRINGS + 1 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []), dur: ev.dur };
+  np = { bi, ei, ni, barId: s.bars[bi].id, rev: s.bars[bi].rev, snap: s.bars[bi].events, string: cur ? cur.string : freeString(ev, note ? STRINGS + 1 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []), dur: ev.dur };
   set('ui.bar', bi);
   renderNotePop();
   $('npFret').value = np.fret;
@@ -149,7 +160,7 @@ function closeNotePop() { if (npLayer) npLayer.close(); np = null; $('notePop').
 const npStep = d => { if (!np) return; np.fret = Math.max(0, Math.min(30, (parseInt($('npFret').value, 10) || 0) + d)); $('npFret').value = np.fret; };
 
 async function saveNotePop() {
-  if (!np || npConflict()) return;
+  if (!np || npConflict() || barBusy(np.barId)) return;
   const fret = parseInt($('npFret').value, 10);
   if (!(fret >= 0 && fret <= 30)) { $('npMsg').textContent = '品位要在 0–30 之间'; return; }
   const bar = get('song').bars[np.bi], events = structuredClone(barEvents(np.bi)), ev = events[np.ei];
@@ -165,21 +176,21 @@ async function saveNotePop() {
   ev.notes.sort((a, b) => a.string - b.string);
   let out = events;
   try { out = retimeEvent(events, np.ei, np.dur); } catch (e) { $('npMsg').textContent = e.message; return; }
-  const where = `第 ${np.bi + 1} 小节`;
+  const where = `第 ${np.bi + 1} 小节`, rev = np.rev;
   closeNotePop();
-  await putBar(bar.id, out, `已修改${where}`);
+  await putBar(bar.id, out, rev, `已修改${where}`);
 }
 async function deleteNotePop() {
-  if (!np || np.ni < 0) return;
+  if (!np || np.ni < 0 || barBusy(np.barId)) return;
   const bar = get('song').bars[np.bi], events = structuredClone(barEvents(np.bi));
   if (!bar || bar.id !== np.barId || !events[np.ei] || !events[np.ei].notes[np.ni]) { closeNotePop(); return; }
   events[np.ei].notes.splice(np.ni, 1);
-  const where = `第 ${np.bi + 1} 小节`;
+  const where = `第 ${np.bi + 1} 小节`, rev = np.rev;
   closeNotePop();
-  await putBar(bar.id, events, `已删除${where}的一个音`);
+  await putBar(bar.id, events, rev, `已删除${where}的一个音`);
 }
 
-export const editorState = { get saving() { return saving; }, get undo() { return undoStack.length; }, get undoBars() { return undoStack.map(u => u.barId); }, get np() { return np; } };
+export const editorState = { get saving() { return saving; }, get undo() { return undoStack.length; }, get undoBars() { return undoStack.map(u => u.barId); }, get undoRevs() { return undoStack.map(u => u.rev); }, get np() { return np; } };
 
 export function initEditor() {
   setPlayerHooks({ editClick: queueEditClick });
@@ -189,7 +200,7 @@ export function initEditor() {
     const locked = barLocked(get('ui.bar'));
     if (locked) { UI.toast(locked, 'info'); return; }
     $('edText').value = '[\n' + bar.events.map(e => '  ' + JSON.stringify(e)).join(',\n') + '\n]';
-    editorBarId = bar.id;
+    editorBarId = bar.id; editorRev = bar.rev;
     $('editor').hidden = false;
     $('edText').focus();
   };
@@ -197,7 +208,7 @@ export function initEditor() {
   $('edSave').onclick = () => withBusy($('edSave'), async () => {
     let events;
     try { events = JSON.parse($('edText').value); } catch (e) { UI.toast('JSON 格式不对：' + e.message, 'err', 4000); return; }
-    if ((await putBar(editorBarId, events, '已保存')) === 'ok') closeEditor();
+    if ((await putBar(editorBarId, events, editorRev, '已保存')) === 'ok') closeEditor();
   });
   $('reparseBtn').onclick = async () => {
     const bar = curBar();
