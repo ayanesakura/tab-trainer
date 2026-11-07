@@ -24,6 +24,7 @@ from app.music import (
     apply_time_signatures,
     clean_events,
     clean_repeats,
+    clean_shapes,
     clean_time_signature,
     new_bar_id,
     normalize_meta,
@@ -313,6 +314,9 @@ def _derived_bar(i: int, b: dict, meta: dict) -> dict:
             **clean_repeats(b),
         }
     )
+    shapes = clean_shapes(b.get("shapes"))
+    if shapes:
+        bar["shapes"] = shapes
     return bar
 
 

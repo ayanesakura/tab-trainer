@@ -289,3 +289,14 @@ def test_bar_text_shows_chords_and_strums():
         "events": [{"dur": "1", "chord": "Em", "strum": "down", "notes": [{"string": 1, "fret": 0}]}],
     }
     assert bar_text(b) == "第2小节: [Em] 1拍 下扫 1弦0品"
+
+
+def test_set_derived_keeps_chord_names_strums_and_shapes(data_dir):
+    sid = songs.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
+    bars = derived_bars(1)
+    bars[0]["events"][0].update(chord="Em", strum="down")
+    bars[0]["shapes"] = {"Em": [0, 0, 0, 2, 2, 0], "bad": [1, 2]}
+    song = songs.set_derived(sid, {"tuning": music.STANDARD}, bars)
+    b = song["bars"][0]
+    assert b["events"][0]["chord"] == "Em" and b["events"][0]["strum"] == "down"
+    assert b["shapes"] == {"Em": [0, 0, 0, 2, 2, 0]}
