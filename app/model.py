@@ -367,11 +367,6 @@ class SongView(_M):
     tags: list[str] = Field(default_factory=list)
     track: int = 0
     derived: Derived | None = None
-    # 兼容旧前端，保留一版
-    error: str | None = None  # = notice.msg
-    running: bool = False  # = busy
-    kind: Literal["score", "image"] = "image"  # = source_type 是 gp / musicxml
-    job: Literal["explain", "pages"] | None = None  # = activity
 
 
 class LibraryPractice(_M):
@@ -403,9 +398,3 @@ class LibraryItem(_M):
     cost_estimated: bool = False
     unpriced_tokens: int = 0
     tokens: int = 0
-    # 兼容旧前端，保留一版
-    error: str | None = None
-    warn_bars: int = 0
-    last_practiced: str = ""
-    kind: Literal["score", "image"] = "image"
-    job: Literal["explain", "pages"] | None = None

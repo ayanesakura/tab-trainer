@@ -199,7 +199,8 @@ def test_song_view_contract(client):
         "capo",
         "time_signature",
     ]
-    assert v["notice"] is None and v["error"] is None
+    assert v["notice"] is None
+    assert not {"error", "running", "kind", "job"} & set(v)  # 兼容字段已删
     b = v["bars"][0]
     assert b["n"] == 1 and b["locked"] is None and b["edited"] is False and b["needs_review"] is False
     assert not any(k.startswith("_") for x in v["bars"] for k in x) and not any(k.startswith("_") for k in v)
@@ -257,7 +258,7 @@ def test_practice_history_and_last_positions(client):
     }
     row = next(x for x in client.get("/api/songs").json() if x["id"] == sid)
     assert row["practice"]["total_seconds"] == 35 and row["practice"]["last"]["a_n"] == 5
-    assert row["last_practiced"] == row["practice"]["last_at"]
+    assert not {"error", "warn_bars", "last_practiced", "kind", "job"} & set(row)
     assert client.get("/api/songs/20260101-000000-abcdef/practice/history").status_code == 404
 
 

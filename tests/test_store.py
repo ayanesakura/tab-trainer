@@ -43,7 +43,7 @@ def test_corrupt_song_does_not_break_the_library(data_dir):
     (d / "song.json.bak").write_text("[1, 2]")
     rows = {s["id"]: s for s in views.list_library()}
     assert rows[good]["title"] == "好的"
-    assert rows[bad]["status"] == "corrupt" and "数据损坏" in rows[bad]["error"]
+    assert rows[bad]["status"] == "corrupt" and "数据损坏" in rows[bad]["notice"]["msg"]
     c = TestClient(main.app, base_url="http://127.0.0.1:8765")
     r = c.get(f"/api/songs/{bad}")
     assert r.status_code == 500 and "数据损坏" in r.json()["detail"]
