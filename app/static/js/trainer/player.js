@@ -194,7 +194,7 @@ function applyLoopRange() {
     if (run) { la = run[0]; lb = run[1]; }
     if (la.end <= la.start || lb.end <= lb.start) {
       // 按反复 / 跳转记号走，这个小节根本不会被弹到（比如 Fine 之后的小节）
-      if (warnedUnplayed !== `${state.a}-${state.b}`) UI.toast('按谱上的反复和跳转记号，选中的小节不会被弹到，先循环全曲', 'info', 5000);
+      if (warnedUnplayed !== `${state.a}-${state.b}`) UI.toast('按反复记号，选中的小节弹不到，改为循环全曲', 'info', 5000);
       warnedUnplayed = `${state.a}-${state.b}`;
     } else {
       range = new alphaTab.synth.PlaybackRange();
@@ -234,7 +234,7 @@ function markWarnBars() {
 }
 
 function play() {
-  if (!api || !state.ready) { UI.toast('音色还在加载，稍等一下', 'info'); return; }
+  if (!api || !state.ready) { UI.toast('音色加载中', 'info'); return; }
   state.loops = 0; state.lastTick = -1;
   api.play();
 }

@@ -28,7 +28,7 @@ function renderPracticeLine() {
     ? '还没练过这一小节'
     : p.loops
       ? `练习记录：循环 ${p.loops} 遍 · 累计 ${mins(p.seconds)}${p.best_bpm ? ` · 最快 ${p.best_bpm} BPM` : ''} · 上次 ${p.last}`
-      : `练习记录：听过${mins(p.seconds)}，还没完整循环过一遍 · 上次 ${p.last}`;
+      : `练习记录：听过 ${mins(p.seconds)} · 上次 ${p.last}`;
 }
 let resumeShown = false;
 function renderResume() {

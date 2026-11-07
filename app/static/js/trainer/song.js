@@ -39,23 +39,23 @@ function renderHeader() {
   document.title = title + ' · 吉他谱练习器';
   $('songTitle').textContent = title;
   const parts = [m.artist, m.arranger && m.arranger + ' 编配', m.tuning && '调弦 ' + [6, 5, 4, 3, 2, 1].map(s => OPEN_NAME[s]).join(' '),
-    '变调夹 ' + (CAPO ? CAPO + ' 品' : '无'), m.time_signature && m.time_signature.join('/') + ' 拍' + (SONG.bars.some(b => b.time_signature) ? '（中途有变拍号）' : ''), `共 ${SONG.bars.length} 小节`];
+    '变调夹 ' + (CAPO ? CAPO + ' 品' : '无'), m.time_signature && m.time_signature.join('/') + ' 拍' + (SONG.bars.some(b => b.time_signature) ? '（有变拍号）' : ''), `共 ${SONG.bars.length} 小节`];
   $('songSub').textContent = parts.filter(Boolean).join(' · ');
   $('metaNote').style.display = m.notes ? '' : 'none';
-  $('metaNote').innerHTML = m.notes ? `<span class="dot" style="background:var(--accent)"></span><div><b>AI 读谱时注意到：</b>${esc(m.notes)}</div>` : '';
+  $('metaNote').innerHTML = m.notes ? `<span class="dot" style="background:var(--accent)"></span><div><b>AI 备注：</b>${esc(m.notes)}</div>` : '';
   const running = SONG.running || SONG.status === 'parsing' || SONG.status === 'queued';
   const pr = SONG.progress || {};
   const explaining = SONG.job === 'explain';
   const what = explaining
-    ? `正在生成讲解${pr.total ? `（${pr.done}/${pr.total} 批）` : ''}。可以照常练习，写好的提示会自动出现。`
+    ? `正在生成讲解${pr.total ? `（${pr.done}/${pr.total} 批）` : ''}，可以照常练习。`
     : SONG.restaging
-      ? `正在重新识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}。全部完成后才替换现在的结果，这期间不能改谱。`
-      : `正在识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}。已识别的小节可以先练，页面会自动刷新。`;
+      ? `正在重新识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}，完成前不能改谱。`
+      : `正在识别：${esc(pr.stage || '')}${pr.total ? `（${pr.done}/${pr.total} 行）` : ''}，已识别的小节可以先练。`;
   $('progressBox').style.display = running ? '' : 'none';
   $('progressBox').innerHTML = running ? `<span class="spinner" style="margin-top:2px"></span><div style="flex:1">${what}</div><button class="btn sm" id="cancelBtn">${explaining ? '取消' : '取消识别'}</button>` : '';
   if (running) $('cancelBtn').onclick = async () => {
     const r = await fetch(`/api/songs/${SONG_ID}/cancel`, { method: 'POST' });
-    UI.toast(r.ok ? '正在取消，进行中的那几行完成后停止' : ((await r.json()).detail || '取消失败'), r.ok ? 'info' : 'err');
+    UI.toast(r.ok ? '正在取消…' : ((await r.json()).detail || '取消失败'), r.ok ? 'info' : 'err');
   };
   $('errorBox').style.display = SONG.error ? '' : 'none';
   $('errorBox').innerHTML = SONG.error ? `<span class="dot err" style="margin-top:4px"></span><div>${SONG.kind === 'score' && SONG.status === 'error' ? '曲谱读取失败' : '出错了'}：${esc(SONG.error)}</div>` : '';
@@ -67,8 +67,8 @@ function renderHeader() {
   // GP / MusicXML：调弦、变调夹、拍号来自原文件（播放也按原文件），这里只能改曲名
   const scoreSong = SONG.kind === 'score';
   document.querySelectorAll('.meta-setting').forEach(el => { el.hidden = scoreSong; });
-  $('metaHead').textContent = scoreSong ? '曲名' : '识别的调弦 / 变调夹 / 拍号不对？';
-  if (scoreSong) $('metaMsg').textContent = '调弦、变调夹和拍号来自原文件，不能在这里改。';
+  $('metaHead').textContent = scoreSong ? '曲名' : '曲子信息';
+  if (scoreSong) $('metaMsg').textContent = '调弦、变调夹和拍号以原文件为准。';
 }
 
 function renderSections() {
@@ -77,7 +77,7 @@ function renderSections() {
   const warnAt = i => { const b = SONG.bars[i]; return (b.warn && b.warn.length) || b.uncertain; };
   const add = (label, a, z) => {
     const btn = document.createElement('button'); btn.textContent = label; btn.dataset.a = a; btn.dataset.z = z; btn.onclick = () => setLoop(a, z);
-    if (label !== '全曲' && SONG.bars.slice(a, z + 1).some((_, k) => warnAt(a + k))) { btn.classList.add('warn'); btn.title = '这一段有可能识别有误的小节'; }
+    if (label !== '全曲' && SONG.bars.slice(a, z + 1).some((_, k) => warnAt(a + k))) { btn.classList.add('warn'); btn.title = '这段有待核对的小节'; }
     host.appendChild(btn);
   };
   if (SONG.bars.length) add('全曲', 0, SONG.bars.length - 1); // 放最前面：窄屏时也不会被挤出可见范围
@@ -89,11 +89,11 @@ function renderPlan() {
   const p = SONG.plan;
   if (!p) {
     const can = SONG.bars.length && SONG.status !== 'parsing' && SONG.status !== 'queued';
-    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? `可以根据现在的谱子生成（只发文字，费用很低）。<div style="margin-top:10px"><button class="btn sm primary" id="planCreate">${UI.icon('sparkle')}生成练习建议</button></div>` : '识别完成后会自动生成。'}</div></div>`;
+    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? `<div style="margin-top:10px"><button class="btn sm primary" id="planCreate">${UI.icon('sparkle')}生成练习建议</button></div>` : '识别完成后会自动生成。'}</div></div>`;
     if (can) $('planCreate').onclick = () => $('explainBtn').click();
     return;
   }
-  const staleNote = p.stale ? `<div class="notice" style="margin-bottom:12px"><span class="dot warn" style="margin-top:4px"></span><div style="flex:1">谱子在生成这些建议之后改过（改音、重新识别或改调弦），下面的内容可能已过时。</div><button class="btn sm" id="planRefresh">${UI.icon('refresh')}重新生成</button></div>` : '';
+  const staleNote = p.stale ? `<div class="notice" style="margin-bottom:12px"><span class="dot warn" style="margin-top:4px"></span><div style="flex:1">谱子改过，这些建议可能已过时。</div><button class="btn sm" id="planRefresh">${UI.icon('refresh')}重新生成</button></div>` : '';
   const steps = (p.steps || []).map((st, i) => {
     const m = /^(\d+)\s*[-–~]\s*(\d+)$/.exec(st.bars.trim()) || /^(\d+)$/.exec(st.bars.trim());
     const a = m ? +m[1] - 1 : null, z = m ? +(m[2] || m[1]) - 1 : null;
@@ -127,8 +127,8 @@ function render(force) {
   const fresh = isScore && missing === SONG.bars.length;
   setButton($('explainBtn'), UI.icon('sparkle') + (fresh ? '让 AI 讲解这首曲子' : '让 AI 补写提示和练习建议'));
   $('explainHint').textContent = fresh
-    ? '根据谱子数据给每个小节写练习提示，并生成练习建议（只发文字，费用很低）。'
-    : `${[missing ? `${missing} 个小节还没有提示` : '', !SONG.plan ? '还没有练习建议' : planOld ? '练习建议是改谱之前写的，需要更新' : ''].filter(Boolean).join('，')}（只发文字，费用很低）。`;
+    ? '为每个小节写练习提示，并生成练习建议。'
+    : `${[missing ? `${missing} 个小节还没有提示` : '', !SONG.plan ? '还没有练习建议' : planOld ? '练习建议是改谱之前写的，需要更新' : ''].filter(Boolean).join('，')}。`;
   $('fixBox').hidden = isScore;
   $('editModeBtn').hidden = isScore;
   if (isScore && editMode) setEditMode(false);
@@ -136,7 +136,7 @@ function render(force) {
   if (!imgs.length || imgs.length !== PAGES.length) loadImages();
   renderedIds = SONG.bars.map(b => b.id);
   if (!BARS.length) {
-    if (!isScore) $('score').innerHTML = '<div class="empty-state"><b>还没有识别出的小节</b>识别完成后会出现在这里。</div>';
+    if (!isScore) $('score').innerHTML = '<div class="empty-state"><b>还没有识别出的小节</b>识别完成后显示。</div>';
     return;
   }
   const n = BARS.length - 1, find = (id, fallback) => { const i = renderedIds.indexOf(id); return i >= 0 ? i : Math.min(fallback, n); };
@@ -182,7 +182,7 @@ function initSong() {
     $('explainBtn').disabled = true;
     const r = await fetch(`/api/songs/${SONG_ID}/explain`, { method: 'POST' });
     if (!r.ok) UI.toast((await r.json()).detail || '请求失败', 'err', 5000);
-    else UI.toast('AI 正在写讲解，完成后提示会出现在每个小节里', 'info');
+    else UI.toast('AI 正在写讲解', 'info');
     $('explainBtn').disabled = false;
     await refresh(true);
   };

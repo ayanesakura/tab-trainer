@@ -4,7 +4,7 @@ const STD = { 1: 64, 2: 59, 3: 55, 4: 50, 5: 45, 6: 40 };
 let TUNE = [];
 function howTo(d) {
   if (d === 0) return ['不变', 'chg-same'];
-  const words = { 1: '半音', 2: '一个全音', 3: '一个半全音（3 个半音）' };
+  const words = { 1: '半音', 2: '一个全音', 3: '3 个半音' };
   const w = words[Math.abs(d)] || `${Math.abs(d)} 个半音`;
   return [(d < 0 ? '降' : '升') + w, d < 0 ? 'chg-down' : 'chg-up'];
 }
@@ -33,7 +33,7 @@ function autoCorrelate(buf, sr) {
   return sr / (a ? mp - b / (2 * a) : mp);
 }
 let micOn = false;
-const MIC_BLOCKED = '浏览器只允许在本机地址（http://127.0.0.1）或 HTTPS 页面里用麦克风。用平板通过局域网打开时调音器用不了，可以用上面每根弦的“听”按钮对音。';
+const MIC_BLOCKED = '麦克风只能在本机地址或 HTTPS 下使用。局域网打开时请用每根弦的“听”按钮对音。';
 async function startMic() {
   if (micOn) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('tRead').textContent = MIC_BLOCKED; return; }
@@ -60,7 +60,7 @@ async function startMic() {
     const ok = Math.abs(cents) <= 5;
     $('tNeedle').style.background = ok ? 'var(--green)' : 'var(--amber)';
     $('tRead').innerHTML = `${best.s} 弦 → 目标 <b>${mname(best.m)}</b>　当前 ${fm.toFixed(1)} Hz，${cents > 0 ? '+' : ''}${cents} 音分　` +
-      (ok ? '<span style="color:var(--green)">✓ 准了</span>' : Math.abs(cents) > 300 ? '差得较多，先大致拧到附近' : cents > 0 ? '偏高，往下调' : '偏低，往上调');
+      (ok ? '<span style="color:var(--green)">✓ 准了</span>' : Math.abs(cents) > 300 ? '差得较多' : cents > 0 ? '偏高，往下调' : '偏低，往上调');
   }, 80);
 }
 

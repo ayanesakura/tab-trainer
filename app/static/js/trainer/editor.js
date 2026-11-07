@@ -8,7 +8,7 @@ let editorBarId = null;
 function barLocked(bi) {
   const bar = SONG && SONG.bars[bi];
   if (!bar) return '';
-  if (SONG.restaging) return '正在重新识别整首，完成后再改（识别失败或取消时原来的结果会保留）';
+  if (SONG.restaging) return '正在重新识别整首，完成后再改';
   const sys = SONG.systems[bar.system];
   return sys && sys.status === 'parsing' ? '这一行正在重新识别，完成后再改' : '';
 }
@@ -53,8 +53,8 @@ async function undoEdit() {
 // ---------------------------------------------------------------------
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const UNDO_KEY = IS_MAC ? '⌘Z' : 'Ctrl+Z';
-const LEGEND_PLAY = '点击小节 = 只循环这一小节 · <kbd>Shift</kbd> + 点击 = 扩展循环范围 · 点击音符 = 试听 · 淡橙色框 = 可能识别有误';
-const LEGEND_EDIT = '改音模式：点击音符修改弦、品、技巧和时值 · 点击休止符在这一拍加音 · 输入品位后按 <kbd>Enter</kbd> 保存，<kbd>Esc</kbd> 关闭 · <kbd>' + UNDO_KEY + '</kbd> 撤销';
+const LEGEND_PLAY = '点小节 = 循环这一小节 · <kbd>Shift</kbd> + 点 = 扩展循环 · 点音符 = 试听 · 橙框 = 待核对';
+const LEGEND_EDIT = '改音：点音符改弦、品、技巧和时值 · 点休止符加音 · <kbd>Enter</kbd> 保存 · <kbd>Esc</kbd> 关闭 · <kbd>' + UNDO_KEY + '</kbd> 撤销';
 const NP_TECH = [['h', '击弦'], ['p', '勾弦'], ['sl', '滑音'], ['si', '滑入'], ['pm', '闷音'], ['x', '死音'], ['nh', '泛音'], ['ah', '人工泛音'], ['vib', '揉弦'], ['roll', '琶音']];
 let editMode = false, np = null, pendingClick = null;
 const pointer = { x: 0, y: 0 };
@@ -80,7 +80,7 @@ function openNotePop(beat, note) {
   if (bi >= SONG.bars.length) return;
   const locked = barLocked(bi);
   if (locked) { UI.toast(locked, 'info'); return; }
-  if (beat.graceType) { UI.toast('倚音请在小节说明里的“识别有误？→ 修改本小节”里改', 'info'); return; }
+  if (beat.graceType) { UI.toast('倚音请在“识别有误？→ 修改本小节”里改', 'info'); return; }
   const ei = scoreConv.eventIndexAt(beatMap[bi] || [0], beat.playbackStart);
   const ev = barEvents(bi)[ei];
   if (!ev) return;
@@ -110,7 +110,7 @@ function npConflict() {
 function renderNotePop() {
   const add = np.ni < 0;
   $('npTitle').textContent = add ? '在这一拍加一个音' : '修改这个音';
-  $('npSub').textContent = `第 ${np.bi + 1} 小节 · 从左数第 ${np.ei + 1} 个音`;
+  $('npSub').textContent = `第 ${np.bi + 1} 小节 · 第 ${np.ei + 1} 个音`;
   setNpStr(String(np.string));
   $('npTech').querySelectorAll('button').forEach(b => b.classList.toggle('on', np.tech.has(b.dataset.t)));
   $('npDel').hidden = $('npAdd').hidden = add;
@@ -122,7 +122,7 @@ function renderNotePop() {
   let msg = '';
   try { scoreConv.retimeEvent(barEvents(np.bi), np.ei, np.dur); } catch (e) { durOk = false; msg = e.message; }
   const clash = npConflict();
-  if (clash) msg = `这一拍的 ${np.string} 弦上已经有一个音了，换一根弦或去改那个音`;
+  if (clash) msg = `这一拍 ${np.string} 弦已经有音了`;
   $('npMsg').textContent = msg;
   $('npSave').disabled = clash || !durOk;
 }
@@ -135,7 +135,7 @@ async function saveNotePop() {
   const fret = parseInt($('npFret').value, 10);
   if (!(fret >= 0 && fret <= 30)) { $('npMsg').textContent = '品位要在 0–30 之间'; return; }
   const bar = SONG.bars[np.bi], events = structuredClone(barEvents(np.bi)), ev = events[np.ei];
-  if (!bar || bar.id !== np.barId || !ev || (np.ni >= 0 && !ev.notes[np.ni])) { closeNotePop(); UI.toast('谱子刚刚更新过，请重新点一下这个音', 'info'); return; }
+  if (!bar || bar.id !== np.barId || !ev || (np.ni >= 0 && !ev.notes[np.ni])) { closeNotePop(); UI.toast('谱子刚更新过，请重新点这个音', 'info'); return; }
   const old = np.ni >= 0 ? ev.notes[np.ni] : { grace: -1, bend: 0 };
   const tech = NP_TECH.map(t => t[0]).filter(k => np.tech.has(k));
   if (old.tech && old.tech.includes('bend')) tech.push('bend'); // 推弦不在面板里，原样保留
@@ -181,7 +181,7 @@ function initEditor() {
     if (shownBar < 0) return;
     const si = SONG.bars[shownBar].system;
     const row = SONG.bars.filter(b => b.system === si).map(b => b.n);
-    if (!confirm(`重新识别第 ${row[0]}–${row[row.length - 1]} 小节这一行？\n\n会调用一次模型（产生少量费用），这一行里手工改过的音、AI 写的提示和问答都会被新的识别结果替换。`)) return;
+    if (!confirm(`重新识别第 ${row[0]}–${row[row.length - 1]} 小节？\n\n这一行的手工修改、提示和问答都会被替换。`)) return;
     const r = await fetch(`/api/songs/${SONG_ID}/systems/${si}/reparse`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hint: $('hintInput').value }) });
     if (!r.ok) { UI.toast((await r.json()).detail || '请求失败', 'err'); return; }
     UI.toast('已开始重新识别这一行', 'info');

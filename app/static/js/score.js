@@ -310,10 +310,10 @@ export function retimeEvent(events, ei, dur) {
   if (diff[0] === 0) return out;
   if (ei + 1 < out.length) {
     const next = add(F(out[ei + 1].dur), diff);
-    if (next[0] <= 0) throw new Error('改长以后会盖过下一个音，先把下一个音改短或删掉');
+    if (next[0] <= 0) throw new Error('会盖过下一个音，先把它改短或删掉');
     out[ei + 1].dur = str(next);
   } else {
-    if (diff[0] < 0) throw new Error('这是小节里最后一拍，只能改短（改长会超出小节）');
+    if (diff[0] < 0) throw new Error('最后一个音只能改短');
     out.push({ dur: str(diff), notes: [] });
   }
   ev.dur = str(newD);

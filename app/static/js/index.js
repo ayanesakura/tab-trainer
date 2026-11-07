@@ -66,10 +66,10 @@ function songState(s) {
     const unit = s.job === 'explain' ? '批' : '行';
     return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${p.done}/${p.total} ${unit}` : ''}</span><span class="progress"><i style="width:${pct}%"></i></span>`;
   }
-  if (s.status === 'corrupt') return `<span class="dot err"></span><span class="err-text">${esc(s.error)}（可以在“…”菜单里删除）</span>`;
+  if (s.status === 'corrupt') return `<span class="dot err"></span><span class="err-text">${esc(s.error)}（可在“…”菜单删除）</span>`;
   if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">${s.kind === 'score' ? '曲谱读取失败' : '识别失败'}：${esc(s.error)}</span>`;
   if (s.status === 'cancelled') return `<span class="dot warn"></span><span>已取消${s.bars ? ` · 已识别 ${s.bars} 小节` : ''}</span>`;
-  if (s.kind === 'score' && !s.bars) return `<span class="dot ok"></span><span>已导入，打开练习页读取曲谱</span>`;
+  if (s.kind === 'score' && !s.bars) return `<span class="dot ok"></span><span>已导入</span>`;
   const parts = [`<span class="dot ${s.warn_bars ? 'warn' : 'ok'}"></span><span>${s.bars} 小节</span>`];
   if (s.warn_bars) parts.push(`<span class="badge warn">${s.warn_bars} 处待核对</span>`);
   if (s.error) parts.push(`<span class="badge err">部分行识别失败</span>`);
@@ -81,7 +81,7 @@ async function loadSongs() {
   let songs;
   try { songs = await api('/api/songs'); } catch (e) { $('songs').innerHTML = `<div class="empty-state"><b>加载失败</b>${esc(e.message)}</div>`; return; }
   if (!songs.length) {
-    $('songs').innerHTML = `<div class="empty-state"><b>还没有曲子</b>上传一份谱子开始练习吧。</div>`;
+    $('songs').innerHTML = `<div class="empty-state"><b>还没有曲子</b>上传一份谱子开始。</div>`;
   } else {
     $('songs').innerHTML = songs.map(s => {
       const busy = s.status === 'parsing' || s.status === 'queued';
@@ -125,16 +125,16 @@ $('songs').addEventListener('click', e => {
   if (row) location.href = '/trainer?id=' + row.dataset.id;
 });
 async function reparse(id) {
-  if (!confirm('整首重新识别会覆盖现有结果（包括手工修改），并再次产生模型调用费用。继续？')) return;
+  if (!confirm('重新识别会覆盖现有结果，包括手工修改。继续？')) return;
   try { await api(`/api/songs/${id}/parse`, { method: 'POST' }); toast('已开始重新识别', 'info'); } catch (e) { toast(e.message, 'err'); }
   loadSongs();
 }
 async function cancel(id) {
-  try { await api(`/api/songs/${id}/cancel`, { method: 'POST' }); toast('正在取消，进行中的那几行完成后停止', 'info'); } catch (e) { toast(e.message, 'err'); }
+  try { await api(`/api/songs/${id}/cancel`, { method: 'POST' }); toast('正在取消…', 'info'); } catch (e) { toast(e.message, 'err'); }
   loadSongs();
 }
 async function del(id) {
-  if (!confirm('删除这首曲子（包括上传的谱子图片和识别结果）？')) return;
+  if (!confirm('删除这首曲子？')) return;
   try { await api(`/api/songs/${id}`, { method: 'DELETE' }); toast('已删除'); } catch (e) { toast(e.message, 'err'); }
   loadSongs();
 }
@@ -147,7 +147,7 @@ function showSettings(c) {
   $('keyNotice').hidden = hasKey;
   $('keyState').innerHTML = c.api_key_masked ? `已保存：<code>${esc(c.api_key_masked)}</code>`
     : c.env_key ? '正在使用环境变量 <code>ANTHROPIC_API_KEY</code>。'
-    : '只保存在本机 <code>data/config.json</code>（仅本人可读）。也可以改为启动前设置环境变量 <code>ANTHROPIC_API_KEY</code>。';
+    : '只保存在本机，也可以用环境变量 <code>ANTHROPIC_API_KEY</code>。';
   $('clearKey').hidden = !c.api_key_masked;
   const custom = !PRESETS.includes(c.model);
   setModelSeg(custom ? 'custom' : c.model);
