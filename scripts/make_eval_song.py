@@ -78,8 +78,10 @@ _STEM_PATCHES = [
 ]
 
 
-def alphatab_settings(stave: str, bars_per_row: int, hide: list[str]) -> dict:
+def alphatab_settings(stave: str, bars_per_row: int, hide: list[str], encoding: str = "") -> dict:
     s = json.loads(json.dumps(STAVES[stave]))
+    if encoding:  # 中文 GP3–5 文件按 GBK 读，渲染出来的曲名才不是乱码
+        s["importer"] = {"encoding": encoding}
     s["display"].update(layoutMode="Page", scale=1.0, barsPerRow=bars_per_row)
     if hide:
         s.setdefault("notation", {})["elements"] = dict.fromkeys(hide, False)
@@ -108,13 +110,19 @@ def _alphatab_dir(web: Path, stems_below: bool) -> None:
 
 DERIVE = """
 import * as at from '{root}/app/static/vendor/alphatab/alphaTab.core.min.mjs';
-import {{ deriveSong }} from '{root}/app/static/js/score.js';
+import {{ deriveSong, scoreNeedsGbk }} from '{root}/app/static/js/score.js';
 import fs from 'node:fs';
 at.Logger.logLevel = at.LogLevel.None;
-const sc = at.importer.ScoreLoader.loadScoreFromBytes(new Uint8Array(fs.readFileSync(process.argv[1])), new at.Settings());
+const bytes = new Uint8Array(fs.readFileSync(process.argv[1]));
+let settings = new at.Settings(), encoding = '';
+let sc = at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings);
+if (scoreNeedsGbk(sc)) {{ // 中文 GP3–5 文件：按 GBK 重新读（和练习页一样）
+  settings = new at.Settings(); settings.importer.encoding = encoding = 'gbk';
+  sc = at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings);
+}}
 let track = {track};
 if (track < 0) track = Math.max(0, sc.tracks.findIndex(t => t.staves[0] && t.staves[0].tuning.length === 6));
-process.stdout.write(JSON.stringify({{ track, ...deriveSong(sc, track) }}));
+process.stdout.write(JSON.stringify({{ track, encoding, ...deriveSong(sc, track) }}));
 """
 
 
@@ -214,11 +222,12 @@ def render(
     stave: str = "score-tab",
     bars_per_row: int = -1,
     hide: list[str] | None = None,
+    encoding: str = "",
 ) -> tuple[Image.Image, list[int]]:
     web = Path(tempfile.mkdtemp())
     _alphatab_dir(web, stave == "tab-below")
     shutil.copy(path, web / "score.bin")
-    settings = alphatab_settings(stave, bars_per_row, hide or [])
+    settings = alphatab_settings(stave, bars_per_row, hide or [], encoding)
     page = (
         PAGE.replace("TRACK", str(track))
         .replace("WIDTH", str(width))
@@ -264,7 +273,9 @@ def main() -> None:
     a = ap.parse_args()
 
     truth = derive(a.file, a.track)
-    full, rows = render(a.file, truth["track"], a.scale, a.width, a.stave, a.bars_per_row, a.hide)
+    full, rows = render(
+        a.file, truth["track"], a.scale, a.width, a.stave, a.bars_per_row, a.hide, truth.get("encoding", "")
+    )
     if a.save_full:
         full.save(a.save_full)
     systems = detect_page(full)["systems"]
