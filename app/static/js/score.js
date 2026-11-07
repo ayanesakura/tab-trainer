@@ -13,7 +13,8 @@ export const TICKS = 960; // 每个四分音符的 MIDI tick 数
 // 2：每小节带自己的拍号；多声部同一根弦同时起拍的音只保留一个
 // 3：按谱面位置分起拍（拍上倚音不再在小节开头多出假休止）
 // 4：闷音的品格记 0；自然泛音的品格记谱上标的泛音点（<12> → 12）
-export const DERIVE_VERSION = 4;
+// 5：中文 GP3–5 文件按 GBK 重新导入（曲名、艺人不再是乱码）
+export const DERIVE_VERSION = 5;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -282,6 +283,47 @@ export function deriveSong(score, trackIndex = 0) {
     return out;
   });
   return { meta, bars, trackName: track.name, version: DERIVE_VERSION };
+}
+
+// ---------------------------------------------------------------------
+// 中文 GP3–5 文件的乱码：老版本 Guitar Pro 按系统编码存文字，中文系统上是 GBK；alphaTab 默认按
+// windows-1252 读，曲名、艺人就成了“Ñº¹ãÌ«ÀÉ”。认出这种乱码后用 settings.importer.encoding = 'gbk' 重新导入。
+// ---------------------------------------------------------------------
+let CP1252 = null; // windows-1252 的字符 → 字节
+function cp1252Bytes(s) {
+  if (!CP1252) {
+    CP1252 = new Map();
+    const dec = new TextDecoder('windows-1252');
+    for (let b = 0; b < 256; b++) CP1252.set(dec.decode(new Uint8Array([b])), b);
+  }
+  const out = [];
+  for (const ch of s) { const b = CP1252.get(ch); if (b === undefined) return null; out.push(b); }
+  return new Uint8Array(out);
+}
+const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+
+/**
+ * 按 windows-1252 读出来的 GBK 文字 → 原来的中文；看着不像这种乱码就返回 null。
+ * 判断：只有 ASCII 和 1252 的高位字符，高位字符连续成对出现（GBK 一个汉字两个高位字节），
+ * 按 GBK 严格解码成功，并且解出了汉字。“Café”“Für Elise”这类西文不会被误判（单个高位字符）。
+ */
+export function gbkFromMojibake(s) {
+  s = String(s ?? '');
+  if (!/[\u0080-\uffff]/.test(s)) return null;
+  const bytes = cp1252Bytes(s);
+  if (!bytes) return null;
+  let run = 0;
+  for (const b of [...bytes, 0]) { if (b >= 0x80) run++; else { if (run % 2) return null; run = 0; } }
+  let out;
+  try { out = new TextDecoder('gbk', { fatal: true }).decode(bytes); } catch { return null; }
+  return CJK.test(out) && !/[\ue000-\uf8ff]/.test(out) ? out : null;
+}
+
+/** alphaTab 读出来的谱子是不是 GBK 被当成 windows-1252 读了（看曲名、艺人等和音轨名） */
+export function scoreNeedsGbk(score) {
+  const texts = [score.title, score.subTitle, score.artist, score.album, score.words, score.music, score.tab, score.copyright,
+    ...(score.tracks || []).map(t => t.name)].filter(Boolean);
+  return texts.some(t => gbkFromMojibake(t) !== null);
 }
 
 /** 改音面板里可选的时值（到下一个音的时长，单位四分音符）。 */
