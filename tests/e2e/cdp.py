@@ -51,6 +51,8 @@ class Browser:
                 f"--user-data-dir={self._profile}",
                 "--no-proxy-server",
                 "--autoplay-policy=no-user-gesture-required",
+                "--use-fake-ui-for-media-stream",  # 麦克风（调音器）：自动允许，用假的输入设备
+                "--use-fake-device-for-media-stream",
                 f"--window-size={self.width},{self.height}",
                 "about:blank",
             ],

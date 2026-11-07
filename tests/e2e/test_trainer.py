@@ -549,3 +549,24 @@ def test_song_info_form_edits_artist(server, trainer):
     assert b.js("document.getElementById('mArtistLbl').hidden")
     assert "原文件" in b.js("document.getElementById('metaMsg').textContent")
     assert not b.errors, b.errors
+
+
+def test_tuner_mic_stops_when_leaving_tune_page(trainer):
+    """调音器开了麦克风：离开调弦页（或再点一次按钮）就关掉，麦克风不会一直开着。"""
+    b = trainer()
+    b.js("""(() => { window.__streams = []; const md = navigator.mediaDevices, of = md.getUserMedia.bind(md);
+      md.getUserMedia = async c => { const s = await of(c); __streams.push(s); return s; }; return true; })()""")
+    b.js("location.hash = '#tune'; true")
+    b.wait_for("tt.get('ui.view') === 'tune'")
+    b.js("document.getElementById('micBtn').click(); true")
+    b.wait_for("document.getElementById('micBtn').textContent.includes('已开启')")
+    b.js("location.hash = '#practice'; true")
+    b.wait_for("__streams[0].getTracks().every(t => t.readyState === 'ended')")
+    assert "开启麦克风" in b.js("document.getElementById('micBtn').textContent")
+    # 再开一次，用按钮关
+    b.js("location.hash = '#tune'; true")
+    b.js("document.getElementById('micBtn').click(); true")
+    b.wait_for("__streams.length === 2 && document.getElementById('micBtn').textContent.includes('已开启')")
+    b.js("document.getElementById('micBtn').click(); true")
+    b.wait_for("__streams[1].getTracks().every(t => t.readyState === 'ended')")
+    assert not b.errors, b.errors

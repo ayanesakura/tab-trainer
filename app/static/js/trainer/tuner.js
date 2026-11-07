@@ -36,20 +36,26 @@ function autoCorrelate(buf, sr) {
   const x1 = c[mp - 1], x2 = c[mp], x3 = c[mp + 1], a = (x1 + x3 - 2 * x2) / 2, b = (x3 - x1) / 2;
   return sr / (a ? mp - b / (2 * a) : mp);
 }
-let micOn = false;
+let mic = null; // 开着时 {stream, src, timer}
 const MIC_BLOCKED = '麦克风只能在本机地址或 HTTPS 下使用。局域网打开时请用每根弦的“听”按钮对音。';
+const MIC_IDLE = '弹一根空弦，自动识别是哪根';
+let starting = false;
 async function startMic() {
-  if (micOn) return;
+  if (mic || starting) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('tRead').textContent = MIC_BLOCKED; return; }
   initAudio();
   let stream;
+  starting = true;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
   catch (err) { $('tRead').textContent = '麦克风打开失败：' + err.message; return; }
-  micOn = true; $('micBtn').innerHTML = '<span class="dot ok"></span>调音器已开启';
+  finally { starting = false; }
+  if (get('ui.view') !== 'tune') { stream.getTracks().forEach(t => t.stop()); return; } // 等授权的时候已经离开了调弦页
+  $('micBtn').innerHTML = '<span class="dot ok"></span>调音器已开启 · 点击关闭';
   const an = ac.createAnalyser(); an.fftSize = 2048;
-  ac.createMediaStreamSource(stream).connect(an);
+  const src = ac.createMediaStreamSource(stream);
+  src.connect(an);
   const buf = new Float32Array(an.fftSize), hist = [];
-  setInterval(() => {
+  const timer = setInterval(() => {
     an.getFloatTimeDomainData(buf);
     const f = autoCorrelate(buf, ac.sampleRate);
     if (f < 60 || f > 400) return;
@@ -61,14 +67,30 @@ async function startMic() {
     TUNE.forEach(t => $('tr' + t.s).classList.toggle('hit', t === best));
     $('tNote').textContent = mname(Math.round(m));
     $('tNeedle').style.left = (50 + Math.max(-50, Math.min(50, cents))) + '%';
+    $('tNeedle').classList.add('live');
     $('tNeedle').classList.toggle('ok', ok);
     $('tRead').innerHTML = `${best.s} 弦 → 目标 <b>${mname(best.m)}</b>　当前 ${fm.toFixed(1)} Hz，${cents > 0 ? '+' : ''}${cents} 音分　` +
       (ok ? '<span class="chg-same">✓ 准了</span>' : Math.abs(cents) > 300 ? '差得较多' : cents > 0 ? '偏高，往下调' : '偏低，往上调');
   }, 80);
+  mic = { stream, src, timer };
+}
+/** 关掉麦克风（再点一次按钮、离开调弦页时）：不然系统的麦克风指示一直亮着，后台每 80ms 还在算音高 */
+function stopMic() {
+  if (!mic) return;
+  clearInterval(mic.timer);
+  mic.src.disconnect();
+  mic.stream.getTracks().forEach(t => t.stop());
+  mic = null;
+  $('micBtn').innerHTML = UI.icon('mic') + '开启麦克风';
+  $('tNeedle').classList.remove('live', 'ok'); $('tNeedle').style.left = '50%';
+  $('tNote').textContent = '--';
+  $('tRead').textContent = MIC_IDLE;
+  TUNE.forEach(t => { const r = $('tr' + t.s); if (r) r.classList.remove('hit'); });
 }
 
 export function initTuner() {
-  $('micBtn').onclick = startMic;
+  $('micBtn').onclick = () => (mic ? stopMic() : startMic());
+  on('ui.view', v => { if (v !== 'tune') stopMic(); });
   if (!window.isSecureContext) { $('micBtn').disabled = true; $('tRead').textContent = MIC_BLOCKED; }
   $('tuneRows').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; initAudio(); pluck(0, +b.dataset.m, ac.currentTime + 0.02); });
   on('view', v => { if (v) renderTune(v); });
