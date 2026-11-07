@@ -44,12 +44,12 @@
   --accent-hover: #4338ca;
   --accent-soft: #eeedfd;
   --accent-fg: #ffffff;
-  --green: #189a58;
+  --green: #117a45;
   --green-soft: #e4f6ec;
-  --red: #d64545;
+  --red: #b93a3a;
   --red-soft: #fbe9e9;
   --red-fg: #ffffff;
-  --amber: #b45309;
+  --amber: #a14a06;
   --amber-soft: #fbf0df;
   --blue: #0369a1;
   --knob: #ffffff; /* 开关和滑块的圆钮 */
@@ -87,7 +87,7 @@
   --line-2: #2c2c32;
   --fg: #ededf1;
   --fg-2: #b9b9c1;
-  --muted: #8b8b94;
+  --muted: #9a9aa3;
   --faint: #56565f;
   --placeholder: #7a7a83;
   --accent: #a5b4fc;
@@ -252,6 +252,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
 .notice.err { background: var(--red-soft); border-color: transparent; color: var(--fg); }
 .notice.info { background: var(--accent-soft); border-color: transparent; color: var(--fg); }
 .notice .n-body { flex: 1; min-width: 0; }
+.notice .hint { color: var(--fg-2); } /* 浅色底（尤其淡靛蓝）上 --muted 不到 4.5:1 */
 .notice .n-acts { display: flex; gap: 6px; align-items: center; flex: none; margin: -3px -6px -3px 0; }
 .muted { color: var(--muted); }
 .hint { color: var(--muted); font-size: var(--fs-1); }
