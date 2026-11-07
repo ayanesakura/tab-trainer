@@ -144,8 +144,8 @@ function switchTimbre() {
 
 async function onScoreLoaded(score) {
   const song = get('song');
-  if (isScore(song) && scoreBytes && api.settings.importer.encoding !== 'gbk' && scoreNeedsGbk(score)) {
-    // 中文 GP3–5 文件：按 GBK 重新导入（曲名、艺人、音轨名才不是乱码）
+  if (isScore(song) && scoreBytes && api.settings.importer.encoding !== 'gbk' && scoreNeedsGbk(score, scoreBytes)) {
+    // 中文 GP3–5 / GPX 文件：按 GBK 重新导入（曲名、艺人、音轨名才不是乱码）
     api.settings.importer.encoding = 'gbk';
     const bytes = scoreBytes, track = (get('view.source') || {}).track || 0;
     setTimeout(() => api.load(bytes, [track]), 0);

@@ -16,7 +16,8 @@ export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数�
 // 3：按谱面位置分起拍（拍上倚音不再在小节开头多出假休止）
 // 4：闷音的品格记 0；自然泛音的品格记谱上标的泛音点（<12> → 12）
 // 5：中文 GP3–5 文件按 GBK 重新导入（曲名、艺人不再是乱码）
-export const DERIVE_VERSION = 5;
+// 6：GBK 乱码判断收紧（Canção、Größe 这类西文曲名不再被误当成乱码），只看 GP3–5 / GPX 文件
+export const DERIVE_VERSION = 6;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -284,8 +285,9 @@ export function deriveSong(score, trackIndex = 0) {
 }
 
 // ---------------------------------------------------------------------
-// 中文 GP3–5 文件的乱码：老版本 Guitar Pro 按系统编码存文字，中文系统上是 GBK；alphaTab 默认按
-// windows-1252 读，曲名、艺人就成了“Ñº¹ãÌ«ÀÉ”。认出这种乱码后用 settings.importer.encoding = 'gbk' 重新导入。
+// 中文 GP3–5 / GPX 文件的乱码：老版本 Guitar Pro 按系统编码存文字，中文系统上是 GBK；alphaTab 默认按
+// windows-1252 读，曲名、艺人就成了“ÑºÎ²¹âÌ«ÀÉ”。认出这种乱码后用 settings.importer.encoding = 'gbk' 重新导入。
+// 判断规则和后端 migrate.fix_mojibake 是同一套（见 tests/js/score.test.mjs 里的例子）。
 // ---------------------------------------------------------------------
 let CP1252 = null; // windows-1252 的字符 → 字节
 function cp1252Bytes(s) {
@@ -295,30 +297,45 @@ function cp1252Bytes(s) {
     for (let b = 0; b < 256; b++) CP1252.set(dec.decode(new Uint8Array([b])), b);
   }
   const out = [];
-  for (const ch of s) { const b = CP1252.get(ch); if (b === undefined) return null; out.push(b); }
+  for (const ch of s) {
+    let b = CP1252.get(ch);
+    if (b === undefined) { const cp = ch.codePointAt(0); if (cp < 256) b = cp; else return null; } // latin-1 能表示的直接取码位
+    out.push(b);
+  }
   return new Uint8Array(out);
 }
-const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
 
 /**
  * 按 windows-1252 读出来的 GBK 文字 → 原来的中文；看着不像这种乱码就返回 null。
- * 判断：只有 ASCII 和 1252 的高位字符，高位字符连续成对出现（GBK 一个汉字两个高位字节），
- * 按 GBK 严格解码成功，并且解出了汉字。“Café”“Für Elise”这类西文不会被误判（单个高位字符）。
+ * 先按 cp1252 还原成字节、再按 GBK 严格解码（任一步失败 → null）；并且同时满足才算：
+ * 非 ASCII 字符 ≥ 4 个、非 ASCII 字符比 ASCII 字母多、解出来至少 2 个汉字、没有替换符。
+ * 这样“Canção”“Größe”“Für Elise”这类西文不会被误判成“Can玢o”“Gr鲞e”“F黵 Elise”。
  */
 export function gbkFromMojibake(s) {
   s = String(s ?? '');
-  if (!/[\u0080-\uffff]/.test(s)) return null;
+  let nonAscii = 0, letters = 0;
+  for (const ch of s) { if (ch.codePointAt(0) > 0x7f) nonAscii++; else if (/[A-Za-z]/.test(ch)) letters++; }
+  if (nonAscii < 4 || nonAscii <= letters) return null;
   const bytes = cp1252Bytes(s);
   if (!bytes) return null;
-  let run = 0;
-  for (const b of [...bytes, 0]) { if (b >= 0x80) run++; else { if (run % 2) return null; run = 0; } }
   let out;
   try { out = new TextDecoder('gbk', { fatal: true }).decode(bytes); } catch { return null; }
-  return CJK.test(out) && !/[\ue000-\uf8ff]/.test(out) ? out : null;
+  // 私用区：浏览器的 GBK 解码把用户自定义区解成私用区字符，Python 的 gbk 解不了（两边结果一致）
+  if (out.includes('\ufffd') || /[\ue000-\uf8ff]/.test(out)) return null;
+  return (out.match(CJK) || []).length >= 2 ? out : null;
 }
 
-/** alphaTab 读出来的谱子是不是 GBK 被当成 windows-1252 读了（看曲名、艺人等和音轨名） */
-export function scoreNeedsGbk(score) {
+/** 文件是不是 GP3–5（“FICHIER GUITAR PRO”开头）或 GPX（BCFZ / BCFS 容器）：只有这些老格式会按系统编码存文字 */
+export function isLegacyGp(bytes) {
+  if (!bytes || bytes.length < 20) return false;
+  const head = String.fromCharCode(...bytes.slice(0, 20));
+  return head.startsWith('BCFZ') || head.startsWith('BCFS') || head.slice(1).startsWith('FICHIER GUITAR');
+}
+
+/** alphaTab 读出来的谱子是不是 GBK 被当成 windows-1252 读了（只看 GP3–5 / GPX 文件；看曲名、艺人等和音轨名） */
+export function scoreNeedsGbk(score, bytes) {
+  if (!isLegacyGp(bytes)) return false;
   const texts = [score.title, score.subTitle, score.artist, score.album, score.words, score.music, score.tab, score.copyright,
     ...(score.tracks || []).map(t => t.name)].filter(Boolean);
   return texts.some(t => gbkFromMojibake(t) !== null);
