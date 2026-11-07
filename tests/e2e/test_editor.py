@@ -76,6 +76,28 @@ def test_json_editor_saves_against_the_rev_it_was_opened_with(server, trainer, i
     b.js("document.getElementById('edSave').click(); true")
     b.wait_for(CONFLICT)
     assert _song(server, sid)["bars"][1]["events"][0]["notes"][0]["fret"] == 12  # 没被编辑器里的旧内容盖掉
+    # 冲突后编辑器换成了刷新后的内容和版本：改了再保存就能成功，不会一直 409
+    assert not b.js("document.getElementById('editor').hidden")
+    assert '"fret":12' in b.js("document.getElementById('edText').value")
+    b.js("""(() => { const t = document.getElementById('edText'); t.value = t.value.replace('"fret":12', '"fret":9');
+      document.getElementById('edSave').click(); return true; })()""")
+    b.wait_for("document.getElementById('editor').hidden")
+    assert _song(server, sid)["bars"][1]["events"][0]["notes"][0]["fret"] == 9
+    assert not b.errors, b.errors
+
+
+def test_json_editor_stays_open_while_playback_moves_on(trainer, image_song):
+    """播放中打开“修改本小节”：光标走到下一小节，侧栏不切换，编辑器不会关掉。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 2); tt.setTempo(240); tt.set('ui.bar', 0); true")
+    b.js("document.getElementById('editBtn').click(); true")
+    b.wait_for("!document.getElementById('editor').hidden")
+    b.js("tt.play(); true")
+    b.wait_for("tt.state.playing")
+    b.wait_for("tt.api.tickPosition > tt.api.playbackRange.startTick + 4 * 960 + 100", timeout=8)  # 进了第 2 小节
+    assert b.js("tt.get('ui.bar')") == 0
+    assert not b.js("document.getElementById('editor').hidden")
+    b.js("tt.stop(); true")
     assert not b.errors, b.errors
 
 

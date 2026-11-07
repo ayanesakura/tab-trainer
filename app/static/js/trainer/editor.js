@@ -19,6 +19,10 @@ export function barLocked(bi) {
   const s = get('song'), bar = s && s.bars[bi];
   return (bar && bar.locked) || '';
 }
+function fillEditor(bar) {
+  $('edText').value = '[\n' + bar.events.map(e => '  ' + JSON.stringify(e)).join(',\n') + '\n]';
+  editorBarId = bar.id; editorRev = bar.rev;
+}
 function closeEditor() { $('editor').hidden = true; $('edMsg').textContent = ''; editorBarId = null; editorRev = undefined; }
 function updateBarTools() {
   const s = get('song'), bar = curBar();
@@ -201,14 +205,14 @@ async function deleteNotePop() {
 export const editorState = { get saving() { return saving; }, get undo() { return undoStack.length; }, get undoBars() { return undoStack.map(u => u.barId); }, get undoRevs() { return undoStack.map(u => u.rev); }, get np() { return np; } };
 
 export function initEditor() {
-  setPlayerHooks({ editClick: queueEditClick });
+  // holdBar：小节编辑器开着时，播放光标走到别的小节也不切换侧栏（否则编辑器会关掉，没保存的内容就丢了）
+  setPlayerHooks({ editClick: queueEditClick, holdBar: () => editorBarId !== null });
   $('editBtn').onclick = () => {
     const bar = curBar();
     if (!bar) return;
     const locked = barLocked(get('ui.bar'));
     if (locked) { UI.toast(locked, 'info'); return; }
-    $('edText').value = '[\n' + bar.events.map(e => '  ' + JSON.stringify(e)).join(',\n') + '\n]';
-    editorBarId = bar.id; editorRev = bar.rev;
+    fillEditor(bar);
     $('editor').hidden = false;
     $('edText').focus();
   };
@@ -216,7 +220,12 @@ export function initEditor() {
   $('edSave').onclick = () => withBusy($('edSave'), async () => {
     let events;
     try { events = JSON.parse($('edText').value); } catch (e) { UI.toast('JSON 格式不对：' + e.message, 'err', 4000); return; }
-    if ((await putBar(editorBarId, events, editorRev, '已保存')) === 'ok') closeEditor();
+    const r = await putBar(editorBarId, events, editorRev, '已保存');
+    if (r === 'ok') closeEditor();
+    else if (r === 'conflict') { // 别处改过：换成刷新后的内容和版本，不然之后每次保存都是 409
+      const bar = get('song').bars.find(b => b.id === editorBarId);
+      if (bar) fillEditor(bar); else closeEditor();
+    }
   });
   $('reparseBtn').onclick = async () => {
     const bar = curBar();
