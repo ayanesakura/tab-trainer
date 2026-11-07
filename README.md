@@ -40,6 +40,10 @@
 
 需要 [uv](https://docs.astral.sh/uv/)。
 
+在访达里双击 `start.command`：自动安装依赖、启动服务并打开浏览器（http://127.0.0.1:8765）。关掉弹出的终端窗口就停止服务。
+
+也可以在终端里手动启动：
+
 ```bash
 uv sync
 uv run python -m app.main          # 打开 http://127.0.0.1:8765
