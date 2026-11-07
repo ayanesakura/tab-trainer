@@ -71,12 +71,14 @@ def _bak(path: Path) -> Path:
 def write_json(path: Path, data: dict, private: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
+    # private（存 API key 的配置）：建文件时就是 0600，不是写完再改（中间别人能读到）；fchmod 管上次残留的同名临时文件
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600 if private else 0o666)
+    if private:
+        os.fchmod(fd, 0o600)
+    with open(fd, "w", encoding="utf-8") as f:
         f.write(json.dumps(data, ensure_ascii=False, indent=1))
         f.flush()
         os.fsync(f.fileno())
-    if private:
-        tmp.chmod(0o600)
     if path.exists():
         os.replace(path, _bak(path))  # 上一版留作备份；这两次改名之间崩溃的话，读取时会用备份
     os.replace(tmp, path)

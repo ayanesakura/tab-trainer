@@ -100,6 +100,22 @@ def test_corrupt_config_is_set_aside(data_dir):
     assert store.load_config() == {"api_key": "sk-3"}
 
 
+def test_private_file_is_never_readable_by_others_while_written(data_dir, monkeypatch):
+    """存 API key 的配置：临时文件一建出来就是 0600，不是写完内容才改权限（中间别人能读到 key）。"""
+    import os
+
+    seen = []
+    real = os.fsync
+
+    def fsync(fd):
+        seen.extend(oct(p.stat().st_mode & 0o777) for p in store.DATA.glob(".config.json.*.tmp"))
+        real(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    store.save_config({"api_key": "sk-1"})
+    assert seen == ["0o600"]
+
+
 def test_second_instance_cannot_lock_the_same_data_dir(data_dir):
     assert store.lock_data_dir()
     code = (
