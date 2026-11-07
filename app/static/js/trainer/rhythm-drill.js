@@ -244,7 +244,8 @@ function autoSpeed(score) {
   if (RH.streak >= every && p.bpm < target && step > 0) {
     RH.streak = 0;
     setTempo(Math.min(target, p.bpm + step));
-    UI.toast(`连续 ${every} 遍 90 分以上，下一遍提速到 ${get('play.bpm')} BPM`);
+    // 打分时下一遍已经开始了（提前排好的），新速度从它之后的那一遍起生效
+    UI.toast(`连续 ${every} 遍 90 分以上，这一遍结束后提速到 ${get('play.bpm')} BPM`);
   }
 }
 function finishCalib(L) {
