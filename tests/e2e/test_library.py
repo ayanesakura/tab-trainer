@@ -289,3 +289,17 @@ def test_practice_line_escapes_backend_text(server, browser):
     assert evil in b.js(f"{row}.querySelector('.practice').textContent")
     assert not b.js("window.__xss")
     assert not b.errors, b.errors
+
+
+def test_enter_while_composing_does_not_submit(server, browser):
+    # 输入法选词时按回车只是确认候选词，不能提交（曲名、API key）
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for("!!document.getElementById('title')")
+    b.js("""window.__clicks = [];
+      for (const id of ['uploadBtn', 'saveKey']) document.getElementById(id).click = () => window.__clicks.push(id);
+      for (const id of ['title', 'apiKey']) for (const isComposing of [true, false])
+        document.getElementById(id).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing, bubbles: true }));
+      true""")
+    assert b.js("window.__clicks") == ["uploadBtn", "saveKey"]
+    assert not b.errors, b.errors

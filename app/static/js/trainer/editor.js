@@ -244,7 +244,7 @@ export function initEditor() {
     renderNotePop();
   };
   $('npFret').addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); saveNotePop(); }
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); saveNotePop(); }
   });
   $('score').addEventListener('mousedown', e => { pointer.x = e.clientX; pointer.y = e.clientY; }, true);
   document.addEventListener('keydown', e => {

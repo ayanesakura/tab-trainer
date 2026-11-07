@@ -55,7 +55,7 @@ $('uploadBtn').onclick = () => api.withBusy($('uploadBtn'), async () => {
     toast(e.message, 'err', 4000);
   }
 });
-$('title').onkeydown = e => { if (e.key === 'Enter') $('uploadBtn').click(); };
+$('title').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) $('uploadBtn').click(); }; // 输入法选词时的回车不算
 
 // ---------------- 曲子包 ----------------
 async function importBundles(files) {
@@ -525,7 +525,7 @@ $('saveKey').onclick = () => api.withBusy($('saveKey'), async () => {
   $('apiKey').value = '';
   await save({ api_key: k }, 'API key 已保存');
 });
-$('apiKey').onkeydown = e => { if (e.key === 'Enter') $('saveKey').click(); };
+$('apiKey').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) $('saveKey').click(); };
 $('clearKey').onclick = async () => {
   if (await UI.confirm('清除后识别原谱前要重新填写。', { title: '清除已保存的 API key？', ok: '清除', danger: true })) save({ clear_api_key: true }, '已清除');
 };
