@@ -18,7 +18,7 @@ from PIL import Image, ImageOps
 
 from app import ocr, store
 from app.layout import detect_page
-from app.llm import TECHS, Claude, LLMConfig, LLMError
+from app.llm import TECHS, Claude, LLMConfig, LLMError, request_id_of
 
 log = logging.getLogger("tab_trainer.pipeline")
 
@@ -315,7 +315,7 @@ def import_failed(sid: str, error: str) -> dict:
         if s.get("kind") != "score":
             raise ValueError("只有 Guitar Pro / MusicXML 曲子会这样报错")
         if s.get("bars"):  # 之前已经成功解析过：一次临时的加载错误不代表文件坏了
-            log.info("request_id=none song=%s import error ignored (already parsed): %s", sid, error)
+            log.info("song=%s import error ignored (already parsed): %s", sid, error)
             return
         s.update(status="error", error=(str(error or "").strip() or "曲谱文件无法读取")[:300])
 
@@ -715,7 +715,7 @@ def _transcribe_system(
         try:
             ocr_bars = ocr.read_system(np.asarray(img.convert("L")), lines, spans)
         except Exception as e:  # noqa: BLE001 - 校对只是锦上添花，出错就跳过
-            log.warning("request_id=none song=%s system=%d ocr failed: %s", sid, si, e)
+            log.warning("song=%s system=%d ocr failed: %s", sid, si, e)
     labeled = bool(lines and LABEL_STRINGS)
     if labeled:
         img = _label_strings(img, lines, spans[0][0])
@@ -774,7 +774,7 @@ def _transcribe_system(
 
     raw, bars, issues = run()
     if issues:
-        log.info("request_id=unknown song=%s system=%d retry: %s", sid, si, issues)
+        log.info("request_id=%s song=%s system=%d retry: %s", claude.last_request_id, sid, si, issues)
         _raw2, bars2, issues2 = run(previous=raw, problems=issues)
         if len(issues2) <= len(issues):
             bars, issues = bars2, issues2
@@ -817,7 +817,8 @@ def _run_parse_safe(sid: str, cancel: threading.Event) -> None:
     except Cancelled:
         _set(sid, status="cancelled", error="识别已取消，已完成的行会保留。")
     except Exception as e:
-        log.exception("request_id=unknown song=%s parse failed", sid)
+        rid = request_id_of(e)
+        log.exception("request_id=%s song=%s parse failed", rid, sid)
         _set(sid, status="error", error=_friendly(e))
     finally:
         jobs.release(sid)
@@ -878,7 +879,8 @@ def _run_parse(sid: str, cancel: threading.Event | None = None) -> None:
             except (Cancelled, CancelledError):
                 bars, status, err = [], "error", "已取消"
             except Exception as e:
-                log.exception("request_id=unknown song=%s system=%d failed", sid, i)
+                rid = request_id_of(e)
+                log.exception("request_id=%s song=%s system=%d failed", rid, sid, i)
                 bars, status, err = [], "error", _friendly(e)
                 errors.append(f"第 {i + 1} 行：{err}")
 
@@ -908,7 +910,7 @@ def _run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     try:
         plan = claude.practice_plan(song["meta"], song["bars"])
     except Exception as e:  # noqa: BLE001 - 练习建议失败不影响使用
-        log.warning("request_id=unknown song=%s practice plan failed: %s", sid, e)
+        log.warning("request_id=%s song=%s practice plan failed: %s", request_id_of(e), sid, e)
         plan = None
     _set(
         sid,
@@ -1015,7 +1017,8 @@ def start_explain(sid: str) -> None:
         except Cancelled:
             end("讲解生成已取消，已完成的部分会保留。")
         except Exception as e:
-            log.exception("request_id=unknown song=%s explain failed", sid)
+            rid = request_id_of(e)
+            log.exception("request_id=%s song=%s explain failed", rid, sid)
             end("生成讲解失败：" + _friendly(e))
         finally:
             jobs.release(sid)
@@ -1039,7 +1042,8 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
         try:
             reparse_system(sid, si, hint, cancel)
         except Exception as e:
-            log.exception("request_id=unknown song=%s system=%d reparse failed", sid, si)
+            rid = request_id_of(e)
+            log.exception("request_id=%s song=%s system=%d reparse failed", rid, sid, si)
             msg = "已取消" if isinstance(e, Cancelled) else _friendly(e)
             store.update(sid, lambda x: x["systems"][si].update(status="error", error=msg))
         finally:

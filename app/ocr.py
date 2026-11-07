@@ -74,7 +74,7 @@ def _recognizer() -> _Recognizer | None:
     try:
         return _Recognizer()
     except Exception as e:  # noqa: BLE001 - 缺依赖 / 模型文件时整个校对功能关闭，不影响识别
-        log.warning("request_id=none 本地数字识别不可用：%s", e)
+        log.warning("本地数字识别不可用：%s", e)
         return None
 
 

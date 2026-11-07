@@ -13,6 +13,7 @@ class FakeClaude:
 
     calls: ClassVar[list] = []
     tab_lines: ClassVar[list] = []
+    last_request_id = "req_fake"
 
     def __init__(self, cfg):
         self.usage = {"input_tokens": 10, "output_tokens": 20}

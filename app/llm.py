@@ -38,7 +38,18 @@ class LLMConfig:
 
 
 class LLMError(RuntimeError):
-    pass
+    def __init__(self, msg: str, request_id: str | None = None):
+        super().__init__(msg)
+        self.request_id = request_id
+
+
+def request_id_of(e: BaseException | None) -> str:
+    """异常对应的请求 ID（API 报错、拒绝、截断都有），用来写日志；拿不到就是 none。"""
+    rid = getattr(e, "request_id", None)
+    if not rid:
+        resp = getattr(e, "response", None)
+        rid = getattr(resp, "headers", {}).get("request-id") if resp is not None else None
+    return rid or "none"
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +252,7 @@ class Claude:
         )
         # 同一个客户端会被识别的几个线程同时用：用量累加和兜底开关都要加锁
         self._lock = threading.Lock()
+        self._local = threading.local()  # 每个线程最近一次请求的 ID（识别是几个线程同时跑的）
         self.use_fallbacks = True
         self.usage = {"input_tokens": 0, "output_tokens": 0}
 
@@ -261,25 +273,31 @@ class Claude:
         except anthropic.BadRequestError as e:
             # 代理或旧模型可能不认识 fallbacks 参数：去掉后重试一次（看的是这次请求自己有没有带）
             if used_fallbacks and "fallback" in str(e).lower():
-                log.warning("request_id=unknown fallbacks rejected, retrying without: %s", e)
+                log.warning("request_id=%s fallbacks rejected, retrying without: %s", request_id_of(e), e)
                 with self._lock:
                     self.use_fallbacks = False
                 msg = self._stream(kwargs, fallbacks=False)
             else:
                 raise
-        rid = getattr(msg, "_request_id", None) or "unknown"
+        rid = getattr(msg, "_request_id", None) or "none"
+        self._local.request_id = rid
         with self._lock:
             self.usage["input_tokens"] += msg.usage.input_tokens or 0
             self.usage["output_tokens"] += msg.usage.output_tokens or 0
         if msg.stop_reason == "refusal":
-            raise LLMError(f"模型拒绝了这次请求（request_id={rid}）")
+            raise LLMError(f"模型拒绝了这次请求（request_id={rid}）", rid)
         if msg.stop_reason == "max_tokens":
-            raise LLMError(f"输出超出长度上限，被截断（request_id={rid}）")
+            raise LLMError(f"输出超出长度上限，被截断（request_id={rid}）", rid)
         text = next((b.text for b in msg.content if b.type == "text"), "")
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            raise LLMError(f"模型返回的不是合法 JSON（request_id={rid}）：{e}") from e
+            raise LLMError(f"模型返回的不是合法 JSON（request_id={rid}）：{e}", rid) from e
+
+    @property
+    def last_request_id(self) -> str:
+        """这个线程最近一次成功请求的 ID。"""
+        return getattr(self._local, "request_id", "none")
 
     def _stream(self, kwargs: dict, fallbacks: bool | None = None):
         if self.use_fallbacks if fallbacks is None else fallbacks:
