@@ -270,7 +270,8 @@ def detect_page(img: Image.Image) -> dict:
             first = staves[ti - 1]
 
         ys = [round(y) for y in tab]
-        on = np.stack([dark[max(0, y - 1) : y + 2].any(0) for y in ys]).sum(0) >= 4
+        lines_dark = g < 215  # 谱线可能很浅（见 _staff_lines）
+        on = np.stack([lines_dark[max(0, y - 1) : y + 2].any(0) for y in ys]).sum(0) >= 4
         for x0, x1 in _segments(on, sp, sp * 6):
             if _chord_diagrams(dark, tab, sp, x0, x1):
                 continue
