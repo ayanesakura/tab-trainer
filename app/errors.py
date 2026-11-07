@@ -1,4 +1,5 @@
 """业务错误：消息是给用户看的中文说明，接口按 status 返回对应的 HTTP 状态码（见 main.py 的异常处理）。
+模型调用的错误 llm.LLMError 也是 AppError（Upstream）。
 
 各类同时继承对应的内置异常（ValueError / LookupError / RuntimeError），内部按内置类型捕获的地方照常工作。
 """
@@ -19,6 +20,9 @@ class Invalid(AppError, ValueError):
 class NotFound(AppError, LookupError):
     status = 404
 
+    def __init__(self, msg: str = "曲子不存在"):
+        super().__init__(msg)
+
 
 class BarNotFound(NotFound):
     """按 id 找不到小节：小节可能刚被重新识别，id 都变了。"""
@@ -38,3 +42,22 @@ class Upstream(AppError, RuntimeError):
     """模型服务出错或没给出可用结果。"""
 
     status = 502
+
+
+class Conflict(AppError, RuntimeError):
+    """请求和曲子当前的状态对不上（别处已经改过、没有可以取消的任务）。"""
+
+    status = 409
+
+
+STALE_REV = "曲子在别处改过了，已刷新，请再改一次"
+
+
+class CorruptSong(AppError, ValueError):
+    """song.json 和备份都读不出来。"""
+
+    status = 500
+
+    def __init__(self, song_id: str, reason: str):
+        super().__init__(f"曲子数据损坏，无法读取：{reason}")
+        self.song_id = song_id

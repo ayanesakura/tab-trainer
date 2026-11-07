@@ -5,16 +5,24 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import uuid
 from fractions import Fraction
+from pathlib import Path
 
 from app.errors import Invalid
 
+# 前后端共用的词表（app/static/js/vocab.json）：乐器、技巧、反复记号、节奏网格、警告代码
+VOCAB = json.loads((Path(__file__).parent / "static" / "js" / "vocab.json").read_text(encoding="utf-8"))
+INSTRUMENT = VOCAB["instrument"]
+STRINGS: int = INSTRUMENT["strings"]
+MAX_FRET: int = INSTRUMENT["max_fret_written"]  # 数据里接受的最高品（泛音节点、加长指板）
 # 演奏技巧代号（模型输出的 schema、前端和 alphaTex 转换都用这一套）
-TECHS = ["h", "p", "sl", "si", "pm", "nh", "ah", "roll", "x", "vib", "bend"]
-STANDARD = ["E4", "B3", "G3", "D3", "A2", "E2"]
+TECHS = [t["code"] for t in VOCAB["techs"]]
+STANDARD = list(INSTRUMENT["standard_tuning"])
+WARN_CODES: dict[str, str] = dict(VOCAB["warn_codes"])
 _NOTE = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 _NOTE_RE = re.compile(r"^\s*([A-Ga-g])\s*([#♯b♭]?)\s*(-?\d)?\s*$")
 _NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -41,12 +49,24 @@ def midi_to_name(m: int) -> str:
     return f"{_NAMES[m % 12]}{m // 12 - 1}"
 
 
+def tuning_midi(tuning: list[str]) -> list[int]:
+    """音名（带八度，normalize_meta 整理过的）→ MIDI 音高。读不懂的弦按标准调弦。"""
+    out = []
+    for i, name in enumerate(tuning):
+        std = note_to_midi(STANDARD[i]) if i < len(STANDARD) else 40
+        try:
+            out.append(note_to_midi(str(name), near=std))
+        except ValueError:
+            out.append(std)
+    return out
+
+
 def normalize_meta(raw: dict, fallback_title: str = "", strict: bool = False) -> dict:
     """整理谱头信息。模型的输出宽松处理（读不懂就退回默认值）；strict=True 用于用户手工修改，格式不对直接报错。"""
     tuning = list(raw.get("tuning") or [])
-    if len(tuning) != 6:
+    if len(tuning) != STRINGS:
         if strict:
-            raise Invalid("调弦需要 6 根弦的音名")
+            raise Invalid(f"调弦需要 {STRINGS} 根弦的音名")
         tuning = STANDARD
     midis = []
     for i, n in enumerate(tuning):
@@ -69,8 +89,6 @@ def normalize_meta(raw: dict, fallback_title: str = "", strict: bool = False) ->
         if strict:
             raise Invalid("变调夹应为 0–12 的整数") from None
         capo = 0
-    if strict and not 0 <= capo <= 12:
-        raise Invalid("变调夹应为 0–12 的整数")
     try:
         tempo = max(0, int(raw.get("tempo") or 0))
     except (TypeError, ValueError):
@@ -138,10 +156,10 @@ def clean_events(events) -> list[dict]:
                 tech = [t for t in (n.get("tech") or []) if t in TECHS]
             except (KeyError, TypeError, ValueError, AttributeError):
                 raise Invalid(f"第 {i} 个事件里有音符格式不对（需要 string、fret）") from None
-            if not 1 <= st <= 6:
-                raise Invalid(f"第 {i} 个事件：弦号 {st} 超出 1–6")
-            if not 0 <= fr <= 30:
-                raise Invalid(f"第 {i} 个事件：品数 {fr} 超出 0–30")
+            if not 1 <= st <= STRINGS:
+                raise Invalid(f"第 {i} 个事件：弦号 {st} 超出 1–{STRINGS}")
+            if not 0 <= fr <= MAX_FRET:
+                raise Invalid(f"第 {i} 个事件：品数 {fr} 超出 0–{MAX_FRET}")
             if not math.isfinite(bend) or not 0 <= bend <= 4:
                 raise Invalid(f"第 {i} 个事件：推弦幅度 {bend} 不合理（0–4 个半音）")
             notes.append(
@@ -149,7 +167,7 @@ def clean_events(events) -> list[dict]:
                     "string": st,
                     "fret": fr,
                     "tech": tech,
-                    "grace": grace if 0 <= grace <= 30 else -1,
+                    "grace": grace if 0 <= grace <= MAX_FRET else -1,
                     "bend": bend,
                 }
             )
@@ -157,12 +175,12 @@ def clean_events(events) -> list[dict]:
     return out
 
 
-# 反复和跳转记号（名字和 alphaTex 的 \jump 一致）。播放时 alphaTab 会按它们跳转。
-DIRECTIONS = (
-    "fine", "segno", "segnosegno", "coda", "doublecoda", "dacapo", "dacapoalcoda", "dacapoaldoublecoda",
-    "dacapoalfine", "dalsegno", "dalsegnoalcoda", "dalsegnoaldoublecoda", "dalsegnoalfine", "dalsegnosegno",
-    "dalsegnosegnoalcoda", "dalsegnosegnoaldoublecoda", "dalsegnosegnoalfine", "dacoda", "dadoublecoda",
-)  # fmt: skip
+# 反复和跳转记号（名字和 alphaTex 的 \jump 一致，顺序 = alphaTab 的 Direction 枚举）。播放时 alphaTab 会按它们跳转。
+DIRECTIONS = tuple(d["code"] for d in VOCAB["directions"])
+# 模型提示词里允许的子集（llm.py 的 schema 用），按 prompt_order 排（和以前写死的顺序一致，schema 逐字不变）
+PROMPT_DIRECTIONS = [
+    d["code"] for d in sorted((d for d in VOCAB["directions"] if d["prompt"]), key=lambda d: d["prompt_order"])
+]
 
 
 def clean_repeats(b: dict) -> dict:
@@ -197,10 +215,46 @@ def new_bar_id() -> str:
     return uuid.uuid4().hex[:10]
 
 
-GRID = Fraction(1, 48)  # 播放器能精确写出的最小时值单位（四分音符的 1/48：64 分音符和 64 分三连音的公约数）
+# 播放器能精确写出的最小时值单位（四分音符的 1/48：64 分音符和 64 分三连音的公约数）
+GRID = Fraction(VOCAB["grid_ticks"], VOCAB["ticks_per_quarter"])
+
+# 小节警告：{"code", "msg"}，code 取自 vocab.warn_codes。这些是按小节内容算出来的（读取时重算，不存盘）；
+# 其他（OCR 不一致、导入失败说明）是识别 / 导入时留下的，存盘。
+DERIVED_WARNS = frozenset({"length", "off_grid", "string_range", "empty", "placeholder"})
+PLACEHOLDER_MSG = "没有识别出可用的音符，暂按整小节休止处理"
 
 
-LENGTH_WARN = "时值合计"  # check_bar 里时值合计不对的那条提示的开头
+def warn(code: str, msg: str) -> dict:
+    assert code in WARN_CODES, code
+    return {"code": code, "msg": msg}
+
+
+def warn_code_of(w) -> str:
+    """警告的 code。旧数据（和旧评测报告）里警告是一句话，按开头的文字认出来，认不出的算 other。"""
+    if isinstance(w, dict):
+        return w.get("code") if w.get("code") in WARN_CODES else "other"
+    text = str(w)
+    if text.startswith("时值合计"):
+        return "length"
+    if "网格" in text:
+        return "off_grid"
+    if text.startswith("本地数字识别"):
+        return "ocr_mismatch"
+    if text.startswith("没有识别出可用的音符"):
+        return "placeholder"
+    if text.startswith(("弦号", "品数")):
+        return "string_range"
+    if text.startswith("没有任何音符"):
+        return "empty"
+    return "other"
+
+
+def as_warn(w) -> dict:
+    """旧格式（字符串）或新格式的警告 → {"code", "msg"}。"""
+    if isinstance(w, dict) and w.get("code") in WARN_CODES:
+        return {"code": w["code"], "msg": str(w.get("msg") or WARN_CODES[w["code"]])}
+    msg = w.get("msg", "") if isinstance(w, dict) else w
+    return {"code": warn_code_of(w), "msg": str(msg)}
 
 
 def apply_time_signatures(bars: list[dict], meta: dict) -> None:
@@ -221,31 +275,44 @@ def apply_time_signatures(bars: list[dict], meta: dict) -> None:
 
 def refresh_length_warn(bar: dict, meta: dict) -> None:
     """只重算“时值合计”这一条提示（OCR 不一致之类的其他提示保留）。"""
-    keep = [w for w in bar.get("warn") or [] if not w.startswith(LENGTH_WARN)]
-    length = [p for p in check_bar(bar["events"], meta, bar=bar) if p.startswith(LENGTH_WARN)]
+    keep = [w for w in bar.get("warn") or [] if warn_code_of(w) != "length"]
+    length = [p for p in check_bar(bar["events"], meta, bar=bar) if p["code"] == "length"]
     bar["warn"] = length + keep
 
 
-def check_bar(events: list[dict], meta: dict, info: bool = True, bar: dict | None = None) -> list[str]:
-    """小节的问题（显示在练习页）。info=False 时只返回需要模型返修的问题：
+def derive_warns(bar: dict, meta: dict) -> None:
+    """重算小节上按内容算出来的警告（时值、网格、弦品范围、占位），保留识别时留下的（OCR 不一致等）。"""
+    kept = [as_warn(w) for w in bar.get("warn") or []]
+    kept = [w for w in kept if w["code"] not in DERIVED_WARNS]
+    derived = check_bar(bar["events"], meta, bar=bar) if bar.get("events") is not None else []
+    if bar.get("placeholder"):
+        derived.append(warn("placeholder", PLACEHOLDER_MSG))
+    bar["warn"] = derived + kept
+
+
+def check_bar(events: list[dict], meta: dict, info: bool = True, bar: dict | None = None) -> list[dict]:
+    """小节的问题（显示在练习页），[{"code", "msg"}]。info=False 时只返回需要模型返修的问题：
     时值不在播放网格上（五连音之类）只是提醒，读对了也会有，不能拿去让模型“改”。
     bar 给出时按它自己的拍号（如果有）算小节长度。"""
     problems = []
     total = sum((parse_dur(e["dur"]) for e in events), Fraction(0))
     want = bar_length(meta, bar)
     if total != want:
-        problems.append(f"{LENGTH_WARN} {float(total):g} 拍，应为 {float(want):g} 拍")
+        problems.append(warn("length", f"时值合计 {float(total):g} 拍，应为 {float(want):g} 拍"))
     odd = sorted({e["dur"] for e in events if (parse_dur(e["dur"]) / GRID).denominator != 1}, key=parse_dur)
     if odd and info:
         problems.append(
-            f"时值 {'、'.join(odd)} 拍不在播放器支持的节奏网格上（支持到 64 分音符和三连音、六连音，五连音、七连音这类不支持），播放时按最接近的位置近似"
+            warn(
+                "off_grid",
+                f"时值 {'、'.join(odd)} 拍不在播放器支持的节奏网格上（支持到 64 分音符和三连音、六连音，五连音、七连音这类不支持），播放时按最接近的位置近似",
+            )
         )
     for e in events:
         for n in e["notes"]:
-            if not 1 <= n["string"] <= 6:
-                problems.append(f"弦号 {n['string']} 超出 1–6")
-            if not 0 <= n["fret"] <= 30:
-                problems.append(f"品数 {n['fret']} 不合理")
+            if not 1 <= n["string"] <= STRINGS:
+                problems.append(warn("string_range", f"弦号 {n['string']} 超出 1–{STRINGS}"))
+            if not 0 <= n["fret"] <= MAX_FRET:
+                problems.append(warn("string_range", f"品数 {n['fret']} 不合理"))
     if not events:
-        problems.append("没有任何音符")
+        problems.append(warn("empty", "没有任何音符"))
     return problems
