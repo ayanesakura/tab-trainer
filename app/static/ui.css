@@ -35,6 +35,8 @@
   --ctl-fg: #63636b;
   --line: #e3e3e8;
   --line-2: #ececf0;
+  --line-strong: #c9c9d1; /* 输入框边框：比 --line 深，看得出是控件 */
+  --switch-off: #92929c; /* 开关关闭时的轨道（卡片底上约 3:1） */
   --fg: #1c1c21;
   --fg-2: #4b4b53;
   --muted: #6e6e76; /* 白底上约 5:1 */
@@ -85,6 +87,8 @@
   --ctl-fg: #a1a1aa;
   --line: #333339;
   --line-2: #2c2c32;
+  --line-strong: #55555d;
+  --switch-off: #72727c;
   --fg: #ededf1;
   --fg-2: #b9b9c1;
   --muted: #9a9aa3;
@@ -211,7 +215,7 @@ code, kbd { font: var(--fs-1) var(--code); background: var(--pill); border-radiu
 .icon-btn.sm { width: 26px; height: 26px; }
 
 /* ---- 输入 ---- */
-.input { height: 30px; padding: 0 10px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--card); color: var(--fg); font-size: var(--fs-2); min-width: 0; transition: border-color .15s, box-shadow .15s; }
+.input { height: 30px; padding: 0 10px; border-radius: var(--r-md); border: 1px solid var(--line-strong); background: var(--card); color: var(--fg); font-size: var(--fs-2); min-width: 0; transition: border-color .15s, box-shadow .15s; }
 .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .input::placeholder { color: var(--placeholder); }
 .input.num { width: 58px; text-align: center; font-variant-numeric: tabular-nums; padding: 0 var(--sp-1); }
@@ -219,7 +223,7 @@ textarea.input { height: auto; padding: var(--sp-2) 10px; font: var(--fs-1)/1.55
 
 /* 开关 */
 .switch { display: inline-flex; align-items: center; gap: var(--sp-2); cursor: pointer; font-size: var(--fs-2); color: var(--fg-2); user-select: none; }
-.switch input { appearance: none; -webkit-appearance: none; width: 30px; height: 18px; border-radius: 9px; background: var(--faint); position: relative; cursor: pointer; transition: background .2s var(--ease); flex: none; }
+.switch input { appearance: none; -webkit-appearance: none; width: 30px; height: 18px; border-radius: 9px; background: var(--switch-off); position: relative; cursor: pointer; transition: background .2s var(--ease); flex: none; }
 .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--knob); box-shadow: var(--knob-shadow); transition: transform .22s var(--ease); }
 .switch input:checked { background: var(--accent); }
 .switch input:checked::after { transform: translateX(12px); }
