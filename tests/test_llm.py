@@ -67,3 +67,60 @@ def test_request_ids_reach_errors_and_logs(monkeypatch):
     except LLMError as e:
         assert request_id_of(e) == "req_no" and "req_no" in str(e)
     assert request_id_of(ValueError("x")) == "none"
+
+
+def _status_error(status, body):
+    import anthropic
+    import httpx
+
+    req = httpx.Request("POST", "http://127.0.0.1:3425/v1/messages")
+    return anthropic.APIStatusError("x", response=httpx.Response(status, request=req, json=body), body=body)
+
+
+def test_transient_mid_stream_errors_are_retried(monkeypatch):
+    """回复传到一半网关断线（流里的 api_error，状态码 200）：重试，不让整行识别失败。"""
+    from types import SimpleNamespace
+
+    from app import llm
+
+    monkeypatch.setattr(llm, "STREAM_RETRY_WAIT", 0)
+    c = Claude(LLMConfig(api_key="sk-test"))
+    msg = SimpleNamespace(
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+        stop_reason="end_turn",
+        content=[SimpleNamespace(type="text", text='{"ok": 1}')],
+    )
+    lost = {"type": "error", "error": {"type": "api_error", "message": "connection lost mid-reply"}}
+    fails = [_status_error(200, lost), _status_error(529, {"error": {"type": "overloaded_error"}})]
+
+    def stream_once(kwargs, fallbacks=None):
+        if fails:
+            raise fails.pop(0)
+        return msg
+
+    monkeypatch.setattr(c, "_stream_once", stream_once)
+    assert c._call([], {}) == {"ok": 1} and not fails
+
+    # 一直断：重试两次后放弃；权限错误之类不重试
+    calls = []
+
+    def always(err):
+        def f(kwargs, fallbacks=None):
+            calls.append(1)
+            raise err
+
+        return f
+
+    monkeypatch.setattr(c, "_stream_once", always(_status_error(200, lost)))
+    import anthropic
+
+    with pytest.raises(anthropic.APIStatusError):
+        c._call([], {})
+    assert len(calls) == 3
+    calls.clear()
+    monkeypatch.setattr(
+        c, "_stream_once", always(_status_error(403, {"error": {"type": "permission_error"}}))
+    )
+    with pytest.raises(anthropic.APIStatusError):
+        c._call([], {})
+    assert len(calls) == 1
