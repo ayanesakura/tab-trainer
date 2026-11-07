@@ -184,3 +184,47 @@ def test_rename_before_the_header_is_read(data_dir):
     assert not store.load(sid)["meta"]
     songs.edit_meta(sid, {"title": "新名字"})
     assert next(r for r in views.list_library() if r["id"] == sid)["title"] == "新名字"
+
+
+def test_edit_just_before_the_new_page_ts_rerun_is_not_overwritten(data_dir, sync_jobs, monkeypatch):
+    """补页后按变拍号重做的行：挑行和锁住在同一次 store.update 里（同整首识别的 begin_redo），
+    用户在第一遍识别完、锁住之前改了那一行，也不会被重做覆盖。"""
+    calls = []
+
+    def transcribe(self, img, meta, first_bar, spans, start_ts=None, **kw):
+        calls.append((first_bar, start_ts))
+        new_page_row1 = first_bar == 7  # 新页第一行开头写着 3/4，后面的行并行识别时看不到
+        beats = 3 if new_page_row1 or start_ts == [3, 4] else 4
+        bars = [
+            {
+                "time_signature": [3, 4] if new_page_row1 and i == 0 else [],
+                "events": [{"dur": "1", "notes": [{"string": 1, "fret": i}]} for _ in range(beats)],
+                "tip": "",
+                "uncertain": "",
+            }
+            for i in range(len(spans))
+        ]
+        return {"bars": bars}
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("a.png", score_png())])
+    recognize.run_parse(sid)
+    real_load = store.load
+    edited = []
+
+    def load(song_id):
+        song = real_load(song_id)
+        systems = song["systems"]
+        if not edited and len(systems) == 4 and all(x["status"] == "done" for x in systems):
+            bar = next(b for b in song["bars"] if b["system"] == 3)  # 第一遍刚识别完，用户改了新页第二行
+            edited.append(bar["id"])
+            songs.edit_bar(song_id, bar["id"], [{"dur": "4", "notes": [{"string": 2, "fret": 9}]}], None)
+        return song
+
+    monkeypatch.setattr(store, "load", load)
+    recognize.arrange_pages(sid, ["p1.png", "new:0"], [("c.png", score_png())])
+    song = real_load(sid)
+    bar = next(b for b in song["bars"] if b["id"] == edited[0])
+    assert bar["edited"] and bar["events"][0]["notes"][0]["fret"] == 9
+    assert [ts for fb, ts in calls if fb == 10] == [[4, 4]]  # 新页第二行没有重做
+    assert all(s["status"] == "done" for s in song["systems"])

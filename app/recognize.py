@@ -835,16 +835,27 @@ def _recognize_new_rows(sid: str, rows: list[int], cancel: threading.Event) -> N
         claude = config.new_llm()
         charged.update(claude.usage)
         used = run_batch([(si, None) for si in rows])
+
         # 新页上前面的行写了变拍号、后面的行并行识别时看不到：按实际的起始拍号再识别一次
-        song = store.load(sid)
-        redo = [
-            (si, ts)
-            for si, ts in ((si, _row_start_ts(song["bars"], song["meta"], si)) for si in used)
-            if ts != used[si] and not any(b.get("edited") for b in song["bars"] if b["system"] == si)
-        ]
+        def rows_to_redo(s):
+            return [
+                (si, ts)
+                for si, ts in ((si, _row_start_ts(s["bars"], s["meta"], si)) for si in used)
+                if ts != used[si] and not any(b.get("edited") for b in s["bars"] if b["system"] == si)
+            ]
+
+        redo = rows_to_redo(store.load(sid))  # 先看一眼：没有要重做的就不写
+
+        def begin_redo(s):
+            # 挑出要重做的行和把它们锁住在同一次读-改-写里：中间用户改了的行不会被重做覆盖
+            redo[:] = rows_to_redo(s)
+            for si, _ in redo:
+                s["systems"][si].update(status="parsing")
+
         if redo and not cancel.is_set():
-            store.update(sid, lambda s: [s["systems"][si].update(status="parsing") for si, _ in redo])
-            run_batch(redo)
+            store.update(sid, begin_redo)
+            if redo:
+                run_batch(redo)
     except Exception as e:  # 建客户端失败之类：没开始的行都标成失败
         rid = request_id_of(e)
         log.exception("request_id=%s song=%s new pages failed", rid, sid)
