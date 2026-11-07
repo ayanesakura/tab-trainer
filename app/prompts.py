@@ -175,11 +175,7 @@ def bar_text(b: dict) -> str:
     """一个小节的文字版：'第N小节: <时值>拍 <音> | ...'，给只发文字的调用用。"""
     ts = b.get("time_signature")  # 只有和全曲拍号不同的小节才有
     head = f"第{b['n']}小节" + (f"（{ts[0]}/{ts[1]} 拍）" if ts else "")
-    return (
-        head
-        + ": "
-        + " | ".join(_event_text(e) for e in b["events"])
-    )
+    return head + ": " + " | ".join(_event_text(e) for e in b["events"])
 
 
 NOTATION_KEY = (

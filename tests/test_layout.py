@@ -228,3 +228,25 @@ def test_barline_touched_by_a_slur_is_still_a_barline():
 @pytest.mark.parametrize("size", [(1, 1), (5, 400), (400, 3)])
 def test_tiny_images_have_no_systems(size):
     assert detect_page(Image.new("RGB", size, "white"))["systems"] == []
+
+
+def test_first_row_crop_includes_chord_diagrams_above_a_tab_only_row():
+    """弹唱谱：没有五线谱，每行上方是和弦名和和弦图。第一行也要把它们裁进来（否则模型看不到和弦，只能瞎猜）；
+    再往上隔着一大段空白的曲名不要。"""
+    img = Image.new("L", (1200, 700), 255)
+    d = ImageDraw.Draw(img)
+    d.text((500, 40), "TITLE", fill=0)  # 曲名：离谱面很远
+    tab_top = 300
+    for i in range(6):
+        d.line([(60, tab_top + i * 14), (1140, tab_top + i * 14)], fill=170)
+    for x in (60, 600, 1140):
+        d.line([(x, tab_top), (x, tab_top + 70)], fill=40, width=2)
+    for k in range(4):  # 和弦图：名字 + 小格子，底边离 1 弦 25 像素，顶上的名字在 1 弦上方约 110 像素
+        x = 100 + k * 250
+        d.text((x + 10, tab_top - 112), "Em", fill=0)
+        for i in range(6):
+            d.line([(x, tab_top - 90 + i * 12), (x + 50, tab_top - 90 + i * 12)], fill=0)
+    r = detect_page(img)
+    assert len(r["systems"]) == 1
+    top = r["systems"][0]["top"]
+    assert tab_top - 125 <= top <= tab_top - 110 and top > 60

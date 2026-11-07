@@ -184,6 +184,23 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
     return False
 
 
+def _content_above(dark: np.ndarray, first_top: float, x0: int, x1: int, sp: float) -> float:
+    """一栏的第一行：上方紧挨着的标记（弹唱谱的和弦名和和弦图、速度、反复记号）也要裁进来。
+    从谱线往上一块一块地找有墨迹的行，块之间的空白不到 3 个线距就算连着，最多往上 12 个线距；
+    再往上隔着一大段空白的（曲名、作词作曲）不要。"""
+    rows = dark[:, max(0, x0) : x1 + 1].any(1)
+    limit = max(0, int(first_top - sp * 12))
+    top, gap = first_top, 0
+    for y in range(int(first_top) - 1, limit - 1, -1):
+        if rows[y]:
+            top, gap = y, 0
+        else:
+            gap += 1
+            if gap > sp * 3:
+                break
+    return top - sp * 0.5
+
+
 def _trim(group: list[float]) -> list[float]:
     """一组超过 6 根“线”：多出来的通常是贴着谱表的虚线标记（let ring、P.M. 的延续线）。
     从两端去掉和中位线距差得最多的那根，直到剩 6 根。"""
@@ -273,7 +290,10 @@ def detect_page(img: Image.Image) -> dict:
         top = (
             (prev["tab_bottom"] + s_["first_top"]) / 2
             if prev
-            else s_["first_top"] - min(height * 0.6, s_["sp"] * 9)
+            else min(
+                s_["first_top"] - min(height * 0.6, s_["sp"] * 9),
+                _content_above(dark, s_["first_top"], s_["x0"], s_["x1"], s_["sp"]),
+            )
         )
         bottom = (
             (s_["tab_bottom"] + nxt["first_top"]) / 2
