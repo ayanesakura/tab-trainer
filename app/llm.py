@@ -395,17 +395,29 @@ class Claude:
         previous: dict | None = None,
         problems: list[str] | None = None,
         labeled_strings: bool = False,
+        start_ts: list[int] | None = None,
     ) -> dict:
+        """start_ts：前面的行里变过拍号时，这一行开头实际的拍号（这张图上看不到那个变拍号）。"""
         block, scale = _image_block(img, min_width=1800)
         ts = meta["time_signature"]
         bar_len = ts[0] * 4 / ts[1]
-        lines = [
-            (
-                f"Score info: tuning (string 1 -> 6) {' '.join(meta['tuning'])}; capo {meta['capo']} "
-                f"(copy fret numbers as written). Time signature at the start of the piece {ts[0]}/{ts[1]}: a bar "
-                f"lasts {bar_len:g} quarter notes unless a time-signature change is written (see below)."
-            ),
-        ]
+        info = (
+            f"Score info: tuning (string 1 -> 6) {' '.join(meta['tuning'])}; capo {meta['capo']} "
+            f"(copy fret numbers as written). "
+        )
+        if start_ts and start_ts != ts:
+            n_len = start_ts[0] * 4 / start_ts[1]
+            info += (
+                f"The piece starts in {ts[0]}/{ts[1]}, but an earlier line changed the time signature: at the start "
+                f"of this line it is {start_ts[0]}/{start_ts[1]}, so a bar lasts {n_len:g} quarter notes unless "
+                "another time-signature change is written in this image (see below)."
+            )
+        else:
+            info += (
+                f"Time signature at the start of the piece {ts[0]}/{ts[1]}: a bar lasts {bar_len:g} quarter notes "
+                "unless a time-signature change is written (see below)."
+            )
+        lines = [info]
         if bar_spans:
             last = first_bar + len(bar_spans) - 1
             spans = "; ".join(

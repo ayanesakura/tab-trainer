@@ -29,7 +29,16 @@ class FakeClaude:
         }
 
     def transcribe(
-        self, img, meta, first_bar, spans, hint="", previous=None, problems=None, labeled_strings=False
+        self,
+        img,
+        meta,
+        first_bar,
+        spans,
+        hint="",
+        previous=None,
+        problems=None,
+        labeled_strings=False,
+        start_ts=None,
     ):
         FakeClaude.calls.append({"first_bar": first_bar, "retry": previous is not None, "hint": hint})
         FakeClaude.tab_lines.append((first_bar, labeled_strings))

@@ -129,7 +129,10 @@ def run(sid: str, cfg: LLMConfig, systems: list[int] | None, concurrency: int, p
     def one(si: int):
         first = by_sys[si][0]["n"] if by_sys.get(si) else 1
         try:
-            return si, recognize.transcribe_system(claude, sid, truth, si, first), None
+            # 这一行开头的拍号按标准答案给（整首识别时由前面各行的结果带过来，见 recognize.run_parse）
+            row = by_sys.get(si) or []
+            ts = (row[0].get("time_signature") if row else None) or truth["meta"]["time_signature"]
+            return si, recognize.transcribe_system(claude, sid, truth, si, first, start_ts=ts), None
         except Exception as e:  # noqa: BLE001 - 单行失败照样出报告
             return si, [], jobs.friendly(e)
 

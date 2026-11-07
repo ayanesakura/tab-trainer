@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from app import errors, jobs, recognize, songs, store
+from app import errors, jobs, music, recognize, songs, store
 from tests.fakes import FakeClaude, score_png
 
 
@@ -158,7 +158,16 @@ def test_tab_lines_are_found_and_strings_labelled(data_dir):
 
 def test_off_grid_durations_do_not_trigger_a_retry(data_dir, monkeypatch):
     def transcribe(
-        self, img, meta, first_bar, spans, hint="", previous=None, problems=None, labeled_strings=False
+        self,
+        img,
+        meta,
+        first_bar,
+        spans,
+        hint="",
+        previous=None,
+        problems=None,
+        labeled_strings=False,
+        start_ts=None,
     ):
         FakeClaude.calls.append({"first_bar": first_bar, "retry": previous is not None})
         quint = [
@@ -299,7 +308,16 @@ def _ts_transcribe(declare_on_row2=False, row2_retry_declares=False):
     calls = []
 
     def transcribe(
-        self, img, meta, first_bar, spans, hint="", previous=None, problems=None, labeled_strings=False
+        self,
+        img,
+        meta,
+        first_bar,
+        spans,
+        hint="",
+        previous=None,
+        problems=None,
+        labeled_strings=False,
+        start_ts=None,
     ):
         calls.append({"first_bar": first_bar, "retry": previous is not None, "problems": problems})
         bars = []
@@ -399,3 +417,79 @@ def test_placeholder_rest_follows_the_time_signature(data_dir, monkeypatch):
     bar5 = store.load(sid)["bars"][4]
     assert bar5["events"] == [{"dur": "3", "notes": []}] and bar5["placeholder"]
     assert bar5["warn"] == ["没有识别出可用的音符，暂按整小节休止处理"]
+
+
+def _cramming_transcribe():
+    """替身模型：第 1 行第 2 小节写着 3/4，之后的小节其实都是 3 拍；但不知道变过拍号的行，
+    会把 3 拍的内容硬凑成 4 拍（每小节一样长，单看这一行查不出来）。告诉它这一行开头的拍号才读对。"""
+    calls = []
+
+    def transcribe(
+        self,
+        img,
+        meta,
+        first_bar,
+        spans,
+        hint="",
+        previous=None,
+        problems=None,
+        labeled_strings=False,
+        start_ts=None,
+    ):
+        calls.append({"first_bar": first_bar, "start_ts": start_ts, "retry": previous is not None})
+        bars = []
+        for i in range(len(spans)):
+            n = first_bar + i
+            in_row_change = first_bar == 1 and n >= 2
+            knows = in_row_change or start_ts == [3, 4]
+            beats = 4 if n == 1 or not knows else 3
+            dur = "1" if n == 1 or knows else "4/3"  # 不知道时：3 个音被拉长凑成 4 拍
+            bars.append(
+                {
+                    "number": n,
+                    "time_signature": [3, 4] if n == 2 else [],
+                    "events": [
+                        {"dur": dur, "notes": [{"string": 1, "fret": k, "tech": [], "grace": -1, "bend": 0}]}
+                        for k in range(3 if n > 1 else beats)
+                    ],
+                    "tip": "",
+                    "uncertain": "",
+                }
+            )
+        return {"bars": bars}
+
+    return transcribe, calls
+
+
+def test_rows_after_an_earlier_time_signature_change_are_reread(data_dir, monkeypatch):
+    transcribe, calls = _cramming_transcribe()
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    song = store.load(sid)
+    assert song["status"] == "ready", song["error"]
+    # 第 2 行先按全曲拍号识别（凑成了 4 拍），再带上 3/4 重新识别
+    row2 = [c for c in calls if c["first_bar"] == 4]
+    assert [c["start_ts"] for c in row2] == [None, [3, 4]]
+    bars = song["bars"]
+    assert [sum(music.parse_dur(e["dur"]) for e in b["events"]) for b in bars] == [4, 3, 3, 3, 3, 3]
+    assert [b.get("time_signature") for b in bars] == [None] + [[3, 4]] * 5
+    assert all(not b["warn"] for b in bars) and all(s["status"] == "done" for s in song["systems"])
+
+
+def test_reparse_row_gets_the_carried_time_signature(data_dir, monkeypatch):
+    transcribe, calls = _cramming_transcribe()
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    calls.clear()
+    recognize.reparse_system(sid, 1)
+    assert calls[0]["start_ts"] == [3, 4]
+    assert all(not b["warn"] for b in store.load(sid)["bars"])
+
+
+def test_songs_without_time_signature_changes_cost_nothing_extra(data_dir):
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    first_calls = [c for c in FakeClaude.calls if "first_bar" in c and not c["retry"]]
+    assert sorted(c["first_bar"] for c in first_calls) == [1, 4]  # 每行只识别一次
