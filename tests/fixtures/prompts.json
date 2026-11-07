@@ -1,0 +1,546 @@
+{
+ "ping": {
+  "content": [
+   "Reply with {\"title\": \"ok\", ...} filling other fields with empty values."
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "title": {
+     "type": "string"
+    },
+    "artist": {
+     "type": "string"
+    },
+    "arranger": {
+     "type": "string"
+    },
+    "tuning": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "capo": {
+     "type": "integer"
+    },
+    "time_signature": {
+     "type": "array",
+     "items": {
+      "type": "integer"
+     }
+    },
+    "tempo": {
+     "type": "integer"
+    },
+    "notes": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "artist",
+    "arranger",
+    "tuning",
+    "capo",
+    "time_signature",
+    "tempo",
+    "notes"
+   ],
+   "additionalProperties": false
+  },
+  "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
+  "effort": "low",
+  "max_tokens": 2000
+ },
+ "read_meta": {
+  "content": [
+   "<image>",
+   "This is the first page of a guitar score. Read its header and return:\n- title / artist / arranger (empty string if absent)\n- tuning: 6 note names with octave, for string 1 (highest) to string 6 (lowest), e.g. [\"E4\",\"B3\",\"G3\",\"D3\",\"A2\",\"E2\"]. Tuning text such as \"DADGAD\" or \"Tuning=DAC#F#AD\" lists strings from 6 (lowest) to 1. If no tuning is written, assume standard tuning.\n- capo: the capo fret, 0 if none.\n- time_signature: [numerator, denominator] of the first bar, e.g. [4, 4].\n- tempo: quarter-note BPM if written, else 0.\n- notes: in Chinese, anything a player should know (e.g. tuning changes, the written capo looking inconsistent with the standard-notation pitches). Empty string if nothing."
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "title": {
+     "type": "string"
+    },
+    "artist": {
+     "type": "string"
+    },
+    "arranger": {
+     "type": "string"
+    },
+    "tuning": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "capo": {
+     "type": "integer"
+    },
+    "time_signature": {
+     "type": "array",
+     "items": {
+      "type": "integer"
+     }
+    },
+    "tempo": {
+     "type": "integer"
+    },
+    "notes": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "artist",
+    "arranger",
+    "tuning",
+    "capo",
+    "time_signature",
+    "tempo",
+    "notes"
+   ],
+   "additionalProperties": false
+  },
+  "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
+  "effort": null,
+  "max_tokens": 16000
+ },
+ "transcribe": {
+  "content": [
+   "<image>",
+   "Score info: tuning (string 1 -> 6) D4 A3 F#3 D3 A2 D2; capo 2 (copy fret numbers as written). Time signature at the start of the piece 4/4: a bar lasts 4 quarter notes unless a time-signature change is written (see below).\n\nThis image is one line (system) of the score with 2 bars, numbered 3-4. Horizontal extent of each bar in this image (pixels): bar 3: x=15-600; bar 4: x=600-1200. Return exactly these bars.\n\nThe small red numbers 1-6 at the left edge of the tab staff were added by the app, not part of the score: they label the six tab lines (1 = top line, 6 = bottom line). Never transcribe them. For every fret number, follow its line to the left to the red label to decide its string, instead of counting lines by eye: a common mistake is putting a number one line too low (string 5 read as string 6), especially bass notes and open strings (0) on the lower lines.\n\nHow to encode a bar:\n- A bar is a list of events in time order. An event is one onset: all notes that start together.\n- \"dur\" is the time from this onset to the next onset in the same bar (for the last event: to the end of the bar), in quarter notes. The durs of a bar must add up exactly to the bar length.\n- Notes that keep ringing while other notes are played do not create extra events, and a tied continuation note (a note whose fret number is not re-written, or connected by a tie) is not a new event.\n- A rest at the start of a bar or between notes is an event with an empty \"notes\" list.\n- Time signature: a bar where a new time signature is written (e.g. 3/4 or 6/8 printed after the barline) gets \"time_signature\": [3, 4] etc., and from that bar on every bar lasts the new length until the next change. Bars without a written change get []. Never change durations just to make a bar fit a time signature: if the notes clearly fill a different length, check whether a time-signature change is written.\n- string: 1 is the top line of the tab (highest pitch), 6 the bottom line. fret: exactly as written (relative to the capo; 0 = open string).\n- Fret numbers in parentheses, e.g. (7), are usually notes tied over from before - especially at the start of a line, where the tie comes from the previous line, which is not in this image (the standard notation shows tie arcs coming in from the left edge). They are not new onsets: leave them out, and if no other note starts at that time, write an event with an empty \"notes\" list for it.\n- Beamed groups do not always line up with beats. A group can contain a note that crosses the beat (e.g. eighth + sixteenth + eighth = 1 1/4 beats) and the next group then starts off the beat. Take each note's value from its own stem (one beam or flag = eighth, two = sixteenth, three = 32nd; a short beam stub belongs to the note it touches; a dot adds half) and add them up, instead of assuming every beamed group fills exactly one beat.\n\nTechniques (put them on the note that receives them):\n- \"h\": hammer-on into this note (arc + H from the previous note on the same string). \"p\": pull-off into this note.\n- \"sl\": slide into this note from the previous note on the same string; this note is not re-picked.\n- \"si\": slide in from an unspecified lower fret (a slash before the number with no starting note); the note is picked.\n- \"pm\": palm mute (P.M. line). \"x\": dead/muted note written as x (use fret 0).\n- \"nh\": natural harmonic, written <n>; fret = the harmonic node n. A natural harmonic written with a fractional node, e.g. <21.7> or <14.7>, gets fret = the node rounded to the nearest whole number (22, 15). \"ah\": artificial harmonic (A.H., e.g. \"2<14>\"): fret = the fretted note (2), the node is 12 frets higher.\n- \"roll\": arpeggiated chord (wavy vertical line) - put it on every note of the chord.\n- \"vib\": vibrato. \"bend\": a bend; also set \"bend\" to the size in semitones (full = 2, 1/2 = 1).\n- A small grace note before a note: set \"grace\" on the main note to the grace note's fret (and add \"h\"/\"sl\"/\"p\" if the grace connects by that technique). Otherwise grace = -1.\n\nRepeats and navigation (the app follows them during playback):\n- repeat_start / repeat_end: repeat barlines. repeat_end is the total number of times the section is played (2 for a plain :| sign).\n- endings: the numbers of the 1st/2nd-ending (volta) bracket over this bar.\n- directions, at the bar where they are written: \"segno\" (the 𝄋 sign), \"coda\" (the 𝄌 target, \"To Coda\" jumps here), \"fine\" (Fine, where the piece ends after a D.C./D.S.), \"dacapo\" (D.C.), \"dacapoalfine\" (D.C. al Fine), \"dacapoalcoda\" (D.C. al Coda), \"dalsegno\" (D.S.), \"dalsegnoalfine\", \"dalsegnoalcoda\", \"dacoda\" (the \"To Coda\" / ⊕ jump point).\n\n\"tip\": 1-4 sentences of practical Chinese guidance for this bar, naming strings and frets the way a teacher would, e.g. \"5 弦空弦 + 2 弦空弦一起弹，2 弦击弦到 2 品再勾弦回空弦（只拨一次）。第 3 拍和弦：2 弦 4 品、3 弦 2 品、4 弦 3 品；第 4 拍三连音：4 弦 3 品、3 弦空弦、2 弦空弦。\" Mention what is hard and how to practise it when it helps.\n\"uncertain\": in Chinese, anything you could not read with confidence (which beat, which string, what you assumed). Empty string if everything is clear."
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "bars": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "number": {
+        "type": "integer"
+       },
+       "time_signature": {
+        "type": "array",
+        "items": {
+         "type": "integer"
+        },
+        "description": "[numerator, denominator] if a time-signature change is written at the start of this bar (e.g. [3, 4]); [] if none"
+       },
+       "events": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "dur": {
+           "type": "string",
+           "description": "time from this onset to the next onset (or bar end), in quarter notes, as a fraction string: \"1/4\" = 16th, \"1/2\" = 8th, \"1/3\" = 8th-note triplet, \"1/6\" = 16th sextuplet, \"3/4\" = dotted 8th, \"1\", \"3/2\", \"2\", \"4\" ..."
+          },
+          "notes": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "string": {
+              "type": "integer",
+              "enum": [
+               1,
+               2,
+               3,
+               4,
+               5,
+               6
+              ],
+              "description": "1 = highest (top tab line) ... 6 = lowest"
+             },
+             "fret": {
+              "type": "integer",
+              "description": "fret number exactly as written in the tab"
+             },
+             "tech": {
+              "type": "array",
+              "items": {
+               "type": "string",
+               "enum": [
+                "h",
+                "p",
+                "sl",
+                "si",
+                "pm",
+                "nh",
+                "ah",
+                "roll",
+                "x",
+                "vib",
+                "bend"
+               ]
+              }
+             },
+             "grace": {
+              "type": "integer",
+              "description": "fret of a grace note leading into this note, -1 if none"
+             },
+             "bend": {
+              "type": "number",
+              "description": "bend amount in semitones, 0 if no bend"
+             }
+            },
+            "required": [
+             "string",
+             "fret",
+             "tech",
+             "grace",
+             "bend"
+            ],
+            "additionalProperties": false
+           },
+           "description": "empty for a rest"
+          }
+         },
+         "required": [
+          "dur",
+          "notes"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "repeat_start": {
+        "type": "boolean",
+        "description": "a start-repeat barline ( |: ) at the start of this bar"
+       },
+       "repeat_end": {
+        "type": "integer",
+        "description": "an end-repeat barline ( :| ) at the end of this bar: how many times the section is played in total (2 for a plain repeat sign, 3 for \"x3\"); 0 if none"
+       },
+       "endings": {
+        "type": "array",
+        "items": {
+         "type": "integer"
+        },
+        "description": "volta bracket numbers this bar is under (e.g. [1] or [1, 2]); [] if none"
+       },
+       "directions": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "enum": [
+          "segno",
+          "segnosegno",
+          "coda",
+          "doublecoda",
+          "fine",
+          "dacapo",
+          "dacapoalcoda",
+          "dacapoalfine",
+          "dalsegno",
+          "dalsegnoalcoda",
+          "dalsegnoalfine",
+          "dacoda"
+         ]
+        },
+        "description": "navigation marks written at this bar; [] if none"
+       },
+       "tip": {
+        "type": "string"
+       },
+       "uncertain": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "number",
+       "time_signature",
+       "events",
+       "repeat_start",
+       "repeat_end",
+       "endings",
+       "directions",
+       "tip",
+       "uncertain"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   "required": [
+    "bars"
+   ],
+   "additionalProperties": false
+  },
+  "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
+  "effort": null,
+  "max_tokens": 32000
+ },
+ "transcribe_retry": {
+  "content": [
+   "<image>",
+   "Score info: tuning (string 1 -> 6) D4 A3 F#3 D3 A2 D2; capo 2 (copy fret numbers as written). The piece starts in 4/4, but an earlier line changed the time signature: at the start of this line it is 3/4, so a bar lasts 3 quarter notes unless another time-signature change is written in this image (see below).\n\nThis image is a whole page. Transcribe every bar on it in reading order, numbering from 3. If the page contains no guitar tablature, return an empty list.\n\nHow to encode a bar:\n- A bar is a list of events in time order. An event is one onset: all notes that start together.\n- \"dur\" is the time from this onset to the next onset in the same bar (for the last event: to the end of the bar), in quarter notes. The durs of a bar must add up exactly to the bar length.\n- Notes that keep ringing while other notes are played do not create extra events, and a tied continuation note (a note whose fret number is not re-written, or connected by a tie) is not a new event.\n- A rest at the start of a bar or between notes is an event with an empty \"notes\" list.\n- Time signature: a bar where a new time signature is written (e.g. 3/4 or 6/8 printed after the barline) gets \"time_signature\": [3, 4] etc., and from that bar on every bar lasts the new length until the next change. Bars without a written change get []. Never change durations just to make a bar fit a time signature: if the notes clearly fill a different length, check whether a time-signature change is written.\n- string: 1 is the top line of the tab (highest pitch), 6 the bottom line. fret: exactly as written (relative to the capo; 0 = open string).\n- Fret numbers in parentheses, e.g. (7), are usually notes tied over from before - especially at the start of a line, where the tie comes from the previous line, which is not in this image (the standard notation shows tie arcs coming in from the left edge). They are not new onsets: leave them out, and if no other note starts at that time, write an event with an empty \"notes\" list for it.\n- Beamed groups do not always line up with beats. A group can contain a note that crosses the beat (e.g. eighth + sixteenth + eighth = 1 1/4 beats) and the next group then starts off the beat. Take each note's value from its own stem (one beam or flag = eighth, two = sixteenth, three = 32nd; a short beam stub belongs to the note it touches; a dot adds half) and add them up, instead of assuming every beamed group fills exactly one beat.\n\nTechniques (put them on the note that receives them):\n- \"h\": hammer-on into this note (arc + H from the previous note on the same string). \"p\": pull-off into this note.\n- \"sl\": slide into this note from the previous note on the same string; this note is not re-picked.\n- \"si\": slide in from an unspecified lower fret (a slash before the number with no starting note); the note is picked.\n- \"pm\": palm mute (P.M. line). \"x\": dead/muted note written as x (use fret 0).\n- \"nh\": natural harmonic, written <n>; fret = the harmonic node n. A natural harmonic written with a fractional node, e.g. <21.7> or <14.7>, gets fret = the node rounded to the nearest whole number (22, 15). \"ah\": artificial harmonic (A.H., e.g. \"2<14>\"): fret = the fretted note (2), the node is 12 frets higher.\n- \"roll\": arpeggiated chord (wavy vertical line) - put it on every note of the chord.\n- \"vib\": vibrato. \"bend\": a bend; also set \"bend\" to the size in semitones (full = 2, 1/2 = 1).\n- A small grace note before a note: set \"grace\" on the main note to the grace note's fret (and add \"h\"/\"sl\"/\"p\" if the grace connects by that technique). Otherwise grace = -1.\n\nRepeats and navigation (the app follows them during playback):\n- repeat_start / repeat_end: repeat barlines. repeat_end is the total number of times the section is played (2 for a plain :| sign).\n- endings: the numbers of the 1st/2nd-ending (volta) bracket over this bar.\n- directions, at the bar where they are written: \"segno\" (the 𝄋 sign), \"coda\" (the 𝄌 target, \"To Coda\" jumps here), \"fine\" (Fine, where the piece ends after a D.C./D.S.), \"dacapo\" (D.C.), \"dacapoalfine\" (D.C. al Fine), \"dacapoalcoda\" (D.C. al Coda), \"dalsegno\" (D.S.), \"dalsegnoalfine\", \"dalsegnoalcoda\", \"dacoda\" (the \"To Coda\" / ⊕ jump point).\n\n\"tip\": 1-4 sentences of practical Chinese guidance for this bar, naming strings and frets the way a teacher would, e.g. \"5 弦空弦 + 2 弦空弦一起弹，2 弦击弦到 2 品再勾弦回空弦（只拨一次）。第 3 拍和弦：2 弦 4 品、3 弦 2 品、4 弦 3 品；第 4 拍三连音：4 弦 3 品、3 弦空弦、2 弦空弦。\" Mention what is hard and how to practise it when it helps.\n\"uncertain\": in Chinese, anything you could not read with confidence (which beat, which string, what you assumed). Empty string if everything is clear.\n\nYour previous transcription of this image is below, but it has problems:\n- 第 3 小节：时值不对\nRe-read the image carefully and return a corrected transcription of all the bars.\n{\"bars\": []}\n\nThe user reviewed an earlier transcription and says (in Chinese): 第 3 拍是 2 弦"
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "bars": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "number": {
+        "type": "integer"
+       },
+       "time_signature": {
+        "type": "array",
+        "items": {
+         "type": "integer"
+        },
+        "description": "[numerator, denominator] if a time-signature change is written at the start of this bar (e.g. [3, 4]); [] if none"
+       },
+       "events": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "dur": {
+           "type": "string",
+           "description": "time from this onset to the next onset (or bar end), in quarter notes, as a fraction string: \"1/4\" = 16th, \"1/2\" = 8th, \"1/3\" = 8th-note triplet, \"1/6\" = 16th sextuplet, \"3/4\" = dotted 8th, \"1\", \"3/2\", \"2\", \"4\" ..."
+          },
+          "notes": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "string": {
+              "type": "integer",
+              "enum": [
+               1,
+               2,
+               3,
+               4,
+               5,
+               6
+              ],
+              "description": "1 = highest (top tab line) ... 6 = lowest"
+             },
+             "fret": {
+              "type": "integer",
+              "description": "fret number exactly as written in the tab"
+             },
+             "tech": {
+              "type": "array",
+              "items": {
+               "type": "string",
+               "enum": [
+                "h",
+                "p",
+                "sl",
+                "si",
+                "pm",
+                "nh",
+                "ah",
+                "roll",
+                "x",
+                "vib",
+                "bend"
+               ]
+              }
+             },
+             "grace": {
+              "type": "integer",
+              "description": "fret of a grace note leading into this note, -1 if none"
+             },
+             "bend": {
+              "type": "number",
+              "description": "bend amount in semitones, 0 if no bend"
+             }
+            },
+            "required": [
+             "string",
+             "fret",
+             "tech",
+             "grace",
+             "bend"
+            ],
+            "additionalProperties": false
+           },
+           "description": "empty for a rest"
+          }
+         },
+         "required": [
+          "dur",
+          "notes"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "repeat_start": {
+        "type": "boolean",
+        "description": "a start-repeat barline ( |: ) at the start of this bar"
+       },
+       "repeat_end": {
+        "type": "integer",
+        "description": "an end-repeat barline ( :| ) at the end of this bar: how many times the section is played in total (2 for a plain repeat sign, 3 for \"x3\"); 0 if none"
+       },
+       "endings": {
+        "type": "array",
+        "items": {
+         "type": "integer"
+        },
+        "description": "volta bracket numbers this bar is under (e.g. [1] or [1, 2]); [] if none"
+       },
+       "directions": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "enum": [
+          "segno",
+          "segnosegno",
+          "coda",
+          "doublecoda",
+          "fine",
+          "dacapo",
+          "dacapoalcoda",
+          "dacapoalfine",
+          "dalsegno",
+          "dalsegnoalcoda",
+          "dalsegnoalfine",
+          "dacoda"
+         ]
+        },
+        "description": "navigation marks written at this bar; [] if none"
+       },
+       "tip": {
+        "type": "string"
+       },
+       "uncertain": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "number",
+       "time_signature",
+       "events",
+       "repeat_start",
+       "repeat_end",
+       "endings",
+       "directions",
+       "tip",
+       "uncertain"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   "required": [
+    "bars"
+   ],
+   "additionalProperties": false
+  },
+  "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
+  "effort": null,
+  "max_tokens": 32000
+ },
+ "explain_bars": {
+  "content": [
+   "Tuning (string 1 -> 6): D4 A3 F#3 D3 A2 D2; capo 2; time signature 4/4. Below is exact tablature data for some bars: each event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, nh natural harmonic, ah artificial harmonic, roll arpeggio, x dead note, vib vibrato, bend).\n第3小节: 1拍 2弦3品[h] | 1拍 2弦3品[h] | 1拍 2弦3品[h] | 1拍 2弦3品[h]\n第4小节（3/4 拍）: 3拍 休止\n\nFor every bar, write a tip in Chinese: 1-4 sentences of practical guidance naming strings and frets the way a teacher would (what to play together, what is fretted vs open, which technique and how to do it, what is hard and how to practise it). Return one entry per bar with its number."
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "bars": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "number": {
+        "type": "integer"
+       },
+       "tip": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "number",
+       "tip"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   "required": [
+    "bars"
+   ],
+   "additionalProperties": false
+  },
+  "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
+  "effort": "medium",
+  "max_tokens": 32000
+ },
+ "coach": {
+  "content": [
+   "<image>",
+   "A guitarist is practising T (tuning string 1 -> 6: D4 A3 F#3 D3 A2 D2, capo 2, time signature 4/4) and asks about bar 3. Tablature data, each event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, nh natural harmonic, ah artificial harmonic, roll arpeggio, x dead note, vib vibrato, bend):\n\nThis bar: 第3小节: 1拍 2弦3品[h] | 1拍 2弦3品[h] | 1拍 2弦3品[h] | 1拍 2弦3品[h]\n\nNeighbouring bars for context:\n第4小节（3/4 拍）: 3拍 休止\n\nPractice tip already shown for this bar: 慢练\n\nTheir practice log for this bar: 练了 3 遍\n\nThe image is this bar cut from the original score; the data above was transcribed from it and may contain mistakes - if the image clearly disagrees, say so.\n\nEarlier question: 前一个问题\nYour answer: 回答\n\nTheir question (in Chinese): 怎么弹\n\nAnswer in Simplified Chinese like a patient guitar teacher: concrete fingering (which left-hand finger on which string/fret, right-hand p i m a where useful), what to listen for, and a short practice routine if it helps. Refer to notes as 'N 弦 M 品'. Be concise: a few short paragraphs or a short list, no headings."
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "answer": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "answer"
+   ],
+   "additionalProperties": false
+  },
+  "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
+  "effort": "medium",
+  "max_tokens": 8000
+ },
+ "practice_plan": {
+  "content": [
+   "A guitarist is learning this piece: T, tuning D4 A3 F#3 D3 A2 D2, capo 2. Per-bar notes from the transcription:\n[{\"bar\": 3, \"techniques\": [\"h\"], \"tip\": \"慢练\"}, {\"bar\": 4, \"techniques\": [], \"tip\": \"\"}]\n\nWrite a practice plan in Chinese. overview: 2-3 sentences on what makes this piece hard and how to approach it. steps: 4-8 steps in the order to practise, each covering a range of bars written like \"6-11\" (use the bar numbers above; the whole piece as the final step), with a short title and 1-3 sentences of concrete advice (which technique to isolate, which bars resemble each other, tempo tips)."
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "overview": {
+     "type": "string"
+    },
+    "steps": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "bars": {
+        "type": "string"
+       },
+       "title": {
+        "type": "string"
+       },
+       "advice": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "bars",
+       "title",
+       "advice"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   "required": [
+    "overview",
+    "steps"
+   ],
+   "additionalProperties": false
+  },
+  "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
+  "effort": "medium",
+  "max_tokens": 16000
+ }
+}

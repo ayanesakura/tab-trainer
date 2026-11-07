@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app import llm, model, music
+from app import llm, model, music, prompts
 from tests.fakes import FakeClaude
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "llm_schemas.json").read_text(encoding="utf-8"))
@@ -14,18 +14,18 @@ FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "llm_schemas.json").r
 @pytest.mark.parametrize("name", ["NOTE", "EVENT", "BAR", "TRANSCRIBE", "META", "EXPLAIN", "COACH", "PLAN"])
 def test_llm_schemas_are_unchanged(name):
     """tests/fixtures/llm_schemas.json 由重构前（6957d49）的 llm.py 导出；按 JSON 文本比较，连键的顺序都要一样。"""
-    got = json.dumps(getattr(llm, f"{name}_SCHEMA"), ensure_ascii=False)
+    got = json.dumps(getattr(prompts, f"{name}_SCHEMA"), ensure_ascii=False)
     assert got == json.dumps(FIXTURE[name], ensure_ascii=False)
 
 
 def test_note_and_event_schemas_come_from_the_model():
-    assert llm.NOTE_SCHEMA == model.llm_schema(model.Note)
-    assert llm.EVENT_SCHEMA == model.llm_schema(model.Event)
-    assert llm.NOTE_SCHEMA["properties"]["string"]["enum"] == list(range(1, music.STRINGS + 1))
+    assert prompts.NOTE_SCHEMA == model.llm_schema(model.Note)
+    assert prompts.EVENT_SCHEMA == model.llm_schema(model.Event)
+    assert prompts.NOTE_SCHEMA["properties"]["string"]["enum"] == list(range(1, music.STRINGS + 1))
 
 
 def test_constants_are_unchanged():
-    assert llm.DIRECTIONS == FIXTURE["DIRECTIONS"]
+    assert prompts.DIRECTIONS == FIXTURE["DIRECTIONS"]
     assert music.TECHS == FIXTURE["TECHS"]
     assert list(music.DIRECTIONS) == FIXTURE["MUSIC_DIRECTIONS"]
     assert music.STANDARD == FIXTURE["STANDARD"]

@@ -5,7 +5,7 @@
 - 派生字段“读时算、写时去”：小节编号 n、按内容算的警告（时值、网格、弦品范围、占位）、meta.tuning_midi、
   meta.title（= 曲子的 title）、plan.stale 都不存盘。store.load / update 之后调用 derive 补上，store.save 之前用 strip 去掉，
   所以文件里每样东西只有一份，内存里的 dict 仍然什么都有（识别、讲解、提示词照常用）。
-- llm_schema：从 Note / Event 的字段生成给模型的 JSON Schema（llm.NOTE_SCHEMA / EVENT_SCHEMA），
+- llm_schema：从 Note / Event 的字段生成给模型的 JSON Schema（prompts.NOTE_SCHEMA / EVENT_SCHEMA），
   tests/test_model.py 断言它和原来手写的逐字一致。
 - SongView / LibraryItem：接口返回的形状（见 app/views.py）。
 - 乐观锁按对象：bar.rev 只在这个小节的内容（音符；用户改提示时也算）变了时 +1，song.meta_rev 只在可改的谱头字段

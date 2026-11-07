@@ -145,7 +145,7 @@ def test_set_derived_per_bar_time_signature(data_dir):
     store.update(sid, lambda s: s["bars"][1].update(events=[{"dur": "4", "notes": []}]))
     song = store.load(sid)
     assert song["bars"][1]["warn"] == [W("length", "时值合计 4 拍，应为 3 拍")]
-    from app.llm import bar_text
+    from app.prompts import bar_text
 
     assert bar_text(song["bars"][2]).startswith("第3小节（6/8 拍）:")
 

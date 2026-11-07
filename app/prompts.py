@@ -1,0 +1,158 @@
+"""给模型的提示词和输出格式：JSON Schema（音符 / 事件从 app/model.py 生成）、系统提示、识别规则、小节的文字版。
+app/llm.py 的 Claude 客户端拼请求时用。改这里会改变发给模型的内容：tests/test_prompts.py 的快照会提醒你核对。"""
+
+from __future__ import annotations
+
+from app import model
+from app.music import PROMPT_DIRECTIONS
+
+
+# ---------------------------------------------------------------------------
+# JSON Schemas
+# ---------------------------------------------------------------------------
+def _obj(props: dict, required: list[str] | None = None) -> dict:
+    return {
+        "type": "object",
+        "properties": props,
+        "required": required if required is not None else list(props),
+        "additionalProperties": False,
+    }
+
+
+# 音符和事件的 schema 由 app/model.py 的 Note / Event 定义生成（tests/test_model.py 断言和原来手写的逐字一致）
+NOTE_SCHEMA = model.llm_schema(model.Note)
+EVENT_SCHEMA = model.llm_schema(model.Event)
+DIRECTIONS = list(PROMPT_DIRECTIONS)  # vocab.json 里 prompt 为 true 的反复记号
+BAR_SCHEMA = _obj(
+    {
+        "number": {"type": "integer"},
+        "time_signature": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "[numerator, denominator] if a time-signature change is written at the start of this "
+            "bar (e.g. [3, 4]); [] if none",
+        },
+        "events": {"type": "array", "items": EVENT_SCHEMA},
+        "repeat_start": {
+            "type": "boolean",
+            "description": "a start-repeat barline ( |: ) at the start of this bar",
+        },
+        "repeat_end": {
+            "type": "integer",
+            "description": "an end-repeat barline ( :| ) at the end of this bar: how many times the section is "
+            'played in total (2 for a plain repeat sign, 3 for "x3"); 0 if none',
+        },
+        "endings": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "volta bracket numbers this bar is under (e.g. [1] or [1, 2]); [] if none",
+        },
+        "directions": {
+            "type": "array",
+            "items": {"type": "string", "enum": DIRECTIONS},
+            "description": "navigation marks written at this bar; [] if none",
+        },
+        "tip": {"type": "string"},
+        "uncertain": {"type": "string"},
+    }
+)
+TRANSCRIBE_SCHEMA = _obj({"bars": {"type": "array", "items": BAR_SCHEMA}})
+
+META_SCHEMA = _obj(
+    {
+        "title": {"type": "string"},
+        "artist": {"type": "string"},
+        "arranger": {"type": "string"},
+        "tuning": {"type": "array", "items": {"type": "string"}},
+        "capo": {"type": "integer"},
+        "time_signature": {"type": "array", "items": {"type": "integer"}},
+        "tempo": {"type": "integer"},
+        "notes": {"type": "string"},
+    }
+)
+
+EXPLAIN_SCHEMA = _obj(
+    {"bars": {"type": "array", "items": _obj({"number": {"type": "integer"}, "tip": {"type": "string"}})}}
+)
+
+COACH_SCHEMA = _obj({"answer": {"type": "string"}})
+
+PLAN_SCHEMA = _obj(
+    {
+        "overview": {"type": "string"},
+        "steps": {
+            "type": "array",
+            "items": _obj(
+                {"bars": {"type": "string"}, "title": {"type": "string"}, "advice": {"type": "string"}}
+            ),
+        },
+    }
+)
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+SYSTEM = (
+    "You transcribe guitar sheet music images into structured data for a practice app that plays the "
+    "music back, highlights fingerings on a fretboard, and loops sections. The user will practise "
+    "from your transcription, so an exact reading of every fret number and rhythm matters far more "
+    "than speed. Read the tablature as the source of truth for strings and frets; use the standard "
+    "notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. "
+    "Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese."
+)
+
+TRANSCRIBE_RULES = """\
+How to encode a bar:
+- A bar is a list of events in time order. An event is one onset: all notes that start together.
+- "dur" is the time from this onset to the next onset in the same bar (for the last event: to the end of the bar), in quarter notes. The durs of a bar must add up exactly to the bar length.
+- Notes that keep ringing while other notes are played do not create extra events, and a tied continuation note (a note whose fret number is not re-written, or connected by a tie) is not a new event.
+- A rest at the start of a bar or between notes is an event with an empty "notes" list.
+- Time signature: a bar where a new time signature is written (e.g. 3/4 or 6/8 printed after the barline) gets "time_signature": [3, 4] etc., and from that bar on every bar lasts the new length until the next change. Bars without a written change get []. Never change durations just to make a bar fit a time signature: if the notes clearly fill a different length, check whether a time-signature change is written.
+- string: 1 is the top line of the tab (highest pitch), 6 the bottom line. fret: exactly as written (relative to the capo; 0 = open string).
+- Fret numbers in parentheses, e.g. (7), are usually notes tied over from before - especially at the start of a line, where the tie comes from the previous line, which is not in this image (the standard notation shows tie arcs coming in from the left edge). They are not new onsets: leave them out, and if no other note starts at that time, write an event with an empty "notes" list for it.
+- Beamed groups do not always line up with beats. A group can contain a note that crosses the beat (e.g. eighth + sixteenth + eighth = 1 1/4 beats) and the next group then starts off the beat. Take each note's value from its own stem (one beam or flag = eighth, two = sixteenth, three = 32nd; a short beam stub belongs to the note it touches; a dot adds half) and add them up, instead of assuming every beamed group fills exactly one beat.
+
+Techniques (put them on the note that receives them):
+- "h": hammer-on into this note (arc + H from the previous note on the same string). "p": pull-off into this note.
+- "sl": slide into this note from the previous note on the same string; this note is not re-picked.
+- "si": slide in from an unspecified lower fret (a slash before the number with no starting note); the note is picked.
+- "pm": palm mute (P.M. line). "x": dead/muted note written as x (use fret 0).
+- "nh": natural harmonic, written <n>; fret = the harmonic node n. A natural harmonic written with a fractional node, e.g. <21.7> or <14.7>, gets fret = the node rounded to the nearest whole number (22, 15). "ah": artificial harmonic (A.H., e.g. "2<14>"): fret = the fretted note (2), the node is 12 frets higher.
+- "roll": arpeggiated chord (wavy vertical line) - put it on every note of the chord.
+- "vib": vibrato. "bend": a bend; also set "bend" to the size in semitones (full = 2, 1/2 = 1).
+- A small grace note before a note: set "grace" on the main note to the grace note's fret (and add "h"/"sl"/"p" if the grace connects by that technique). Otherwise grace = -1.
+
+Repeats and navigation (the app follows them during playback):
+- repeat_start / repeat_end: repeat barlines. repeat_end is the total number of times the section is played (2 for a plain :| sign).
+- endings: the numbers of the 1st/2nd-ending (volta) bracket over this bar.
+- directions, at the bar where they are written: "segno" (the 𝄋 sign), "coda" (the 𝄌 target, "To Coda" jumps here), "fine" (Fine, where the piece ends after a D.C./D.S.), "dacapo" (D.C.), "dacapoalfine" (D.C. al Fine), "dacapoalcoda" (D.C. al Coda), "dalsegno" (D.S.), "dalsegnoalfine", "dalsegnoalcoda", "dacoda" (the "To Coda" / ⊕ jump point).
+
+"tip": 1-4 sentences of practical Chinese guidance for this bar, naming strings and frets the way a teacher would, e.g. "5 弦空弦 + 2 弦空弦一起弹，2 弦击弦到 2 品再勾弦回空弦（只拨一次）。第 3 拍和弦：2 弦 4 品、3 弦 2 品、4 弦 3 品；第 4 拍三连音：4 弦 3 品、3 弦空弦、2 弦空弦。" Mention what is hard and how to practise it when it helps.
+"uncertain": in Chinese, anything you could not read with confidence (which beat, which string, what you assumed). Empty string if everything is clear."""
+
+
+def _note_text(n: dict) -> str:
+    s = f"{n['string']}弦{n['fret']}品"
+    if n.get("grace", -1) >= 0:
+        s = f"(倚音{n['grace']}品)" + s
+    return s + (f"[{','.join(n['tech'])}]" if n.get("tech") else "")
+
+
+def bar_text(b: dict) -> str:
+    """一个小节的文字版：'第N小节: <时值>拍 <音> | ...'，给只发文字的调用用。"""
+    ts = b.get("time_signature")  # 只有和全曲拍号不同的小节才有
+    head = f"第{b['n']}小节" + (f"（{ts[0]}/{ts[1]} 拍）" if ts else "")
+    return (
+        head
+        + ": "
+        + " | ".join(
+            f"{e['dur']}拍 " + (" ".join(_note_text(n) for n in e["notes"]) or "休止") for e in b["events"]
+        )
+    )
+
+
+NOTATION_KEY = (
+    "each event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), "
+    "techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, "
+    "nh natural harmonic, ah artificial harmonic, roll arpeggio, x dead note, vib vibrato, bend)"
+)
