@@ -63,7 +63,9 @@ CHORD_SCHEMA = _obj(
             "type": "array",
             "items": {"type": "integer"},
             "description": "the diagram as actual frets for strings 1 (highest) to 6: 0 = open (o), -1 = not "
-            'played (x above the diagram); add the position marker ("3fr." = the top row of the grid is fret 3)',
+            'played (x above the diagram); add the position marker ("3fr." = the top row of the grid is fret 3). '
+            "A position marker is printed just left of the grid it belongs to, so it can sit close to the "
+            "previous diagram - it never belongs to the diagram on its left",
         },
     }
 )

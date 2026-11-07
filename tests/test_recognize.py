@@ -899,3 +899,25 @@ def test_chord_names_and_strums_survive_editing(data_dir):
         }
     ]
     assert music.clean_events([{"dur": "1", "notes": [], "strum": "sideways"}]) == [{"dur": "1", "notes": []}]
+
+
+def test_rows_that_read_a_chord_diagram_differently_are_redone_with_the_majority_shape():
+    """三行都有 D11：两行读成 x5403 0，一行把 3fr. 算错了。那一行带上多数的读法再识别；拍号没问题的行不动。"""
+    meta = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+    good, bad = [0, 3, 0, 4, 5, -1], [0, 1, 0, 2, 3, -1]
+    bars = [
+        {
+            "system": si,
+            "events": [{"dur": "4", "notes": []}],
+            "shapes": {"D11": shape, "Em": [0, 0, 0, 2, 2, 0]},
+        }
+        for si, shape in enumerate([good, bad, good])
+    ]
+    used = {0: [4, 4], 1: [4, 4], 2: [4, 4]}
+    redo = recognize._rows_to_redo(bars, meta, used)
+    assert [(si, ts) for si, ts, _ in redo] == [(1, [4, 4])]
+    assert "D11 = frets for strings 1-6 [0, 3, 0, 4, 5, -1]" in redo[0][2] and "Em" not in redo[0][2]
+    bars[1]["edited"] = True  # 用户改过的行不覆盖
+    assert recognize._rows_to_redo(bars, meta, used) == []
+    # 只有两行、各读各的：没有多数，不重做
+    assert recognize._rows_to_redo(bars[:2], meta, {0: [4, 4], 1: [4, 4]}, skip_edited=False) == []

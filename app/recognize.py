@@ -444,7 +444,7 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
     # 各行是并行识别的，前面某行写的变拍号后面的行看不到，模型会把小节硬凑成全曲拍号（每小节一样长，查不出来）。
     # 按第一遍的结果算出每行开头实际的拍号，和识别时用的不同的行带上它再识别一次（没有变拍号的曲子不多花钱）。
     # 重新识别已经有行失败：结果注定不会采用，不再为重做花钱
-    redo: list[tuple[int, list[int]]] = []
+    redo: list[tuple[int, list[int], str]] = []
     if not cancel.is_set() and not (restage and errors):
         if restage:  # 原来的结果没动，没有要锁的行
             redo = _rows_to_redo(work["bars"], meta, used, skip_edited=False)
@@ -457,7 +457,7 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
 
             store.update(sid, begin_redo)
     if redo:
-        log.info("song=%s rerun rows with carried time signature: %s", sid, redo)
+        log.info("song=%s rerun rows (time signature / chord diagrams): %s", sid, redo)
         errors += _recognize_rows(claude, sid, work, redo, cancel, on_row)[1]
 
     if cancel.is_set():
@@ -526,16 +526,17 @@ def _recognize_rows(
     claude: LLM,
     sid: str,
     song: dict,
-    rows: list[tuple[int, list[int] | None]],
+    rows: list[tuple],
     cancel: threading.Event,
     on_row,
 ) -> tuple[dict[int, list[int]], list[str]]:
-    """并行识别 rows：(行号, 这一行开头的拍号；None = 按 song 里前面各行写的变拍号推算)。
+    """并行识别 rows：(行号, 这一行开头的拍号；None = 按 song 里前面各行写的变拍号推算[, 给模型的提示])。
     起始小节号和拍号在提交前按 song 算好。每行结束（成功、失败、取消）都在调用线程里调用
     on_row(行号, 小节 | None, 错误说明 | None)。返回 (每行识别时用的开头拍号, 失败的说明)。"""
     meta_ts = song["meta"]["time_signature"]
     plan = [
-        (si, first_bar_of(song, si), ts or _row_start_ts(song["bars"], song["meta"], si)) for si, ts in rows
+        (r[0], first_bar_of(song, r[0]), r[1] or _row_start_ts(song["bars"], song["meta"], r[0]), *r[2:3])
+        for r in rows
     ]
     errors: list[str] = []
     with ThreadPoolExecutor(settings.row_concurrency) as pool:
@@ -547,11 +548,11 @@ def _recognize_rows(
                 song,
                 si,
                 first,
-                "",
+                hint[0] if hint else "",
                 cancel=cancel,
                 start_ts=ts if ts != meta_ts else None,  # 和全曲拍号一样就不用特别告诉模型
             ): si
-            for si, first, ts in plan
+            for si, first, ts, *hint in plan
         }
         for fut in as_completed(futs):
             si = futs[fut]
@@ -568,7 +569,7 @@ def _recognize_rows(
             if cancel.is_set():
                 for f in futs:
                     f.cancel()  # 还没开始的行不再发请求；正在进行的请求会跑完
-    return {si: ts for si, _, ts in plan}, errors
+    return {si: ts for si, _, ts, *_ in plan}, errors
 
 
 def _row_start_ts(bars: list[dict], meta: dict, si: int) -> list[int]:
@@ -583,29 +584,60 @@ def _row_start_ts(bars: list[dict], meta: dict, si: int) -> list[int]:
 
 def _rows_to_redo(
     bars: list[dict], meta: dict, used: dict[int, list[int]], skip_edited: bool = True
-) -> list[tuple[int, list[int]]]:
-    """识别出了小节、但开头实际的拍号（按前面各行写的变拍号推算）和识别时用的不一样的行，带上实际拍号。
-    行首自己写了变拍号的不算（模型看得到）；skip_edited：用户改过的行不重做（不覆盖用户的改动）。"""
+) -> list[tuple[int, list[int], str]]:
+    """第一遍之后要再识别一次的行：(行号, 开头的拍号, 给模型的提示)。两种情况：
+    - 开头实际的拍号（按前面各行写的变拍号推算）和识别时用的不一样（行首自己写了变拍号的不算，模型看得到）；
+    - 弹唱谱：这一行读出的和弦图和别的行对同一个和弦的读法不一样（多数行一致时以多数为准，
+      常见原因是“3fr.”这类位置标记算错了和弦图），带上多数的读法再识别，谱上的 x 才能换算对。
+    skip_edited：用户改过的行不重做（不覆盖用户的改动）。"""
+    consensus = _shape_consensus(bars)
     out = []
     for si in sorted(used):
         row = [b for b in bars if b["system"] == si]
+        if not row or (skip_edited and any(b.get("edited") for b in row)):
+            continue
         ts = _row_start_ts(bars, meta, si)
-        if not row or ts == used[si] or row[0].get("ts_change"):
+        ts_wrong = ts != used[si] and not row[0].get("ts_change")
+        mine = {k: v for b in row for k, v in (b.get("shapes") or {}).items()}
+        odd = {k: consensus[k] for k, v in mine.items() if k in consensus and v != consensus[k]}
+        if not ts_wrong and not odd:
             continue
-        if skip_edited and any(b.get("edited") for b in row):
-            continue
-        out.append((si, ts))
+        hint = ""
+        if odd:
+            hint = (
+                "The chord diagrams below were read the same way in the other lines of this score; use them "
+                "(and resolve the x marks with them): "
+                + "; ".join(f"{k} = frets for strings 1-6 {v}" for k, v in odd.items())
+            )
+        out.append((si, ts if ts_wrong else used[si], hint))
+    return out
+
+
+def _shape_consensus(bars: list[dict]) -> dict[str, list[int]]:
+    """各行对同一个和弦图的读法：超过一半的行（至少两行）读成一样的，就以它为准。"""
+    per_row: dict[tuple[int, str], tuple[int, ...]] = {}
+    for b in bars:
+        for name, frets in (b.get("shapes") or {}).items():
+            per_row[(b.get("system", -1), name)] = tuple(frets)
+    votes: dict[str, Counter] = {}
+    for (_, name), frets in per_row.items():
+        votes.setdefault(name, Counter())[frets] += 1
+    out = {}
+    for name, c in votes.items():
+        frets, n = c.most_common(1)[0]
+        if n >= 2 and n * 2 > sum(c.values()):
+            out[name] = list(frets)
     return out
 
 
 def _redo_progress(redo: list) -> dict:
-    return {"stage": "按前面的变拍号重新识别", "done": 0, "total": len(redo)}
+    return {"stage": "复核个别行（变拍号、和弦图）", "done": 0, "total": len(redo)}
 
 
 def _lock_redo(s: dict, used: dict[int, list[int]], redo: list) -> None:
     """挑出要重做的行（填进 redo）并把它们标成识别中，在同一次读-改-写里：中间用户改了的行不会被重做覆盖。"""
     redo[:] = _rows_to_redo(s["bars"], s["meta"], used)
-    for si, _ in redo:
+    for si, *_ in redo:
         s["systems"][si].update(status="parsing", error=None)
     if redo:
         s["progress"] = _redo_progress(redo)
@@ -711,7 +743,7 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
         failed += errs
         # 新页上前面的行写了变拍号、后面的行并行识别时看不到：按实际的起始拍号再识别一次
         song = store.load(sid)
-        redo: list[tuple[int, list[int]]] = []
+        redo: list[tuple[int, list[int], str]] = []
         if not cancel.is_set() and _rows_to_redo(
             song["bars"], song["meta"], used
         ):  # 先看一眼：没有要重做的就不写
