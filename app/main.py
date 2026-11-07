@@ -127,9 +127,31 @@ def list_songs():
     return store.list_songs()
 
 
+@app.middleware("http")
+async def limit_upload_size(request: Request, call_next):
+    """表单解析之前就按 Content-Length 挡掉过大的上传（否则 Starlette 会先把整个请求收下来存到临时文件）。"""
+    if request.method == "POST" and request.url.path == "/api/songs":
+        try:
+            size = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            size = 0
+        if size > songs.MAX_TOTAL_BYTES + 1024 * 1024:
+            return JSONResponse({"detail": f"文件总大小超过 {songs.MAX_TOTAL_BYTES // 1024 // 1024} MB"}, 413)
+    return await call_next(request)
+
+
 @app.post("/api/songs")
-async def upload(files: Annotated[list[UploadFile], File()], title: Annotated[str, Form()] = ""):
-    uploads = [(f.filename or "upload", await f.read()) for f in files]
+def upload(files: Annotated[list[UploadFile], File()], title: Annotated[str, Form()] = ""):
+    # 普通 def：FastAPI 放到线程池里跑，PDF 渲染、PNG 压缩不会卡住其他请求
+    if len(files) > songs.MAX_FILES:
+        raise HTTPException(400, f"一次最多上传 {songs.MAX_FILES} 个文件")
+    uploads = []
+    for f in files:
+        if f.size is not None and f.size > songs.MAX_FILE_BYTES:
+            raise HTTPException(
+                400, f"“{f.filename}”太大了（单个文件最大 {songs.MAX_FILE_BYTES // 1024 // 1024} MB）"
+            )
+        uploads.append((f.filename or "upload", f.file.read(songs.MAX_FILE_BYTES + 1)))
     try:
         sid = songs.create_song(uploads, title)
     except AppError:

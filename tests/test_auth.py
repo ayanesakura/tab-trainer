@@ -12,7 +12,9 @@ def _reset_token():
 
 def _client(monkeypatch, token, host="192.168.1.20"):
     main.app.state.token = token
-    return TestClient(main.app, client=(host, 50000), follow_redirects=False)
+    return TestClient(
+        main.app, base_url="http://127.0.0.1:8765", client=(host, 50000), follow_redirects=False
+    )
 
 
 def test_no_token_needed_when_bound_to_localhost(monkeypatch):
@@ -50,3 +52,34 @@ def test_non_ascii_token_values_are_rejected_not_500(monkeypatch):
 def test_ipv6_mapped_loopback_is_local(monkeypatch):
     c = _client(monkeypatch, "s3cret", host="::ffff:127.0.0.1")
     assert c.get("/api/songs").status_code == 200
+
+
+def test_dns_rebinding_hosts_are_rejected(monkeypatch):
+    """恶意网页把自己的域名解析到 127.0.0.1：Host 是它的域名，一律拒绝（本机访问也一样）。"""
+    c = _client(monkeypatch, None, host="127.0.0.1")
+    for host in ("evil.example.com", "evil.example.com:8765", "127.0.0.1.evil.com"):
+        assert c.get("/api/settings", headers={"host": host}).status_code == 403, host
+    r = c.put(
+        "/api/settings", json={"base_url": "https://evil.example.com"}, headers={"host": "evil.example.com"}
+    )
+    assert r.status_code == 403
+    for host in ("127.0.0.1:8765", "localhost:8765", "[::1]:8765", "192.168.1.5:8765", "my-mac.local:8765"):
+        assert c.get("/api/songs", headers={"host": host}).status_code == 200, host
+
+
+def test_cross_site_writes_are_rejected(monkeypatch):
+    c = _client(monkeypatch, None, host="127.0.0.1")
+    evil = {"origin": "https://evil.example.com"}
+    assert c.put("/api/settings", json={"model": "x"}, headers=evil).status_code == 403
+    r = c.post("/api/songs", files={"files": ("p.png", b"x")}, headers=evil)
+    assert r.status_code == 403 and "其他网站" in r.json()["detail"]
+    assert (
+        c.post("/api/songs", files={"files": ("p.png", b"x")}, headers={"origin": "null"}).status_code == 403
+    )
+    assert c.get("/api/songs", headers=evil).status_code == 200  # 读请求浏览器本身会挡（同源策略）
+    # 同源页面发的请求、没有 Origin 的客户端（curl）照常
+    same = {"origin": "http://127.0.0.1:8765"}
+    assert (
+        c.post("/api/songs", files={"files": ("p.png", b"x")}, headers=same).status_code == 400
+    )  # 到了业务校验
+    assert c.post("/api/songs", files={"files": ("p.png", b"x")}).status_code == 400

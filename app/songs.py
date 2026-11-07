@@ -27,6 +27,12 @@ from app.music import (
 log = logging.getLogger("tab_trainer.songs")
 
 PDF_DPI = 200
+# 上传上限：防止一个超大文件把内存、CPU 和磁盘吃光（开了局域网访问时其他设备也能上传）
+MAX_FILES = 40
+MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_TOTAL_BYTES = 200 * 1024 * 1024
+MAX_PAGES = 60  # 一首曲子最多几页（PDF 的页数也算在内）
+MAX_PIXELS = 60_000_000  # 一页最多多少像素（微信长截图 1080×20000 约 2200 万）
 SCORE_EXT = (".gp", ".gpx", ".gp3", ".gp4", ".gp5", ".musicxml", ".xml", ".mxl")
 
 
@@ -69,8 +75,7 @@ def is_score(song: dict) -> bool:
 # ---------------------------------------------------------------------------
 def create_song(uploads: list[tuple[str, bytes]], title: str = "") -> str:
     """保存上传的文件，返回曲子 id。图片 / PDF 曲子状态为 queued，等调用方启动识别。"""
-    if not uploads:
-        raise Invalid("没有上传文件")
+    check_upload_sizes(uploads)
     if any(_score_ext(n) for n, _ in uploads):
         return _create_score_song(uploads, title)
     sid = store.new_id()
@@ -94,27 +99,61 @@ def create_song(uploads: list[tuple[str, bytes]], title: str = "") -> str:
     return sid
 
 
-def _save_pages(uploads: list[tuple[str, bytes]], pages_dir) -> list[dict]:
-    pages_dir.mkdir(parents=True, exist_ok=True)
-    images: list[Image.Image] = []
+def check_upload_sizes(uploads: list[tuple[str, bytes]]) -> None:
+    if not uploads:
+        raise Invalid("没有收到文件")
+    if len(uploads) > MAX_FILES:
+        raise Invalid(f"一次最多上传 {MAX_FILES} 个文件")
+    for name, data in uploads:
+        if len(data) > MAX_FILE_BYTES:
+            raise Invalid(f"“{name}”太大了（单个文件最大 {MAX_FILE_BYTES // 1024 // 1024} MB）")
+    if sum(len(d) for _, d in uploads) > MAX_TOTAL_BYTES:
+        raise Invalid(f"文件总大小超过 {MAX_TOTAL_BYTES // 1024 // 1024} MB")
+
+
+def _page_images(uploads: list[tuple[str, bytes]]):
+    """逐页产出 RGB 图片（PDF 一页一页渲染，不把整份文件的页面都留在内存里）。"""
+    count = 0
+
+    def one_more():
+        nonlocal count
+        count += 1
+        if count > MAX_PAGES:
+            raise Invalid(f"一首曲子最多 {MAX_PAGES} 页")
+
     for name, data in uploads:
         if name.lower().endswith(".pdf") or data[:5] == b"%PDF-":
             import fitz  # pymupdf
 
             with fitz.open(stream=data, filetype="pdf") as doc:
+                if count + len(doc) > MAX_PAGES:
+                    raise Invalid(f"一首曲子最多 {MAX_PAGES} 页（“{name}”有 {len(doc)} 页）")
                 for page in doc:
-                    pix = page.get_pixmap(dpi=PDF_DPI)
-                    images.append(Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB"))
+                    one_more()
+                    # 页面特别大（海报尺寸之类）时降低分辨率，免得渲染出几亿像素
+                    w_in, h_in = page.rect.width / 72, page.rect.height / 72
+                    dpi = min(PDF_DPI, int((MAX_PIXELS / max(1e-6, w_in * h_in)) ** 0.5))
+                    if dpi < 30:
+                        raise Invalid(f"“{name}”的页面尺寸太大")
+                    pix = page.get_pixmap(dpi=dpi)
+                    yield Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
         else:
-            img = Image.open(io.BytesIO(data))
+            one_more()
+            img = Image.open(io.BytesIO(data))  # 只读文件头，还没解码像素
+            if img.width * img.height > MAX_PIXELS:
+                raise Invalid(f"“{name}”分辨率太大（{img.width}×{img.height}），请缩小后再上传")
             img = ImageOps.exif_transpose(img)
             if img.mode in ("RGBA", "LA", "P"):
                 bg = Image.new("RGB", img.size, "white")
                 bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[-1])
                 img = bg
-            images.append(img.convert("RGB"))
+            yield img.convert("RGB")
+
+
+def _save_pages(uploads: list[tuple[str, bytes]], pages_dir) -> list[dict]:
+    pages_dir.mkdir(parents=True, exist_ok=True)
     pages = []
-    for i, img in enumerate(images):
+    for i, img in enumerate(_page_images(uploads)):
         fn = f"p{i + 1}.png"
         img.save(pages_dir / fn, optimize=True)
         pages.append({"file": fn, "width": img.width, "height": img.height})

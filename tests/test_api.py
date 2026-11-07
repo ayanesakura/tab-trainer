@@ -11,7 +11,7 @@ from tests.fakes import derived_bars, score_png
 def client(data_dir, monkeypatch):
     started = []
     monkeypatch.setattr(recognize, "start_parse", lambda sid: started.append(sid) or True)
-    c = TestClient(main.app)
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
     c.started = started
     return c
 
@@ -44,3 +44,48 @@ def test_domain_errors_map_to_status_codes(client):
     assert client.post(f"/api/songs/{sid}/practice", json={}).status_code == 400
     assert client.post(f"/api/songs/{sid}/cancel").status_code == 409
     assert client.get("/api/songs/20260101-000000-abcdef").status_code == 404
+
+
+def _pdf(pages: int) -> bytes:
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(pages):
+        doc.new_page().insert_text((72, 72), "tab")
+    return doc.tobytes()
+
+
+def test_upload_limits(client, monkeypatch):
+    from app import songs
+
+    monkeypatch.setattr(songs, "MAX_FILES", 2)
+    r = client.post("/api/songs", files=[("files", (f"p{i}.png", score_png())) for i in range(3)])
+    assert r.status_code == 400 and "最多上传 2 个" in r.json()["detail"]
+
+    monkeypatch.setattr(songs, "MAX_FILE_BYTES", 1000)
+    r = client.post("/api/songs", files={"files": ("big.png", score_png())})
+    assert r.status_code == 400 and "太大" in r.json()["detail"]
+    monkeypatch.setattr(songs, "MAX_FILE_BYTES", 50 * 1024 * 1024)
+
+    monkeypatch.setattr(songs, "MAX_PAGES", 2)
+    r = client.post("/api/songs", files={"files": ("x.pdf", _pdf(3))})
+    assert r.status_code == 400 and "最多 2 页" in r.json()["detail"]
+    r = client.post("/api/songs", files=[("files", ("x.pdf", _pdf(2))), ("files", ("p.png", score_png()))])
+    assert r.status_code == 400 and "最多 2 页" in r.json()["detail"]
+    assert client.post("/api/songs", files={"files": ("x.pdf", _pdf(2))}).status_code == 200
+
+    monkeypatch.setattr(songs, "MAX_PIXELS", 1000 * 1000)  # 合成谱页是 1200×900
+    r = client.post("/api/songs", files={"files": ("p.png", score_png())})
+    assert r.status_code == 400 and "分辨率太大" in r.json()["detail"]
+    assert len(client.started) == 1  # 只有那份 2 页的 PDF 开始了识别
+    from app import store
+
+    assert len(list(store.SONGS.iterdir())) == 1  # 被拒的上传没有留下半成品目录
+
+
+def test_oversized_request_is_rejected_before_parsing(client, monkeypatch):
+    from app import songs
+
+    monkeypatch.setattr(songs, "MAX_TOTAL_BYTES", 1000)
+    r = client.post("/api/songs", files={"files": ("p.png", b"x" * 3_000_000)})
+    assert r.status_code == 413
