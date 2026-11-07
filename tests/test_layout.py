@@ -267,3 +267,29 @@ def test_clef_before_a_start_repeat_is_not_a_bar():
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [2]
     assert r["systems"][0]["bars"][0][0] >= 115
+
+
+def test_rows_far_apart_keep_their_lyrics_below_and_chords_above():
+    """弹唱谱：每行下面有简谱和歌词（离六线谱 10 个线距左右），下一行上面有和弦图。分界不能取中点
+    （会把歌词拦腰切掉）：下一行只要它上方 9 个线距，其余归上一行；最后一行也要把下面的歌词带上。"""
+    img = Image.new("L", (1200, 1000), 255)
+    d = ImageDraw.Draw(img)
+    tops = (150, 520)
+    for t in tops:
+        for i in range(6):
+            d.line([(60, t + i * 14), (1140, t + i * 14)], fill=170)
+        for x in (60, 600, 1140):
+            d.line([(x, t), (x, t + 70)], fill=40, width=2)
+        for x in range(80, 1120, 60):  # 符干（六线谱下面 0–30 像素）
+            d.line([(x, t + 70), (x, t + 100)], fill=40)
+        d.text((100, t + 70 + 60), "5 6 1 1 2 3 3", fill=0)  # 简谱：下面 60 像素
+        d.text((100, t + 70 + 100), "LYRICS", fill=0)  # 歌词：六线谱下面 100 像素
+        for k in range(3):  # 和弦图：六线谱上面 25–110 像素
+            for i in range(6):
+                d.line([(100 + k * 300, t - 90 + i * 12), (150 + k * 300, t - 90 + i * 12)], fill=0)
+    r = detect_page(img)
+    (a, b) = r["systems"]
+    lyric_bottom = 150 + 70 + 100 + 12
+    assert a["bottom"] >= lyric_bottom and b["top"] >= lyric_bottom  # 第一行的歌词完整地在第一行里
+    assert b["top"] <= 520 - 95  # 第二行的和弦图在第二行里
+    assert b["bottom"] >= 520 + 70 + 100 + 12  # 最后一行：下面的歌词也带上

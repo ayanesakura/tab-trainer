@@ -184,6 +184,30 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
     return False
 
 
+def _row_split(upper: dict, lower: dict) -> float:
+    """相邻两行的分界：一般取中点。两行隔得很远时（弹唱谱：上一行下面有简谱和歌词，下一行上面有和弦图），
+    下一行只要它上方 9 个线距（和弦名、和弦图、速度记号都在这个范围里），剩下的都归上一行——
+    否则上一行的歌词会被拦腰切掉。"""
+    mid = (upper["tab_bottom"] + lower["first_top"]) / 2
+    return max(mid, lower["first_top"] - lower["sp"] * 9)
+
+
+def _content_below(dark: np.ndarray, tab_bottom: float, x0: int, x1: int, sp: float) -> float:
+    """一栏的最后一行：下方紧挨着的内容（符干、简谱、歌词）也要裁进来，和 _content_above 一样一块一块往下找，
+    块之间的空白不到 3 个线距就算连着，最多往下 14 个线距（页码、版权说明隔着一大段空白，不要）。"""
+    rows = dark[:, max(0, x0) : x1 + 1].any(1)
+    limit = min(len(rows) - 1, int(tab_bottom + sp * 14))
+    bottom, gap = tab_bottom, 0
+    for y in range(int(tab_bottom) + 1, limit + 1):
+        if rows[y]:
+            bottom, gap = y, 0
+        else:
+            gap += 1
+            if gap > sp * 3:
+                break
+    return bottom + sp * 0.5
+
+
 def _content_above(dark: np.ndarray, first_top: float, x0: int, x1: int, sp: float) -> float:
     """一栏的第一行：上方紧挨着的标记（弹唱谱的和弦名和和弦图、速度、反复记号）也要裁进来。
     从谱线往上一块一块地找有墨迹的行，块之间的空白不到 3 个线距就算连着，最多往上 12 个线距；
@@ -292,7 +316,7 @@ def detect_page(img: Image.Image) -> dict:
         nxt = systems[i + 1] if i + 1 < len(systems) and systems[i + 1]["col"] == s_["col"] else None
         height = s_["tab_bottom"] - s_["first_top"]
         top = (
-            (prev["tab_bottom"] + s_["first_top"]) / 2
+            _row_split(prev, s_)
             if prev
             else min(
                 s_["first_top"] - min(height * 0.6, s_["sp"] * 9),
@@ -300,9 +324,12 @@ def detect_page(img: Image.Image) -> dict:
             )
         )
         bottom = (
-            (s_["tab_bottom"] + nxt["first_top"]) / 2
+            _row_split(s_, nxt)
             if nxt
-            else s_["tab_bottom"] + min(height * 0.6, s_["sp"] * 6)
+            else max(
+                s_["tab_bottom"] + min(height * 0.6, s_["sp"] * 6),
+                _content_below(dark, s_["tab_bottom"], s_["x0"], s_["x1"], s_["sp"]),
+            )
         )
         s_["top"], s_["bottom"] = max(0, int(top)), min(h, int(bottom))
 
