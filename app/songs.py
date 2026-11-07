@@ -18,7 +18,7 @@ from app import state, store
 from app.config import settings
 from app.errors import STALE_REV, AppError, BarNotFound, Busy, Conflict, Invalid
 from app.migrate import fix_meta_text
-from app.model import is_score, new_song
+from app.model import is_score, new_song, touch_bar
 from app.music import (
     apply_time_signatures,
     clean_events,
@@ -53,9 +53,10 @@ def find_bar(song: dict, bar_id: str) -> dict:
     return bar
 
 
-def check_rev(s: dict, rev: int | None) -> None:
-    """乐观锁：请求带的 rev 和曲子现在的对不上，说明这期间别处（另一个页面、后台识别）改过。"""
-    if rev is not None and int(s.get("rev") or 0) != rev:
+def check_rev(current, rev: int | None) -> None:
+    """乐观锁（按对象）：改小节时比这个小节的 rev，改谱头时比曲子的 meta_rev。请求带的和现在的对不上，
+    说明这期间别处（另一个页面、重新识别）改过这个小节 / 谱头。写问答、讲解补提示、识别其他行都不算。"""
+    if rev is not None and int(current or 0) != rev:
         raise Conflict(STALE_REV)
 
 
@@ -312,7 +313,7 @@ def _derived_bar(i: int, b: dict, meta: dict) -> dict:
 # 手工修改（图片 / PDF 曲子）
 # ---------------------------------------------------------------------------
 def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = None) -> dict:
-    """按小节的稳定 id 修改（编号在识别过程中会变，按编号改可能改到别的小节）。rev 见 check_rev。"""
+    """按小节的稳定 id 修改（编号在识别过程中会变，按编号改可能改到别的小节）。rev = 这个小节的 rev（见 check_rev）。"""
     try:
         cleaned = clean_events(events)
     except Invalid as e:
@@ -321,8 +322,8 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
     def apply(s):
         if not state.can_edit_bars(s):
             raise Invalid(state.SCORE_BARS_LOCKED)
-        check_rev(s, rev)
         bar = find_bar(s, bar_id)
+        check_rev(bar.get("rev"), rev)
         if why := state.bar_locked(s, bar):
             raise Busy(why)
         new = cleaned or rest_bar(s["meta"], bar)
@@ -336,6 +337,8 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
         bar.pop("placeholder", None)  # 用户自己写的内容，不再是识别失败的占位休止
         bar["warn"] = []  # 识别时留下的提示（OCR 不一致等）说的是原来的音；按内容算的读取时重算
         if tip is not None:
+            if tip != bar.get("tip", ""):
+                touch_bar(bar)  # 只改了提示（音符变了的话 store.update 会自己 +1，不会重复）
             bar["tip"] = tip
 
     return store.update(sid, apply)
@@ -345,7 +348,7 @@ def edit_meta(sid: str, raw: dict, rev: int | None = None) -> dict:
     """改谱头：曲名随时能改；调弦 / 变调夹 / 拍号在识别进行中不能改，GP / MusicXML 曲子来自原文件不能改。"""
 
     def apply(s):
-        check_rev(s, rev)
+        check_rev(s.get("meta_rev"), rev)
         old = s.get("meta") or {}
         if "title" in raw and raw["title"] is not None:
             title = str(raw["title"]).strip()

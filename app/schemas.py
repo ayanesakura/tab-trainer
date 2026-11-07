@@ -48,13 +48,13 @@ class MetaIn(_In):
     tuning: list[str] | None = Field(None, max_length=STRINGS)
     capo: int | None = Field(None, ge=0, le=12)
     time_signature: list[int] | None = Field(None, max_length=2)
-    rev: int | None = None  # 带上时和曲子现在的 rev 不一致 → 409（别处改过）
+    rev: int | None = None  # 曲子的 meta_rev：带上时和现在的不一致 → 409（别处改过谱头）
 
 
 class BarIn(_In):
     events: list[Event] = Field(max_length=500)
     tip: str | None = Field(None, max_length=5000)
-    rev: int | None = None
+    rev: int | None = None  # 这个小节的 rev：带上时和现在的不一致 → 409（别处改过这个小节）
 
 
 class AskIn(_In):

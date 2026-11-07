@@ -34,6 +34,7 @@ def needs_review(bar: dict) -> bool:
 def bar_view(s: dict, bar: dict) -> dict:
     out = _public(bar)
     out["warn"] = list(out.get("warn") or [])
+    out["rev"] = int(bar.get("rev") or 0)
     out["edited"] = bool(bar.get("edited"))
     out["needs_review"] = needs_review(bar)
     out["locked"] = state.bar_locked(s, bar)
@@ -50,6 +51,7 @@ def song_view(s: dict) -> dict:
     out.update(
         title=s.get("title") or "",
         rev=int(s.get("rev") or 0),
+        meta_rev=int(s.get("meta_rev") or 0),
         activity=s.get("activity"),
         notice=notice,
         **flags,

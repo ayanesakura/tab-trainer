@@ -12,10 +12,10 @@
 
 from __future__ import annotations
 
-from app.model import is_score
+from app.model import EDITABLE_META, is_score
 
 RECOGNIZE_KINDS = ("parse", "reparse_row")
-META_FIELDS = ["title", "artist", "tuning", "capo", "time_signature"]
+META_FIELDS = list(EDITABLE_META)
 SETTING_FIELDS = ("tuning", "capo", "time_signature")
 SCORE_BARS_LOCKED = "Guitar Pro / MusicXML 曲子的小节来自原文件，不能在这里改"
 

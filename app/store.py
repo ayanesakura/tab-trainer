@@ -4,7 +4,7 @@
 
 写入：先写临时文件并 fsync，再把旧文件改名成 .bak、临时文件改名成正式文件。断电或崩溃时最多丢最后一次修改；
 读取时正式文件坏了（截断、不是合法 JSON）就用 .bak。两份都坏的曲子抛 CorruptSong（曲库里显示成“数据损坏”，可以删除）。
-每次保存 rev +1（接口用它做乐观锁）。删除在锁里先把目录改名（之后的写入一律 NotFound，不会把目录重新建出来）。
+每次保存 rev +1（保存计数）；update 顺便维护按对象的版本号 bar.rev / meta_rev（见 model.bump_revs，接口用它们做乐观锁）。删除在锁里先把目录改名（之后的写入一律 NotFound，不会把目录重新建出来）。
 """
 
 from __future__ import annotations
@@ -147,10 +147,13 @@ def write_song(d: Path, song: dict) -> None:
 
 
 def update(song_id: str, fn: Callable[[dict], None]) -> dict:
-    """加锁读-改-写，后台识别线程和接口请求同时改同一首曲子时不会互相覆盖。返回改完的曲子（带派生字段）。"""
+    """加锁读-改-写，后台识别线程和接口请求同时改同一首曲子时不会互相覆盖。返回改完的曲子（带派生字段）。
+    内容变了的小节 rev +1、可改谱头变了 meta_rev +1（model.bump_revs）。"""
     with _lock:
         song = load(song_id)
+        before = model.content_snapshot(song)
         fn(song)
+        model.bump_revs(song, before)
         save(song)
         return model.derive(song)
 

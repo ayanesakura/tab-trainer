@@ -12,6 +12,8 @@ import difflib
 import json
 from dataclasses import dataclass
 
+from app.model import touch_bar
+
 SETTING_KEYS = ("tuning_midi", "capo", "time_signature")  # 这些变了，所有小节的提示都按旧设定写的
 
 
@@ -84,6 +86,8 @@ def setting_changed(old_meta: dict, new_meta: dict) -> bool:
 def invalidate_tips_for_setting(s: dict) -> None:
     """调弦 / 变调夹 / 拍号变了：所有提示和问答都按旧设定写的（AI 读谱的不确定说明和设定无关，保留）。"""
     for b in s["bars"]:
+        if b.get("tip"):
+            touch_bar(b)  # 提示没了也是这个小节的内容变了
         b["tip"] = ""
         if "_orig" in b:  # 改回原样时也不该恢复旧设定下写的提示
             b["_orig"]["tip"] = ""
