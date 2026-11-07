@@ -146,7 +146,9 @@ def _note_names(bag) -> str:
     return "、".join(f"{s}弦{f}品" + (f"×{n}" if n > 1 else "") for (s, f), n in sorted(bag.items()))
 
 
-def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -> dict[int, tuple]:
+def ocr_disagreements(
+    bars: list[dict], ocr_bars: list[list[tuple[int, int]]], chord_sheet: bool = False
+) -> dict[int, tuple]:
     """逐小节比较 AI 结果和本机数字识别读到的（弦, 品）。返回 {小节序号: (只有 OCR 读到的, 只有 AI 写了的)}。
 
     - OCR 在这个小节什么都没读到：不判断（可能是没读出来，不代表没有音）；
@@ -191,11 +193,13 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
             pairs.append((i, ai, got))
     agree = sum(sum((ai & got).values()) for _, ai, got in pairs)
     total = sum(max(sum(ai.values()), sum(got.values())) for _, ai, got in pairs)
-    if not total or agree / total < 0.5:
+    if not total or (not chord_sheet and agree / total < 0.5):
         return {}
     # OCR 在整行里只读对了 AI 结果的一小部分（斜体 / 手写风格的数字、很糊的截图）：它在这种排版上靠不住，
     # 这时的“不一致”多半是 OCR 读错，提示给模型反而会把对的改错。GP 等软件导出的谱子每行都在 78% 以上
-    if agree < 0.6 * ai_total:
+    # 弹唱谱的 × 是按和弦图换算的，OCR 本来就看不到：改看 OCR 读到的数字里有多少和 AI 对得上
+    ocr_total = sum(sum(got.values()) for _, _, got in pairs)
+    if (agree < 0.7 * ocr_total) if chord_sheet else (agree < 0.6 * ai_total):
         return {}
     return {i: (got - ai, ai - got) for i, ai, got in pairs if got != ai}
 
@@ -320,7 +324,7 @@ def transcribe_system(
         if spans and len(bars) != len(spans):
             issues.append(("other", f"应有 {len(spans)} 个小节，返回了 {len(bars)} 个"))
         elif ocr_bars:
-            for i, (only_ocr, only_ai) in ocr_disagreements(bars, ocr_bars).items():
+            for i, (only_ocr, only_ai) in ocr_disagreements(bars, ocr_bars, chord_sheet=bool(shapes)).items():
                 if shapes:
                     only_ai = []
                     if not only_ocr:

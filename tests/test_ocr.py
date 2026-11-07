@@ -139,3 +139,21 @@ def test_rows_where_ocr_reads_little_are_not_compared():
     assert recognize.ocr_disagreements(ai, ocr) == {}
     good = [[(1, 0), (2, 1), (3, 0), (4, 2), (5, 3)]] * 3 + [[(1, 0), (2, 1), (3, 0), (4, 2), (5, 8)]]
     assert recognize.ocr_disagreements(ai, good) == {3: (Counter({(5, 8): 1}), Counter({(5, 3): 1}))}
+
+
+def test_chord_sheet_rows_judge_ocr_by_what_it_read():
+    """弹唱谱：AI 的音大多是按和弦图换算的 ×（OCR 看不到），不能按“读到了 AI 的几成”判断 OCR 靠不靠得住，
+    改看 OCR 读到的数字有几成对得上；写出来的品位读错了照样报。"""
+
+    def bar(*notes):
+        return {
+            "events": [
+                {"dur": "1", "notes": [{"string": s, "fret": f, "tech": [], "grace": -1} for s, f in notes]}
+            ]
+        }
+
+    ai = [bar((1, 0), (2, 1), (3, 0), (4, 2), (5, 3)), bar((1, 0), (2, 1), (3, 0), (4, 2), (3, 1))]
+    ocr = [[(5, 3)], [(4, 2), (3, 0), (3, 0)]]  # 只读到写出来的几个数字：AI 第 2 小节的 3 弦 1 品，谱上是 0
+    assert recognize.ocr_disagreements(ai, ocr) == {}  # 普通谱：OCR 只读到 AI 的 3/10，不判断
+    out = recognize.ocr_disagreements(ai, ocr, chord_sheet=True)
+    assert list(out) == [1]
