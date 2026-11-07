@@ -304,7 +304,7 @@ function cp1252Bytes(s) {
   }
   return new Uint8Array(out);
 }
-const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
+const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g; // 和后端 migrate.fix_mojibake 同一套（含假名）
 
 /**
  * 按 windows-1252 读出来的 GBK 文字 → 原来的中文；看着不像这种乱码就返回 null。
