@@ -527,3 +527,112 @@ def test_check_bar_flags_durations_the_player_cannot_write():
     quint = [{"dur": "1/5", "notes": []}] * 5 + [{"dur": "3", "notes": []}]
     probs = pipeline.check_bar(quint, meta)
     assert len(probs) == 1 and "1/5" in probs[0] and "近似" in probs[0]
+
+
+def test_explain_does_not_write_old_tips_onto_bars_edited_meanwhile(data_dir, monkeypatch):
+    sid = pipeline.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, _derived_bars(3))
+    bar_id = store.load(sid)["bars"][0]["id"]
+    real = FakeClaude.explain_bars
+
+    def explain_while_user_edits(self, meta, bars):
+        out = real(self, meta, bars)
+        pipeline.edit_bar(
+            sid, bar_id, [{"dur": "4", "notes": [{"string": 1, "fret": 9}]}], None
+        )  # 用户这时改了音
+        return out
+
+    monkeypatch.setattr(FakeClaude, "explain_bars", explain_while_user_edits)
+    _explain_sync(monkeypatch)
+    pipeline.start_explain(sid)
+    song = store.load(sid)
+    assert song["bars"][0]["tip"] == "" and song["bars"][1]["tip"] == "讲解 2"
+    assert song["status"] == "ready"
+
+
+def test_plan_built_from_old_notes_stays_stale(data_dir, monkeypatch):
+    sid = pipeline.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, _derived_bars(2))
+    bar_id = store.load(sid)["bars"][1]["id"]
+    real = FakeClaude.practice_plan
+
+    def plan_while_user_edits(self, meta, bars):
+        out = real(self, meta, bars)
+        pipeline.edit_bar(sid, bar_id, [{"dur": "4", "notes": [{"string": 3, "fret": 5}]}], None)
+        return out
+
+    monkeypatch.setattr(FakeClaude, "practice_plan", plan_while_user_edits)
+    _explain_sync(monkeypatch)
+    pipeline.start_explain(sid)
+    plan = store.load(sid)["plan"]
+    assert plan["stale"] and plan["changed_bars"] == [bar_id]
+
+
+def test_undoing_an_edit_restores_tip_qa_and_plan(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    bar = store.load(sid)["bars"][1]
+    pipeline.ask_bar(sid, bar["id"], "旧问题")
+    pipeline.edit_bar(sid, bar["id"], [{"dur": "4", "notes": [{"string": 2, "fret": 3}]}], None)
+    pipeline.ask_bar(sid, bar["id"], "改了之后的问题")
+    pipeline.edit_bar(sid, bar["id"], [{"dur": "4", "notes": [{"string": 2, "fret": 4}]}], None)  # 再改一次
+    song = pipeline.edit_bar(sid, bar["id"], bar["events"], None)  # 撤销回原样
+    b = song["bars"][1]
+    assert b["tip"] == "tip 2" and "_orig" not in b
+    assert [q.get("stale", False) for q in b["qa"]] == [False, True]  # 原来的问答恢复，改动期间的变成过时
+    assert not song["plan"]["stale"]
+
+
+def test_meta_change_keeps_uncertain_notes(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    store.update(sid, lambda s: s["bars"][0].update(uncertain="第 3 拍看不清"))
+    song = pipeline.edit_meta(sid, {"capo": 3})
+    assert song["bars"][0]["uncertain"] == "第 3 拍看不清" and song["bars"][0]["tip"] == ""
+
+
+def test_off_grid_durations_do_not_trigger_a_retry(data_dir, monkeypatch):
+    def transcribe(
+        self, img, meta, first_bar, spans, hint="", previous=None, problems=None, labeled_strings=False
+    ):
+        FakeClaude.calls.append({"first_bar": first_bar, "retry": previous is not None})
+        quint = [
+            {"dur": "1/5", "notes": [{"string": 1, "fret": k, "tech": [], "grace": -1, "bend": 0}]}
+            for k in range(5)
+        ]
+        rest = [{"dur": "3", "notes": [{"string": 2, "fret": 0, "tech": [], "grace": -1, "bend": 0}]}]
+        return {
+            "bars": [
+                {"number": first_bar + i, "events": quint + rest, "tip": "", "uncertain": ""}
+                for i in range(len(spans))
+            ]
+        }
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    assert not any(c.get("retry") for c in FakeClaude.calls)
+    assert all(any("网格" in w for w in b["warn"]) for b in store.load(sid)["bars"])  # 只是提醒
+
+
+def test_import_error_is_ignored_once_the_song_was_parsed(data_dir):
+    sid = pipeline.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, _derived_bars(2))
+    assert pipeline.import_failed(sid, "临时的网络错误")["status"] == "ready"
+
+
+def test_restart_during_explain_restores_previous_status(data_dir):
+    sid = pipeline.create_song([("p1.png", _png())])
+    pipeline._run_parse(sid)
+    store.update(
+        sid,
+        lambda s: s.update(
+            status="parsing",
+            job="explain",
+            job_prev={"status": "cancelled", "error": "已取消"},
+            progress={"stage": "生成讲解"},
+        ),
+    )
+    pipeline.recover_interrupted()
+    song = store.load(sid)
+    assert song["status"] == "cancelled" and "讲解生成中断" in song["error"] and "job" not in song

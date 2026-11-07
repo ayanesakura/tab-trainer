@@ -117,3 +117,9 @@ test('odd durations never lose time: exact split, grid-aligned onsets', () => {
   assert.equal(beatMap[0][5], 960);
   assert.deepEqual(beatMap[1], [0, 140, 960]); // 7/48 拍精确表示
 });
+
+test('retiming next to septuplets keeps the exact bar length', async () => {
+  const { retimeEvent } = await import('../../app/static/js/score.js');
+  const out = retimeEvent([{ dur: '1/7', notes: [] }, { dur: '1/7', notes: [] }, { dur: '2/7', notes: [] }, { dur: '25/7', notes: [] }], 0, '1/6');
+  assert.deepEqual(out.map(e => e.dur), ['1/6', '5/42', '2/7', '25/7']);
+});

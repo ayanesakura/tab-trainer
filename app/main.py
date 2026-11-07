@@ -32,12 +32,18 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="tab-trainer", lifespan=lifespan)
 app.state.token = None  # 绑定到非本机地址时才设置（见 main）：局域网里的其他设备要带这个令牌才能访问
 
-LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"}
 TOKEN_COOKIE = "tt_token"
 DENIED_PAGE = """<!doctype html><meta charset="utf-8"><title>tab-trainer</title>
 <body style="font-family:system-ui;max-width:520px;margin:80px auto;line-height:1.7;color:#333">
 <h2>需要访问令牌</h2><p>tab-trainer 开放了局域网访问，其他设备需要用带令牌的地址打开一次。</p>
 <p>请在运行 tab-trainer 的电脑上，从启动时打印的信息里复制完整地址（以 <code>?token=</code> 结尾）。</p></body>"""
+
+
+def _same(a: str, b: str) -> bool:
+    return secrets.compare_digest(
+        a.encode("utf-8"), b.encode("utf-8")
+    )  # 直接比较 str 时非 ASCII 会抛 TypeError
 
 
 @app.middleware("http")
@@ -48,12 +54,12 @@ async def require_token(request: Request, call_next):
     if not token or client in LOOPBACK:
         return await call_next(request)
     given = request.query_params.get("token")
-    if given is not None and secrets.compare_digest(given, token):
+    if given is not None and _same(given, token):
         url = request.url.remove_query_params("token")
         resp = RedirectResponse(str(url), status_code=303)
         resp.set_cookie(TOKEN_COOKIE, token, max_age=30 * 86400, httponly=True, samesite="lax")
         return resp
-    if secrets.compare_digest(request.cookies.get(TOKEN_COOKIE, ""), token):
+    if _same(request.cookies.get(TOKEN_COOKIE, ""), token):
         return await call_next(request)
     if request.url.path.startswith("/api/") or request.url.path.startswith("/files/"):
         return JSONResponse({"detail": "需要访问令牌"}, status_code=401)

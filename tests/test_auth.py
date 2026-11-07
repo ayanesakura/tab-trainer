@@ -39,3 +39,14 @@ def test_lan_requests_need_the_token(monkeypatch):
 def test_local_browser_skips_the_token_even_when_lan_is_open(monkeypatch):
     c = _client(monkeypatch, "s3cret", host="127.0.0.1")
     assert c.get("/api/songs").status_code == 200
+
+
+def test_non_ascii_token_values_are_rejected_not_500(monkeypatch):
+    c = _client(monkeypatch, "s3cret")
+    assert c.get("/?token=%C3%A9").status_code == 401
+    assert c.get("/api/songs?token=%E4%BD%A0").status_code == 401
+
+
+def test_ipv6_mapped_loopback_is_local(monkeypatch):
+    c = _client(monkeypatch, "s3cret", host="::ffff:127.0.0.1")
+    assert c.get("/api/songs").status_code == 200

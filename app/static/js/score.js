@@ -272,19 +272,27 @@ export const DUR_CHOICES = [
  * 是最后一个起拍时只能缩短，缩出来的时间补一个休止。做不到时抛出带中文说明的 Error。
  */
 export function retimeEvent(events, ei, dur) {
+  // 用精确的分数算（tick 会四舍五入：1/7 拍改成 1/6 时，小节总长会差一点）
+  const F = d => { const [n, m] = String(d).split('/').map(Number); return [n, m || 1]; };
+  const g = (a, b) => (b ? g(b, a % b) : Math.abs(a));
+  const norm = ([n, m]) => { const k = g(n, m) || 1; return [n / k, m / k]; };
+  const add = ([a, b], [c, d]) => norm([a * d + c * b, b * d]);
+  const sub = (x, [c, d]) => add(x, [-c, d]);
+  const str = ([n, m]) => (m === 1 ? String(n) : `${n}/${m}`);
   const out = events.map(e => ({ ...e, notes: e.notes.map(n => ({ ...n })) }));
   const ev = out[ei];
-  const oldT = durToTicks(ev.dur), newT = durToTicks(dur);
-  if (newT <= 0) throw new Error('时值必须大于 0');
-  if (newT === oldT) return out;
+  const oldD = F(ev.dur), newD = norm(F(dur));
+  if (newD[0] <= 0) throw new Error('时值必须大于 0');
+  const diff = sub(oldD, newD); // 旧 - 新：正数表示改短了
+  if (diff[0] === 0) return out;
   if (ei + 1 < out.length) {
-    const nextT = durToTicks(out[ei + 1].dur) + oldT - newT;
-    if (nextT <= 0) throw new Error('改长以后会盖过下一个音，先把下一个音改短或删掉');
-    out[ei + 1].dur = ticksToDur(nextT);
+    const next = add(F(out[ei + 1].dur), diff);
+    if (next[0] <= 0) throw new Error('改长以后会盖过下一个音，先把下一个音改短或删掉');
+    out[ei + 1].dur = str(next);
   } else {
-    if (newT > oldT) throw new Error('这是小节里最后一拍，只能改短（改长会超出小节）');
-    out.push({ dur: ticksToDur(oldT - newT), notes: [] });
+    if (diff[0] < 0) throw new Error('这是小节里最后一拍，只能改短（改长会超出小节）');
+    out.push({ dur: str(diff), notes: [] });
   }
-  ev.dur = ticksToDur(newT);
+  ev.dur = str(newD);
   return out;
 }

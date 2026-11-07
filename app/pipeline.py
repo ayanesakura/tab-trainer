@@ -195,14 +195,16 @@ def new_bar_id() -> str:
 GRID = Fraction(1, 48)  # 播放器能精确写出的最小时值单位（四分音符的 1/48：64 分音符和 64 分三连音的公约数）
 
 
-def check_bar(events: list[dict], meta: dict) -> list[str]:
+def check_bar(events: list[dict], meta: dict, info: bool = True) -> list[str]:
+    """小节的问题（显示在练习页）。info=False 时只返回需要模型返修的问题：
+    时值不在播放网格上（五连音之类）只是提醒，读对了也会有，不能拿去让模型“改”。"""
     problems = []
     total = sum((parse_dur(e["dur"]) for e in events), Fraction(0))
     want = bar_length(meta)
     if total != want:
         problems.append(f"时值合计 {float(total):g} 拍，应为 {float(want):g} 拍")
     odd = sorted({e["dur"] for e in events if (parse_dur(e["dur"]) / GRID).denominator != 1}, key=parse_dur)
-    if odd:
+    if odd and info:
         problems.append(
             f"时值 {'、'.join(odd)} 拍不在播放器支持的节奏网格上（支持到 64 分音符和三连音、六连音，五连音、七连音这类不支持），播放时按最接近的位置近似"
         )
@@ -312,6 +314,9 @@ def import_failed(sid: str, error: str) -> dict:
     def apply(s):
         if s.get("kind") != "score":
             raise ValueError("只有 Guitar Pro / MusicXML 曲子会这样报错")
+        if s.get("bars"):  # 之前已经成功解析过：一次临时的加载错误不代表文件坏了
+            log.info("request_id=none song=%s import error ignored (already parsed): %s", sid, error)
+            return
         s.update(status="error", error=(str(error or "").strip() or "曲谱文件无法读取")[:300])
 
     return store.update(sid, apply)
@@ -393,16 +398,52 @@ def set_derived(sid: str, meta_raw: dict, bars_raw: list, track: int = 0) -> dic
 # 谱面变了以后，AI 写的内容和练习记录的失效处理
 # ---------------------------------------------------------------------------
 def _invalidate_bar(bar: dict) -> None:
-    """这个小节的音变了：提示和不确定说明是按旧音写的，清掉；问答保留但标成“改谱之前的”。"""
+    """这个小节的音变了：提示和不确定说明是按旧音写的，清掉；问答保留但标成“改谱之前的”。
+    第一次改动前的内容记在 _orig 里：之后又改回原样（比如撤销），就把它们恢复。"""
+    first = "_orig" not in bar
+    if first:
+        bar["_orig"] = {
+            "events": bar["events"],
+            "tip": bar.get("tip", ""),
+            "uncertain": bar.get("uncertain", ""),
+        }
     bar["tip"] = ""
     bar["uncertain"] = ""
     for q in bar.get("qa") or []:
-        q["stale"] = True
+        if not q.get("stale"):
+            q["stale"] = True
+            if first:  # 只有原样时问的问答，改回原样后才恢复；改动期间问的说的是改过的谱
+                q["stale_by_edit"] = True
 
 
-def _invalidate_plan(s: dict) -> None:
-    if s.get("plan"):
-        s["plan"]["stale"] = True
+def _restore_bar(bar: dict) -> None:
+    """改回了第一次改动前的音：恢复当时的提示和不确定说明；改动期间问的问题反过来变成过时的。"""
+    orig = bar.pop("_orig")
+    bar["tip"], bar["uncertain"] = orig["tip"], orig["uncertain"]
+    for q in bar.get("qa") or []:
+        if q.pop("stale_by_edit", False):
+            q.pop("stale", None)
+        else:
+            q["stale"] = True
+
+
+def _invalidate_plan(s: dict, bar_id: str | None = None) -> None:
+    """练习建议过时：bar_id 给出时只记下“这个小节改过”（改回原样还能撤销），否则是整体过时（调弦、重新识别）。"""
+    plan = s.get("plan")
+    if not plan:
+        return
+    if bar_id:
+        plan["changed_bars"] = sorted({*plan.get("changed_bars", []), bar_id})
+    else:
+        plan["stale_all"] = True
+    plan["stale"] = bool(plan.get("stale_all") or plan.get("changed_bars"))
+
+
+def _restore_plan_bar(s: dict, bar_id: str) -> None:
+    plan = s.get("plan")
+    if plan and bar_id in plan.get("changed_bars", []):
+        plan["changed_bars"] = [b for b in plan["changed_bars"] if b != bar_id]
+        plan["stale"] = bool(plan.get("stale_all") or plan["changed_bars"])
 
 
 def _prune_practice(s: dict) -> None:
@@ -512,7 +553,13 @@ def recover_interrupted() -> None:
         except (KeyError, ValueError):
             continue
         changed = False
-        if song.get("status") in ("parsing", "queued"):
+        if song.get("status") in ("parsing", "queued") and song.get("job") == "explain":
+            prev = song.pop("job_prev", None) or {"status": "ready", "error": None}
+            song.pop("job", None)
+            song["status"], song["progress"] = prev["status"], None
+            song["error"] = "服务重启，讲解生成中断，已完成的部分会保留，可以重新生成。"
+            changed = True
+        elif song.get("status") in ("parsing", "queued"):
             if song.get("kind") == "score":
                 song["status"], song["error"], song["progress"] = (
                     "ready",
@@ -609,7 +656,9 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
     from collections import Counter
 
     pairs = []
+    last_fret: dict[int, int] = {}  # 每根弦上最后一个音的品位（判断跨小节线、写成括号的延续音）
     for i, (bar, seen) in enumerate(zip(bars, ocr_bars, strict=False)):
+        tied_ok = set(last_fret.items())
         ai: Counter = Counter()
         harmonic_marks: Counter = Counter()
         for e in bar["events"]:
@@ -617,6 +666,7 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
                 if "x" in n["tech"]:
                     continue
                 ai[(n["string"], n["fret"])] += 1
+                last_fret[n["string"]] = n["fret"]
                 if n.get("grace", -1) >= 0:
                     ai[(n["string"], n["grace"])] += 1
                 if "ah" in n["tech"]:
@@ -629,6 +679,13 @@ def ocr_disagreements(bars: list[dict], ocr_bars: list[list[tuple[int, int]]]) -
                 if parts and not (parts - (got - ai)):
                     got -= parts
                     got[(st, f)] += 1
+        # 连音线跨过小节线延续的音，谱上常写成“(5)”，OCR 会读到，但它不是新起拍：上一小节这根弦的最后一个音
+        # 就是这个品位、而且 AI 这边没有对不上的音（读错弦是两边各多一个，延续音只是 OCR 多一个），就不算多出来的
+        if not (ai - got):
+            for key, k in list((got - ai).items()):
+                if key in tied_ok:
+                    got[key] -= k
+            got += Counter()  # 去掉计数为 0 的
         if got:
             pairs.append((i, ai, got))
     agree = sum(sum((ai & got).values()) for _, ai, got in pairs)
@@ -685,7 +742,7 @@ def _transcribe_system(
                 events = []
                 issues.append(f"第 {first_bar + i} 小节数据格式错误：{e}")
             probs = check_bar(events, meta)
-            issues += [f"第 {first_bar + i} 小节：{p}" for p in probs]
+            issues += [f"第 {first_bar + i} 小节：{p}" for p in check_bar(events, meta, info=False)]
             if not events:
                 events = rest_bar(meta)
                 probs = ["没有识别出可用的音符，暂按整小节休止处理"]
@@ -884,13 +941,30 @@ def start_explain(sid: str) -> None:
     if cancel is None:
         raise RuntimeError("这首曲子正在处理中")
     total = (len(todo) + EXPLAIN_CHUNK - 1) // EXPLAIN_CHUNK
-    _set(sid, status="parsing", error=None, progress={"stage": "生成讲解", "done": 0, "total": total})
+    prev = {
+        "status": song.get("status", "ready"),
+        "error": song.get("error"),
+    }  # 结束后恢复（比如“已取消”的识别）
+
+    def begin(s):
+        s.update(status="parsing", job="explain", job_prev=prev)
+        s["progress"] = {"stage": "生成讲解", "done": 0, "total": total}
+
+    store.update(sid, begin)
 
     def add_usage(s, claude, before):
         s["usage"] = {
             k: s.get("usage", {}).get(k, 0) + claude.usage[k] - before[k]
             for k in ("input_tokens", "output_tokens")
         }
+
+    def end(error=None):
+        def apply(s):
+            s.pop("job", None)
+            p = s.pop("job_prev", None) or prev
+            s.update(status=p["status"], progress=None, error=error or p["error"])
+
+        store.update(sid, apply)
 
     def run():
         try:
@@ -903,33 +977,46 @@ def start_explain(sid: str) -> None:
                 chunk = [b for b in cur["bars"] if b.get("id") in ids]
                 if not chunk:
                     continue
+                seen = {b["id"]: b["events"] for b in chunk}  # 写回时小节已经被改过的，就不写旧内容的提示
                 before = dict(claude.usage)
                 tips = {
                     t["number"]: t["tip"] for t in claude.explain_bars(cur["meta"], chunk).get("bars", [])
                 }
 
-                def apply(s, tips=tips, k=k, ids=ids, before=before):
+                def apply(s, tips=tips, k=k, seen=seen, before=before, meta=cur["meta"]):
+                    same_meta = s["meta"] == meta
                     for b in s["bars"]:
-                        if b.get("id") in ids and b["n"] in tips and not (b.get("tip") or "").strip():
+                        if (
+                            same_meta
+                            and seen.get(b.get("id")) == b["events"]
+                            and b["n"] in tips
+                            and not (b.get("tip") or "").strip()
+                        ):
                             b["tip"] = tips[b["n"]]
+                            b.pop("_orig", None)  # 提示是按现在的音新写的
                     s["progress"] = {"stage": "生成讲解", "done": k + 1, "total": total}
                     add_usage(s, claude, before)
 
                 store.update(sid, apply)
             cur = store.load(sid)
+            seen = {b["id"]: b["events"] for b in cur["bars"]}
             before = dict(claude.usage)
             new_plan = claude.practice_plan(cur["meta"], cur["bars"])
 
-            def finish(s):
-                s.update(plan=new_plan, status="ready", progress=None)
+            def finish(s, meta=cur["meta"]):
+                changed = sorted(b["id"] for b in s["bars"] if seen.get(b["id"]) != b["events"])
+                if changed or s["meta"] != meta:  # 生成计划期间谱子又改了：新计划一出来就是过时的
+                    new_plan.update(changed_bars=changed, stale_all=s["meta"] != meta, stale=True)
+                s["plan"] = new_plan
                 add_usage(s, claude, before)
 
             store.update(sid, finish)
+            end()
         except Cancelled:
-            _set(sid, status="ready", progress=None, error="讲解生成已取消，已完成的部分会保留。")
+            end("讲解生成已取消，已完成的部分会保留。")
         except Exception as e:
             log.exception("request_id=unknown song=%s explain failed", sid)
-            _set(sid, status="ready", progress=None, error="生成讲解失败：" + _friendly(e))
+            end("生成讲解失败：" + _friendly(e))
         finally:
             jobs.release(sid)
 
@@ -996,12 +1083,14 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None) -> dict:
         if bar is None:
             raise BarNotFound(bar_id)
         new = cleaned or rest_bar(s["meta"])
-        if new != bar["events"]:
+        if "_orig" in bar and new == bar["_orig"]["events"]:
+            _restore_bar(bar)
+            _restore_plan_bar(s, bar_id)
+        elif new != bar["events"]:
             _invalidate_bar(bar)
-            _invalidate_plan(s)
+            _invalidate_plan(s, bar_id)
         bar["events"] = new
         bar["warn"] = check_bar(bar["events"], s["meta"])
-        bar["uncertain"] = ""
         if tip is not None:
             bar["tip"] = tip
 
@@ -1014,8 +1103,14 @@ def edit_meta(sid: str, raw: dict) -> dict:
         merged = {**old, **raw}
         s["meta"] = normalize_meta(merged, strict=True)
         if any(s["meta"][k] != old.get(k) for k in ("tuning_midi", "capo", "time_signature")):
-            for b in s["bars"]:  # 调弦 / 变调夹 / 拍号变了：所有提示都按旧设定写的
-                _invalidate_bar(b)
+            for b in s[
+                "bars"
+            ]:  # 调弦 / 变调夹 / 拍号变了：所有提示都按旧设定写的（AI 读谱的不确定说明和设定无关，保留）
+                b["tip"] = ""
+                b.pop("_orig", None)
+                for q in b.get("qa") or []:
+                    q["stale"] = True
+                    q.pop("stale_by_edit", None)
             _invalidate_plan(s)
         if "title" in raw:
             s["title"] = str(raw["title"]).strip()
@@ -1085,6 +1180,8 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
 
     def apply(s):
         b = next((x for x in s["bars"] if x.get("id") == bar_id), None)
+        if b is not None and b["events"] != bar["events"]:
+            entry["stale"] = True  # 等回答期间这个小节改过音：回答说的是改之前的谱
         if b is not None:  # 等回答期间小节被重新识别掉了，就不存
             b["qa"] = [*(b.get("qa") or []), entry][-QA_KEEP:]
         s["usage"] = {

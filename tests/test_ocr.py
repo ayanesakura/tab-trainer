@@ -84,6 +84,11 @@ def test_disagreements_rules():
     assert list(
         pipeline.ocr_disagreements([bar((1, 1, (), -1), (2, 0, (), -1))], [[(1, 1), (1, 1), (2, 0)]])
     ) == [0]
+    # 跨小节线的延续音“(2)”：OCR 多读一个和上一小节最后一个音相同的品位，不算；同时 AI 也有对不上的音时照样报
+    tie = [bar((1, 2, (), -1), (5, 0, (), -1)), bar((2, 3, (), -1), (4, 0, (), -1))]
+    assert pipeline.ocr_disagreements(tie, [[(1, 2), (5, 0)], [(1, 2), (2, 3), (4, 0)]]) == {}
+    shifted = [bar((5, 0, (), -1), (1, 2, (), -1)), bar((6, 0, (), -1), (1, 3, (), -1))]
+    assert list(pipeline.ocr_disagreements(shifted, [[(5, 0), (1, 2)], [(5, 0), (1, 3)]])) == [1]
     # 一致率太低：多半是 OCR 读不准这种排版，整行不判断
     assert pipeline.ocr_disagreements(bars[:2], [[(3, 3)], [(4, 4)]]) == {}
 

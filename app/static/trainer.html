@@ -624,7 +624,13 @@ const AT_BASE = '/static/vendor/alphatab/';
 // 木吉他库后加载，alphaTab 查音色时后加载的优先，所以 24 / 25 号用的是真实木吉他采样。
 const SF_BASE = '/static/vendor/soundfont/sonivox.sf2', SF_GUITARS = '/static/vendor/soundfont/guitars.sf3';
 const TIMBRES = { steel: 25, nylon: 24 };
-let soundFontsLoaded = 0;
+let soundFontsLoaded = 0, playerReadyOnce = false;
+function guitarsFailed() {
+  if (soundFontsLoaded >= 2) return;
+  soundFontsLoaded = 2;
+  UI.toast('木吉他音色加载失败，先用默认音色播放', 'err', 6000);
+  if (playerReadyOnce && !state.ready) { state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格键播放'); }
+}
 const atReady = new Promise(r => (window.alphaTab ? r() : addEventListener('alphatab-ready', r, { once: true })));
 let api = null, baseTempo = 60, beatMap = [], scoreKey = '', shiftDown = false;
 addEventListener('keydown', e => { if (e.key === 'Shift') shiftDown = true; });
@@ -650,8 +656,14 @@ async function ensureApi() {
     },
   });
   api.soundFontLoad.on(e => { if (!state.ready) setStatus('加载音色…', `${Math.round(100 * e.loaded / Math.max(1, e.total))}%`); });
-  api.soundFontLoaded.on(() => { if (++soundFontsLoaded === 1) api.loadSoundFont(SF_GUITARS, true); });
+  api.soundFontLoaded.on(() => {
+    if (++soundFontsLoaded !== 1) return;
+    // 木吉他音色加载失败时退回只用 Sonivox，不能让播放器一直卡在“音色还在加载”
+    if (api.player && api.player.soundFontLoadFailed) api.player.soundFontLoadFailed.on(guitarsFailed);
+    api.loadSoundFont(SF_GUITARS, true);
+  });
   api.playerReady.on(() => {
+    playerReadyOnce = true;
     if (soundFontsLoaded < 2) return; // 等木吉他音色也加载完
     state.ready = true; applyAudio(); if (!state.playing) setStatus('已停止', '空格键播放');
   });
@@ -688,7 +700,11 @@ async function loadScore() {
     if (key === scoreKey) return;
     scoreKey = key;
     const r = await fetch(`/files/${SONG.id}/source`);
-    if (!r.ok) { reportImportError('曲谱文件加载失败（' + r.status + '）'); return; }
+    if (!r.ok) {
+      const msg = '曲谱文件加载失败（' + r.status + '）';
+      if (!SONG.bars.length) reportImportError(msg); else UI.toast(msg + '，刷新页面再试', 'err', 6000);
+      return;
+    }
     api.load(new Uint8Array(await r.arrayBuffer()), [SONG.track || 0]);
   } else {
     if (!BARS.length) return;
@@ -798,6 +814,7 @@ function applyLoopRange() {
       range.endTick = lb.end > la.start ? lb.end : la.end;
     }
   }
+  state.lastTick = -1; // 设置范围会把播放位置跳回起点：不能当成弹完了一遍
   api.playbackRange = range;
   api.isLooping = true;
   const bars = api.tracks[0].staves[0].bars;
@@ -842,7 +859,9 @@ function setLoop(a, b, restart = true, show = true) {
 }
 
 function onPosition(tick) {
-  if (state.playing && state.lastTick >= 0 && tick < state.lastTick - 10) {
+  // 只有从段尾跳回段首才算弹完一遍；重新设置循环范围、停止时也会跳回起点，那些不算（applyLoopRange 会重置 lastTick）
+  const r = api && api.playbackRange, start = r ? r.startTick : 0;
+  if (state.playing && state.lastTick >= 0 && tick < state.lastTick - 10 && tick <= start + scoreConv.TICKS) {
     state.loops++;
     practiceFlush(true); // 先按提速前的速度记下刚弹完的这一遍
     if ($('auto').checked) {
@@ -1009,7 +1028,10 @@ const frac = s => { const [a, b] = String(s).split('/'); return b === undefined 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 function applySong(song) {
-  if (np) closeNotePop(); // 数据变了，面板里记的位置可能已经不对
+  if (np) { // 正在改的小节被删掉或内容变了才关面板；别的刷新（比如后台轮询）不打断
+    const k = song.bars.findIndex(b => b.id === np.barId);
+    if (k < 0 || JSON.stringify(song.bars[k].events) !== np.snap) closeNotePop(); else np.bi = k;
+  }
   SONG = song;
   const meta = song.meta || {};
   const tm = meta.tuning_midi || [64, 59, 55, 50, 45, 40];
@@ -1177,9 +1199,11 @@ function renderCoach() {
   $('qaList').innerHTML = qa.map(x => `<div class="qa${x.stale ? ' stale' : ''}"><div class="q">${UI.icon('sparkle', 13)}<span>${esc(x.q)}</span>${x.stale ? '<span class="old" title="这一小节后来改过音，回答说的可能是改之前的谱">改谱前</span>' : ''}<span class="t">${esc(x.at || '')}</span></div><div class="a">${esc(x.a)}</div></div>`).join('');
   $('qaList').hidden = !qa.length;
   $('qaList').scrollTop = $('qaList').scrollHeight;
-  const busy = asking === bar.id;
+  const busy = !!asking, here = asking === bar.id;
   $('askBtn').disabled = busy;
-  setButton($('askBtn'), busy ? '<span class="spinner"></span>思考中…' : UI.icon('sparkle') + '问 AI');
+  const otherN = busy && !here ? (SONG.bars.find(b => b.id === asking) || {}).n || '' : '';
+  $('askBtn').title = otherN ? `正在回答第 ${otherN} 小节的问题，回答完再问` : '';
+  setButton($('askBtn'), here ? '<span class="spinner"></span>思考中…' : busy ? `<span class="spinner"></span>等第 ${otherN} 小节的回答` : UI.icon('sparkle') + '问 AI');
 }
 async function askBar() {
   if (shownBar < 0 || asking) return;
@@ -1193,7 +1217,8 @@ async function askBar() {
     if (!r.ok) { UI.toast(d.detail || '提问失败', 'err', 6000); return; }
     const b = SONG.bars.find(x => x.id === bar.id);
     if (b) b.qa = d.qa;
-    $('askInput').value = '';
+    // 还停在这个小节、输入框里也还是刚才的问题时才清空（换到别的小节新打的字不能丢）
+    if (SONG.bars[shownBar] && SONG.bars[shownBar].id === bar.id && $('askInput').value.trim() === q) $('askInput').value = '';
   } finally {
     asking = null; renderCoach();
   }
@@ -1276,22 +1301,29 @@ $('edSave').onclick = async () => {
 
 // 保存一个小节；记下改之前的内容，⌘Z / Ctrl+Z 可以撤销
 const undoStack = [];
+let saving = 0; // 进行中的保存：这期间不能撤销，否则可能撤销错步骤
 async function putBar(barId, events, msg, isUndo = false) {
   const before = SONG.bars.find(b => b.id === barId);
-  const r = await fetch(`/api/songs/${SONG_ID}/bars/${encodeURIComponent(barId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events }) });
-  if (!r.ok) { UI.toast((await r.json().catch(() => ({}))).detail || '保存失败', 'err', 4000); return false; }
-  if (before && !isUndo) { undoStack.push({ barId, events: before.events, n: before.n }); if (undoStack.length > 50) undoStack.shift(); }
+  const entry = before && !isUndo ? { barId, events: before.events, n: before.n } : null;
+  if (entry) { undoStack.push(entry); if (undoStack.length > 50) undoStack.shift(); } // 先记上，按发出的顺序
+  saving++;
+  try {
+    const r = await fetch(`/api/songs/${SONG_ID}/bars/${encodeURIComponent(barId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events }) });
+    if (!r.ok) {
+      if (entry) undoStack.splice(undoStack.lastIndexOf(entry), 1);
+      UI.toast((await r.json().catch(() => ({}))).detail || '保存失败', 'err', 4000);
+      return false;
+    }
+  } finally { saving--; }
   await refresh(true);
   UI.toast(msg + (isUndo ? '' : (editMode ? '（⌘Z 撤销）' : '')));
   return true;
 }
-let undoing = false;
 async function undoEdit() {
-  if (undoing) return;
+  if (saving) { UI.toast('正在保存，稍等一下再撤销', 'info'); return; }
   const u = undoStack.pop();
   if (!u) { UI.toast('没有可以撤销的修改', 'info'); return; }
-  undoing = true;
-  try { await putBar(u.barId, u.events, `已撤销第 ${u.n} 小节的修改`, true); } finally { undoing = false; }
+  if (!(await putBar(u.barId, u.events, `已撤销第 ${u.n} 小节的修改`, true))) undoStack.push(u); // 撤销失败：记录放回去
 }
 
 // ---------------------------------------------------------------------
@@ -1330,7 +1362,7 @@ function openNotePop(beat, note) {
   if (!ev) return;
   const ni = note ? ev.notes.findIndex(n => n.string === 7 - note.string) : -1; // alphaTab 的弦号 1 = 最低音弦
   const cur = ni >= 0 ? ev.notes[ni] : null;
-  np = { bi, ei, ni, barId: SONG.bars[bi].id, string: cur ? cur.string : freeString(ev, note ? 7 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []), dur: ev.dur };
+  np = { bi, ei, ni, barId: SONG.bars[bi].id, snap: JSON.stringify(SONG.bars[bi].events), string: cur ? cur.string : freeString(ev, note ? 7 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []), dur: ev.dur };
   if (!$('npDur').children.length) $('npDur').innerHTML = scoreConv.DUR_CHOICES.map(([d, l]) => `<button data-d="${d}">${l}</button>`).join('');
   showBar(bi);
   renderNotePop();
