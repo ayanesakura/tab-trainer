@@ -202,6 +202,14 @@ function costText(s) {
   return `<span class="cost" title="${esc(tip.join('；'))}">${esc(text)}${s.unpriced_tokens && usd ? ' +' : ''}</span>`;
 }
 
+// 识别失败 / 取消、又没有可练的小节时的下一步：模型设置的问题去设置，其他的（图片 / PDF 曲子）重新识别
+const SETTINGS_ERR = /API key|模型设置|模型名|Base URL|余额|额度/i;
+function fixAction(s) {
+  if (s.status === 'error' && s.notice && SETTINGS_ERR.test(s.notice.msg || '')) return `<a class="btn sm act" data-k="settings" href="#settings">${icon('settings', 12)}去设置</a>`;
+  if (!isScore(s)) return `<button class="btn sm act" data-k="retry" data-retry="${esc(s.id)}">${icon('refresh', 12)}重新识别</button>`;
+  return '';
+}
+
 function rowHTML(s) {
   const play = canPlay(s), href = `/trainer?id=${encodeURIComponent(s.id)}`;
   const pick = selecting && selectable(s), on = pick && selected.has(s.id);
@@ -211,10 +219,12 @@ function rowHTML(s) {
   const prac = practiceText(s);
   const range = rangeText(s), last = s.practice && s.practice.last;
   const tags = (s.tags || []).length ? `<span class="tags">${s.tags.map(t => `<button class="badge tag" data-tag="${esc(t)}" data-k="tag:${esc(t)}" title="只看“${esc(t)}”">${esc(t)}</button>`).join('')}</span>` : '';
-  const title = play && !selecting ? `<a class="title" href="${href}" data-k="open">${esc(s.title)}</a>` : `<span class="title">${esc(s.title)}</span>`;
+  const title = play && !selecting ? `<a class="title" href="${href}" data-k="open" title="${esc(s.title)}">${esc(s.title)}</a>` : `<span class="title" title="${esc(s.title)}">${esc(s.title)}</span>`;
+  // 只有“接着练”用主色按钮，其他行的操作用普通按钮，曲库里不会一列全是实心按钮
   let action = '';
-  if (play && last) action = `<a class="btn primary sm" data-k="resume" href="${href}&resume=1" title="${esc(`从${range || '上次的位置'}${last.bpm ? `、${last.bpm} BPM` : ''} 接着练`)}">${icon('repeat', 12)}接着练</a>`;
-  else if (play) action = `<a class="btn primary sm" data-k="play" href="${href}">${icon('play', 12)}练习</a>`;
+  if (play && last) action = `<a class="btn primary sm act" data-k="resume" href="${href}&resume=1" title="${esc(`从${range || '上次的位置'}${last.bpm ? `、${last.bpm} BPM` : ''} 接着练`)}">${icon('repeat', 12)}接着练</a>`;
+  else if (play) action = `<a class="btn sm act" data-k="play" href="${href}">${icon('play', 12)}练习</a>`;
+  else if (!s.busy && (s.status === 'error' || s.status === 'cancelled')) action = fixAction(s); // 没有可练的内容：给出下一步
   return `<div class="row song-row${play || pick ? ' click' : ''}${on ? ' on' : ''}" data-id="${esc(s.id)}" data-play="${play ? 1 : ''}" data-pick="${pick ? 1 : ''}">
     ${selecting ? `<input type="checkbox" class="pick" data-k="pick" aria-label="选择 ${esc(s.title)}" ${on ? 'checked' : ''} ${pick ? '' : 'disabled'}>` : ''}
     <span class="src-ic" title="${esc(src ? `来源：${src}` : '')}">${icon(SOURCE_ICON[s.source_type] || 'music', 18)}</span>
@@ -325,6 +335,8 @@ $('songs').addEventListener('click', e => {
   if (tag) { e.stopPropagation(); lib.tag = tag.dataset.tag; renderSongs(); return; }
   const more = e.target.closest('[data-more]');
   if (more) { e.stopPropagation(); openMore(more); return; }
+  const retry = e.target.closest('[data-retry]');
+  if (retry) { const s = lastSongs.find(x => x.id === retry.dataset.retry); if (s) reparse(s); return; }
   if (e.target.closest('a,button')) return;
   const row = e.target.closest('.row[data-play="1"]');
   if (row) location.href = row.querySelector('a.title').href;

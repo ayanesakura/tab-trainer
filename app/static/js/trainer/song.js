@@ -72,10 +72,10 @@ function renderHeader(s) {
   const m = s.meta || {}, v = get('view');
   const title = s.title || m.title || '未命名';
   document.title = title + ' · 吉他谱练习器';
-  $('songTitle').textContent = title;
+  $('songTitle').textContent = title; $('songTitle').title = title; // 太长会被截断：悬停看全名
   const src = SOURCES[s.source_type];
   $('songSource').hidden = !src; $('songSource').textContent = src || '';
-  $('songSub').textContent = songSubtitle(s, v);
+  $('songSub').textContent = $('songSub').title = songSubtitle(s, v);
 }
 
 // ---------------------------------------------------------------------

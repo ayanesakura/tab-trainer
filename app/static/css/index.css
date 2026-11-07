@@ -21,6 +21,7 @@
 .song-row .name { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .song-row .title { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .song-row a.title:hover { color: var(--accent); }
+.song-row .ctl .act { min-width: 76px; } /* 接着练 / 练习 / 重新识别 右边对齐 */
 .song-row .state { display: flex; align-items: center; gap: 6px; font-size: var(--fs-1); color: var(--muted); margin-top: 3px; min-width: 0; }
 .song-row .state .progress { width: 140px; flex: none; }
 .song-row .notice-badge { max-width: 360px; overflow: hidden; text-overflow: ellipsis; display: inline-block; line-height: 20px; }
