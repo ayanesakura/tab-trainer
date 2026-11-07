@@ -85,7 +85,7 @@ function ensureApi() {
     core: { fontDirectory: AT_BASE + 'font/', includeNoteBounds: true }, // 不开这个 alphaTab 不会触发点击音符事件（试听、改音都靠它）
     display: { scale: 0.9, layoutMode: 'Page', staveProfile: staveProfile(), resources: themeColors() },
     // 曲名、艺人等页面顶栏已经有了，谱面上不再画（省出一大块地方）；调弦说明保留。alphaTab 署名不受影响
-    notation: { rhythmMode: 'ShowWithBars', elements: { scoreTitle: false, scoreSubTitle: false, scoreArtist: false, scoreAlbum: false, scoreWords: false, scoreMusic: false, scoreWordsAndMusic: false, scoreCopyright: false } },
+    notation: { rhythmMode: 'ShowWithBars', elements: { scoreTitle: false, scoreSubTitle: false, scoreArtist: false, scoreAlbum: false, scoreWords: false, scoreMusic: false, scoreWordsAndMusic: false, scoreCopyright: false, effectLyrics: false } }, // 歌词自己画在六线谱下方（drawLyrics）
     player: {
       playerMode: 'EnabledSynthesizer', soundFont: SF_BASE,
       enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true,
@@ -204,6 +204,14 @@ async function onScoreLoaded(score) {
   // 和弦图画在和弦变化的拍上方（像弹唱谱原谱那样），不在曲子开头列一排
   score.stylesheet.globalDisplayChordDiagramsInScore = true;
   score.stylesheet.globalDisplayChordDiagramsOnTop = false;
+  // 有歌词：每行下面留出几行字的地方（drawLyrics 画在那里）
+  // （设置要在渲染前生效：这里已经晚了，变了的话就按新设置再画一次，只在歌词行数变了的时候发生）
+  const pad = 10 + lyricLines(score) * LYRIC_LINE + (lyricLines(score) ? 8 : 0);
+  if (api.settings.display.systemPaddingBottom !== pad) {
+    api.settings.display.systemPaddingBottom = api.settings.display.lastSystemPaddingBottom = pad;
+    api.updateSettings();
+    setTimeout(() => api.render(), 0);
+  }
   baseTempo = score.tempo || 60;
   api.playbackSpeed = get('play.bpm') / baseTempo; // 先设好：下面的 hook 失败提前返回时，实际速度也要和显示的 BPM 一致
   if (isScore(song) && hooks.scoreLoaded && !(await hooks.scoreLoaded(score))) return;
@@ -286,6 +294,39 @@ export function barBox(bi) {
   if (!mb) return null;
   const r = mb.realBounds;
   return { x: surface.offsetLeft + r.x, y: surface.offsetTop + r.y, w: r.w, h: r.h };
+}
+
+// 歌词：alphaTab 只看六线谱时把歌词画在谱表上方（和弦图上面），看着像是上一行的；这里自己画在每行六线谱的下方，
+// 对准各拍的位置，多段歌词一段一行
+const LYRIC_LINE = 20;
+const beatsOf = score => score.tracks[0].staves[0].bars.flatMap(b => b.voices.flatMap(v => v.beats));
+function lyricLines(score) {
+  let n = 0;
+  for (const b of beatsOf(score)) if (b.lyrics) n = Math.max(n, b.lyrics.filter(Boolean).length && b.lyrics.length);
+  return Math.min(n, 4);
+}
+function drawLyrics() {
+  let layer = $('lyricLayer');
+  if (!layer) { layer = document.createElement('div'); layer.id = 'lyricLayer'; $('score').appendChild(layer); }
+  layer.replaceChildren();
+  const look = api && (api.boundsLookup || (api.renderer && api.renderer.boundsLookup)), surface = $('score').querySelector('.at-surface');
+  if (!look || !surface || !api.score || !lyricLines(api.score)) return;
+  for (const sys of look.staffSystems) {
+    // 一行的范围包括下面留的空（systemPaddingBottom）：歌词从这段空白的顶上开始写
+    const bottom = surface.offsetTop + sys.realBounds.y + sys.realBounds.h - api.settings.display.systemPaddingBottom;
+    for (const mb of sys.bars) for (const bar of mb.bars) for (const bb of bar.beats) {
+      const lyr = bb.beat.lyrics;
+      if (!lyr || bb.beat.voice.index !== 0) continue;
+      lyr.forEach((text, k) => {
+        if (!text) return;
+        const el = document.createElement('span');
+        el.className = 'lyric';
+        el.textContent = text;
+        Object.assign(el.style, { left: surface.offsetLeft + (bb.onNotesX || bb.visualBounds.x) + 'px', top: bottom + 2 + k * LYRIC_LINE + 'px' });
+        layer.appendChild(el);
+      });
+    }
+  }
 }
 
 function markReviewBars() {
@@ -529,6 +570,7 @@ export function initPlayer() {
   on('view', renderSections);
   on('view.source', loadSource);
   on('ui.renderGen', markReviewBars);
+  on('ui.renderGen', drawLyrics);
   on('ui.notation', () => { if (!api) return; api.settings.display.staveProfile = alphaTab.StaveProfile[staveProfile()]; api.updateSettings(); api.render(); });
 
   setBpm(50); // 加载前的占位，不算“定下了速度”

@@ -355,7 +355,7 @@ class Claude(LLM):
         start_ts: list[int] | None = None,
     ) -> dict:
         """start_ts：前面的行里变过拍号时，这一行开头实际的拍号（这张图上看不到那个变拍号）。"""
-        block, scale = _image_block(img, min_width=1800)
+        block, scale = _image_block(img, min_width=2400)  # 小截图放大一些：和弦图的圆点、符杠更容易看清
         ts = meta["time_signature"]
         bar_len = ts[0] * 4 / ts[1]
         info = (

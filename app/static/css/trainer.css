@@ -312,3 +312,5 @@ table.tune td b { font-variant-numeric: tabular-nums; }
 .chord-diagram .cd-open { fill: none; stroke: var(--fg-2); stroke-width: 1; }
 .review-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .warns.reviewed { opacity: .6; }
+#lyricLayer { position: absolute; inset: 0; pointer-events: none; }
+#lyricLayer .lyric { position: absolute; transform: translateX(-2px); font-size: 13px; line-height: 16px; color: var(--fg); white-space: nowrap; }

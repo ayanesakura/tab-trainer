@@ -60,7 +60,20 @@ def test_chord_names_diagrams_and_strums_are_drawn(chord_song, trainer):
     )
     assert beats == [["C", 2], ["", 1], ["D11", 2], ["", 1]]
     names = b.js("""[...document.querySelectorAll('#score text')].map(t => t.textContent)""")
-    assert "C" in names and "D11" in names and "第1" in names and "二段" in names and "句" in names
+    assert "C" in names and "D11" in names and "第1" not in names  # 歌词不让 alphaTab 画（它画在谱表上方）
+    # 歌词画在每行六线谱的下方：第 1 段一行、第 2 段在它下面
+    b.wait_for("document.querySelectorAll('#lyricLayer .lyric').length >= 18")
+    lyr = b.js(
+        """[...document.querySelectorAll('#lyricLayer .lyric')].slice(0, 3).map(e => [e.textContent, e.getBoundingClientRect().top])"""
+    )
+    assert [x[0] for x in lyr] == ["第1", "二段", "句"]
+    assert lyr[1][1] > lyr[0][1] and lyr[2][1] == lyr[0][1]
+    # 歌词在第一行六线谱（谱线）的下面、第二行的上面
+    tab_bottom, next_top = b.js(
+        """(() => { const top = document.querySelector('#score .at-surface').getBoundingClientRect().top, s = tt.api.boundsLookup.staffSystems;
+          const v = s[0].bars[0].bars[0].visualBounds; return [top + v.y + v.h, top + s[1].realBounds.y]; })()"""
+    )
+    assert tab_bottom <= lyr[0][1] and lyr[1][1] + 16 <= next_top
     # 弹唱谱默认只看六线谱；和弦图画在谱里（不在开头列一排）
     assert b.js("tt.get('ui.notation')") == "tab"
     assert b.js("tt.api.score.stylesheet.globalDisplayChordDiagramsInScore") is True
