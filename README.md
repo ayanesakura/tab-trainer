@@ -37,10 +37,25 @@
 
 界面参考了 [magpie](https://github.com/yetone/magpie) 的设计语言：
 - 浅灰底配白卡片，细线分隔，靛蓝强调色；
-- 跟随系统切换亮/暗主题，也可以手动切换；
-- 选项用分段开关，状态用圆点（失败用 × 形状），操作结果用底部的轻提示。
+- 跟随系统切换亮/暗主题，也可以手动切换（顶栏按钮：跟随系统 → 浅色 → 深色）；
+- 选项用分段开关，状态用圆点（失败用 × 形状），操作结果用底部的轻提示，确认和输入用界面里的对话框（不用浏览器自带的弹窗）；
+- 全部操作都能用键盘完成：上传框可以 Tab 到再按 Enter / 空格，菜单用 ↑ ↓ 选择，Esc 关闭最上面的浮层，关闭后焦点回到原来的按钮。
 
-全部是原生 HTML/CSS/JS（`app/static/ui.css`、`ui.js` 为共用部分），不需要前端构建。
+用词：**曲子** = 曲库里的一条；**谱面** = 渲染出来、可以播放的谱；**原谱** = 上传的图片 / PDF。
+
+曲库里每首曲子显示上次练习的时间、练到哪几个小节和累计时长，点“接着练”直接回到上次的循环范围和速度；可以按最近练习 / 最近添加 / 曲名排序。
+
+全部是原生 HTML/CSS/JS，不需要前端构建，脚本都是 ES 模块（`<script type="module">`）。共用部分：
+
+| 文件 | 内容 |
+|---|---|
+| `app/static/ui.css` | 设计变量（颜色、字号 4 档、圆角 3 档、间距 4 档、阴影、原谱底色、指板配色，亮暗两套）和通用组件（按钮、分段开关、卡片、列表行、chips、通知、菜单、对话框） |
+| `app/static/ui.js` | `$` / `esc`、图标、主题、轻提示、浮层栈 `layer`（Esc / 点外面关闭、焦点移入和还回）、`menu`、`confirm` / `prompt`、`notice`、`seg` / `tabs` |
+| `app/static/js/lib/api.js` | 和后端通信：`get` / `post` / `put` / `del` / `upload` / `download`（出错统一抛带中文说明的 `ApiError`）、`withBusy`（按钮忙状态、防重复提交）、`poll`（轮询，出错退避重试） |
+| `app/static/js/lib/theme-boot.js` | 在 `<head>` 里同步加载的小脚本，首屏前写好主题，避免暗色下闪白 |
+| `app/static/js/vocab.js` | 前后端共用词表 `js/vocab.json` 的常量：弦数和标准调弦、技巧名称和记号、反复记号、来源、警告代码、`parseDur` |
+
+主题：`<html data-theme>` 总是写实际生效的 `light` / `dark`（选“跟随系统”时由脚本监听系统外观变化），CSS 里暗色只有一个选择器 `:root[data-theme="dark"]`。页面自己的样式只用变量，不写死颜色。
 
 ## 第三方组件
 
@@ -183,7 +198,7 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/store.py` | `data/` 下的 JSON 读写（加锁的读-改-写、`.bak` 备份、坏文件回退、单实例锁） |
 | `app/evaluate.py` | 识别准确率评测 |
 
-前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`。练习页的脚本按功能拆在 `js/trainer/` 下（core → synth / tuner / fretboard / bar-info → player → coach / practice-log / editor → song → main），用普通 `<script>` 按顺序加载：前面的文件只做声明，事件绑定放在各自的 `initXxx()` 里，由 `main.js` 统一调用并在 alphaTab 模块就绪后第一次加载曲子。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`）。
+前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`（共用部分见上面“界面”一节）。曲库页的脚本是 `js/index.js`。练习页的脚本按功能拆在 `js/trainer/` 下（core → synth / tuner / fretboard / bar-info → player → coach / practice-log / editor → song → main），用普通 `<script>` 按顺序加载：前面的文件只做声明，事件绑定放在各自的 `initXxx()` 里，由 `main.js` 统一调用并在 alphaTab 模块就绪后第一次加载曲子。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`）。
 
 测试和模块一一对应（`tests/test_<模块>.py`），替身模型和合成谱子在 `tests/fakes.py`，公共 fixture 在 `tests/conftest.py`。
 
