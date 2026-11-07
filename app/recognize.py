@@ -206,6 +206,7 @@ def transcribe_system(
     first_bar: int,
     hint: str = "",
     cancel: threading.Event | None = None,
+    start_ts: list[int] | None = None,
 ) -> list[dict]:
     sysinfo = song["systems"][si]
     page = song["pages"][sysinfo["page"]]
@@ -236,9 +237,11 @@ def transcribe_system(
             previous=previous,
             problems=problems,
             labeled_strings=labeled,
+            start_ts=start_ts,
         )
         bars, issues, lengths = [], [], []
-        cur_ts = None  # 这一行里谱上写了变拍号之后的拍号（之前的按全曲拍号；前面几行写的变拍号这里看不到）
+        # 当前生效的拍号：这一行开头的（前面几行变过拍号时由调用方给出），遇到这一行里写的变拍号就换
+        cur_ts = start_ts if start_ts and start_ts != meta["time_signature"] else None
         for i, b in enumerate(raw.get("bars", [])):
             change = clean_time_signature(b.get("time_signature") or [])
             cur_ts = change or cur_ts
@@ -377,40 +380,66 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
         n += len(s["spans"]) if s["spans"] else 8
 
     errors = []
-    with ThreadPoolExecutor(CONCURRENCY) as pool:
-        futs = {
-            pool.submit(transcribe_queued, claude, sid, work, i, starts[i], "", cancel=cancel): i
-            for i in range(len(systems))
-        }
-        for fut in as_completed(futs):
-            i = futs[fut]
-            try:
-                bars = fut.result()
-                status, err = "done", None
-            except (Cancelled, CancelledError):
-                bars, status, err = [], "error", "已取消"
-            except Exception as e:
-                rid = request_id_of(e)
-                log.exception("request_id=%s song=%s system=%d failed", rid, sid, i)
-                bars, status, err = [], "error", jobs.friendly(e)
-                errors.append(f"第 {i + 1} 行：{err}")
 
-            _replace_system_bars(work, i, [dict(b) for b in bars])
-            work["systems"][i].update(status=status, error=err)
+    def run_rows(rows: list[tuple[int, list[int] | None]]) -> None:
+        """并行识别这些行（行号，这一行开头的拍号），每行完成就写回（重新识别时写到 work 里）。"""
+        with ThreadPoolExecutor(CONCURRENCY) as pool:
+            futs = {
+                pool.submit(
+                    transcribe_queued, claude, sid, work, i, starts[i], "", cancel=cancel, start_ts=ts
+                ): i
+                for i, ts in rows
+            }
+            for fut in as_completed(futs):
+                i = futs[fut]
+                try:
+                    bars = fut.result()
+                    status, err = "done", None
+                except (Cancelled, CancelledError):
+                    bars, status, err = [], "error", "已取消"
+                except Exception as e:
+                    rid = request_id_of(e)
+                    log.exception("request_id=%s song=%s system=%d failed", rid, sid, i)
+                    bars, status, err = [], "error", jobs.friendly(e)
+                    errors.append(f"第 {i + 1} 行：{err}")
 
-            def apply(s, i=i, bars=bars, status=status, err=err):
-                if not restage:
-                    _replace_system_bars(s, i, bars)
-                    apply_time_signatures(s["bars"], s["meta"])
-                    s["systems"][i].update(status=status, error=err)
-                    staleness.prune_practice(s)
-                s["progress"]["done"] += 1
-                s["usage"] = dict(claude.usage)
+                _replace_system_bars(work, i, [dict(b) for b in bars])
+                work["systems"][i].update(status=status, error=err)
 
-            store.update(sid, apply)
-            if cancel.is_set():
-                for f in futs:
-                    f.cancel()  # 还没开始的行不再发请求；正在进行的请求会跑完
+                def apply(s, i=i, bars=bars, status=status, err=err):
+                    if not restage:
+                        _replace_system_bars(s, i, bars)
+                        apply_time_signatures(s["bars"], s["meta"])
+                        s["systems"][i].update(status=status, error=err)
+                        staleness.prune_practice(s)
+                    s["progress"]["done"] += 1
+                    s["usage"] = dict(claude.usage)
+
+                store.update(sid, apply)
+                if cancel.is_set():
+                    for f in futs:
+                        f.cancel()  # 还没开始的行不再发请求；正在进行的请求会跑完
+
+    run_rows([(i, None) for i in range(len(systems))])
+
+    # 各行是并行识别的，前面某行写的变拍号后面的行看不到，模型会把小节硬凑成全曲拍号（每小节一样长，查不出来）。
+    # 按第一遍的结果算出每行开头实际的拍号，和全曲拍号不同的行带上它再识别一次（没有变拍号的曲子不多花钱）。
+    redo = [] if cancel.is_set() else _rows_needing_carried_ts(work["bars"], meta, len(systems))
+    if not restage:
+        song_now = store.load(sid)
+        edited = {b["system"] for b in song_now["bars"] if "_orig" in b}  # 用户已经改过的行不覆盖
+        redo = [(i, ts) for i, ts in redo if i not in edited]
+    if redo:
+        log.info("song=%s rerun rows with carried time signature: %s", sid, redo)
+
+        def begin_redo(s):
+            s["progress"] = {"stage": "按前面的变拍号重新识别", "done": 0, "total": len(redo)}
+            if not restage:
+                for i, _ in redo:
+                    s["systems"][i].update(status="parsing", error=None)  # 识别期间这几行不能改
+
+        store.update(sid, begin_redo)
+        run_rows(redo)
 
     if cancel.is_set():
         raise Cancelled()
@@ -452,6 +481,27 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
         )
 
     store.update(sid, finish)
+
+
+def _row_start_ts(bars: list[dict], meta: dict, si: int) -> list[int]:
+    """第 si 行开头实际的拍号：按顺序走过前面各行写的变拍号（ts_change）。"""
+    cur = meta["time_signature"]
+    for b in bars:
+        if b["system"] >= si:
+            break
+        cur = b.get("ts_change") or cur
+    return cur
+
+
+def _rows_needing_carried_ts(bars: list[dict], meta: dict, n_rows: int) -> list[tuple[int, list[int]]]:
+    """第一遍按全曲拍号识别、但开头其实已经变了拍号的行（行首自己写了变拍号的不算）。"""
+    out = []
+    for si in range(n_rows):
+        row = [b for b in bars if b["system"] == si]
+        ts = _row_start_ts(bars, meta, si)
+        if row and ts != meta["time_signature"] and not row[0].get("ts_change"):
+            out.append((si, ts))
+    return out
 
 
 class RestageFailed(Exception):
@@ -501,7 +551,8 @@ def reparse_system(sid: str, si: int, hint: str = "", cancel: threading.Event | 
     song = store.load(sid)
     # 起始小节号：前面各行最后一个小节 + 1（这一行之前识别失败、没有小节时也对）
     first = max((b["n"] for b in song["bars"] if b["system"] < si), default=0) + 1
-    bars = transcribe_queued(claude, sid, song, si, first, hint=hint, cancel=cancel)
+    start_ts = _row_start_ts(song["bars"], song["meta"], si)  # 前面各行写的变拍号，这一行的图上看不到
+    bars = transcribe_queued(claude, sid, song, si, first, hint=hint, cancel=cancel, start_ts=start_ts)
 
     def apply(s):
         _replace_system_bars(s, si, bars)
