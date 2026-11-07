@@ -462,7 +462,7 @@ $('pageGrid').addEventListener('drop', e => {
   if (pg.drag < 0 || !card) return;
   e.preventDefault();
   const to = +card.dataset.i, after = e.offsetX > card.offsetWidth / 2 ? 1 : 0;
-  movePage(pg.drag, pg.drag < to ? to - 1 + after : to + after);
+  if (to !== pg.drag) movePage(pg.drag, pg.drag < to ? to - 1 + after : to + after); // 放回自己身上（不管左半还是右半）不动
   pg.drag = -1;
 });
 $('pagesAdd').onclick = () => $('pagesFile').click();

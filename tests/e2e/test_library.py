@@ -325,3 +325,30 @@ def test_search_keeps_hidden_selection(server, browser):
     )
     b.js("document.getElementById('selectCancel').click(); true")
     assert not b.errors, b.errors
+
+
+def test_drop_page_card_on_itself_is_noop(server, browser):
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for(f"!!document.querySelector('[data-more=\"{server['image']}\"]')")
+    b.js(f"tt.openPages('{server['image']}').then(() => true)")
+    b.wait_for("document.querySelectorAll('.page-card').length === 1")
+    # 加一张新页（只在对话框里，不保存），凑成两张卡片
+    b.js("""const dt = new DataTransfer(); dt.items.add(new File(['x'], 'new.png', { type: 'image/png' }));
+      const input = document.getElementById('pagesFile'); input.files = dt.files;
+      input.dispatchEvent(new Event('change')); true""")
+    b.wait_for("document.querySelectorAll('.page-card').length === 2")
+    # 第一张拖起来，放在它自己的右半边
+    b.js("""(() => { const card = document.querySelector('.page-card[data-i="0"]'), r = card.getBoundingClientRect();
+      const ev = (type, x) => new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: r.top + r.height / 2, dataTransfer: new DataTransfer() });
+      card.dispatchEvent(ev('dragstart', r.left + 5));
+      card.dispatchEvent(ev('dragover', r.right - 5));
+      card.dispatchEvent(ev('drop', r.right - 5));
+      card.dispatchEvent(ev('dragend', r.right - 5)); return true; })()""")
+    assert b.js("[...document.querySelectorAll('.page-card')].map(c => c.classList.contains('new'))") == [
+        False,
+        True,
+    ]
+    b.js("document.getElementById('pagesCancel').click(); true")
+    b.wait_for("!document.getElementById('pagesDlg').open")
+    assert not b.errors, b.errors
