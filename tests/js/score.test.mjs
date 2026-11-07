@@ -162,3 +162,19 @@ test('per-bar time signatures survive our data -> alphaTex -> alphaTab', () => {
   assert.deepEqual(score.masterBars.map(m => [m.timeSignatureNumerator, m.timeSignatureDenominator]), [[4, 4], [3, 4], [6, 8], [4, 4]]);
   assert.deepEqual(norm(deriveSong(score, 0).bars), norm(d.bars));
 });
+
+// 拍上倚音（GP 里常见）：alphaTab 播放时把主音往后推一个三十二分（playbackStart 120），
+// 起拍要按谱面位置算，否则小节开头会多出一个八分之一拍的假休止
+test('on-beat grace notes do not shift the main note or add a rest', () => {
+  const tex = `\\track "G" \\staff {tabs} \\tuning (E4 B3 G3 D3 A2 E2) . 2.3.4 {gr ob} 4.3.4 5.3.4 7.3.2 | 3.2.4 5.2.4 {gr ob} 7.2.4 0.1.4`;
+  const score = gpRoundTrip(tex);
+  const beats = score.tracks[0].staves[0].bars[0].voices[0].beats;
+  assert.equal(beats[1].playbackStart, 120); // 前提：alphaTab 确实把主音推后了
+  const d = deriveSong(score, 0);
+  const sig = b => b.events.map(e => e.dur + ':' + e.notes.map(n => `${n.string}/${n.fret}` + (n.grace >= 0 ? `g${n.grace}` : '')).join(','));
+  assert.deepEqual(sig(d.bars[0]), ['1:3/4g2', '1:3/5', '2:3/7']);
+  assert.deepEqual(sig(d.bars[1]), ['1:2/3', '1:2/7g5', '2:1/0']);
+  // 播放时用 playbackStart 找当前事件：被推后的主音仍然对应它自己的事件
+  const onsets = [0, 960, 1920];
+  for (const b of beats) assert.equal(eventIndexAt(onsets, b.playbackStart), Math.min(2, Math.floor(b.displayStart / 960)));
+});

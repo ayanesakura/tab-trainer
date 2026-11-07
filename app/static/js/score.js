@@ -11,7 +11,8 @@ export const TICKS = 960; // 每个四分音符的 MIDI tick 数
 // deriveSong 的输出格式 / 转换规则的版本。改了 deriveSong（音符、技巧、拍号的转换）就加 1：
 // 已经导入的曲子下次打开时会重新转换（alphaTab 升级也会）。
 // 2：每小节带自己的拍号；多声部同一根弦同时起拍的音只保留一个
-export const DERIVE_VERSION = 2;
+// 3：按谱面位置分起拍（拍上倚音不再在小节开头多出假休止）
+export const DERIVE_VERSION = 3;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -218,11 +219,13 @@ export function deriveSong(score, trackIndex = 0) {
     const pendingGrace = [];
     for (const voice of bar.voices) {
       for (const beat of voice.beats) {
+        // 用谱面位置（displayStart），不用播放位置：拍上倚音会让 alphaTab 把主音的 playbackStart 往后推
+        // 一个三十二分，按 playbackStart 算会在小节开头多出一个假休止
         if (beat.graceType) { // 倚音：记下来，交给同一根弦上紧跟着的音
-          for (const n of beat.notes) pendingGrace.push({ s: ours(n.string), fret: n.fret, at: beat.playbackStart });
+          for (const n of beat.notes) pendingGrace.push({ s: ours(n.string), fret: n.fret, at: beat.displayStart });
           continue;
         }
-        const start = beat.playbackStart;
+        const start = beat.displayStart;
         if (!byTick.has(start)) byTick.set(start, []);
         if (beat.isRest) continue;
         for (const n of beat.notes) {
