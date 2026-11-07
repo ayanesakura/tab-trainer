@@ -128,6 +128,7 @@ function ensureApi() {
   api.renderFinished.on(() => { if (nBars()) applyLoopRange(); });
   api.postRenderFinished.on(() => set('ui.renderGen', (get('ui.renderGen') || 0) + 1)); // 小节位置要等所有部分都画完才有
   api.midiLoaded.on(() => { // 反复的播放时间要等 MIDI 生成后才知道
+    applyAudio(); // 音轨音量跟着 MIDI 走：重新生成后再设一次
     if (!nBars()) return;
     const range = applyLoopRange();
     if (range && cursorPending && !playing()) api.tickPosition = range.startTick;
@@ -222,8 +223,10 @@ async function onScoreLoaded(score) {
 export function applyAudio() {
   if (!api) return;
   const p = get('play');
-  api.masterVolume = p.gtVol / 100;
-  api.metronomeVolume = p.metro ? p.metroVol / 100 * 1.5 : 0;
+  // 示范音（吉他音轨）和节拍器分开调：只开节拍器、关掉示范音也行。不用 masterVolume——它连节拍器一起调小
+  api.masterVolume = 1;
+  if (api.score) api.changeTrackVolume(api.score.tracks, p.demo ? p.gtVol / 100 : 0);
+  api.metronomeVolume = p.metro ? p.metroVol / 100 * 1.2 : 0;
   api.countInVolume = p.countIn ? 1 : 0;
 }
 
@@ -491,7 +494,7 @@ function bindInputs() {
     on('play.' + key, paint);
     paint(get('play.' + key));
   };
-  bind('metro', 'metro', 'check'); bind('metroVol', 'metroVol'); bind('countIn', 'countIn', 'check'); bind('gtVol', 'gtVol');
+  bind('metro', 'metro', 'check'); bind('metroVol', 'metroVol'); bind('countIn', 'countIn', 'check'); bind('gtVol', 'gtVol'); bind('demo', 'demo', 'check');
   bind('auto', 'auto', 'check'); bind('autoEvery', 'autoEvery'); bind('autoStep', 'autoStep'); bind('autoTarget', 'autoTarget');
   bind('follow', 'follow', 'check');
 }
@@ -503,7 +506,7 @@ export function initPlayer() {
   // 不用全局 keydown / keyup：按着 Shift 切到别的应用时 keyup 会丢，之后每次点小节都成了扩展循环
   $('score').addEventListener('mousedown', e => { shiftDown = e.shiftKey; }, true);
   bindInputs();
-  on(['play.metro', 'play.metroVol', 'play.countIn', 'play.gtVol'], applyAudio);
+  on(['play.metro', 'play.metroVol', 'play.countIn', 'play.gtVol', 'play.demo'], applyAudio);
   on('play.timbre', v => { remember('tt.timbre', v); switchTimbre(); });
   on('play.bpm', bpm => {
     $('bpm').value = bpm; $('bpmVal').textContent = bpm; UI.fillRange($('bpm'));

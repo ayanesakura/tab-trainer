@@ -659,3 +659,18 @@ def test_play_settings_survive_reload(trainer):
     b = trainer()
     assert b.js("tt.state.follow") is True and b.js("tt.state.gtVol") == 80
     assert not b.errors, b.errors
+
+
+def test_metronome_only_without_the_demo_guitar(trainer):
+    """关掉示范音只剩节拍器：吉他音轨音量 0，节拍器照常响（以前示范音量用的是总音量，节拍器跟着一起没了）。"""
+    b = trainer()
+    b.js("""(() => { window.__vols = [];
+      const orig = tt.api.changeTrackVolume.bind(tt.api);
+      tt.api.changeTrackVolume = (tracks, v) => { window.__vols.push(v); return orig(tracks, v); };
+      tt.set('play.metro', true); tt.set('play.demo', false); })()""")
+    assert b.js("window.__vols[window.__vols.length - 1]") == 0
+    assert b.js("tt.api.masterVolume") == 1 and b.js("tt.api.metronomeVolume") > 0
+    b.js("tt.set('play.demo', true)")
+    assert b.js("window.__vols[window.__vols.length - 1]") > 0
+    assert b.js("JSON.parse(localStorage.getItem('tt.playPrefs')).demo") is True
+    assert not b.errors, b.errors

@@ -1,9 +1,9 @@
-// 播放设置记在本机（localStorage），所有曲子共用：节拍器、预备拍、音量、自动提速（每几遍、每次加多少）、自动跟随。
+// 播放设置记在本机（localStorage），所有曲子共用：节拍器、预备拍、示范音开关、音量、自动提速（每几遍、每次加多少）、自动跟随。
 // 速度和循环范围不在这里：它们跟着曲子走（接着练 / 练习记录）；自动提速的“最高”默认是这首曲子的原速，也跟着曲子走。
 // 读的时候逐项检查：旧版本、手改坏的值不会把页面弄坏，不对的那一项用默认值。纯函数，不碰 DOM（有 node 测试）。
 
 export const PREFS_KEY = 'tt.playPrefs';
-export const PREF_DEFAULTS = { metro: true, metroVol: 70, countIn: true, gtVol: 80, auto: false, autoEvery: 2, autoStep: 4, follow: true };
+export const PREF_DEFAULTS = { metro: true, metroVol: 70, countIn: true, demo: true, gtVol: 80, auto: false, autoEvery: 2, autoStep: 4, follow: true };
 const RANGES = { metroVol: [0, 100], gtVol: [0, 100], autoEvery: [1, 50], autoStep: [1, 40] };
 
 /** 存着的文本（可能是 null、坏 JSON、旧格式）→ 完整、合法的设置 */
