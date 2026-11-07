@@ -51,10 +51,10 @@
 | 文件 | 内容 |
 |---|---|
 | `app/static/ui.css` | 设计变量（颜色、字号 4 档、圆角 3 档、间距 4 档、阴影、原谱底色、指板配色，亮暗两套）和通用组件（按钮、分段开关、卡片、列表行、chips、通知、菜单、对话框） |
-| `app/static/ui.js` | `$` / `esc`、图标、主题、轻提示、浮层栈 `layer`（Esc / 点外面关闭、焦点移入和还回）、`menu`、`confirm` / `prompt`、`notice`、`seg` / `tabs` |
+| `app/static/ui.js` | `$` / `esc`、图标（`esc` 和 `icon` 本身在不碰 DOM 的 `js/lib/html.js`，Node 测试也能用）、主题、轻提示、浮层栈 `layer`（Esc / 点外面关闭、焦点移入和还回）、`menu`、`confirm` / `prompt`、`notice`、`seg` / `tabs` |
 | `app/static/js/lib/api.js` | 和后端通信：`get` / `post` / `put` / `del` / `upload` / `download`（出错统一抛带中文说明的 `ApiError`）、`withBusy`（按钮忙状态、防重复提交）、`poll`（轮询，出错退避重试） |
 | `app/static/js/lib/theme-boot.js` | 在 `<head>` 里同步加载的小脚本，首屏前写好主题，避免暗色下闪白 |
-| `app/static/js/vocab.js` | 前后端共用词表 `js/vocab.json` 的常量：弦数和标准调弦、技巧名称和记号、反复记号、来源、警告代码、`parseDur` |
+| `app/static/js/vocab.js` | 前后端共用词表 `js/vocab.json` 的常量：弦数和标准调弦、技巧名称和记号、反复记号、来源、直接导入的曲谱扩展名（`SCORE_EXT` / `isScoreFile`）、警告代码、`parseDur` |
 
 主题：`<html data-theme>` 总是写实际生效的 `light` / `dark`（选“跟随系统”时由脚本监听系统外观变化），CSS 里暗色只有一个选择器 `:root[data-theme="dark"]`。页面自己的样式只用变量，不写死颜色。
 
@@ -216,7 +216,15 @@ uv run python -m app.evaluate eval-xxx --yes
 - 乐观锁按对象：`PUT /api/songs/{id}/bars/{bar_id}` 可以带 `rev` = 这个小节的 `rev`，`PUT /api/songs/{id}/meta` 可以带 `rev` = 曲子的 `meta_rev`；和当前不一致返回 409（“曲子在别处改过了，已刷新，请再改一次”），不带照旧。小节的 `rev` 只在它的内容变了时 +1（手改音符或提示、重新识别 / GP 重新转换换了内容、改调弦清掉了提示）；`meta_rev` 只在可改的谱头字段（曲名、艺人、调弦、变调夹、拍号）变了时 +1。问 AI、讲解补提示、练习记录、进度、识别别的行、改别的小节都不会让手里的版本号过期。旧数据没有的按 0 算。改 GP / MusicXML 曲子的小节返回 400。
 - `GET /api/songs/{id}/practice/history` → `{sessions: [{at, a, b, bpm, seconds, loops}]}`。
 
-前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。练习页从 `js/trainer/main.js` 进入，按功能拆成模块：`store.js`（一个小 store：`song` 后端数据、`view` 派生结构、`play` 播放状态、`ui` 界面状态，按路径 `set` / `get` / `on`，值没变不通知）、`view.js`（纯函数：`deriveView(song)`、段落、换段、练习记录文案等，Node 测试直接用）、`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `setTempo` / `setStatus`）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息）、`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅 `ui.bar` 等状态，互不直接调用）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）、`rhythm-drill.js`（敲节奏：节奏条、WebAudio 排程的节拍器和示范音、敲击打分；状态在 store 的 `rhythm` 切片，播放键 / 空格 / 换段通过 `player.js` 的钩子交给它）。页面上 `window.tt` 是给端到端测试和调试用的句柄。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`），也负责认出中文 GP3–5 文件的 GBK 乱码（练习页和 `scripts/make_eval_song.py` 遇到时按 GBK 重新读）。`js/rhythm.js` 是敲节奏的打分逻辑（要敲的点和口令、配对、打分、诊断；不碰 DOM 和音频，`tests/js/rhythm.test.mjs` 直接测）。
+前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。曲库页是 `js/index.js`（事件和 DOM）+ `js/library-view.js`（纯函数：一行曲子的 HTML、状态 / 练习 / 花费说明、筛选排序，`tests/js/library.test.mjs` 直接测）。
+
+练习页从 `js/trainer/main.js` 进入，按功能拆成模块。模块之间的规矩：**`song.js` 和 `player.js` 是可以直接调用的服务模块，其余模块之间只通过 store 通信**（订阅 `ui.bar`、`play.*` 等路径），不互相 import 对方的函数。具体：
+- `store.js`：一个小 store（`song` 后端数据、`view` 派生结构、`play` 播放状态和设置、`ui` 界面状态、`rhythm` 敲节奏），按路径 `set` / `get` / `on`，值没变不通知；`dom.js`：`$` / `UI` / `songUrl` / `setButton` / `svgEl` 这些 DOM 小工具；`page-images.js`：原谱页面图片的共用缓存（加载好发 `tt-images` 事件）。
+- 服务模块：`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `setTempo` / `setStatus` / `barBox`；`setPlayerHooks` 让曲子、改谱、敲节奏把各自的处理挂进来，`holdBarWhile` 让侧栏在编辑器开着或正在输入问题时不跟着播放切小节，播放模块不反过来依赖它们）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息；对外 `refresh` / `applySong` / `conflict`）。
+- 纯函数（Node 测试直接用）：`view.js`（`deriveView(song)`、段落、换段、练习记录文案等）、`prefs.js`（本机记住的播放设置：读的时候逐项检查，坏值用默认值）。
+- 功能模块：`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅状态）、`follow.js`（自动跟随：光标所在行看不见时自己滚过去，用户手动滚动后停几秒）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）、`rhythm-drill.js`（敲节奏：节奏条、WebAudio 排程的节拍器和示范音、敲击打分；状态在 store 的 `rhythm` 切片，播放键 / 空格 / 换段通过 `player.js` 的钩子交给它）。
+
+页面上 `window.tt` 是给端到端测试和调试用的句柄。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`），也负责认出中文 GP3–5 文件的 GBK 乱码（练习页和 `scripts/make_eval_song.py` 遇到时按 GBK 重新读）。`js/rhythm.js` 是敲节奏的打分逻辑（要敲的点和口令、配对、打分、诊断；不碰 DOM 和音频，`tests/js/rhythm.test.mjs` 直接测）。
 
 测试基本按模块分（`tests/test_<模块>.py`；`service` / `views` / `state` / `jobs` 由 `test_api`、`test_pages` 等间接覆盖），替身模型和合成谱子在 `tests/fakes.py`，公共 fixture 在 `tests/conftest.py`。`tests/fixtures/llm_schemas.json` 是重构前给模型的 schema（`test_model.py` 断言逐字不变）；`golden.gp` / `golden_derived.json` 是浏览器转换的金标准（`tests/js/fixture.test.mjs` 和 `tests/test_golden.py` 两边各查一遍）。
 

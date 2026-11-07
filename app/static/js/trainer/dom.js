@@ -8,3 +8,12 @@ export const songUrl = (path = '') => `/api/songs/${encodeURIComponent(SONG_ID)}
 
 /** 按钮内容由代码管理时：去掉 data-ic，免得 UI.hydrate 再补一个图标 */
 export function setButton(el, html) { el.removeAttribute('data-ic'); el.innerHTML = html; }
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+/** 建 SVG 元素（指板、敲节奏的节奏条）：svgEl('line', {x1: 0, …}, parent) */
+export function svgEl(tag, attrs = {}, parent) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}

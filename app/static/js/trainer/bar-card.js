@@ -4,20 +4,7 @@
 import { get, on } from './store.js';
 import { $, UI, esc } from './dom.js';
 import { barTags, warnText, isScore } from './view.js';
-
-// 原谱页面图片：按 view.pages 加载，加载好了重画（截图、原图弹窗都用）
-export const images = { list: [], src: [] };
-function loadImages(pages) {
-  if (images.src.join() === pages.join()) return;
-  images.src = pages.slice();
-  images.list = pages.map(src => {
-    const im = new Image();
-    im.onload = () => { im.ok = true; drawCrop(); document.dispatchEvent(new Event('tt-images')); };
-    im.onerror = () => { im.bad = true; drawCrop(); document.dispatchEvent(new Event('tt-images')); };
-    im.src = src;
-    return im;
-  });
-}
+import { images, loadImages } from './page-images.js';
 
 function renderCard() {
   const bi = get('ui.bar'), s = get('song'), v = get('view');
@@ -52,7 +39,8 @@ function drawCrop() {
 
 export function initBarCard() {
   on('view', v => { if (v) loadImages(v.pages); });
-  on(['ui.bar', 'view', 'song.bars', 'song.source_type'], renderCard);
+  document.addEventListener('tt-images', drawCrop);
+  on(['ui.bar', 'view', 'song.bars', 'song.is_score'], renderCard);
   on(['ui.view', 'ui.drawer'], drawCrop); // 隐藏时量不出大小：切回练习页 / 打开抽屉时重画
   // 敲节奏打开时节奏卡片占这个位置（rhythm-drill.js）；关掉后回来，截图重画一次
   on('rhythm.on', v => { $('barCard').hidden = v; drawCrop(); });

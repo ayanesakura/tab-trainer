@@ -2,16 +2,7 @@
 // 颜色全在 trainer.css 里（.fb-* 类，跟主题走）。停着的时候显示正在看的小节的第一个音。
 
 import { get, set, on } from './store.js';
-
-const SVGNS = 'http://www.w3.org/2000/svg';
-function el(tag, attrs = {}, parent) {
-  const n = document.createElementNS(SVGNS, tag);
-  for (const k in attrs) n.setAttribute(k, attrs[k]);
-  if (parent) parent.appendChild(n);
-  return n;
-}
-/** 建 SVG 元素：敲节奏的节奏条（rhythm-drill.js）也用 */
-export { el as svgEl };
+import { svgEl as el } from './dom.js';
 
 const FB = { W: 960, L: 74, R: 14, T: 16, G: 20, MAXF: 17 };
 let capo = 0, dyn = null;

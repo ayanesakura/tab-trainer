@@ -2,7 +2,7 @@
 
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
-import { images } from './bar-card.js';
+import { images } from './page-images.js';
 import { needsReview, isScore } from './view.js';
 
 let origLayer = null;

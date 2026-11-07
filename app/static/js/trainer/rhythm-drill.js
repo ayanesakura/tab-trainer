@@ -15,10 +15,9 @@
 
 import * as core from '../rhythm.js';
 import { get, set, on } from './store.js';
-import { $, UI, esc, setButton } from './dom.js';
+import { $, UI, esc, setButton, svgEl } from './dom.js';
 import { stop as stopPlayback, setLoop, setTempo, setStatus, setPlayerHooks, IDLE_HINT } from './player.js';
 import { ac, initAudio, playEvent, stopAllVoices, setGuitarVolume } from './audio.js';
-import { svgEl } from './fretboard.js';
 import { loopLabel } from './view.js';
 
 const MODES = ['follow', 'listen', 'blind'];
