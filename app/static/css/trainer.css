@@ -131,3 +131,9 @@ table.tune td b { font-variant-numeric: tabular-nums; }
   .transport { position: static; }
   .crumb .t { max-width: 40vw; }
 }
+
+/* 回到播放位置（播放时光标不在视野里才出现） */
+.follow-btn { position: fixed; right: 22px; bottom: 22px; z-index: 25; height: 36px; padding: 0 14px; border-radius: 18px;
+  background: var(--accent); color: var(--accent-fg); box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
+.follow-btn:hover { background: var(--accent-hover); }
+.follow-btn[hidden] { display: none; }

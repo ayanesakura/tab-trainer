@@ -47,6 +47,23 @@ def test_playback_records_completed_loops(server, trainer):
     assert not b.errors, b.errors
 
 
+def test_playback_does_not_scroll_until_asked(trainer):
+    b = trainer()
+    # 页面加高，滚到最下面：播放光标在视野上方
+    b.js("document.body.style.paddingBottom = '4000px'; scrollTo(0, document.body.scrollHeight); true")
+    y = b.js("scrollY")
+    assert y > 0 and b.js("document.getElementById('followBtn').hidden")
+    b.js("document.getElementById('countIn').checked = false; applyAudio(); setLoop(3, 3); play(); true")
+    b.wait_for("state.playing && !document.getElementById('followBtn').hidden")
+    time.sleep(1.5)
+    assert b.js("scrollY") == y  # 播放时不会自己滚到光标处
+    b.js("document.getElementById('followBtn').click(); true")
+    b.wait_for("document.getElementById('followBtn').hidden")  # 滚到光标处以后按钮消失
+    assert b.js("scrollY") < y and not b.js("cursorOutOfView()")
+    b.js("stop(); true")
+    assert not b.errors, b.errors
+
+
 def test_edit_note_then_undo(server, trainer):
     b = trainer()
     orig = _song(server, server["image"])["bars"][1]

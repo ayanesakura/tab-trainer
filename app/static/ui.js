@@ -32,6 +32,7 @@
     tuning: '<path d="M4 4v16M9 4v16M14 4v16M19 4v16"/><circle cx="9" cy="9" r="1.6" fill="currentColor"/><circle cx="14" cy="14" r="1.6" fill="currentColor"/>',
     sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/>',
     back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
+    locate: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
   };
   const icon = (name, size) => `<span class="ic"${size ? ` style="width:${size}px;height:${size}px"` : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${P[name] || ''}</svg></span>`;
   const hydrate = (root = document) => root.querySelectorAll('[data-ic]').forEach(el => {

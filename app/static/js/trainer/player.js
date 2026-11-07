@@ -33,7 +33,7 @@ async function ensureApi() {
       playerMode: 'EnabledSynthesizer', soundFont: SF_BASE,
       enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true,
       enablePlaybackRangeSelection: false, scrollOffsetY: -230,
-      scrollMode: 'Off', // 只在播放时跟着光标滚动（见 playerStateChanged）；否则一打开页面就会跳到谱面
+      scrollMode: 'Off', // 不自动滚动：光标不在视野里时显示“回到播放位置”按钮，点了才滚（见 updateFollowBtn）
     },
   });
   api.soundFontLoad.on(e => { if (!state.ready) setStatus('加载音色…', `${Math.round(100 * e.loaded / Math.max(1, e.total))}%`); });
@@ -51,10 +51,10 @@ async function ensureApi() {
   api.playerStateChanged.on(e => {
     const was = state.playing;
     state.playing = e.state === 1;
-    if (state.playing !== was) { api.settings.player.scrollMode = state.playing ? alphaTab.ScrollMode.Continuous : alphaTab.ScrollMode.Off; api.updateSettings(); }
     if (state.playing && !was) practiceStart();
     if (!state.playing && was) practiceFlush(false);
     setPlayBtn(state.playing);
+    updateFollowBtn();
     if (!state.playing) setStatus('已暂停', '空格继续 · ←→ 换段 · ↑↓ 调速');
   });
   api.playerPositionChanged.on(e => onPosition(e.currentTick));
@@ -279,6 +279,7 @@ function eventAt(beat) {
 }
 function onBeat(beat, clicked) {
   const { bi, cur } = eventAt(beat);
+  if (!clicked) updateFollowBtn();
   if (!clicked) setStatus(`第 ${bi + 1} 小节 · 第 ${Math.floor(beat.playbackStart / scoreConv.TICKS) + 1} 拍`, `第 ${state.loops + 1} 遍`);
   if (bi < BARS.length) showBar(bi);
   if (!cur) return;
@@ -286,6 +287,30 @@ function onBeat(beat, clicked) {
   if (!next || next.bar > state.b) next = BARS[state.a] && BARS[state.a][0];
   showFb(cur, next);
 }
+// 播放光标所在的小节（alphaTab 画的高亮框）；不在视野里时显示“回到播放位置”
+const cursorBar = () => document.querySelector('#score .at-cursor-bar');
+function cursorOutOfView() {
+  const el = cursorBar();
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  if (!r.height) return false;
+  const top = Math.max(0, document.querySelector('.transport').getBoundingClientRect().bottom); // 吸顶的顶栏和播放栏挡住的部分不算看得见
+  return r.bottom < top + 8 || r.top > innerHeight - 8;
+}
+function updateFollowBtn() {
+  $('followBtn').hidden = !(state.playing && cursorOutOfView());
+}
+function scrollToCursor() {
+  const el = cursorBar();
+  if (!el) return;
+  const t = document.querySelector('.transport');
+  const stuck = parseFloat(getComputedStyle(t).top) + t.offsetHeight; // 滚过去以后播放栏吸顶时的下沿
+  scrollTo({ top: scrollY + el.getBoundingClientRect().top - stuck - 16, behavior: 'smooth' });
+}
+let followTick = 0;
+addEventListener('scroll', () => { if (!followTick) followTick = requestAnimationFrame(() => { followTick = 0; updateFollowBtn(); }); }, { passive: true });
+$('followBtn').onclick = scrollToCursor;
+
 function onBeatClick(beat) {
   const bi = beat.voice.bar.index;
   if (bi >= BARS.length) return;
