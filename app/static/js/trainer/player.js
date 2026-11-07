@@ -262,10 +262,17 @@ function setBpm(bpm) {
   const max = get('play.bpmMax');
   set({ 'play.bpm': bpm, 'play.bpmMax': bpm > max ? Math.min(240, Math.ceil(bpm / 10) * 10) : max }); // ↑ 键 / + 按钮超过了滑块上限
 }
+/**
+ * 设循环范围 a..b（小节下标）。restart：播放中就从段首重新开始；暂停时把光标放到段首。
+ * restart = false 并且范围没变（比如后台刷新后重新对一遍范围）：什么都不动，暂停的位置不会跳回段首。
+ * show：侧栏切到段首小节。
+ */
 export function setLoop(a, b, restart = true, show = true) {
   const n = nBars();
   if (!n) return;
   const na = Math.max(0, Math.min(a, b, n - 1)), nb = Math.min(n - 1, Math.max(a, b));
+  const { a: oa, b: ob } = get('play');
+  if (!restart && na === oa && nb === ob) { if (show) set('ui.bar', na); return; }
   set({ 'play.a': na, 'play.b': nb }); // 练习记录（practice-log.js）跟着它记上一段、开始下一段
   const range = applyLoopRange();
   if (show) set('ui.bar', na);
@@ -440,7 +447,7 @@ export function initPlayer() {
 
   setBpm(50); // 加载前的占位，不算“定下了速度”
   $('playBtn').onclick = () => (playing() ? stop() : play());
-  $('demoBarBtn').onclick = () => { const bi = get('ui.bar') >= 0 ? get('ui.bar') : get('play.a'); setLoop(bi, bi, false); if (!playing()) play(); };
+  $('demoBarBtn').onclick = () => { const bi = get('ui.bar') >= 0 ? get('ui.bar') : get('play.a'); setLoop(bi, bi, !playing()); if (!playing()) play(); };
   UI.seg($('timbreSeg'), get('play.timbre'), v => set('play.timbre', v));
   UI.seg($('notationSeg'), 'both', v => set('ui.notation', v));
   $('exportBtn').onclick = exportGp;

@@ -252,8 +252,10 @@ function onView(v) {
   if (nz < na) nz = na;
   const keep = prevIds[shown] ? v.ids.indexOf(prevIds[shown]) : -1;
   prevIds = v.ids;
-  setLoop(na, nz, false, keep < 0); // 正在看的小节还在就接着显示它，不跳到别的小节（否则编辑器会被关掉）
-  if (keep >= 0) set('ui.bar', keep);
+  // 范围真的变了才重设（问 AI 写了问答、识别中轮询到新数据都会走到这里：范围没变时不能把暂停的位置跳回段首）
+  if (na !== a || nz !== b) setLoop(na, nz, false, keep < 0);
+  else if (keep < 0) set('ui.bar', na);
+  if (keep >= 0) set('ui.bar', keep); // 正在看的小节还在就接着显示它，不跳到别的小节（否则编辑器会被关掉）
 }
 
 export function initSong() {
