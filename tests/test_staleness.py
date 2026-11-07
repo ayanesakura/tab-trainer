@@ -2,8 +2,15 @@
 
 import pytest
 
-from app import coach, music, recognize, songs, store
-from tests.fakes import FakeClaude, derived_bars, score_png
+from app import coach, practice, recognize, songs, store
+from tests.fakes import FakeClaude, score_png
+
+
+def _image_song():
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    store.update(sid, lambda s: [b.update(tip="") for b in s["bars"]] and s.update(plan=None))
+    return sid
 
 
 def test_editing_notes_invalidates_tip_qa_and_plan_but_keeps_practice(data_dir, sync_jobs):
@@ -12,7 +19,7 @@ def test_editing_notes_invalidates_tip_qa_and_plan_but_keeps_practice(data_dir, 
     song = store.load(sid)
     bar = song["bars"][1]
     coach.ask_bar(sid, bar["id"], "怎么练？")
-    songs.record_practice(sid, {"bar_ids": [bar["id"]], "loops": 2, "bpm": 50, "seconds": 30})
+    practice.record(sid, [bar["id"]], 2, 50, 30)
     assert store.load(sid)["plan"] and not store.load(sid)["plan"].get("stale")
 
     # 内容没变的保存：什么都不失效
@@ -23,7 +30,8 @@ def test_editing_notes_invalidates_tip_qa_and_plan_but_keeps_practice(data_dir, 
     b = song["bars"][1]
     assert b["tip"] == "" and b["uncertain"] == "" and all(q["stale"] for q in b["qa"])
     assert song["plan"]["stale"] and song["bars"][0]["tip"] == "tip 1"  # 别的小节不受影响
-    assert song["practice"]["bars"][bar["id"]]["loops"] == 2  # 同一个小节，练习记录保留
+    assert b["edited"] and b["id"] == bar["id"]
+    assert practice.aggregate(sid, song)["bars"][bar["id"]]["loops"] == 2  # 同一个小节，练习记录保留
 
     # 之后再问：改谱之前的问答不再作为上下文
     coach.ask_bar(sid, bar["id"], "现在呢？")
@@ -73,8 +81,7 @@ def test_meta_change_keeps_uncertain_notes(data_dir):
 
 
 def test_explain_does_not_write_old_tips_onto_bars_edited_meanwhile(data_dir, monkeypatch, sync_jobs):
-    sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
-    songs.set_derived(sid, {"tuning": music.STANDARD}, derived_bars(3))
+    sid = _image_song()
     bar_id = store.load(sid)["bars"][0]["id"]
     real = FakeClaude.explain_bars
 
@@ -93,8 +100,7 @@ def test_explain_does_not_write_old_tips_onto_bars_edited_meanwhile(data_dir, mo
 
 
 def test_plan_built_from_old_notes_stays_stale(data_dir, monkeypatch, sync_jobs):
-    sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
-    songs.set_derived(sid, {"tuning": music.STANDARD}, derived_bars(2))
+    sid = _image_song()
     bar_id = store.load(sid)["bars"][1]["id"]
     real = FakeClaude.practice_plan
 

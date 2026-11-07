@@ -4,9 +4,10 @@ import json
 import subprocess
 import sys
 
+import pytest
 from fastapi.testclient import TestClient
 
-from app import main, songs, store
+from app import errors, main, songs, store, views
 from tests.fakes import derived_bars
 
 
@@ -40,7 +41,7 @@ def test_corrupt_song_does_not_break_the_library(data_dir):
     d = store.song_dir(bad)
     (d / "song.json").write_text("{")
     (d / "song.json.bak").write_text("[1, 2]")
-    rows = {s["id"]: s for s in store.list_songs()}
+    rows = {s["id"]: s for s in views.list_library()}
     assert rows[good]["title"] == "好的"
     assert rows[bad]["status"] == "corrupt" and "数据损坏" in rows[bad]["error"]
     c = TestClient(main.app, base_url="http://127.0.0.1:8765")
@@ -59,7 +60,7 @@ def test_old_songs_get_missing_fields(data_dir):
     path.write_text(json.dumps(raw))
     s = store.load(sid)
     assert s["status"] == "ready" and s["systems"] == [] and s["schema_version"] == store.SCHEMA_VERSION
-    assert any(x["id"] == sid for x in store.list_songs())
+    assert any(x["id"] == sid for x in views.list_library())
 
 
 def test_corrupt_config_is_set_aside(data_dir):
@@ -87,3 +88,55 @@ def test_second_instance_cannot_lock_the_same_data_dir(data_dir):
     store._lock_file = None
     r = subprocess.run([sys.executable, "-c", code], check=False, cwd=str(store.ROOT), capture_output=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_every_save_bumps_rev(data_dir):
+    sid = _gp()
+    rev = store.load(sid)["rev"]
+    assert store.patch(sid, title="x")["rev"] == rev + 1 == store.load(sid)["rev"]
+
+
+def test_missing_song_is_not_found(data_dir):
+    with pytest.raises(errors.NotFound):
+        store.load("20260101-000000-abcdef")
+    with pytest.raises(errors.NotFound):
+        store.load("../etc")
+
+
+def test_delete_leaves_a_tombstone_so_late_writes_do_not_recreate_the_song(data_dir):
+    """删除时在锁里先把目录改名：之后后台任务的写回一律 NotFound，不会把删掉的曲子重新建出来。"""
+    sid = _gp()
+    song = store.load(sid)
+    store.delete(sid)
+    assert not store.exists(sid) and sid not in store.song_ids()
+    with pytest.raises(errors.NotFound):
+        store.save(song)
+    with pytest.raises(errors.NotFound):
+        store.update(sid, lambda s: s.update(title="x"))
+    with pytest.raises(errors.NotFound):
+        store.append_practice(sid, {"ids": ["x"]})
+    with pytest.raises(errors.NotFound):
+        store.delete(sid)
+    assert not store.song_dir(sid).exists() and not list(store.SONGS.glob(".trash-*"))
+
+
+def test_job_finishing_after_delete_is_harmless(data_dir):
+    import threading
+
+    from app import jobs
+
+    sid = _gp()
+    jobs.jobs.claim(sid)
+    done = []
+
+    def late_write():
+        store.delete(sid)  # 任务进行中曲子被删掉了
+        store.patch(sid, title="写回")
+        done.append(True)
+
+    jobs.spawn(sid, late_write)
+    for _ in range(100):
+        if not jobs.jobs.running(sid):
+            break
+        threading.Event().wait(0.01)
+    assert not jobs.jobs.running(sid) and not done and not store.song_dir(sid).exists()
