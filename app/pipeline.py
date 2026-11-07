@@ -149,6 +149,36 @@ def clean_events(events) -> list[dict]:
     return out
 
 
+# 反复和跳转记号（名字和 alphaTex 的 \jump 一致）。播放时 alphaTab 会按它们跳转。
+DIRECTIONS = (
+    "segno", "segnosegno", "coda", "doublecoda", "fine",
+    "dacapo", "dacapoalcoda", "dacapoalfine", "dalsegno", "dalsegnoalcoda", "dalsegnoalfine", "dacoda",
+)  # fmt: skip
+
+
+def clean_repeats(b: dict) -> dict:
+    """小节上的反复 / 跳房子 / 跳转记号，只保留有的字段。repeat_end = 这段一共弹几遍（普通反复号 = 2）。"""
+    out: dict = {}
+    if b.get("repeat_start") is True:
+        out["repeat_start"] = True
+    try:
+        n = int(b.get("repeat_end") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n >= 1:
+        out["repeat_end"] = max(2, min(n, 8))
+    try:
+        endings = sorted({int(x) for x in b.get("endings") or [] if 1 <= int(x) <= 8})
+    except (TypeError, ValueError):
+        endings = []
+    if endings:
+        out["endings"] = endings
+    dirs = [d for d in dict.fromkeys(b.get("directions") or []) if d in DIRECTIONS]
+    if dirs:
+        out["directions"] = dirs
+    return out
+
+
 def rest_bar(meta: dict) -> list[dict]:
     """整小节休止：识别失败或被清空的小节用它占位，页面才能正常显示和播放。"""
     return [{"dur": str(bar_length(meta)), "notes": []}]
@@ -356,6 +386,7 @@ def set_derived(sid: str, meta_raw: dict, bars_raw: list, track: int = 0) -> dic
                     "tip": "",
                     "uncertain": "",
                     "warn": warn,
+                    **clean_repeats(b or {}),
                 }
             )
         s.update(meta=meta, bars=bars, track=int(track or 0), plan=None)
@@ -544,6 +575,7 @@ def _transcribe_system(
                     "tip": b.get("tip", ""),
                     "uncertain": b.get("uncertain", ""),
                     "warn": probs,
+                    **clean_repeats(b),
                 }
             )
         for i, msgs in pitch_mismatches(raw.get("bars", []), meta).items():

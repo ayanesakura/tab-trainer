@@ -42,6 +42,21 @@ export function splitTicks(t) {
 
 const esc = s => String(s ?? '').replace(/["\\]/g, ' ');
 
+// 反复 / 跳转记号：名字和 alphaTex 的 \jump 一致，下标就是 alphaTab 的 Direction 枚举值
+const DIRECTION_NAMES = ['fine', 'segno', 'segnosegno', 'coda', 'doublecoda', 'dacapo', 'dacapoalcoda', 'dacapoaldoublecoda',
+  'dacapoalfine', 'dalsegno', 'dalsegnoalcoda', 'dalsegnoaldoublecoda', 'dalsegnoalfine', 'dalsegnosegno',
+  'dalsegnosegnoalcoda', 'dalsegnosegnoaldoublecoda', 'dalsegnosegnoalfine', 'dacoda', 'dadoublecoda'];
+
+/** 小节开头的 alphaTex 元数据：反复开始 / 结束（一共弹几遍）、跳房子、跳转。 */
+function barMetaTex(bar) {
+  const m = [];
+  if (bar.repeat_start) m.push('\\ro');
+  if (bar.repeat_end > 0) m.push(`\\rc ${Math.max(2, bar.repeat_end)}`);
+  if (bar.endings && bar.endings.length) m.push(`\\ae (${bar.endings.join(' ')})`);
+  for (const d of bar.directions || []) if (DIRECTION_NAMES.includes(d)) m.push(`\\jump ${d}`);
+  return m.length ? m.join(' ') + ' ' : '';
+}
+
 /**
  * 我们的曲子 → alphaTex 文本。返回 { tex, beatMap }：
  * beatMap[barIndex] = 每个事件起拍的 tick（在本小节内），用来把播放到的拍对应回我们的事件。
@@ -95,7 +110,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
   };
 
   const beatMap = [];
-  const barTexts = bars.map(evs => {
+  const barTexts = bars.map((evs, bi) => {
     const parts = [];
     const onsets = [];
     let t = 0;
@@ -112,7 +127,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
       });
     }
     beatMap.push(onsets);
-    return parts.join(' ');
+    return barMetaTex(song.bars[bi]) + parts.join(' ');
   });
 
   const title = meta.title || song.title || '';
@@ -207,7 +222,12 @@ export function deriveSong(score, trackIndex = 0) {
       dur: ticksToDur((i + 1 < ticks.length ? ticks[i + 1] : length) - t),
       notes: byTick.get(t),
     }));
-    return { events };
+    const mb = score.masterBars[bi], out = { events };
+    if (mb.isRepeatStart) out.repeat_start = true;
+    if (mb.repeatCount > 0) out.repeat_end = mb.repeatCount;
+    if (mb.alternateEndings) out.endings = [...Array(8).keys()].filter(i => mb.alternateEndings & (1 << i)).map(i => i + 1);
+    if (mb.directions && mb.directions.size) out.directions = [...mb.directions].map(d => DIRECTION_NAMES[d]).filter(Boolean);
+    return out;
   });
   return { meta, bars, trackName: track.name };
 }

@@ -351,3 +351,26 @@ def test_pitch_mismatch_triggers_retry_and_warns_if_unfixed(data_dir, monkeypatc
     assert song["bars"][1]["warn"] == []  # 返修改对了
     assert any("3 弦 1 品" in w for w in song["bars"][3]["warn"])  # 仍然不对：练习页标橙
     assert all(not b["warn"] for b in song["bars"] if b["n"] not in (4,))
+
+
+def test_clean_repeats_keeps_only_valid_marks():
+    assert pipeline.clean_repeats({}) == {}
+    assert pipeline.clean_repeats(
+        {
+            "repeat_start": True,
+            "repeat_end": 1,
+            "endings": [2, 1, 1, 9],
+            "directions": ["segno", "bogus", "segno"],
+        }
+    ) == {"repeat_start": True, "repeat_end": 2, "endings": [1, 2], "directions": ["segno"]}
+    assert pipeline.clean_repeats({"repeat_start": "yes", "repeat_end": "x", "endings": ["a"]}) == {}
+
+
+def test_set_derived_keeps_repeats(data_dir):
+    sid = pipeline.create_song([("曲子.gp", b"x")])
+    bars = _derived_bars(2)
+    bars[0]["repeat_start"] = True
+    bars[1].update(repeat_end=3, directions=["fine"])
+    song = pipeline.set_derived(sid, {"tuning": pipeline.STANDARD}, bars)
+    assert song["bars"][0]["repeat_start"] is True
+    assert song["bars"][1]["repeat_end"] == 3 and song["bars"][1]["directions"] == ["fine"]

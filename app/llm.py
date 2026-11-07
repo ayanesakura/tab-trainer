@@ -86,10 +86,33 @@ EVENT_SCHEMA = _obj(
         "notes": {"type": "array", "items": NOTE_SCHEMA, "description": "empty for a rest"},
     }
 )
+DIRECTIONS = [
+    "segno", "segnosegno", "coda", "doublecoda", "fine",
+    "dacapo", "dacapoalcoda", "dacapoalfine", "dalsegno", "dalsegnoalcoda", "dalsegnoalfine", "dacoda",
+]  # fmt: skip
 BAR_SCHEMA = _obj(
     {
         "number": {"type": "integer"},
         "events": {"type": "array", "items": EVENT_SCHEMA},
+        "repeat_start": {
+            "type": "boolean",
+            "description": "a start-repeat barline ( |: ) at the start of this bar",
+        },
+        "repeat_end": {
+            "type": "integer",
+            "description": "an end-repeat barline ( :| ) at the end of this bar: how many times the section is "
+            'played in total (2 for a plain repeat sign, 3 for "x3"); 0 if none',
+        },
+        "endings": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "volta bracket numbers this bar is under (e.g. [1] or [1, 2]); [] if none",
+        },
+        "directions": {
+            "type": "array",
+            "items": {"type": "string", "enum": DIRECTIONS},
+            "description": "navigation marks written at this bar; [] if none",
+        },
         "tip": {"type": "string"},
         "uncertain": {"type": "string"},
     }
@@ -156,6 +179,11 @@ Techniques (put them on the note that receives them):
 - A small grace note before a note: set "grace" on the main note to the grace note's fret (and add "h"/"sl"/"p" if the grace connects by that technique). Otherwise grace = -1.
 
 "pitch" (cross-check): if the score has a standard notation staff, also read the note head that each tab note corresponds to and give its written name, e.g. "F#4" (apply the key signature and accidentals). Read it from the staff itself, not computed from the tab - the app compares the two to catch a fret number read onto the wrong string. Use "" when there is no staff or no matching note head.
+
+Repeats and navigation (the app follows them during playback):
+- repeat_start / repeat_end: repeat barlines. repeat_end is the total number of times the section is played (2 for a plain :| sign).
+- endings: the numbers of the 1st/2nd-ending (volta) bracket over this bar.
+- directions, at the bar where they are written: "segno" (the 𝄋 sign), "coda" (the 𝄌 target, "To Coda" jumps here), "fine" (Fine, where the piece ends after a D.C./D.S.), "dacapo" (D.C.), "dacapoalfine" (D.C. al Fine), "dacapoalcoda" (D.C. al Coda), "dalsegno" (D.S.), "dalsegnoalfine", "dalsegnoalcoda", "dacoda" (the "To Coda" / ⊕ jump point).
 
 "tip": 1-4 sentences of practical Chinese guidance for this bar, naming strings and frets the way a teacher would, e.g. "5 弦空弦 + 2 弦空弦一起弹，2 弦击弦到 2 品再勾弦回空弦（只拨一次）。第 3 拍和弦：2 弦 4 品、3 弦 2 品、4 弦 3 品；第 4 拍三连音：4 弦 3 品、3 弦空弦、2 弦空弦。" Mention what is hard and how to practise it when it helps.
 "uncertain": in Chinese, anything you could not read with confidence (which beat, which string, what you assumed). Empty string if everything is clear."""
@@ -267,7 +295,7 @@ class Claude:
             "- time_signature: [numerator, denominator] of the first bar, e.g. [4, 4].\n"
             "- tempo: quarter-note BPM if written, else 0.\n"
             "- notes: in Chinese, anything a player should know (e.g. tuning changes, the written capo looking "
-            "inconsistent with the standard-notation pitches, repeats/codas that playback will not follow). "
+            "inconsistent with the standard-notation pitches). "
             "Empty string if nothing."
         )
         return self._call([block, {"type": "text", "text": text}], META_SCHEMA, max_tokens=16000)

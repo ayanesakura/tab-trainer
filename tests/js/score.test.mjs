@@ -56,3 +56,26 @@ test('round trip on the local example song', { skip: !existsSync(EXAMPLE) && '�
   const a = norm(back.bars), b = norm(song.bars);
   for (let i = 0; i < b.length; i++) assert.deepEqual(a[i], b[i], `第 ${i + 1} 小节不一致`);
 });
+
+test('repeats, endings and jumps survive the round trip and drive playback order', () => {
+  const bar = (fret, extra = {}) => ({ events: [{ dur: '4', notes: [N(1, fret)] }], ...extra });
+  const song = {
+    meta: { tuning: ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'], time_signature: [4, 4] },
+    bars: [
+      bar(1, { repeat_start: true }),
+      bar(2, { endings: [1], repeat_end: 2 }),
+      bar(3, { endings: [2] }),
+      bar(4, { directions: ['segno'] }),
+      bar(5, { directions: ['dalsegnoalfine', 'fine'] }),
+    ],
+  };
+  const score = parse(toAlphaTex(song).tex);
+  const back = deriveSong(score, 0);
+  assert.deepEqual(back.bars.map(({ events, ...rest }) => rest), song.bars.map(({ events, ...rest }) => rest));
+
+  const settings = new at.Settings();
+  const midi = new at.midi.MidiFile();
+  const gen = new at.midi.MidiFileGenerator(score, settings, new at.midi.AlphaSynthMidiFileHandler(midi));
+  gen.generate();
+  assert.deepEqual(gen.tickLookup.masterBars.map(m => m.masterBar.index + 1), [1, 2, 1, 3, 4, 5, 4, 5]);
+});

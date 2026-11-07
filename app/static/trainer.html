@@ -639,6 +639,7 @@ async function ensureApi() {
   });
   api.scoreLoaded.on(onScoreLoaded);
   api.renderFinished.on(() => { if (BARS.length) applyLoopRange(); markWarnBars(); });
+  api.midiLoaded.on(() => { if (BARS.length) applyLoopRange(); }); // 反复的播放时间要等 MIDI 生成后才知道
   api.error.on(e => UI.toast('谱面出错：' + (e && e.message ? e.message : e), 'err', 6000));
   return api;
 }
@@ -716,13 +717,28 @@ function applyAudio() {
   api.countInVolume = $('countIn').checked ? 1 : 0;
 }
 
+let warnedUnplayed = '';
 function applyLoopRange() {
   if (!api || !api.score || !api.tracks.length) return;
   const mbs = api.score.masterBars;
   if (!mbs[state.a] || !mbs[state.b]) return;
-  const range = new alphaTab.synth.PlaybackRange();
-  range.startTick = mbs[state.a].start;
-  range.endTick = mbs[state.b].start + mbs[state.b].calculateDuration();
+  // 循环全曲：不设范围，反复和 D.S. / D.C. 跳转都照常播放。
+  // 循环一段：有反复时播放时间和谱面位置不再一一对应，用 tickCache 查每个小节第一次被弹到的时间。
+  let range = null;
+  if (!(state.a === 0 && state.b === mbs.length - 1)) {
+    const tc = api.tickCache;
+    const first = mb => (tc && tc.getMasterBar(mb)) || { start: mb.start, end: mb.start + mb.calculateDuration() };
+    const la = first(mbs[state.a]), lb = first(mbs[state.b]);
+    if (la.end <= la.start || lb.end <= lb.start) {
+      // 按反复 / 跳转记号走，这个小节根本不会被弹到（比如 Fine 之后的小节）
+      if (warnedUnplayed !== `${state.a}-${state.b}`) UI.toast('按谱上的反复和跳转记号，选中的小节不会被弹到，先循环全曲', 'info', 5000);
+      warnedUnplayed = `${state.a}-${state.b}`;
+    } else {
+      range = new alphaTab.synth.PlaybackRange();
+      range.startTick = la.start;
+      range.endTick = lb.end > la.start ? lb.end : la.end;
+    }
+  }
   api.playbackRange = range;
   api.isLooping = true;
   const bars = api.tracks[0].staves[0].bars;
@@ -730,7 +746,7 @@ function applyLoopRange() {
   const lastBeats = bars[state.b].voices[0].beats, last = lastBeats[lastBeats.length - 1];
   if (state.b - state.a + 1 < mbs.length) api.highlightPlaybackRange(first, last);
   else api.clearPlaybackRangeHighlight();
-  return range;
+  return range || { startTick: 0 };
 }
 
 function markWarnBars() {
