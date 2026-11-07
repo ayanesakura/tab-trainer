@@ -208,3 +208,33 @@ test('overfull GP bars: every event keeps a positive duration', () => {
   const durs = deriveSong(score).bars[0].events.map(e => durToTicks(e.dur));
   assert.deepEqual(durs, [1920, 1920, 960]);
 });
+
+test('chord sheets: chord names, diagrams and strums survive the round trip', () => {
+  const C = [0, 1, 0, 2, 3, -1], D11 = [0, 3, 0, 4, 5, -1];
+  const strum = (frets, dir, chord) => ({
+    dur: '1', strum: dir, ...(chord ? { chord } : {}),
+    notes: frets.map((f, i) => (f < 0 ? null : N(i + 1, f))).filter(Boolean),
+  });
+  const song = {
+    meta: { title: '弹唱', tuning: ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'], capo: 0, time_signature: [4, 4] },
+    bars: [
+      { shapes: { C, D11 }, events: [strum(C, 'down', 'C'), strum(C, 'up'), strum(D11, 'down', 'D11'), strum(D11, 'up')] },
+      { events: [{ dur: '1', notes: [N(5, 3)], chord: 'C' }, { dur: '3', notes: [N(4, 2)] }] },
+    ],
+  };
+  const { tex } = toAlphaTex(song);
+  assert.match(tex, /\\chord \("C" 0 1 0 2 3 x\)/);
+  assert.match(tex, /\\chord \("D11" 0 3 0 4 5 x\) \{firstfret 3 /);
+  const score = parse(tex);
+  const staff = score.tracks[0].staves[0];
+  const beats = staff.bars[0].voices[0].beats;
+  assert.deepEqual(beats.map(b => b.brushType), [2, 1, 2, 1]); // 2 = 下扫、1 = 上扫
+  assert.equal(beats[0].chord.name, 'C');
+  assert.deepEqual([...beats[0].chord.strings], C);
+  const back = deriveSong(score);
+  assert.deepEqual(back.bars[0].events.map(e => [e.chord || '', e.strum || '']), [['C', 'down'], ['', 'up'], ['D11', 'down'], ['', 'up']]);
+  assert.deepEqual(back.bars[0].shapes, { C, D11 });
+  assert.equal(back.bars[1].events[0].chord, 'C');
+  assert.equal(back.bars[1].events[0].strum, undefined); // 单音不算扫弦
+  assert.deepEqual(norm(back.bars), norm(song.bars));
+});

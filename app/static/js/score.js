@@ -1,7 +1,9 @@
 // 我们的小节数据 ⇄ alphaTab 谱面 的转换。浏览器和 Node 测试共用（不依赖 DOM）。
 //
-// 我们的数据：bar.events = [{ dur: "1/2", notes: [{ string, fret, tech: [...], grace, bend }] }]
+// 我们的数据：bar.events = [{ dur: "1/2", notes: [{ string, fret, tech: [...], grace, bend }], chord?, strum? }]
 //   - dur：到下一个起拍的时长，单位是四分音符；string：1 = 最高音弦（最细）
+//   - chord：从这个拍开始的和弦名；strum："down" 下扫（从低音弦扫向高音弦）/ "up" 上扫
+//   - bar.shapes = { 和弦名: [1–6 弦的品位，-1 = 不弹] }：这个小节用到的和弦指法（谱面上方画和弦图）
 //   - 击弦 h / 勾弦 p / 滑音 sl 标在“目标音”上
 // alphaTab：alphaTex 里 string 1 也是最高音弦，但内部模型里 note.string 1 = 最低音弦；
 //   击弦、滑音标在“起始音”上。转换时要把这些技巧挪到同一根弦的前一个音。
@@ -17,7 +19,8 @@ export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数�
 // 4：闷音的品格记 0；自然泛音的品格记谱上标的泛音点（<12> → 12）
 // 5：中文 GP3–5 文件按 GBK 重新导入（曲名、艺人不再是乱码）
 // 6：GBK 乱码判断收紧（Canção、Größe 这类西文曲名不再被误当成乱码），只看 GP3–5 / GPX 文件
-export const DERIVE_VERSION = 7;
+// 8：弹唱谱：拍上的和弦名（chord）、扫弦方向（strum）、小节用到的和弦指法（shapes）
+export const DERIVE_VERSION = 8;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -122,7 +125,14 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
         lastOnString[n.string] = note;
         return { note, grace };
       });
-      return { ticks: durToTicks(e.dur), q: parseDur(e.dur), notes, roll: notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll')) };
+      const roll = notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll'));
+      const fx = [];
+      if (e.chord) fx.push(`ch "${esc(e.chord)}"`);
+      // 扫弦：alphaTab 的 bd = 下扫（从低音弦扫到高音弦）、bu = 上扫；琶音（波浪线）按方向用 au / ad
+      if (roll) fx.push(e.strum === 'up' ? 'ad' : 'au');
+      else if (notes.length > 1 && e.strum === 'down') fx.push('bd');
+      else if (notes.length > 1 && e.strum === 'up') fx.push('bu');
+      return { ticks: durToTicks(e.dur), q: parseDur(e.dur), notes, fx };
     });
   });
 
@@ -161,7 +171,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
       units.forEach((u, i) => {
         // 第一段带上音符和技巧；后面的段用连音线（{t}）延续，不重新拨弦
         const notes = i === 0 ? ev.notes.map(x => noteTex(x.note)) : ev.notes.map(x => `${x.note.fret}.${x.note.string}{t}`);
-        parts.push(beatTex(notes, u, i === 0 && ev.roll ? ['au'] : []));
+        parts.push(beatTex(notes, u, i === 0 ? ev.fx : []));
       });
     });
     beatMap.push(onsets);
@@ -178,9 +188,27 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
     `\\staff {${staves}}`,
     `\\tuning (${tuning})`,
     meta.capo ? `\\capo ${meta.capo}` : '',
+    ...chordDefs(song.bars),
     `\\ts (${ts[0]} ${ts[1]})`,
   ].filter(Boolean).join('\n');
   return { tex: `${head}\n${barTexts.join(' |\n')}`, beatMap };
+}
+
+/** 全曲用到的和弦指法 → alphaTex 的和弦定义（谱面开头画和弦图；拍上的 ch "名字" 按名字找到它）。 */
+function chordDefs(bars) {
+  const shapes = new Map();
+  for (const bar of bars) {
+    for (const [name, frets] of Object.entries(bar.shapes || {})) {
+      if (!shapes.has(name) && Array.isArray(frets) && frets.length === STRINGS) shapes.set(name, frets);
+    }
+  }
+  return [...shapes].map(([name, frets]) => {
+    const played = frets.filter(f => f > 0);
+    const low = played.length ? Math.min(...played) : 1;
+    const first = Math.max(...frets) > 4 && low > 1 ? low : 1; // 高把位的和弦图从最低的按弦品位画起（“3fr.”）
+    const f = frets.map(x => (x < 0 ? 'x' : x)).join(' ');
+    return `\\chord ("${esc(name)}" ${f}) {firstfret ${first} showdiagram true}`;
+  });
 }
 
 /** 播放到的拍 → 我们这个小节里的第几个事件（起拍不晚于这个拍的最后一个事件）。 */
@@ -228,6 +256,8 @@ export function deriveSong(score, trackIndex = 0) {
     // 这时按拍自己的时值算到它结束，不能让最后一个音的时值变成 0 或负数（后端会拒收，整小节变成休止）
     let end = length;
     const byTick = new Map();
+    const beatInfo = new Map(); // 起拍 → { chord, strum }
+    const shapes = {};
     const pendingGrace = [];
     for (const voice of bar.voices) {
       for (const beat of voice.beats) {
@@ -240,6 +270,18 @@ export function deriveSong(score, trackIndex = 0) {
         const start = beat.displayStart;
         end = Math.max(end, start + (beat.displayDuration || 0));
         if (!byTick.has(start)) byTick.set(start, []);
+        // 和弦名（GP 的 Chord）、扫弦（brushType 1 = 上扫、2 = 下扫）记在这个起拍上
+        const info = beatInfo.get(start) || {};
+        const chord = beat.chord || (beat.chordId != null && staff.chords && staff.chords.get(beat.chordId));
+        if (chord && chord.name && !info.chord) {
+          info.chord = String(chord.name).trim().slice(0, 24);
+          const frets = [...(chord.strings || [])];
+          if (frets.length === STRINGS && frets.some(f => f >= 0)) shapes[info.chord] = frets.map(f => (f < 0 ? -1 : f));
+        }
+        if (!beat.isRest && (beat.brushType === 1 || beat.brushType === 2) && !info.strum) {
+          info.strum = beat.brushType === 2 ? 'down' : 'up';
+        }
+        beatInfo.set(start, info);
         if (beat.isRest) continue;
         for (const n of beat.notes) {
           if (n.isTieDestination) continue;
@@ -272,11 +314,16 @@ export function deriveSong(score, trackIndex = 0) {
       if (n) n.grace = g.fret;
     }
     if (end <= ticks[ticks.length - 1]) end = ticks[ticks.length - 1] + TICKS; // 拍没有时值（不会发生）时兜底：算一拍
-    const events = ticks.map((t, i) => ({
-      dur: ticksToDur((i + 1 < ticks.length ? ticks[i + 1] : end) - t),
-      notes: byTick.get(t),
-    }));
+    const events = ticks.map((t, i) => {
+      const ev = { dur: ticksToDur((i + 1 < ticks.length ? ticks[i + 1] : end) - t), notes: byTick.get(t) };
+      const info = beatInfo.get(t) || {};
+      if (info.chord) ev.chord = info.chord;
+      if (info.strum && ev.notes.length > 1) ev.strum = info.strum;
+      return ev;
+    });
     const mb = score.masterBars[bi], out = { events };
+    const used = Object.fromEntries(Object.entries(shapes).filter(([k]) => events.some(e => e.chord === k)));
+    if (Object.keys(used).length) out.shapes = used;
     if (mb.timeSignatureNumerator !== meta.time_signature[0] || mb.timeSignatureDenominator !== meta.time_signature[1]) {
       out.time_signature = [mb.timeSignatureNumerator, mb.timeSignatureDenominator];
     }
