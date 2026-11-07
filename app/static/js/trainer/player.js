@@ -34,7 +34,13 @@ function guitarsFailed() {
   if (soundFontsLoaded >= 2) return;
   soundFontsLoaded = 2;
   UI.toast('木吉他音色加载失败，先用默认音色播放', 'err', 6000);
-  if (playerReadyOnce) set('play.ready', true);
+  if (playerReadyOnce) setReady();
+}
+// 播放器可以用了（两个音色库都好了，或木吉他库失败退回默认音色）：节拍器、预备拍、音量在这里一起设上，
+// 不然 alphaTab 默认的 0 音量会一直留着（另外 on('play.ready') 也会再设一次，哪条路径变成就绪都不会漏）
+function setReady() {
+  set('play.ready', true);
+  applyAudio();
 }
 
 function themeColors() {
@@ -67,8 +73,7 @@ function ensureApi() {
   api.playerReady.on(() => {
     playerReadyOnce = true;
     if (soundFontsLoaded < 2) return; // 等木吉他音色也加载完
-    set('play.ready', true);
-    applyAudio();
+    setReady();
   });
   api.playerStateChanged.on(e => set('play.playing', e.state === 1));
   api.playerPositionChanged.on(e => onPosition(e.currentTick));
@@ -438,7 +443,7 @@ export function initPlayer() {
     updateFollowBtn();
     if (!now && was) setStatus('已暂停', '空格继续 · ←→ 换段 · ↑↓ 调速');
   });
-  on('play.ready', r => { if (r && !playing()) setStatus('已停止', IDLE_HINT); });
+  on('play.ready', r => { if (!r) return; applyAudio(); if (!playing()) setStatus('已停止', IDLE_HINT); });
   on(['play.a', 'play.b'], paintLoop);
   on('view', renderSections);
   on('view.source', loadSource);
