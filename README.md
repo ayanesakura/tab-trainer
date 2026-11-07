@@ -173,6 +173,8 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/store.py` | `data/` 下的 JSON 读写（加锁的读-改-写） |
 | `app/evaluate.py` | 识别准确率评测 |
 
+前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`。练习页的脚本按功能拆在 `js/trainer/` 下（core → synth / tuner / fretboard / bar-info → player → coach / practice-log / editor → song → main），用普通 `<script>` 按顺序加载：前面的文件只做声明，事件绑定放在各自的 `initXxx()` 里，由 `main.js` 统一调用并在 alphaTab 模块就绪后第一次加载曲子。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`）。
+
 测试和模块一一对应（`tests/test_<模块>.py`），替身模型和合成谱子在 `tests/fakes.py`，公共 fixture 在 `tests/conftest.py`。
 
 ## 开发

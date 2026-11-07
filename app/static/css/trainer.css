@@ -1,0 +1,133 @@
+/* 练习页（trainer.html）的样式；共用部分在 /static/ui.css */
+.top .seg button .ic { width: 14px; height: 14px; }
+.notices > * + * { margin-top: 8px; }
+.notices:not(:empty) { margin-bottom: 12px; }
+
+/* ---- 播放控制 ---- */
+.transport { position: sticky; top: 52px; z-index: 20; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 6px 18px rgba(20, 22, 30, .06); }
+.t-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.t-sep { width: 1px; height: 26px; background: var(--line-2); flex: none; }
+.play { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-fg); flex: none; box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent); transition: transform .12s var(--ease), background .15s; }
+.play:hover { background: var(--accent-hover); }
+.play:active { transform: scale(.94); }
+.play .ic { width: 18px; height: 18px; }
+.play.on { background: var(--fg); color: var(--bg); box-shadow: none; }
+.status { min-width: 150px; line-height: 1.35; }
+.status .l1 { font-weight: 600; font-variant-numeric: tabular-nums; }
+.status .l2 { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.grp { display: flex; align-items: center; gap: 6px; }
+.grp .lbl { font-size: 12px; color: var(--muted); }
+.bpm { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 66px; text-align: right; }
+#bpm { width: 150px; }
+.loop-label { font-weight: 500; font-variant-numeric: tabular-nums; min-width: 92px; text-align: center; }
+.chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
+.chips::-webkit-scrollbar { display: none; }
+.chips button { height: 26px; padding: 0 10px; border-radius: 13px; background: var(--pill); color: var(--ctl-fg); font-size: 12px; white-space: nowrap; flex: none; transition: background .15s, color .15s; font-variant-numeric: tabular-nums; }
+.chips button:hover { background: var(--pill-hover); color: var(--fg); }
+.chips button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.t-opts { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--fg-2); }
+.t-opts[hidden] { display: none; }
+#optsBtn.on { background: var(--accent-soft); color: var(--accent); }
+.t-row .spacer { flex: 1; }
+.t-opts .vol { width: 90px; }
+
+/* ---- 原谱 + 小节说明 ---- */
+.info-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+@media (max-width: 860px) { .info-grid { grid-template-columns: 1fr; } }
+.card-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-2); }
+#cropCard { display: flex; flex-direction: column; }
+.paper { flex: 1; min-height: 270px; display: flex; align-items: center; justify-content: center; background: #fff; border-radius: 0 0 var(--radius) var(--radius); overflow: hidden; }
+:root[data-theme="dark"] .paper { background: #1d1d21; }
+:root[data-theme="dark"] .paper canvas { filter: invert(.88) hue-rotate(180deg); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .paper { background: #1d1d21; } :root:not([data-theme="light"]) .paper canvas { filter: invert(.88) hue-rotate(180deg); } }
+.paper canvas { display: block; }
+.detail { display: flex; flex-direction: column; }
+.detail .body { padding: 12px 16px 14px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+.tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.tip { line-height: 1.7; color: var(--fg); }
+.coach { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+.coach .qa { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.coach .qa .q { font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
+.coach .qa .q .t { font-weight: 400; color: var(--muted); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
+.coach .qa .a { white-space: pre-wrap; line-height: 1.7; color: var(--fg-2); }
+.coach .qa.stale { opacity: .55; }
+.coach .qa .old { font-weight: 400; font-size: 11px; color: var(--amber); border: 1px solid currentColor; border-radius: 5px; padding: 0 4px; }
+.coach .qa-list { display: flex; flex-direction: column; gap: 12px; max-height: 320px; overflow-y: auto; }
+.coach .ask { display: flex; gap: 6px; }
+.coach .ask .input { flex: 1; }
+.practice-line { color: var(--muted); font-size: 12px; }
+.warns { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 9px; background: var(--amber-soft); font-size: 12.5px; white-space: pre-wrap; }
+.tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.tip:empty::before { content: '这一小节还没有提示。'; color: var(--muted); }
+.fix { border-top: 1px solid var(--line); padding-top: 8px; margin-top: auto; }
+.fix summary { cursor: pointer; color: var(--muted); font-size: 12.5px; list-style: none; display: flex; align-items: center; gap: 6px; }
+.fix summary::-webkit-details-marker { display: none; }
+.fix summary::before { content: '▸'; font-size: 10px; transition: transform .15s; }
+.fix[open] summary::before { transform: rotate(90deg); }
+.fix[open] summary { margin-bottom: 8px; }
+.fix .editor { margin-top: 8px; }
+.tools .input { flex: 1; min-width: 160px; }
+.editor textarea { width: 100%; height: 240px; margin-top: 2px; }
+.editor .bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+
+/* ---- 指板 ---- */
+.fbwrap { margin-top: 12px; padding: 10px 12px 8px; overflow-x: auto; }
+.fbwrap svg { display: block; min-width: 760px; width: 100%; }
+.legend { color: var(--muted); font-size: 12px; margin: 4px 4px 0; display: flex; gap: 14px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+
+/* ---- 谱面（alphaTab） ---- */
+.score-card { margin-top: 12px; position: relative; }
+#score { isolation: isolate; z-index: 0; } /* alphaTab 的光标和选区高亮不能盖到吸顶的播放栏上 */
+.warn-mark { position: absolute; pointer-events: none; border-radius: 4px; background: color-mix(in srgb, var(--amber) 14%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--amber) 70%, transparent); z-index: 1; }
+.chips button.warn::after { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); margin-left: 5px; vertical-align: 1px; }
+#editModeBtn.on { background: var(--accent-soft); color: var(--accent); }
+.score-card.editing #score { cursor: crosshair; }
+.note-pop { position: absolute; z-index: 30; width: 320px; background: var(--pop-bg); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); box-shadow: var(--shadow); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.note-pop[hidden] { display: none; }
+.note-pop .np-h { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.note-pop .np-h .hint { font-weight: 400; }
+.note-pop .np-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.note-pop .np-row > .lbl { width: 30px; flex: none; color: var(--muted); }
+.note-pop .chips { flex-wrap: wrap; overflow: visible; flex: 1; }
+.note-pop .np-fret { width: 64px; text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.note-pop .np-fret::-webkit-inner-spin-button, .note-pop .np-fret::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.note-pop .np-msg { color: var(--amber); min-height: 0; }
+.note-pop .np-actions { display: flex; gap: 6px; align-items: center; }
+.note-pop .np-actions .grow { flex: 1; }
+.score-card .card-h { flex-wrap: wrap; }
+.score-legend { padding: 8px 14px 0; margin: 0; }
+#score { position: relative; padding: 4px 8px 16px; min-height: 200px; }
+#score .at-surface { margin: 0 auto; }
+.at-cursor-bar { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.at-cursor-beat { background: var(--accent); width: 3px; }
+.at-selection div { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.at-highlight * { fill: var(--accent); stroke: var(--accent); }
+.info-grid.nocrop { grid-template-columns: 1fr; }
+.grow { flex: 1; }
+
+/* ---- 调弦 ---- */
+table.tune { width: 100%; border-collapse: collapse; }
+table.tune th { text-align: left; font-size: 12px; font-weight: 500; color: var(--muted); padding: 10px 16px; border-bottom: 1px solid var(--line-2); }
+table.tune td { padding: 10px 16px; border-top: 1px solid var(--line-2); }
+table.tune tr:first-child td { border-top: 0; }
+table.tune tr.hit td { background: var(--accent-soft); }
+table.tune td b { font-variant-numeric: tabular-nums; }
+.chg-down { color: var(--amber); } .chg-up { color: var(--blue); } .chg-same { color: var(--green); }
+.tuner { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; padding: 16px 18px; }
+.tnote { font-size: 34px; font-weight: 700; min-width: 110px; text-align: center; font-variant-numeric: tabular-nums; }
+.meter { position: relative; width: 320px; max-width: 100%; height: 28px; background: var(--pill); border-radius: 14px; overflow: hidden; }
+.meter .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: var(--green); }
+.meter .needle { position: absolute; top: 4px; bottom: 4px; width: 8px; margin-left: -4px; border-radius: 4px; background: var(--amber); left: 50%; transition: left .08s; }
+.tread { color: var(--muted); margin-top: 6px; font-size: 12.5px; }
+.meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px 12px; padding: 14px 16px; }
+.meta-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+
+/* ---- 练习建议 ---- */
+.plan-row .step { width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 600; font-size: 12px; flex: none; }
+.plan-row .sub { white-space: normal; line-height: 1.6; color: var(--fg-2); font-size: 12.5px; margin-top: 3px; }
+
+@media (max-width: 760px) {
+  .transport { position: static; }
+  .crumb .t { max-width: 40vw; }
+}

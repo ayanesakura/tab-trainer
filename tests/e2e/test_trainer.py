@@ -1,4 +1,4 @@
-"""练习页的冒烟测试：加载、播放和练习记录、改音和撤销、方向键换段、GP 导入（成功 / 失败）、曲库页。"""
+"""练习页的冒烟测试：加载、播放和练习记录、改音和撤销、方向键换段、调弦和记号示范音、GP 导入（成功 / 失败）、曲库页。"""
 
 import json
 import sys
@@ -79,6 +79,26 @@ def test_arrow_keys_step_through_sections(trainer):
     bpm = b.js("state.bpm")
     b.key("ArrowUp", vk=38)
     assert b.js("state.bpm") == bpm + 4
+
+
+def test_tuner_and_glossary_demos_play(trainer):
+    """调弦表的“听”和记号说明的“试听”用的是页面里自带的拨弦合成（不是 alphaTab）。"""
+    b = trainer()
+    b.js("location.hash = '#tune'; true")
+    b.wait_for(
+        "!document.getElementById('view-tune').hidden && document.getElementById('view-practice').hidden"
+    )
+    assert b.js("document.querySelectorAll('#tuneRows tr').length") == 6
+    b.js("document.querySelector('#tuneRows button').click(); true")
+    b.js("location.hash = '#glossary'; true")
+    b.wait_for("!document.getElementById('view-glossary').hidden")
+    demos = b.js("[...document.querySelectorAll('button.demo')].map(x => x.dataset.demo)")
+    assert len(demos) == 10
+    for d in demos:  # 每个示范都点一遍：闷音、滑音、击勾弦、两种泛音、倚音各条发声路径都会走到
+        b.js(f"document.querySelector('button.demo[data-demo={d}]').click(); true")
+    time.sleep(0.3)
+    assert b.js("ac.state") == "running"
+    assert not b.errors, b.errors
 
 
 def test_guitar_pro_import_becomes_ready(server, trainer):
