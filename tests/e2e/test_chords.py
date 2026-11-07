@@ -104,3 +104,29 @@ def test_bar_card_shows_the_bars_chords_and_the_editor_changes_them(server, chor
     saved = json.load(urllib.request.urlopen(f"{server['base']}/api/songs/{sid}"))["bars"][0]["events"][1]
     assert saved.get("chord") == "Am7" and "strum" not in saved
     assert not b.errors, b.errors
+
+
+def test_confirming_a_doubtful_bar(server, trainer):
+    """待核对的小节：卡片里点“确认没问题”，不再算待核对；可以撤销。"""
+    store = server["store"]
+    sid = _seed()
+    store.update(sid, lambda s: s["bars"][1].update(uncertain="第 3 拍看不清"))
+    try:
+        b = trainer(sid)
+        b.js("tt.set('ui.bar', 1)")
+        b.wait_for(
+            "!document.getElementById('reviewRow').hidden && !document.getElementById('barReview').hidden"
+        )
+        b.js("document.getElementById('reviewBtn').click()")
+        b.wait_for(
+            "document.getElementById('barReview').hidden && tt.get('song').bars[1].reviewed", timeout=10
+        )
+        assert "撤销确认" in b.js("document.getElementById('reviewBtn').textContent")
+        assert b.js("tt.get('view').review[1]") is False
+        b.js("document.getElementById('reviewBtn').click()")
+        b.wait_for(
+            "!document.getElementById('barReview').hidden && !tt.get('song').bars[1].reviewed", timeout=10
+        )
+        assert not b.errors, b.errors
+    finally:
+        store.delete(sid)

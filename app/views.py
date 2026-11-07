@@ -30,9 +30,19 @@ def _public(x: Any) -> Any:
     return x
 
 
-def needs_review(bar: dict) -> bool:
-    """有警告或者模型标了不确定：练习页标出来、曲库里算作“待核对”。"""
+def has_doubts(bar: dict) -> bool:
+    """有警告或者模型标了不确定。"""
     return bool(bar.get("warn")) or bool(str(bar.get("uncertain") or "").strip())
+
+
+def reviewed(bar: dict) -> bool:
+    """用户看过、点了“确认没问题”，而且之后内容没再变过。"""
+    return bar.get("reviewed_rev") is not None and bar.get("reviewed_rev") == int(bar.get("rev") or 0)
+
+
+def needs_review(bar: dict) -> bool:
+    """有警告或者模型标了不确定、用户还没确认过：练习页标出来、曲库里算作“待核对”。"""
+    return has_doubts(bar) and not reviewed(bar)
 
 
 def bar_view(s: dict, bar: dict) -> dict:
@@ -41,6 +51,8 @@ def bar_view(s: dict, bar: dict) -> dict:
     out["rev"] = int(bar.get("rev") or 0)
     out["edited"] = bool(bar.get("edited"))
     out["needs_review"] = needs_review(bar)
+    out["reviewed"] = has_doubts(bar) and reviewed(bar)
+    out.pop("reviewed_rev", None)
     out["locked"] = state.bar_locked(s, bar)
     return out
 

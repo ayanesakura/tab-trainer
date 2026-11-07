@@ -355,6 +355,21 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
     return store.update(sid, apply)
 
 
+def review_bar(sid: str, bar_id: str, ok: bool, rev: int | None = None) -> dict:
+    """待核对的小节：用户看过原谱、确认识别没问题（ok=False 撤销）。记下当时的 rev，内容再变就要重新核对。
+    不算改谱（不动 rev，不让提示、问答、练习建议失效）；GP 曲子的小节也能确认。"""
+
+    def apply(s):
+        bar = find_bar(s, bar_id)
+        check_rev(bar.get("rev"), rev)
+        if ok:
+            bar["reviewed_rev"] = int(bar.get("rev") or 0)
+        else:
+            bar.pop("reviewed_rev", None)
+
+    return store.update(sid, apply)
+
+
 def edit_meta(sid: str, raw: dict, rev: int | None = None) -> dict:
     """改谱头：曲名随时能改；调弦 / 变调夹 / 拍号在识别进行中不能改，GP / MusicXML 曲子来自原文件不能改。"""
 

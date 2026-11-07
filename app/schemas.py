@@ -91,6 +91,11 @@ class TagsIn(_In):
         return clean
 
 
+class ReviewIn(_In):
+    ok: bool = True
+    rev: int | None = None
+
+
 class ReparseIn(_In):
     hint: str = Field("", max_length=1000)
 

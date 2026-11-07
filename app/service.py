@@ -134,6 +134,10 @@ def edit_bar(sid: str, bar_id: str, events: list[dict], tip: str | None, rev: in
     return views.song_view(songs.edit_bar(sid, bar_id, events, tip, rev))
 
 
+def review_bar(sid: str, bar_id: str, ok: bool, rev: int | None) -> dict:
+    return views.song_view(songs.review_bar(sid, bar_id, ok, rev))
+
+
 def edit_meta(sid: str, fields: dict, rev: int | None) -> dict:
     return views.song_view(songs.edit_meta(sid, fields, rev))
 

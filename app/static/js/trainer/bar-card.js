@@ -1,8 +1,10 @@
-// 侧栏的小节卡片：编号、技巧标签、这一小节的和弦（弹唱谱）、提示、待核对说明、原谱截图。正在看的小节是 store 的 ui.bar。
+// 侧栏的小节卡片：编号、技巧标签、这一小节的和弦（弹唱谱）、提示、待核对说明（可以确认没问题）、原谱截图。正在看的小节是 store 的 ui.bar。
 // 敲节奏打开时（rhythm.on）这张卡片收起来，位置让给节奏卡片。
 
 import { get, on } from './store.js';
-import { $, UI, esc } from './dom.js';
+import { $, UI, esc, songUrl, setButton } from './dom.js';
+import { put, withBusy } from '../lib/api.js';
+import { applySong, conflict } from './song.js';
 import { barTags, warnText, isScore } from './view.js';
 import { images, loadImages } from './page-images.js';
 import { barChords, chordShapes, chordSVG } from './chords.js';
@@ -22,7 +24,27 @@ function renderCard() {
   $('tipWarn').hidden = !warn.length;
   $('tipWarn').innerHTML = warn.map(w => `<div>${UI.icon('alert', 13)}<span>${esc(w)}</span></div>`).join('');
   $('barReview').hidden = !v.review[bi];
+  // 待核对的小节：看过原谱觉得没问题就点确认（之后改了音要重新核对）；确认过的可以撤销
+  $('reviewRow').hidden = !(sb.needs_review || sb.reviewed);
+  $('tipWarn').classList.toggle('reviewed', !!sb.reviewed);
+  setButton($('reviewBtn'), sb.reviewed ? `${UI.icon('x')}撤销确认` : `${UI.icon('check')}确认没问题`);
+  $('reviewHint').textContent = sb.reviewed ? '已确认没问题，不再算待核对' : '对照原谱看过，识别是对的';
   drawCrop();
+}
+
+async function toggleReview() {
+  const bi = get('ui.bar'), sb = (get('song').bars || [])[bi];
+  if (!sb) return;
+  await withBusy($('reviewBtn'), async () => {
+    try {
+      applySong(await put(songUrl(`/bars/${encodeURIComponent(sb.id)}/review`), { ok: !sb.reviewed, rev: sb.rev }));
+      UI.toast(sb.reviewed ? `已撤销第 ${bi + 1} 小节的确认` : `第 ${bi + 1} 小节已确认`, 'ok');
+    } catch (e) {
+      if (e.status === 409) await conflict(e);
+      else UI.toast(e.message, 'err', 5000);
+    }
+  });
+  renderCard(); // withBusy 结束时把按钮还原成点之前的样子：按新状态重画一次
 }
 
 function drawCrop() {
@@ -43,6 +65,7 @@ function drawCrop() {
 }
 
 export function initBarCard() {
+  $('reviewBtn').onclick = toggleReview;
   on('view', v => { if (v) loadImages(v.pages); });
   document.addEventListener('tt-images', drawCrop);
   on(['ui.bar', 'view', 'song.bars', 'song.is_score'], renderCard);

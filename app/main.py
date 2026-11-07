@@ -219,6 +219,12 @@ def put_bar(sid: str, bar_id: str, body: schemas.BarIn):
     return service.edit_bar(sid, bar_id, events, body.tip, body.rev)
 
 
+@app.put("/api/songs/{sid}/bars/{bar_id}/review")
+def review_bar(sid: str, bar_id: str, body: schemas.ReviewIn):
+    """待核对的小节：确认识别没问题（ok=false 撤销）。"""
+    return service.review_bar(sid, bar_id, body.ok, body.rev)
+
+
 @app.post("/api/songs/{sid}/bars/{bar_id}/ask")
 def ask_bar(sid: str, bar_id: str, body: schemas.AskIn):
     return service.ask_bar(sid, bar_id, body.question)

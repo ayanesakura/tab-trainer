@@ -391,3 +391,36 @@ def test_job_and_file_routes_over_http(data_dir, sync_jobs):
     assert r.status_code == 200 and r.content.startswith(b"\x18FICHIER")
     assert c.post(f"/api/songs/{gp}/parse").status_code == 400  # GP 曲子不用识别
     assert c.get(f"/api/songs/{gp}").json()["is_score"]
+
+
+def test_confirming_a_bar_clears_needs_review_until_its_notes_change(data_dir):
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    sid = c.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
+    from app import store
+
+    recognize.run_parse(sid)
+    store.update(sid, lambda s: s["bars"][0].update(uncertain="第 3 拍看不清"))
+    bar = c.get(f"/api/songs/{sid}").json()["bars"][0]
+    assert bar["needs_review"] and not bar["reviewed"] and "reviewed_rev" not in bar
+    assert next(x for x in c.get("/api/songs").json() if x["id"] == sid)["needs_review_bars"] == 1
+
+    v = c.put(f"/api/songs/{sid}/bars/{bar['id']}/review", json={"ok": True, "rev": bar["rev"]}).json()
+    b = v["bars"][0]
+    assert not b["needs_review"] and b["reviewed"] and b["rev"] == bar["rev"] and b["uncertain"]
+    assert next(x for x in c.get("/api/songs").json() if x["id"] == sid)["needs_review_bars"] == 0
+    # 版本号对不上：409
+    assert (
+        c.put(
+            f"/api/songs/{sid}/bars/{bar['id']}/review", json={"ok": True, "rev": bar["rev"] + 5}
+        ).status_code
+        == 409
+    )
+    # 撤销
+    b = c.put(f"/api/songs/{sid}/bars/{bar['id']}/review", json={"ok": False}).json()["bars"][0]
+    assert b["needs_review"] and not b["reviewed"]
+    c.put(f"/api/songs/{sid}/bars/{bar['id']}/review", json={"ok": True})
+    # 之后改了音：要重新核对（改音会清掉不确定说明，这里放一个新的说明来看）
+    c.put(f"/api/songs/{sid}/bars/{bar['id']}", json={"events": [{"dur": "4", "notes": []}]})
+    store.update(sid, lambda s: s["bars"][0].update(uncertain="还是看不清"))
+    b = c.get(f"/api/songs/{sid}").json()["bars"][0]
+    assert b["needs_review"] and not b["reviewed"]

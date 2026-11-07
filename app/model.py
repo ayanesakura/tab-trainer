@@ -203,6 +203,7 @@ class Bar(_M):
     edited: bool = False  # 用户手改过（撤销回原样后变回 False）
     orig: Orig | None = Field(None, alias="_orig")
     placeholder: bool = False  # 识别失败、按整小节休止占位
+    reviewed_rev: int | None = None  # 用户点了“确认没问题”时这个小节的 rev：内容再变（rev 变了）就要重新核对
     # 弹唱谱：这个小节里出现的和弦（事件的 chord）的指法，和弦名 → 1–6 弦的品位（-1 = 不弹），给谱面画和弦图
     shapes: dict[str, ChordShape] | None = None
     qa: list[QA] = Field(default_factory=list)
@@ -568,7 +569,9 @@ class PracticeView(_M):
 class BarView(Bar):
     orig: Orig | None = Field(None, exclude=True)  # _orig 只是撤销基线，不给前端
     n: int
-    needs_review: bool = False  # 有警告或模型标了不确定
+    needs_review: bool = False  # 有警告或模型标了不确定、用户还没确认
+    reviewed: bool = False  # 有警告或不确定说明，但用户已经确认没问题（内容没再变）
+    reviewed_rev: int | None = Field(None, exclude=True)  # 内部字段，不给前端
     locked: str | None = None  # 现在不能改的原因
     warn: list[Warn] = Field(default_factory=list)
 
