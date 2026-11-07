@@ -226,5 +226,5 @@ def test_edit_just_before_the_new_page_ts_rerun_is_not_overwritten(data_dir, syn
     song = real_load(sid)
     bar = next(b for b in song["bars"] if b["id"] == edited[0])
     assert bar["edited"] and bar["events"][0]["notes"][0]["fret"] == 9
-    assert [ts for fb, ts in calls if fb == 10] == [[4, 4]]  # 新页第二行没有重做
+    assert [ts for fb, ts in calls if fb == 10] == [None]  # 新页第二行没有重做（和全曲拍号一样时不传）
     assert all(s["status"] == "done" for s in song["systems"])

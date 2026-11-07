@@ -796,7 +796,8 @@ def test_header_cost_is_recorded_when_the_parse_stops_before_any_row(data_dir, s
     assert recognize.start_parse(sid, cancel)
     song = store.load(sid)
     assert song["status"] == ("cancelled" if how == "cancel" else "error")
-    assert song["usage"]["input_tokens"] == 1000 and song["usage"]["output_tokens"] == 0
+    # 替身一开始就带 10 / 20：新建的客户端用掉的全算这首曲子的
+    assert song["usage"]["input_tokens"] == 1010 and song["usage"]["output_tokens"] == 20
 
 
 def test_row_with_no_bars_fails_instead_of_wiping_the_row(data_dir, sync_jobs, monkeypatch):
