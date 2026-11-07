@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from app import migrate, practice, songs, store, views
 from tests.fakes import score_png
 
@@ -131,12 +133,55 @@ def test_source_type_is_guessed_for_old_songs():
     assert migrate.source_type_of({"source_type": "pdf"}) == "pdf"
 
 
-def test_mojibake_fix_only_touches_real_mojibake():
-    assert migrate.fix_mojibake(MOJI) == "押尾光太郎"
-    assert migrate.fix_mojibake("Ñº¹ãÌ«ÀÉ") != "Ñº¹ãÌ«ÀÉ"
-    for ok in ("Pokémon", "Café del Mar", "押尾光太郎", "Romance", "", "Ångström"):
-        assert migrate.fix_mojibake(ok) == ok
-    assert MOJI == "Ñº\xce²¹âÌ«ÀÉ"
+def _as_cp1252(text: str) -> str:
+    """GBK 字节按 windows-1252 读出来的样子（alphaTab 的读法；1252 没定义的 5 个字节按 Latin-1）。"""
+    out = []
+    for b in text.encode("gbk"):
+        try:
+            out.append(bytes([b]).decode("cp1252"))
+        except UnicodeDecodeError:
+            out.append(chr(b))
+    return "".join(out)
+
+
+MUST_FIX = ["押尾光太郎", "我们的歌", "晴天", "周杰倫", "我們的歌", "闹木 扒谱（TransfmrC修改）"]
+MUST_NOT_CHANGE = [
+    "Canção",
+    "Coração",
+    "Ação",
+    "Größe",
+    "Mötley Crüe",
+    "Café",
+    "Für Elise",
+    "Señor",
+    "Ñandú",
+    "Beyoncé",
+]
+
+
+@pytest.mark.parametrize("text", MUST_FIX)
+def test_mojibake_must_fix(text):
+    """FIX-CONTRACT 的统一规则（前端 score.js 用同一套）：cp1252 读法和 Latin-1 读法都能还原。"""
+    assert migrate.fix_mojibake(_as_cp1252(text)) == text
+    assert migrate.fix_mojibake(text.encode("gbk").decode("latin-1")) == text
+
+
+@pytest.mark.parametrize(
+    "text", [*MUST_NOT_CHANGE, "Pokémon", "Café del Mar", "押尾光太郎", "Romance", "", "Ångström"]
+)
+def test_mojibake_must_not_change(text):
+    assert migrate.fix_mojibake(text) == text
+
+
+def test_mojibake_cp1252_range_and_edge_cases():
+    moji = _as_cp1252("我們的歌")
+    assert "\u201a" in moji and "\u0192" in moji  # 1252 的 0x80–0x9F 区字符（‚ƒ，latin-1 还原不了）
+    assert "\x90" in _as_cp1252("周杰倫")  # 1252 没定义的字节按 Latin-1
+    assert MOJI == "Ñº\xce²¹âÌ«ÀÉ" and migrate.fix_mojibake("Ñº¹ãÌ«ÀÉ") != "Ñº¹ãÌ«ÀÉ"
+    assert migrate.fix_mojibake("Ab€") == "Ab€"  # 还原出的字节解不成 GBK
+    assert migrate.fix_mojibake("中文" + _as_cp1252("晴天")) == "中文" + _as_cp1252(
+        "晴天"
+    )  # 有字符还原不成字节
 
 
 def test_mojibake_is_fixed_for_every_source_type():
@@ -210,3 +255,20 @@ def test_old_notices_get_the_source_that_clears_them(data_dir, sync_jobs):
     assert v["status"] == "ready" and v["notice"] is None
     coach.start_explain("20250101-000000-bbbbbb")
     assert store.load("20250101-000000-bbbbbb")["notice"] is None
+
+
+@pytest.mark.parametrize(
+    ("source", "fixed"), [("x.gp5", True), ("x.gpx", True), ("x.gp", False), ("x.xml", False)]
+)
+def test_set_derived_fixes_mojibake_only_for_old_gp_formats(data_dir, source, fixed):
+    from tests.fakes import derived_bars
+
+    data = b"\x18FICHIER GUITAR PRO v5.10" if source.endswith("gp5") else b"PK\x03\x04"
+    if source.endswith("gpx"):
+        data = b"BCFZ"
+    if source.endswith("xml"):
+        data = b"<score-partwise>"
+    sid = songs.create_song([(source, data)])
+    moji = _as_cp1252("押尾光太郎")
+    s = songs.set_derived(sid, {"tuning": ["E4"] * 6, "artist": moji}, derived_bars(1), 0, None)
+    assert s["meta"]["artist"] == ("押尾光太郎" if fixed else moji)  # GP7+ / MusicXML 本来就是 UTF-8

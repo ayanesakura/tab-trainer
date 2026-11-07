@@ -44,6 +44,7 @@ log = logging.getLogger("tab_trainer.songs")
 
 SCORE_EXT = (".gp", ".gpx", ".gp3", ".gp4", ".gp5", ".musicxml", ".xml", ".mxl")
 MUSICXML_EXT = (".musicxml", ".xml", ".mxl")
+GBK_EXT = (".gp3", ".gp4", ".gp5", ".gpx")  # 中文系统上按 GBK 存文字的老格式（GP7+ 和 MusicXML 是 UTF-8）
 
 
 def find_bar(song: dict, bar_id: str) -> dict:
@@ -264,7 +265,10 @@ def set_derived(
     def apply(s):
         if not is_score(s):
             raise Invalid("只有 Guitar Pro / MusicXML 曲子可以这样保存")
-        meta = normalize_meta(fix_meta_text(meta_raw or {}), s.get("title", ""))
+        raw = meta_raw or {}
+        if str(s.get("source") or "").lower().endswith(GBK_EXT):  # 只有老格式会把中文存成 GBK
+            raw = fix_meta_text(raw)
+        meta = normalize_meta(raw, s.get("title", ""))
         bars = [_derived_bar(i, b or {}, meta) for i, b in enumerate(bars_raw or [])]
         old, track_n = s.get("bars") or [], int(track or 0)
         if old and int(s.get("track") or 0) == track_n:
