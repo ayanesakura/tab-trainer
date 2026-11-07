@@ -1,6 +1,6 @@
 """配置集中在这里：运行参数（并发数、各种上限）和模型设置（API key、Base URL、模型、精细度）。
 
-- settings：进程内的运行参数，测试可以直接改字段。
+- settings：进程内的运行参数，用的时候才读，测试可以直接改字段（例外：max_rows_global 在导入 recognize 时就建成了信号量）。
 - 模型设置存在 data/config.json（读写和损坏处理在 store），这里负责合并、打码显示和建模型客户端。
 - 数据目录：环境变量 TAB_TRAINER_DATA，默认仓库下的 data/（见 store.DATA）。
 """

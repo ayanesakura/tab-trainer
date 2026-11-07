@@ -244,7 +244,10 @@ uv run python -m app.evaluate eval-xxx --yes
 
 ```bash
 scripts/check.sh           # lint + 格式 + Python 单元测试 + JS 数据转换测试
-scripts/check.sh --e2e     # 再加浏览器端到端测试（需要 Chrome，约 20 秒）
+scripts/check.sh --e2e     # 再加浏览器端到端测试（需要 Chrome，约 1–2 分钟）
+uv run pytest tests/test_recognize.py -q      # 单独跑某个模块
+node --test tests/js/*.test.mjs               # 只跑 JS 测试（要写成通配符：Node 24 的 --test 不接受目录）
+UPDATE_PROMPTS=1 uv run pytest tests/test_prompts.py   # 有意改了提示词后重新生成快照，再看 git diff 核对
 ```
 
 上传的谱子、识别结果和配置都在 `data/` 下，不进版本库。每次写入 `song.json` / `config.json` 前，上一版会留成同名的 `.bak`；文件损坏时自动用备份，两份都坏的曲子在曲库里显示“数据损坏”，可以删除。同一个数据目录只能有一个 tab-trainer 在运行。
