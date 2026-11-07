@@ -61,7 +61,11 @@ export function startLoading() {
 /** 马上重新取一次（改谱、开始识别以后）；后台任务又开始了就恢复轮询 */
 export async function refresh() {
   let s;
-  try { s = await load(); } catch (e) { UI.toast(e.message, 'err', 5000); return; }
+  try { s = await load(); } catch (e) {
+    // 网络断了等临时错误：通知里说了“稍后自动重试”，就交给轮询退避重试（轮询可能已经停了）
+    if (transient(e) && poller) { polling = true; poller.now(); } else UI.toast(e.message, 'err', 5000);
+    return;
+  }
   if (s && s.busy && !polling) { polling = true; poller.now(); }
 }
 
@@ -191,18 +195,25 @@ function fillMeta(s) {
   const m = s.meta || {}, v = get('view');
   const editable = s.editable_meta || ['title'];
   $('mTitle').value = s.title || m.title || '';
+  $('mArtist').value = m.artist || '';
   if (m.tuning) m.tuning.forEach((x, i) => { $('mT' + (i + 1)).value = showNote(x); });
   $('mCapo').value = v ? v.capo : m.capo || 0;
   $('mTs').value = (m.time_signature || [4, 4]).join('/');
-  const onlyTitle = !editable.includes('tuning');
-  document.querySelectorAll('.meta-setting').forEach(el => { el.hidden = onlyTitle; });
-  $('metaHead').textContent = onlyTitle ? '曲名' : '曲子信息';
-  $('metaMsg').textContent = onlyTitle ? '调弦、变调夹和拍号以原文件为准。' : '音名写法如 D2、F♯3（F#3 也可以）。';
+  const settings = editable.includes('tuning');
+  $('mArtistLbl').hidden = !editable.includes('artist');
+  document.querySelectorAll('.meta-setting').forEach(el => { el.hidden = !settings; });
+  $('metaHead').textContent = editable.length > 1 ? '曲子信息' : '曲名';
+  // 改不了调弦等设定的原因：GP / MusicXML 来自原文件；图片曲子还没读出谱头，或者正在识别
+  $('metaMsg').textContent = settings ? '音名写法如 D2、F♯3（F#3 也可以）。'
+    : isScore(s) ? '调弦、变调夹和拍号以原文件为准。'
+    : !Object.keys(s.meta || {}).length ? '还没读出谱头，现在只能改曲名。'
+    : '正在识别，完成后可以改调弦、变调夹和拍号。';
 }
 async function saveMeta() {
   const s = get('song');
   const editable = s.editable_meta || ['title'];
   const body = { title: $('mTitle').value };
+  if (editable.includes('artist')) body.artist = $('mArtist').value.trim();
   if (editable.includes('tuning')) body.tuning = [1, 2, 3, 4, 5, 6].map(i => tuningInput($('mT' + i).value));
   if (editable.includes('capo')) body.capo = parseInt($('mCapo').value || '0', 10);
   if (editable.includes('time_signature')) body.time_signature = $('mTs').value.split('/').map(x => parseInt(x, 10));

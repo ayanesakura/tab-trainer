@@ -530,3 +530,22 @@ def test_clicking_a_note_auditions_without_changing_loop(trainer):
     time.sleep(0.3)
     assert b.js("[tt.state.a, tt.state.b]") == [0, 3]
     assert not b.errors, b.errors
+
+
+def test_song_info_form_edits_artist(server, trainer):
+    """曲子信息：图片曲子能改艺人；GP 曲子只能改曲名，提示以原文件为准。"""
+    sid, store = server["image"], server["store"]
+    old = store.load(sid)["meta"].get("artist", "")
+    b = trainer()
+    try:
+        assert not b.js("document.getElementById('mArtistLbl').hidden")
+        b.js("document.getElementById('mArtist').value = '测试艺人'; document.getElementById('metaSave').click(); true")
+        b.wait_for("tt.song.meta.artist === '测试艺人'")
+        assert _song(server, sid)["meta"]["artist"] == "测试艺人"
+    finally:
+        store.update(sid, lambda s: (s["meta"].update(artist=old), s.get("meta_user", {}).pop("artist", None)))
+    b = trainer(server["gp"])
+    b.wait_for("tt.song.status === 'ready'")
+    assert b.js("document.getElementById('mArtistLbl').hidden")
+    assert "原文件" in b.js("document.getElementById('metaMsg').textContent")
+    assert not b.errors, b.errors
