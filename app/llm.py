@@ -21,6 +21,11 @@ from typing import Protocol, runtime_checkable
 import anthropic
 from PIL import Image
 
+try:  # anthropic SDK 2.x 用的是它自带的 httpx 分支（httpx2），旧版用 httpx
+    import httpx2 as _http
+except ImportError:  # pragma: no cover
+    import httpx as _http
+
 from app import model
 from app.errors import Invalid, Upstream
 from app.music import PROMPT_DIRECTIONS
@@ -193,9 +198,9 @@ STREAM_RETRY_WAIT = 3.0  # 秒，第 n 次重试前等 n 倍
 
 
 def _transient(e: Exception) -> bool:
-    """值得重试的临时错误：连接断开、流里的 api_error / overloaded_error、5xx 和 429。
-    认证、权限、参数错误等重试也没用。"""
-    if isinstance(e, anthropic.APIConnectionError):
+    """值得重试的临时错误：连接断开（包括回复传到一半断开——SDK 不包装，抛的是 httpx 的传输错误）、
+    流里的 api_error / overloaded_error、5xx 和 429。认证、权限、参数错误等重试也没用。"""
+    if isinstance(e, (anthropic.APIConnectionError, _http.TransportError)):
         return True
     if not isinstance(e, anthropic.APIStatusError):
         return False
@@ -342,6 +347,8 @@ def friendly(e: Exception) -> str:
         return "调用太频繁或额度不足（429），稍后再试。"
     if isinstance(e, anthropic.APIConnectionError):
         return "连不上模型服务，请检查网络或 Base URL。"
+    if isinstance(e, _http.TransportError):  # 回复传到一半连接断开、读超时
+        return "和模型服务的连接中断了，请稍后重试（网络不稳定时可以检查网络或 Base URL）。"
     if isinstance(e, anthropic.APIStatusError):
         return f"模型服务返回错误 {e.status_code}：{e.message}"
     if isinstance(e, LLMError):
@@ -425,7 +432,7 @@ class Claude(LLM):
         for attempt in range(STREAM_RETRIES + 1):
             try:
                 return self._stream_once(kwargs, fallbacks)
-            except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
+            except (anthropic.APIStatusError, anthropic.APIConnectionError, _http.TransportError) as e:
                 if attempt == STREAM_RETRIES or not _transient(e):
                     raise
                 log.warning(

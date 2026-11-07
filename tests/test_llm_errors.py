@@ -1,5 +1,6 @@
 import anthropic
 import httpx
+import pytest
 
 from app import llm
 
@@ -34,3 +35,43 @@ def test_upstream_reason_is_capped_and_only_uses_message_field():
     reason = llm.upstream_reason(_status_error(anthropic.PermissionDeniedError, 403, body))
     assert len(reason) <= llm.REASON_MAX
     assert "sk-ant" not in reason
+
+
+def test_connection_dropped_mid_stream_is_retried_and_explained(monkeypatch):
+    """回复传到一半连接断开：SDK 不包装，抛的是它自带的 httpx 的 RemoteProtocolError / ReadError 等。
+    要当临时错误重试，最后还失败时给中文说明，而不是原样的英文异常。"""
+    from app.llm import _http
+
+    calls = []
+
+    class Body(_http.SyncByteStream):
+        def __iter__(self):
+            yield (
+                b'event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message",'
+                b'"role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,'
+                b'"stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":1}}}\n\n'
+            )
+            raise _http.RemoteProtocolError("peer closed connection without sending complete message body")
+
+    def handler(req):
+        calls.append(1)
+        return _http.Response(200, headers={"content-type": "text/event-stream"}, stream=Body())
+
+    monkeypatch.setattr(llm, "STREAM_RETRY_WAIT", 0)
+    c = llm.Claude(llm.LLMConfig(api_key="sk-fake", base_url="http://mock"))
+    c.client = anthropic.Anthropic(
+        api_key="sk-fake",
+        base_url="http://mock",
+        max_retries=0,
+        http_client=_http.Client(transport=_http.MockTransport(handler)),
+    )
+    kwargs = {"model": "claude-opus-5-5", "max_tokens": 10, "messages": [{"role": "user", "content": "x"}]}
+    with pytest.raises(_http.RemoteProtocolError) as err:
+        c._stream(kwargs, fallbacks=False)
+    assert len(calls) == llm.STREAM_RETRIES + 1
+    assert (
+        llm.friendly(err.value)
+        == "和模型服务的连接中断了，请稍后重试（网络不稳定时可以检查网络或 Base URL）。"
+    )
+    for e in (_http.ReadError("x"), _http.ReadTimeout("x")):
+        assert llm._transient(e) and "连接中断" in llm.friendly(e)
