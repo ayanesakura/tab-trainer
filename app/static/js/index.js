@@ -252,7 +252,7 @@ $('songs').addEventListener('click', e => {
       { label: '编辑标签', icon: 'list', onClick: () => editTags(s) },
       image && { label: '管理页面', icon: 'image', onClick: () => openPages(id) },
       image && { label: '整首重新识别', icon: 'refresh', onClick: () => reparse(id) },
-      { label: '导出曲子包', icon: 'download', onClick: () => exportSongs([id]) },
+      { label: '导出曲子包', icon: 'upload', onClick: () => exportSongs([id]) },
       'sep',
       { label: '删除', icon: 'trash', danger: true, onClick: () => del(id) },
     ].filter(Boolean));
