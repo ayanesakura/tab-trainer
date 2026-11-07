@@ -76,19 +76,22 @@ function initMore() {
 // ---------------------------------------------------------------------
 function initDock() {
   let open = true;
-  try { open = localStorage.getItem('tt.fb') !== '0'; } catch { /* 读不了就默认展开 */ }
+  // 没设过的话：屏幕够高才默认展开（矮屏幕上先把地方留给谱面）
+  try { const v = localStorage.getItem('tt.fb'); open = v ? v === '1' : innerHeight >= 900; } catch { open = innerHeight >= 900; }
   const paint = v => {
     $('fbBody').hidden = !v;
     $('fbToggle').setAttribute('aria-expanded', v);
     $('fbToggle').title = v ? '收起指板' : '展开指板';
     $('fbBtn').setAttribute('aria-pressed', v);
     document.body.classList.toggle('fb-open', v);
-    try { localStorage.setItem('tt.fb', v ? '1' : '0'); } catch { /* 只在这次打开时生效 */ }
   };
   on('ui.fb', paint);
   set('ui.fb', open);
   paint(open);
-  const toggle = () => set('ui.fb', !get('ui.fb'));
+  const toggle = () => {
+    set('ui.fb', !get('ui.fb'));
+    try { localStorage.setItem('tt.fb', get('ui.fb') ? '1' : '0'); } catch { /* 只在这次打开时生效 */ }
+  };
   $('fbToggle').onclick = toggle;
   // 停靠条的高度给布局用（侧栏高度、页面底部留白、“回到播放位置”按钮的位置）
   const dock = $('fbDock');

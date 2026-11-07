@@ -19,7 +19,7 @@
 .practice-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-w); gap: var(--sp-4); align-items: start; }
 .main-col { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
 .notices { display: flex; flex-direction: column; gap: var(--sp-2); }
-.notices .notice { align-items: center; }
+.notices .notice { align-items: center; padding: 7px 12px; min-height: 40px; }
 .notices .notice > .dot, .notices .notice > .spinner { margin-top: 0; }
 .notices .n-acts { margin: -2px -6px -2px 0; }
 
@@ -45,12 +45,12 @@
 .chips button.warn::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
 
 /* “更多”弹层 */
-.more-pop { position: absolute; z-index: 40; width: 330px; padding: var(--sp-3) 14px; border-radius: var(--r-lg); background: var(--pop-bg); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; animation: pop-in .14s var(--ease); }
+.more-pop { position: absolute; z-index: 40; width: 372px; padding: var(--sp-3) 14px; border-radius: var(--r-lg); background: var(--card); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; animation: pop-in .14s var(--ease); }
 .more-pop hr { border: 0; border-top: 1px solid var(--line-2); }
 .mp-row { display: flex; align-items: center; gap: var(--sp-2); justify-content: space-between; color: var(--fg-2); }
 .mp-lbl { color: var(--fg-2); }
 .more-pop .vol { width: 130px; }
-.auto-row { justify-content: flex-start; flex-wrap: wrap; gap: 6px; font-size: var(--fs-1); color: var(--muted); }
+.auto-row { justify-content: flex-start; flex-wrap: nowrap; gap: 5px; font-size: var(--fs-1); color: var(--fg-2); white-space: nowrap; }
 .auto-row .input.num { width: 48px; height: 26px; }
 
 /* ---- 谱面（alphaTab） ---- */
@@ -69,7 +69,7 @@
 .orig-btn { position: absolute; z-index: 3; height: 24px; padding: 0 var(--sp-2); background: var(--card); box-shadow: var(--shadow-sm); }
 
 /* 改音面板 */
-.note-pop { position: absolute; z-index: 30; width: 320px; background: var(--pop-bg); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); box-shadow: var(--shadow); border-radius: var(--r-lg); padding: var(--sp-3) 14px; display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-1); }
+.note-pop { position: absolute; z-index: 30; width: 320px; background: var(--card); box-shadow: var(--shadow); border-radius: var(--r-lg); padding: var(--sp-3) 14px; display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-1); }
 .np-h { display: flex; align-items: center; gap: var(--sp-2); font-weight: 600; font-size: var(--fs-2); }
 .np-h .hint { font-weight: 400; }
 .np-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }

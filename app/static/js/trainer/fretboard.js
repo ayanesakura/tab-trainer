@@ -11,7 +11,7 @@ function el(tag, attrs = {}, parent) {
   return n;
 }
 
-const FB = { W: 960, L: 58, R: 14, T: 16, G: 20, MAXF: 17 };
+const FB = { W: 960, L: 74, R: 14, T: 16, G: 20, MAXF: 17 };
 let capo = 0, dyn = null;
 const pfr = r => 1 - Math.pow(2, -r / 12);
 const fx = n => FB.L + (pfr(n + capo) - pfr(capo)) / (pfr(FB.MAXF + capo) - pfr(capo)) * (FB.W - FB.L - FB.R);
