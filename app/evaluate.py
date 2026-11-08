@@ -523,7 +523,7 @@ def main() -> None:
     ap.add_argument(
         "--refine",
         action="store_true",
-        help="识别完再精修（逐小节放大核对，见 app/refine.py），报告精修前后两份结果（另加约 $0.055 / 小节）",
+        help="识别完再精修（逐小节放大核对，见 app/refine.py），报告精修前后两份结果（另加约 $0.2 / 小节）",
     )
     ap.add_argument(
         "--relayout",

@@ -34,7 +34,7 @@ def test_refine_from_the_practice_page(server, trainer, monkeypatch):
         b.js("document.getElementById('refineBtn').click()")
         b.wait_for("!!document.querySelector('.dlg-msg[open] [data-ok]')")
         text = b.js("document.querySelector('.dlg-msg').textContent")
-        assert "6 个小节" in text and "$0.33" in text and "约 2 分钟" in text  # 6 × $0.055，4 个并行
+        assert "6 个小节" in text and "$1.20" in text and "约 3 分钟" in text  # 6 × $0.2，4 个并行
         b.js("document.querySelector('.dlg-msg [data-ok]').click(); true")
         notices = "document.getElementById('notices').textContent"
         b.wait_for(f"{notices}.includes('正在精修')", timeout=10)

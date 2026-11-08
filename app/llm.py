@@ -233,6 +233,11 @@ def friendly(e: Exception) -> str:
     return f"{type(e).__name__}: {e}"
 
 
+# 精修（逐小节核对）的精细度和输出上限：最高档想得久，输出要给够
+VERIFY_EFFORT = "max"
+VERIFY_MAX_TOKENS = 64000
+
+
 class Claude(LLM):
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
@@ -468,7 +473,16 @@ class Claude(LLM):
                 "For context only, the previous bar was read as:\n"
                 + json.dumps(verify_events(previous), ensure_ascii=False)
             )
-        return self._call([block, {"type": "text", "text": "\n\n".join(text)}], VERIFY_SCHEMA)
+        content = [block, {"type": "text", "text": "\n\n".join(text)}]
+        try:
+            # 精修用最高精细度：评测里最难的 25 个错小节改对 24 个、对的 208 个一个没改坏（high 只改对 16 个）
+            return self._call(content, VERIFY_SCHEMA, effort=VERIFY_EFFORT, max_tokens=VERIFY_MAX_TOKENS)
+        except LLMError as e:
+            if "截断" not in str(e):
+                raise
+            # 想得太久、输出超长（很少见）：按设置里的精细度再核对一次
+            log.warning("verify_bar truncated at effort %s, retrying with %s", VERIFY_EFFORT, self.cfg.effort)
+            return self._call(content, VERIFY_SCHEMA)
 
     def explain_bars(self, meta: dict, bars: list[dict]) -> dict:
         """给已经有精确数据的小节（GTP / MusicXML 导入）写练习提示，只发文字。"""

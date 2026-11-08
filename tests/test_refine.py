@@ -52,7 +52,7 @@ def test_refine_rewrites_changed_bars_and_keeps_the_old_reading(client, sync_job
     before = store.load(sid)
     monkeypatch.setattr(FakeClaude, "verify_result", change_fret(1, 7))
     est = client.get(f"/api/songs/{sid}").json()["refine_estimate"]
-    assert est == {"bars": 6, "cost_usd": 0.33, "minutes": 2}  # 6 × $0.055；4 个并行，每批约 1 分钟
+    assert est == {"bars": 6, "cost_usd": 1.2, "minutes": 3}  # 6 × $0.2；4 个并行、两批，每批约 75 秒
 
     assert client.post(f"/api/songs/{sid}/refine").json() == {"ok": True}
     v = client.get(f"/api/songs/{sid}").json()

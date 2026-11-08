@@ -723,8 +723,8 @@
    "additionalProperties": false
   },
   "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
-  "effort": null,
-  "max_tokens": 32000
+  "effort": "max",
+  "max_tokens": 64000
  },
  "coach": {
   "content": [

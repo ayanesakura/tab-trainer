@@ -136,7 +136,7 @@ function renderRefineBtn(s) {
   btn.disabled = !!s.busy;
   btn.title = s.activity && s.activity.kind === 'refine' ? '正在精修'
     : s.refined ? `上次精修：${s.refined.at}，检查了 ${s.refined.checked} 个小节，改了 ${s.refined.changed} 个`
-    : '精修：每小节放大，让 AI 对照原谱逐拍核对（约 $0.06 / 小节）';
+    : '精修：每小节放大，让 AI 对照原谱逐拍核对（约 $0.2 / 小节）';
 }
 
 async function explain(btn) {
