@@ -116,13 +116,13 @@ function ensureApi() {
     pendingBeat = { beat: b, note: null };
     setTimeout(() => {
       const c = pendingBeat; pendingBeat = null;
-      if (c.note && !playing() && get('play.ready')) api.playNote(c.note); else onBeatClick(c.beat);
+      if (c.note && !playing() && get('play.ready')) audition(c.note); else onBeatClick(c.beat);
     }, 0);
   });
   api.noteMouseDown.on(n => {
     if (get('ui.editMode') && hooks.editClick) hooks.editClick(n.beat, n);
     else if (pendingBeat) pendingBeat.note = n;
-    else if (!playing() && get('play.ready')) api.playNote(n);
+    else if (!playing() && get('play.ready')) audition(n);
   });
   api.scoreLoaded.on(onScoreLoaded);
   api.renderFinished.on(() => { if (nBars()) applyLoopRange(); });
@@ -236,6 +236,13 @@ export function applyAudio() {
   if (api.score) api.changeTrackVolume(api.score.tracks, p.demo ? p.gtVol / 100 : 0);
   api.metronomeVolume = p.metro ? p.metroVol / 100 * 1.2 : 0;
   api.countInVolume = p.countIn ? 1 : 0;
+}
+
+// 点音符试听：alphaTab 的 playNote 走的是这个音轨自己的 MIDI 通道，示范音关掉时（applyAudio 把音轨音量设成 0）
+// 试听也没声音了。试听前把音轨音量放回吉他音量；开始播放时 startPlayer 再按示范音开关设回去
+function audition(note) {
+  if (!get('play.demo') && api.score) api.changeTrackVolume(api.score.tracks, get('play.gtVol') / 100);
+  api.playNote(note);
 }
 
 function findLinearRun(played, a, b) {
@@ -363,6 +370,7 @@ export function stop() {
   pausePlayer();
 }
 function startPlayer() {
+  applyAudio(); // 试听时可能临时打开了示范音的音量（见 audition）：开始播放前按开关设回去
   countIn.begin(api.tickPosition, api.countInVolume > 0);
   api.play();
 }
