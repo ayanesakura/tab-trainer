@@ -252,8 +252,14 @@ def append_practice(song_id: str, record: dict) -> None:
         if not d.is_dir():
             raise NotFound()
         line = json.dumps(record, ensure_ascii=False) + "\n"
-        with open(d / PRACTICE_FILE, "a", encoding="utf-8") as f:
-            f.write(line)
+        path = d / PRACTICE_FILE
+        with open(path, "ab+") as f:
+            # 上次写到一半断电留下的半行没有换行：另起一行，免得这条和它粘在一起、读的时候一起被跳过
+            if f.seek(0, os.SEEK_END) > 0:
+                f.seek(-1, os.SEEK_END)
+                if f.read(1) != b"\n":
+                    line = "\n" + line
+            f.write(line.encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
 

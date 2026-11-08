@@ -219,3 +219,14 @@ def test_job_finishing_after_delete_is_harmless(data_dir):
             break
         threading.Event().wait(0.01)
     assert not jobs.jobs.running(sid) and not done and not store.song_dir(sid).exists()
+
+
+def test_practice_record_after_a_torn_line_is_kept(data_dir):
+    """上次追加写到一半断电，practice.jsonl 末尾留下半行：下一条记录另起一行，不和半行粘在一起被一起跳过。"""
+    sid = _gp()
+    path = store.practice_path(sid)
+    path.write_text(
+        '{"at": "2026-01-01 10:00", "ids": ["a"], "loops": 1}\n{"at": "2026-01-0', encoding="utf-8"
+    )
+    store.append_practice(sid, {"at": "2026-01-02 10:00", "ids": ["b"], "loops": 2})
+    assert [r["ids"] for r in store.read_jsonl(path)] == [["a"], ["b"]]
