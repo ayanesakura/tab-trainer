@@ -72,6 +72,21 @@ def test_undoing_an_edit_restores_tip_qa_and_plan(data_dir):
     assert not song["plan"]["stale"]
 
 
+def test_recognition_warnings_go_only_when_the_notes_change_and_come_back_on_undo(data_dir):
+    """reviewer 的 noop_save_clears_ocr_warning：不改音的保存（JSON 编辑器原样保存）以前也清掉 OCR 不一致的提示，
+    小节悄悄不再“待核对”；改了再撤销回原样，提示也回不来。"""
+    sid = _image_song()
+    ocr = [{"code": "ocr_mismatch", "msg": "本地数字识别不一致"}]
+    store.update(sid, lambda s: [s["bars"][i].update(warn=ocr) for i in (0, 1)])
+    b0, b1 = store.load(sid)["bars"][:2]
+    song = songs.edit_bar(sid, b0["id"], b0["events"], None, b0["rev"])
+    assert song["bars"][0]["warn"] == ocr and not song["bars"][0].get("edited")
+    song = songs.edit_bar(sid, b1["id"], [{"dur": "4", "notes": []}], None, b1["rev"])
+    assert song["bars"][1]["warn"] == [] and song["bars"][1]["edited"]  # 提示说的是原来的音
+    song = songs.edit_bar(sid, b1["id"], b1["events"], None, song["bars"][1]["rev"])
+    assert song["bars"][1]["warn"] == ocr and not song["bars"][1]["edited"]
+
+
 def test_meta_change_keeps_uncertain_notes(data_dir):
     sid = songs.create_song([("p1.png", score_png())])
     recognize.run_parse(sid)

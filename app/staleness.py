@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 
 from app.model import touch_bar
-from app.music import bar_length, canonical_events, same_events
+from app.music import DERIVED_WARNS, bar_length, canonical_events, same_events
 
 # 影响音的设定：这些变了，所有小节的提示都按旧设定写的。曲名、艺人、备注之类不算（派生的 meta.title 跟着曲名变）
 SETTING_KEYS = ("tuning_midi", "capo", "time_signature")
@@ -29,9 +29,11 @@ def invalidate_bar(bar: dict) -> None:
             "events": bar["events"],
             "tip": bar.get("tip", ""),
             "uncertain": bar.get("uncertain", ""),
+            "warn": recognition_warns(bar),
         }
     bar["tip"] = ""
     bar["uncertain"] = ""
+    bar["warn"] = []  # 识别时留下的提示（OCR 不一致等）说的是原来的音；按内容算的读取时重算
     for q in bar.get("qa") or []:
         if not q.get("stale"):
             q["stale"] = True
@@ -39,11 +41,18 @@ def invalidate_bar(bar: dict) -> None:
                 q["stale_by_edit"] = True
 
 
+def recognition_warns(bar: dict) -> list[dict]:
+    """识别 / 导入时留下的警告（OCR 不一致等，存盘的那些）；按内容算的（时值、网格…）读取时重算，不算。"""
+    return [w for w in bar.get("warn") or [] if isinstance(w, dict) and w.get("code") not in DERIVED_WARNS]
+
+
 def restore_bar(bar: dict) -> None:
     """改回了第一次改动前的音：恢复当时的提示和不确定说明；改动期间问的问题反过来变成过时的。"""
     orig = bar.pop("_orig")
     bar["edited"] = False
     bar["tip"], bar["uncertain"] = orig["tip"], orig["uncertain"]
+    if "warn" in orig:  # 早先的 _orig 没记（当时第一次改就清掉了）
+        bar["warn"] = orig["warn"]
     for q in bar.get("qa") or []:
         if q.pop("stale_by_edit", False):
             q.pop("stale", None)
@@ -200,7 +209,14 @@ def _keep_edit(prev: dict, new: dict, setting_changed_: bool = False) -> None:
         if not setting_changed_:
             new["tip"] = prev.get("tip") or new.get("tip", "")
         return
-    new["_orig"] = {"events": new["events"], "tip": new.get("tip", ""), "uncertain": new.get("uncertain", "")}
+    new["_orig"] = {
+        "events": new["events"],
+        "tip": new.get("tip", ""),
+        "uncertain": new.get("uncertain", ""),
+        "warn": [
+            w for w in recognition_warns(new) if w.get("code") == "ocr_mismatch"
+        ],  # 撤销回识别结果时恢复
+    }
     new["edited"] = True
     new["events"] = prev["events"]
     new.pop("placeholder", None)  # 这次没识别出来、按休止占位的：保留的是用户的音，不能再被当成占位休止换掉

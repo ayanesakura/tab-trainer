@@ -189,6 +189,7 @@ class Orig(_M):
     events: list[Event]
     tip: str = ""
     uncertain: str = ""
+    warn: list[Warn] | None = None  # 识别时留下的警告（OCR 不一致等），撤销时恢复；早先的没记
 
 
 class Bar(_M):

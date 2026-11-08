@@ -340,15 +340,16 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
         if why := state.bar_locked(s, bar):
             raise Busy(why)
         new = cleaned or rest_bar(s["meta"], bar)
+        changed = not same_events(new, bar["events"])
         if "_orig" in bar and same_events(new, bar["_orig"]["events"]):
-            restore_bar(bar)
+            restore_bar(bar)  # 识别时留下的提示（OCR 不一致等）也恢复
             restore_plan_bar(s, bar_id)
-        elif not same_events(new, bar["events"]):
-            invalidate_bar(bar)
+        elif changed:
+            invalidate_bar(bar)  # 识别时留下的提示说的是原来的音：清掉（记在 _orig 里，撤销时恢复）
             invalidate_plan(s, bar_id)
+        if changed:  # 原样保存（JSON 编辑器没改就保存）不动占位标记和提示，小节照样“待核对”
+            bar.pop("placeholder", None)  # 用户自己写的内容，不再是识别失败的占位休止
         bar["events"] = new
-        bar.pop("placeholder", None)  # 用户自己写的内容，不再是识别失败的占位休止
-        bar["warn"] = []  # 识别时留下的提示（OCR 不一致等）说的是原来的音；按内容算的读取时重算
         if tip is not None:
             if tip != bar.get("tip", ""):
                 touch_bar(bar)  # 只改了提示（音符变了的话 store.update 会自己 +1，不会重复）
