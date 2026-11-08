@@ -654,12 +654,12 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     claude = config.new_llm()
     meter = jobs.UsageMeter(claude)  # 每行完成就把新增的用量记上（中途失败也不漏记）
     try:
-        _run_parse(sid, cancel, claude, meter.charge)
+        _run_parse(sid, cancel, claude, meter)
     finally:  # 失败 / 取消时还没记上的（读谱头、没跑完的行）：已经发出去的请求也花了钱
         meter.flush(sid)
 
 
-def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
+def _run_parse(sid: str, cancel: threading.Event, claude: LLM, meter: jobs.UsageMeter) -> None:
     song = store.load(sid)
     restage = bool(song.get("bars"))
     store.update(sid, lambda s: _begin_parse(s, "读取谱头"))
@@ -692,9 +692,9 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
                     apply_time_signatures(s["bars"], s["meta"])
                 s["systems"][si].update(status=status, error=err)
             s["progress"]["done"] += 1
-            charge(s)
+            meter.charge(s)
 
-        store.update(sid, apply)
+        meter.update(sid, apply)
 
     used, errors = _recognize_rows(
         claude, sid, work, [(i, None) for i in range(len(systems))], cancel, on_row
@@ -768,11 +768,11 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
     def finish(s, meta=song["meta"]):
         if plan or not restage:  # 重新识别后生成建议失败：留着原来的建议（已标成过时）
             staleness.store_plan(s, plan, seen, meta)
-        charge(s)
+        meter.charge(s)
         msg = "；".join(errors) or note
         state.finish(s, status="ready", notice=("warn", msg) if msg else None, source="parse")
 
-    store.update(sid, finish)
+    meter.update(sid, finish)
 
 
 # ---------------------------------------------------------------------------
@@ -975,7 +975,7 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
                 meter.charge(x)  # 失败 / 取消的这次也花了钱
                 state.finish(x)
 
-            store.update(sid, failed)
+            meter.update(sid, failed)
 
     jobs.start(sid, "这首曲子正在识别中", begin, run)
 
@@ -1013,7 +1013,7 @@ def reparse_system(
         meter.charge(s)
         state.finish(s)
 
-    store.update(sid, apply)
+    meter.update(sid, apply)
 
 
 def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what: str = "新加的页") -> None:
@@ -1032,7 +1032,7 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
                 s["progress"]["done"] = min(s["progress"]["total"], s["progress"]["done"] + 1)
             meter.charge(s)
 
-        store.update(sid, apply)
+        meter.update(sid, apply)
 
     try:
         meter = jobs.UsageMeter(config.new_llm())
@@ -1078,7 +1078,7 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
             state.finish(s, notice=("warn", msg) if failed else None, source="reparse_row")
             meter.charge(s)
 
-        store.update(sid, end)
+        meter.update(sid, end)
 
 
 # ---------------------------------------------------------------------------

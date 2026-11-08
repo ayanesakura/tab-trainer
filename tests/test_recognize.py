@@ -780,6 +780,49 @@ def test_failed_row_reparse_still_records_its_cost(data_dir, sync_jobs, monkeypa
     assert after["usage"]["output_tokens"] == before["output_tokens"] + 20
 
 
+def test_cost_is_not_lost_when_saving_the_result_fails(data_dir, sync_jobs, monkeypatch):
+    """写回结果时存盘失败：这次的用量没写进去，之后的写入（失败处理）要把它补上，不能当成已经记过。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    before = store.load(sid)["usage"]
+    real_save, real_transcribe = store.save, FakeClaude.transcribe
+    fails = []
+
+    def transcribe(self, *a, **kw):
+        fails.append("armed")  # 识别完的第一次写回存盘失败
+        return real_transcribe(self, *a, **kw)
+
+    def flaky_save(song, *a, **kw):
+        if fails == ["armed"]:
+            fails.append("failed")
+            raise OSError("磁盘满了")
+        return real_save(song, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    monkeypatch.setattr(store, "save", flaky_save)
+    recognize.start_reparse(sid, 1)
+    after = store.load(sid)
+    assert fails and after["systems"][1]["status"] == "error"
+    assert after["usage"]["input_tokens"] == before["input_tokens"] + 10  # 新建的替身一开始就带 10
+    assert after["usage"]["output_tokens"] == before["output_tokens"] + 20
+
+
+def test_usage_meter_commits_only_after_the_write(monkeypatch):
+    """charge 记上的部分要等写盘成功才算数：写盘失败，下一次 charge 连同这次一起记。"""
+    meter = jobs.UsageMeter(FakeClaude(None))
+    s = {}
+
+    def failing_update(sid, fn):
+        fn({})
+        raise OSError("磁盘满了")
+
+    monkeypatch.setattr(store, "update", failing_update)
+    with pytest.raises(OSError):
+        meter.update("x", meter.charge)
+    meter.charge(s)
+    assert s["usage"]["input_tokens"] == 10 and s["usage"]["output_tokens"] == 20
+
+
 @pytest.mark.parametrize("how", ["error", "cancel"])
 def test_header_cost_is_recorded_when_the_parse_stops_before_any_row(data_dir, sync_jobs, monkeypatch, how):
     real = FakeClaude.read_meta

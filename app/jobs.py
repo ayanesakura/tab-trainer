@@ -96,24 +96,46 @@ def start(
 
 class UsageMeter:
     """把一个模型客户端用掉的 token / 费用记到曲子上，每一笔只记一次。
-    charge(s)：在 store.update 里调用，记上从上次以来新增的部分（随结果一起写回）；
+    charge(s)：在写回的 fn 里调用，把从上次记上以来新增的部分加到曲子上；
+    update(sid, fn)：代替 store.update，写盘成功后才算记上——写盘失败时这部分下一次 charge / flush 会再记
+    （直接用 store.update 的调用方：到下一次 charge / flush 时按已经写上处理）；
     flush(sid)：放在 finally 里，失败 / 取消时已经发出去的请求也花了钱，补记上还没记的部分。"""
 
     def __init__(self, claude):
         self.claude = claude
-        self.charged: dict = {}  # 每个任务用自己新建的客户端：它用掉的全算这首曲子的
+        self.charged: dict = {}  # 已经写进曲子的（每个任务用自己新建的客户端：它用掉的全算这首曲子的）
+        self._staged: tuple[dict, dict] | None = None  # (曲子, 已加到它上面的累计用量)：还没确认写盘
 
     def charge(self, s: dict) -> None:
         if self.claude is None:
             return
         now = dict(self.claude.usage)
-        add_usage(s, now, self.charged)
-        self.charged = now
+        if self._staged is not None and self._staged[0] is s:  # 同一次写回里记第二次：只加新增的
+            add_usage(s, now, self._staged[1])
+        else:
+            self._commit()
+            add_usage(s, now, self.charged)
+        self._staged = (s, now)
+
+    def _commit(self) -> None:
+        if self._staged is not None:
+            self.charged, self._staged = self._staged[1], None
+
+    def update(self, sid: str, fn: Callable[[dict], object]) -> dict:
+        self._commit()
+        try:
+            out = store.update(sid, fn)
+        except BaseException:
+            self._staged = None  # 没写上：下次重新记
+            raise
+        self._commit()
+        return out
 
     def flush(self, sid: str) -> None:
+        self._commit()
         if self.claude is None or dict(self.claude.usage) == self.charged:
             return
         try:
-            store.update(sid, self.charge)
+            self.update(sid, self.charge)
         except Exception as e:  # noqa: BLE001 - 曲子已经删掉之类：不能盖住原来的错误
             log.warning("song=%s usage not recorded: %s", sid, e)
