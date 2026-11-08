@@ -126,7 +126,7 @@ def run(
     systems: list[int] | None,
     concurrency: int,
     price_model: str = "",
-    double: bool = False,
+    double: str = "off",
 ) -> dict:
     truth = store.load(sid)
     sys_idx = systems if systems is not None else list(range(len(truth["systems"])))
@@ -289,7 +289,12 @@ def main() -> None:
     ap.add_argument("--base-url", help="覆盖设置里的 Base URL（key 用设置里的或环境变量 ANTHROPIC_API_KEY）")
     ap.add_argument("--price-as", help="按这个模型的价格估算费用（模型名不在价格表里时用）")
     ap.add_argument("--concurrency", type=int, default=4)
-    ap.add_argument("--double-check", action="store_true", help="双重校对：两遍不一致的小节再读一遍投票")
+    ap.add_argument(
+        "--double-check",
+        choices=["off", "doubts", "all"],
+        default="off",
+        help="双重校对：doubts 只重读第一遍有疑问的行，all 每行都重读；两遍不一致的小节读第三遍投票",
+    )
     ap.add_argument(
         "--rescore", metavar="REPORT", help="用已有的 report.json 按当前标准答案重新计分，不调用模型"
     )

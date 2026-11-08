@@ -231,9 +231,10 @@ def transcribe_system(
     hint: str = "",
     cancel: threading.Event | None = None,
     start_ts: list[int] | None = None,
-    double_check: bool | None = None,
+    double_check: str | None = None,
 ) -> list[dict]:
-    """识别一行。double_check：两遍不一致的小节再读一遍投票（None = 按设置）。"""
+    """识别一行。double_check：off / doubts（第一遍有警告或“不确定”才再读）/ all，见 config.double_check_mode；
+    None = 按设置。"""
     if double_check is None:
         double_check = config.double_check()
     sysinfo = song["systems"][si]
@@ -380,7 +381,12 @@ def transcribe_system(
         return bars, issues
 
     bars, _ = read_once()
-    if double_check and spans and len(bars) == len(spans):
+    doubtful = any(b.get("warn") or str(b.get("uncertain") or "").strip() for b in bars)
+    if (
+        spans
+        and len(bars) == len(spans)
+        and (double_check == "all" or (double_check == "doubts" and doubtful))
+    ):
         bars = _double_check(bars, read_once, len(spans), sid, si)
     if not bars:  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
         raise LLMError("模型没有读出这一行的小节，请重新识别这一行", getattr(claude, "last_request_id", None))

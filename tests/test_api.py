@@ -195,7 +195,7 @@ def test_settings_endpoints(client, monkeypatch):
         "base_url": "",
         "model": s["model"],
         "effort": "high",
-        "double_check": False,
+        "double_check": "off",
     }
     s = client.put(
         "/api/settings", json={"api_key": " sk-ant-1234567890abcdef ", "base_url": "http://gw"}
@@ -428,11 +428,12 @@ def test_confirming_a_bar_clears_needs_review_until_its_notes_change(data_dir):
 
 
 def test_double_check_setting_round_trips(client):
-    assert client.get("/api/settings").json()["double_check"] is False
-    assert client.put("/api/settings", json={"double_check": True}).json()["double_check"] is True
-    from app import config
+    from app import config, store
 
-    assert config.double_check() is True
-    assert (
-        client.put("/api/settings", json={"model": "claude-opus-5-5"}).json()["double_check"] is True
-    )  # 别的设置不动它
+    assert client.get("/api/settings").json()["double_check"] == "off"
+    assert client.put("/api/settings", json={"double_check": "doubts"}).json()["double_check"] == "doubts"
+    assert config.double_check() == "doubts"
+    assert client.put("/api/settings", json={"model": "claude-opus-5-5"}).json()["double_check"] == "doubts"
+    assert client.put("/api/settings", json={"double_check": "sometimes"}).status_code == 400
+    store.save_config({**store.load_config(), "double_check": True})  # 旧版本存的是 true
+    assert config.double_check() == "all"

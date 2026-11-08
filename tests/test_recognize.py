@@ -969,7 +969,7 @@ def test_double_check_votes_bars_that_two_reads_disagree_on(data_dir, monkeypatc
     song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
     song["systems"] = recognize.plan_systems(sid, song)
     claude = FakeClaude(None)
-    bars = recognize.transcribe_system(claude, sid, song, 0, 1, double_check=True)
+    bars = recognize.transcribe_system(claude, sid, song, 0, 1, double_check="all")
     assert len(reads) == 3
     assert bars[0]["events"][0]["notes"][0]["fret"] == 0  # 第二、三遍一致
     assert bars[1]["events"][0]["notes"][0]["fret"] == 1 and "三次识别" in bars[1]["uncertain"]
@@ -1012,3 +1012,27 @@ def test_header_time_signature_misread_is_fixed_from_the_first_bar(data_dir, mon
     assert starts.count((1, None)) == starts.count((1, None)) and not any(
         f == 1 and t == [3, 4] for f, t in starts
     )
+
+
+def test_double_check_doubts_mode_only_rereads_rows_with_doubts(data_dir, monkeypatch):
+    """doubts：第一遍没有警告、没有“不确定”的行不再读；有的才再读。"""
+    real = FakeClaude.transcribe
+    reads = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        out = real(self, img, meta, first_bar, spans, *a, **kw)
+        if kw.get("previous") is None:
+            reads.append(first_bar)
+        if first_bar > 1:
+            out["bars"][0]["uncertain"] = "第 1 拍看不清"
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    song = store.load(sid)
+    song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+    song["systems"] = recognize.plan_systems(sid, song)
+    claude = FakeClaude(None)
+    recognize.transcribe_system(claude, sid, song, 0, 1, double_check="doubts")
+    recognize.transcribe_system(claude, sid, song, 1, 4, double_check="doubts")
+    assert reads == [1, 4, 4]  # 第一行没疑问：只读一遍；第二行有：再读一遍（两遍一样，不用第三遍）

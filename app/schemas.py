@@ -24,7 +24,7 @@ class SettingsIn(_In):
     base_url: str | None = Field(None, max_length=500)
     model: str | None = Field(None, max_length=200)
     effort: Literal["", "low", "medium", "high", "xhigh", "max"] | None = None
-    double_check: bool | None = None
+    double_check: Literal["off", "doubts", "all"] | None = None
 
 
 class DerivedInfo(_In):

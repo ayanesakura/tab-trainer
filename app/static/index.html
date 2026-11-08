@@ -96,8 +96,8 @@
         <div class="ctl"><div class="seg sm" id="effortSeg" aria-labelledby="effortLbl"><button data-v="medium">medium</button><button data-v="high">high</button><button data-v="xhigh">xhigh</button><button data-v="max">max</button></div></div>
       </div>
       <div class="row">
-        <div class="who"><label class="name" for="doubleCheck">双重校对</label><div class="sub">每行识别两遍，两遍不一样的小节再读一遍投票，能减少偶尔的读错，三遍都不一样的小节会标成待核对。费用约 2 倍、也更慢；评测里提升不稳定（0–5 个百分点）。</div></div>
-        <div class="ctl"><label class="switch"><input type="checkbox" id="doubleCheck" aria-label="双重校对"></label></div>
+        <div class="who"><div class="name" id="doubleLbl">双重校对</div><div class="sub">再读一遍，两遍不一样的小节读第三遍投票；三遍都不一样的标成待核对。“有疑问的行”只重读第一遍里有警告或不确定说明的行，费用多两三成；“每一行”费用约 2 倍。</div></div>
+        <div class="ctl"><div class="seg sm" id="doubleSeg" aria-labelledby="doubleLbl"><button data-v="off">关</button><button data-v="doubts">有疑问的行</button><button data-v="all">每一行</button></div></div>
       </div>
       <div class="row">
         <div class="who"><label class="name" for="baseUrl">Base URL</label><div class="sub">用代理或兼容网关时才需要填。</div></div>
