@@ -370,3 +370,28 @@ def test_clef_and_time_signature_before_a_heavy_double_bar_are_not_a_bar():
         d.line([(x, tab_top), (x, tab_top + 70)], fill=40, width=2)
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [2]
+
+
+def test_upper_rows_own_stems_and_beams_stay_with_it():
+    """上一行六线谱下面挂着长符干和横梁（2.7 个线距），离下一行只隔一小段空白：这一块和上一行连着，
+    不是下一行的和弦图，分界不能取在上一行谱线下面 1 个线距（横梁会全跑到下一行里）。"""
+    sp = 12
+    img = Image.new("L", (1200, 600), 255)
+    d = ImageDraw.Draw(img)
+    t1, stem = 120, 32
+    t2 = t1 + 60 + stem + 30
+    for t in (t1, t2):
+        for i in range(6):
+            d.line([(60, t + i * sp), (1140, t + i * sp)], fill=170)
+        for x in (60, 600, 1140):
+            d.line([(x, t), (x, t + 60)], fill=40, width=2)
+        for x in range(80, 1120, 40):  # 符干
+            d.line([(x, t + 60), (x, t + 60 + stem)], fill=0)
+        for x0 in range(80, 1120, 80):  # 横梁
+            d.line([(x0, t + 60 + stem), (x0 + 40, t + 60 + stem)], fill=0, width=3)
+        for x in range(90, 1120, 40):
+            d.text((x, t + 8), "5", fill=0)
+    (a, b) = detect_page(img)["systems"]
+    beam_bottom = t1 + 60 + stem + 2
+    assert a["bottom"] >= beam_bottom and b["top"] >= beam_bottom  # 横梁完整地在第一行里
+    assert b["top"] <= t2 - 3
