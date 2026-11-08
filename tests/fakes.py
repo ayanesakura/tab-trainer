@@ -43,6 +43,7 @@ class FakeClaude(LLM):
         problems=None,
         labeled_strings=False,
         start_ts=None,
+        context="",
     ):
         FakeClaude.calls.append({"first_bar": first_bar, "retry": previous is not None, "hint": hint})
         FakeClaude.tab_lines.append((first_bar, labeled_strings))

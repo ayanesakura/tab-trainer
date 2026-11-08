@@ -127,6 +127,7 @@ def run(
     concurrency: int,
     price_model: str = "",
     double: str = "off",
+    split: bool = False,
 ) -> dict:
     truth = store.load(sid)
     sys_idx = systems if systems is not None else list(range(len(truth["systems"])))
@@ -295,6 +296,7 @@ def main() -> None:
         default="off",
         help="双重校对：doubts 只重读第一遍有疑问的行，all 每行都重读；两遍不一致的小节读第三遍投票",
     )
+    ap.add_argument("--split", action="store_true", help="太宽的行切成两半识别（recognize._should_split）")
     ap.add_argument(
         "--rescore", metavar="REPORT", help="用已有的 report.json 按当前标准答案重新计分，不调用模型"
     )
@@ -332,7 +334,7 @@ def main() -> None:
         print("这只是计划。确认要运行请加 --yes。")
         return
 
-    rep = run(a.song, cfg, systems, a.concurrency, price_model, a.double_check)
+    rep = run(a.song, cfg, systems, a.concurrency, price_model, a.double_check, a.split)
     model_tag = (a.model or cfg.model or "").split("/")[-1]
     out = store.DATA / "evals" / f"{time.strftime('%Y%m%d-%H%M%S')}-{a.song}-{model_tag}"
     out.mkdir(parents=True, exist_ok=True)

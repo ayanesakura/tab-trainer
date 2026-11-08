@@ -1036,3 +1036,32 @@ def test_double_check_doubts_mode_only_rereads_rows_with_doubts(data_dir, monkey
     recognize.transcribe_system(claude, sid, song, 0, 1, double_check="doubts")
     recognize.transcribe_system(claude, sid, song, 1, 4, double_check="doubts")
     assert reads == [1, 4, 4]  # 第一行没疑问：只读一遍；第二行有：再读一遍（两遍一样，不用第三遍）
+
+
+def test_split_row_reads_halves_and_carries_the_chord_into_the_right_half(data_dir, monkeypatch):
+    """切成两半：左半 2 个小节、右半 1 个；右半带上左半最后的和弦（和指法），小节号接着排。"""
+    real = FakeClaude.transcribe
+    calls = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        out = real(self, img, meta, first_bar, spans, *a, **kw)
+        calls.append((first_bar, len(spans), kw.get("context", ""), img.width))
+        if first_bar == 1:
+            out["bars"][0]["events"][0]["chord"] = "Em"
+            out["chords"] = [{"name": "Em", "frets": [0, 0, 0, 2, 2, 0]}]
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    song = store.load(sid)
+    song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+    song["systems"] = recognize.plan_systems(sid, song)
+    full_width = song["systems"][0]["crop"][1] - song["systems"][0]["crop"][0]
+    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, split=True, double_check="off")
+    assert len(bars) == 3
+    firsts = [(f, n) for f, n, _, _ in calls]
+    assert (1, 2) in firsts and (3, 1) in firsts
+    right = next(c for c in calls if c[0] == 3)
+    assert "Em" in right[2] and "[0, 0, 0, 2, 2, 0]" in right[2]
+    assert all(w < full_width * 0.75 for *_, w in calls)
+    assert [b["region"][0] for b in bars] == sorted(b["region"][0] for b in bars)

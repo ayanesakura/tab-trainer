@@ -101,7 +101,7 @@ def _image_block(img: Image.Image, min_width: int = 0) -> tuple[dict, float]:
     w, h = img.size
     scale = 1.0
     if min_width and w < min_width:
-        scale = min(2.0, min_width / w)  # 小图适当放大，数字更清楚
+        scale = min(3.0, min_width / w)  # 小图适当放大，数字更清楚（半行识别时图只有几百像素宽）
     scale = min(scale, MAX_EDGE / max(w, h))
     if abs(scale - 1) > 0.01:
         img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
@@ -159,6 +159,7 @@ class LLM(Protocol):
         problems: list[str] | None = None,
         labeled_strings: bool = False,
         start_ts: list[int] | None = None,
+        context: str = "",
     ) -> dict: ...
 
     def explain_bars(self, meta: dict, bars: list[dict]) -> dict: ...
@@ -355,8 +356,10 @@ class Claude(LLM):
         problems: list[str] | None = None,
         labeled_strings: bool = False,
         start_ts: list[int] | None = None,
+        context: str = "",
     ) -> dict:
-        """start_ts：前面的行里变过拍号时，这一行开头实际的拍号（这张图上看不到那个变拍号）。"""
+        """start_ts：前面的行里变过拍号时，这一行开头实际的拍号（这张图上看不到那个变拍号）。
+        context：程序给的上下文（半行识别时左半结束时的和弦等），不是用户说的话。"""
         block, scale = _image_block(img, min_width=2400)  # 小截图放大一些：和弦图的圆点、符杠更容易看清
         ts = meta["time_signature"]
         bar_len = ts[0] * 4 / ts[1]
@@ -406,6 +409,8 @@ class Claude(LLM):
                 f"This image is a whole page. Transcribe every bar on it in reading order, numbering from {first_bar}. "
                 "If the page contains no guitar tablature, return an empty list."
             )
+        if context:
+            lines.append(context)
         lines.append(TRANSCRIBE_RULES)
         if previous is not None:
             lines.append(

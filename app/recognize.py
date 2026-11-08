@@ -38,6 +38,7 @@ log = logging.getLogger("tab_trainer.recognize")
 
 LABEL_STRINGS = True  # 在裁剪图上标弦号（见 label_strings）
 OCR_CHECK = True  # 用本机数字识别校对 AI 读出的弦和品（见 app/ocr.py、ocr_disagreements）
+SPLIT_ROWS = False  # 太宽的行切成两半识别（见 _should_split / _transcribe_halves）；评测后再决定默认值
 
 
 # ---------------------------------------------------------------------------
@@ -232,12 +233,16 @@ def transcribe_system(
     cancel: threading.Event | None = None,
     start_ts: list[int] | None = None,
     double_check: str | None = None,
+    split: bool | None = None,
+    context: str = "",
 ) -> list[dict]:
     """识别一行。double_check：off / doubts（第一遍有警告或“不确定”才再读）/ all，见 config.double_check_mode；
-    None = 按设置。"""
+    None = 按设置。split：一行太宽时切成左右两半分别识别（None = 按 SPLIT_ROWS，见 _should_split）。"""
     if double_check is None:
         double_check = config.double_check()
     sysinfo = song["systems"][si]
+    if (SPLIT_ROWS if split is None else split) and _should_split(sysinfo):
+        return _transcribe_halves(claude, sid, song, si, first_bar, hint, cancel, start_ts, double_check)
     page = song["pages"][sysinfo["page"]]
     x0, x1, y0, y1 = sysinfo["crop"]
     img = store.page_image(sid, page).crop((x0, y0, x1, y1))
@@ -267,6 +272,7 @@ def transcribe_system(
             problems=problems,
             labeled_strings=labeled,
             start_ts=start_ts,
+            **({"context": context} if context else {}),
         )
         bars, issues, lengths = [], [], []
         # 弹唱谱：这一行印出来的和弦图（和弦名 → 1–6 弦品位）。有和弦图时谱上的 x 按和弦换算成了品位，
@@ -410,6 +416,88 @@ def transcribe_system(
             region = [x0, x1, y0, y1]
         out.append({"id": new_bar_id(), "system": si, "page": sysinfo["page"], "region": region, **b})
     return out
+
+
+def _should_split(sysinfo: dict) -> bool:
+    """这一行切成两半能不能明显看得更清楚：整行发给模型时受最长边限制放不大（宽的行、高分辨率截图），
+    切开以后每半能多放大 1.4 倍以上；至少 2 个小节。"""
+    spans = sysinfo.get("spans") or []
+    if len(spans) < 2:
+        return False
+    x0, x1, y0, y1 = sysinfo["crop"]
+    w, h = x1 - x0, y1 - y0
+
+    def scale(width: float) -> float:
+        return min(3.0, 2400 / width, 2576 / max(width, h))
+
+    return scale(w / 2 + 40) >= 1.4 * scale(w)
+
+
+def _transcribe_halves(
+    claude: LLM,
+    sid: str,
+    song: dict,
+    si: int,
+    first_bar: int,
+    hint: str,
+    cancel: threading.Event | None,
+    start_ts: list[int] | None,
+    double_check: str,
+) -> list[dict]:
+    """把一行切成左右两半，先识别左半，再带上左半结束时的拍号和和弦识别右半（右半开头延续的和弦，
+    图上可能看不到它的和弦图）。图小了一半，能放大得更多，密集的符杠、小数字更容易看清。"""
+    sysinfo = song["systems"][si]
+    spans = sysinfo["spans"]
+    k = (len(spans) + 1) // 2
+    x0, x1, y0, y1 = sysinfo["crop"]
+    lines = sysinfo.get("lines") or []
+    sp = (lines[-1] - lines[0]) / 5 if len(lines) == 6 else 12
+    cut = spans[k][0]
+    halves = [
+        {**sysinfo, "crop": [x0, min(x1, int(cut + sp)), y0, y1], "spans": spans[:k]},
+        {**sysinfo, "crop": [max(x0, int(cut - sp * 2.5)), x1, y0, y1], "spans": spans[k:]},
+    ]
+
+    def sub(half: dict) -> dict:
+        systems = list(song["systems"])
+        systems[si] = half
+        return {**song, "systems": systems}
+
+    left = transcribe_system(
+        claude, sid, sub(halves[0]), si, first_bar, hint, cancel, start_ts, double_check, split=False
+    )
+    meta = song["meta"]
+    ts = start_ts or meta["time_signature"]
+    for b in left:
+        ts = b.get("ts_change") or ts
+    context = []
+    chord = next((e["chord"] for b in reversed(left) for e in reversed(b["events"]) if e.get("chord")), None)
+    if chord:
+        shapes = {k_: v for b in left for k_, v in (b.get("shapes") or {}).items()}
+        frets = f" (diagram frets for strings 1-6: {shapes[chord]})" if chord in shapes else ""
+        context.append(
+            f"This image is the right half of a line. The chord still sounding at its left edge is {chord}{frets}: "
+            "x marks before the first chord name in this image belong to it. Return only the bars listed above."
+        )
+    else:
+        context.append(
+            "This image is the right half of a line; the left half was read separately. "
+            "Return only the bars listed above."
+        )
+    right = transcribe_system(
+        claude,
+        sid,
+        sub(halves[1]),
+        si,
+        first_bar + len(left),
+        hint,
+        cancel,
+        ts if ts != meta["time_signature"] else None,
+        double_check,
+        split=False,
+        context=" ".join(context),
+    )
+    return left + right
 
 
 def _bar_key(bar: dict) -> tuple:
