@@ -188,7 +188,8 @@ def ocr_disagreements(
     - 整行一致率不到一半，或 OCR 只读对了 AI 写的音的不到 60%：多半是 OCR 在这种排版上读不准，整行都不判断。
     tied_in：图上第一个小节之前每根弦最后一个音的品位（右半行接左半的音、一行接上一行的音；{} = 前面没有音）。
     None = 不知道（各行并行识别，上一行还没结果）：第一个小节 AI 这边没有对不上的音时，OCR 多读的音每根弦
-    放过一个（可能是接上一行的延续音），和后面小节的规则一样。
+    放过一个（可能是接上一行的延续音），和后面小节的规则一样；但 AI 在小节开头这根弦上已经写了新音的不放过：
+    延续音占着小节开头的这根弦，那里不会同时起一个新音，多出来的只能是小节中间漏掉的音。
     """
     pairs = []
     ai_total = 0  # 整行 AI 写的音（不含闷音）
@@ -200,6 +201,8 @@ def ocr_disagreements(
         unknown_tie = i == 0 and tied_in is None
         ai: Counter = Counter()
         harmonic_marks: Counter = Counter()
+        first = bar["events"][0]["notes"] if bar["events"] else []
+        struck_at_start = {n["string"] for n in first if "x" not in n["tech"]}
         for e in bar["events"]:
             for n in e["notes"]:
                 if "x" in n["tech"]:
@@ -226,7 +229,7 @@ def ocr_disagreements(
             for key, k in list((got - ai).items()):
                 if key in tied_ok:
                     got[key] -= k
-                elif unknown_tie and key[0] not in loose:
+                elif unknown_tie and key[0] not in loose and key[0] not in struck_at_start:
                     got[key] -= 1
                     loose.add(key[0])
             got += Counter()  # 去掉计数为 0 的

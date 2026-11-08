@@ -1230,6 +1230,10 @@ def test_ocr_tie_at_the_start_of_a_row_is_not_a_disagreement():
     assert recognize.ocr_disagreements(bars, seen, tied_in={2: 5}) == {}
     assert recognize.ocr_disagreements(bars, seen, tied_in={}) != {}  # 第一行：前面没有音
     assert recognize.ocr_disagreements(bars, seen, tied_in={2: 7}) != {}
+    # AI 在小节开头的 6 弦上已经写了 5 品，OCR 在这根弦上多读一个 5：不是延续音（延续音占着开头这根弦），
+    # 是小节中间漏写的音（eval-r-imagine 第 10 小节第 3 拍）：照样报
+    ghost = [{"events": [{"dur": "2", "notes": [_note(6, 5)]}, {"dur": "2", "notes": [_note(6, 5)]}]}]
+    assert recognize.ocr_disagreements(ghost, [[(6, 5), (6, 5), (6, 5)]]) != {}
     # AI 这边也有对不上的音（1 弦 3 品其实在 2 弦）：照样报
     chord = [{"events": [{"dur": "1", "notes": [_note(1, 3), _note(3, 2), _note(4, 2), _note(5, 0)]}]}]
     out = recognize.ocr_disagreements(chord, [[(2, 3), (3, 2), (4, 2), (5, 0), (2, 5)]])
