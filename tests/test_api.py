@@ -61,6 +61,17 @@ def test_domain_errors_map_to_status_codes(client):
     assert client.post(f"/api/songs/{sid}/practice", json={}).status_code == 400
     assert client.post(f"/api/songs/{sid}/cancel").status_code == 409
     assert client.get("/api/songs/20260101-000000-abcdef").status_code == 404
+    # 有任务在跑（Busy）是 423，和“别处改过了”（Conflict，409）分开：前端只在 409 时当成冲突、丢掉撤销记录
+    from app import store
+
+    store.patch(img, activity={"kind": "parse", "restaging": True, "systems": []})
+    bar = client.get(f"/api/songs/{img}").json()["bars"][0]
+    r = client.put(f"/api/songs/{img}/bars/{bar['id']}", json={"events": [{"dur": "4"}], "rev": bar["rev"]})
+    assert r.status_code == 423 and "正在重新识别" in r.json()["detail"]
+    r = client.put(
+        f"/api/songs/{img}/bars/{bar['id']}", json={"events": [{"dur": "4"}], "rev": bar["rev"] + 1}
+    )
+    assert r.status_code == 409 and r.json()["detail"] == "曲子在别处改过了，已刷新，请再改一次"
 
 
 def _pdf(pages: int) -> bytes:
@@ -587,4 +598,4 @@ def test_bar_confirmation_survives_rerecognition_but_not_new_warnings(data_dir, 
 
     store.update(sid, lambda s: s.update(activity={"kind": "parse", "restaging": True, "systems": []}))
     b = c.get(f"/api/songs/{sid}").json()["bars"][5]
-    assert c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True}).status_code == 409
+    assert c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True}).status_code == 423

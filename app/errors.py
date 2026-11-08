@@ -33,9 +33,11 @@ class BarNotFound(NotFound):
 
 
 class Busy(AppError, RuntimeError):
-    """这首曲子已有任务在跑（识别、重新识别某一行、生成讲解同一时间只能有一个）。"""
+    """这首曲子已有任务在跑（识别、重新识别某一行、生成讲解同一时间只能有一个），或者这个小节正在识别、暂时不能改。
+    423（Locked），和 Conflict 的 409 分开：前端只把 409 当成“别处改过了”（刷新、丢掉这个小节的撤销记录），
+    423 只是提示稍后再试。"""
 
-    status = 409
+    status = 423
 
 
 class Upstream(AppError, RuntimeError):

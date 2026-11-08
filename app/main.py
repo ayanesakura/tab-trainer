@@ -43,7 +43,7 @@ async def bad_request(_request: Request, e: RequestValidationError):
 
 @app.exception_handler(AppError)
 async def app_error(_request: Request, e: AppError):
-    """业务错误（见 app/errors.py，含模型错误和数据损坏）：按类型返回 400 / 404 / 409 / 500 / 502，消息原样给前端显示。"""
+    """业务错误（见 app/errors.py，含模型错误和数据损坏）：按类型返回 400 / 404 / 409 / 423 / 500 / 502，消息原样给前端显示。"""
     return JSONResponse({"detail": str(e)}, status_code=e.status)
 
 
