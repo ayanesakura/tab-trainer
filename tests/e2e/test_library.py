@@ -579,3 +579,18 @@ def test_second_bundle_import_while_importing_says_so(server, browser):
     )
     assert b.js("window.__imports") == 1
     assert not b.errors, b.errors
+
+
+def test_library_works_when_site_storage_is_blocked(server, browser):
+    b = browser
+    b._run(
+        b._send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            source="Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } });",
+        )
+    )
+    b.open(server["base"] + "/")
+    b.wait_for("document.querySelectorAll('.song-row').length >= 3")
+    b.js("document.querySelector('#sortSeg [data-v=title]').click(); true")
+    assert b.js("document.querySelector('#sortSeg [data-v=title]').getAttribute('aria-pressed')") == "true"
+    assert not b.errors, b.errors

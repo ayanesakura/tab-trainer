@@ -174,9 +174,16 @@ function renderList(box, songs) {
   }
 }
 
-// 搜索、标签筛选、排序（只在浏览器里做；排序方式记在本机）
-const lib = { q: '', tag: '', sort: SORTS.includes(localStorage.getItem('tt.libSort')) ? localStorage.getItem('tt.libSort') : 'practiced' };
-UI.seg($('sortSeg'), lib.sort, v => { lib.sort = v; localStorage.setItem('tt.libSort', v); renderSongs(); });
+// 搜索、标签筛选、排序（只在浏览器里做；排序方式记在本机。网站存储被禁用时读写 localStorage 会抛错：当没记过，只在这次打开时生效）
+const SORT_KEY = 'tt.libSort';
+let savedSort = null;
+try { savedSort = localStorage.getItem(SORT_KEY); } catch { /* 读不了就用默认排序 */ }
+const lib = { q: '', tag: '', sort: SORTS.includes(savedSort) ? savedSort : 'practiced' };
+UI.seg($('sortSeg'), lib.sort, v => {
+  lib.sort = v;
+  try { localStorage.setItem(SORT_KEY, v); } catch { /* 存不了就只在这次打开时生效 */ }
+  renderSongs();
+});
 $('search').oninput = e => { lib.q = e.target.value.trim().toLowerCase(); renderSongs(); };
 $('tagFilter').onclick = e => { const b = e.target.closest('button'); if (b) { lib.tag = b.dataset.tag; renderSongs(); } };
 const visibleSongs = () => filterSongs(lastSongs, lib);
