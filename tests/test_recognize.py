@@ -1385,3 +1385,61 @@ def test_error_after_the_new_result_is_swapped_in_does_not_claim_the_old_one_was
     after = store.load(sid)
     assert after["activity"] is None and after["status"] == "ready"
     assert "原来的结果保留不变" not in after["notice"]["msg"]
+
+
+def _ts_aware_transcribe(declare):
+    """替身模型：第 1 行在 declare 给出的小节（行内序号 → 拍号）写变拍号；知道是 3/4 的小节写 3 拍，否则 4 拍。
+    记下 (起始小节, 开头拍号)。"""
+    starts = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, start_ts=None, **kw):
+        ts = start_ts or meta["time_signature"]
+        starts.append((first_bar, start_ts))
+        bars = []
+        for i in range(len(spans)):
+            mark = declare.get(i) if first_bar == 1 else None
+            ts = mark or ts
+            bars.append(
+                {
+                    "number": first_bar + i,
+                    "time_signature": mark or [],
+                    "events": [{"dur": "1", "notes": [_note(1, k)]} for k in range(ts[0])],
+                    "tip": "",
+                    "uncertain": "",
+                }
+            )
+        return {"bars": bars}
+
+    return transcribe, starts
+
+
+def test_reparse_of_the_first_row_fixes_the_header_time_signature_and_redoes_later_rows(
+    data_dir, monkeypatch
+):
+    """单行重新识别第一行，这次第 1 小节写着 3/4（谱头读错了）：全曲拍号改成 3/4，后面按 4/4 识别的行按 3/4 重做。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    transcribe, starts = _ts_aware_transcribe({0: [3, 4]})
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    recognize.reparse_system(sid, 0)
+    s = store.load(sid)
+    assert s["meta"]["time_signature"] == [3, 4] and "ts_change" not in s["bars"][0]
+    assert [f for f, _ in starts] == [1, 4]  # 第二行重做了（全曲已经是 3/4，不用再特别告诉模型）
+    assert all(x["status"] == "done" for x in s["systems"]) and all(not b["warn"] for b in s["bars"])
+    assert s["activity"] is None
+
+
+def test_retrying_a_row_that_now_changes_the_time_signature_redoes_the_rows_after_it(
+    data_dir, sync_jobs, monkeypatch
+):
+    """重试 / 补页识别的行写了变拍号：后面没有重试的行开头的拍号跟着变了，按新拍号重做（补页插在前面时同理）。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    store.update(sid, lambda s: s["systems"][0].update(status="error", error="断了"))
+    transcribe, starts = _ts_aware_transcribe({1: [3, 4]})
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    recognize.start_retry_failed(sid)
+    s = store.load(sid)
+    assert (4, [3, 4]) in starts  # 第二行按 3/4 重做
+    assert [b.get("time_signature") for b in s["bars"]] == [None] + [[3, 4]] * 5
+    assert all(not b["warn"] for b in s["bars"]) and all(x["status"] == "done" for x in s["systems"])
