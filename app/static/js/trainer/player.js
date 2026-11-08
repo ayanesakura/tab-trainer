@@ -6,7 +6,7 @@ import * as alphaTab from '/static/vendor/alphatab/alphaTab.min.mjs';
 import { TICKS, CHORD_PAD, eventIndexAt, scoreNeedsGbk } from '../score.js';
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
-import { loopLabel, stepSection as stepCalc, isScore } from './view.js';
+import { loopLabel, stepSection as stepCalc, isScore, beatNumber } from './view.js';
 import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs } from './prefs.js';
 
 export { alphaTab };
@@ -461,7 +461,7 @@ function onBeat(beat, clicked) {
   if (!v) return;
   const bi = beat.voice.bar.index, evs = v.bars[bi];
   if (!clicked) updateFollowBtn();
-  if (!clicked) setStatus(`第 ${bi + 1} 小节 · 第 ${Math.floor(beat.playbackStart / TICKS) + 1} 拍`, `第 ${get('play.loops') + 1} 遍`);
+  if (!clicked) setStatus(`第 ${bi + 1} 小节 · 第 ${beatNumber(beat.playbackStart, beat.voice.bar.masterBar.timeSignatureDenominator)} 拍`, `第 ${get('play.loops') + 1} 遍`);
   if (bi < v.bars.length && (clicked || !holds.some(f => f()))) set('ui.bar', bi);
   if (!evs || !evs.length) return;
   const cur = evs[eventIndexAt(v.beatMap[bi] || [0], beat.playbackStart)];

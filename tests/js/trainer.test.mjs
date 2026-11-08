@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createStore, equal } from '../../app/static/js/trainer/store.js';
 import {
   deriveView, sectionsOf, stepSection, practiceText, resumeInfo, rangeLabel, loopLabel, barTags, planRange,
-  songSubtitle, explainState, needsReview, warnText, showNote, tuningInput, nameToMidi, noteMidi,
+  songSubtitle, explainState, needsReview, warnText, showNote, tuningInput, nameToMidi, noteMidi, beatNumber,
 } from '../../app/static/js/trainer/view.js';
 import { gbkFromMojibake, scoreNeedsGbk } from '../../app/static/js/score.js';
 
@@ -207,4 +207,14 @@ test('chord sheets: the carried chord follows first / second endings', async () 
   ];
   assert.deepEqual(carried(later, 5), ['Am']);
   assert.deepEqual(carried(later, 3), ['Am']);
+});
+
+test('status line counts beats in the time signature denominator', () => {
+  assert.equal(beatNumber(0, 4), 1);
+  assert.equal(beatNumber(2880, 4), 4);
+  // 6/8：八分音符一拍，一小节 6 拍（原来按四分音符数，只有第 1–3 拍）
+  assert.deepEqual([0, 480, 960, 1440, 1920, 2400].map(t => beatNumber(t, 8)), [1, 2, 3, 4, 5, 6]);
+  assert.equal(beatNumber(470, 8), 1);
+  assert.equal(beatNumber(1920, 2), 2); // 2/2：二分音符一拍
+  assert.equal(beatNumber(960), 2); // 没有拍号按四分音符
 });

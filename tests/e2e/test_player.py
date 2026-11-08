@@ -117,3 +117,25 @@ def test_clicking_an_earlier_bar_during_count_in_then_pausing(trainer):
     time.sleep(1.0)  # 预备拍里停下要重新生成 MIDI
     assert b.js("tt.api.tickPosition") < start - 960
     assert not b.errors, b.errors
+
+
+def test_status_counts_beats_in_the_time_signature(server, trainer, image_song):
+    """6/8 拍的小节：状态栏数到第 6 拍（八分音符一拍），不是按四分音符数成 1–3 拍。"""
+    sid, store = image_song
+
+    def six_eight(s):
+        s["bars"][0]["time_signature"] = [6, 8]
+        s["bars"][0]["events"] = [
+            {"dur": "1/2", "notes": [{"string": 1, "fret": k, "tech": [], "grace": -1, "bend": 0}]}
+            for k in range(6)
+        ]
+
+    store.update(sid, six_eight)
+    b = trainer()
+    b.js("""(() => { window.__st = new Set(); const el = document.getElementById('statusL1');
+      new MutationObserver(() => __st.add(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true });
+      tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(120); tt.play(); return true; })()""")
+    b.wait_for("__st.has('第 1 小节 · 第 6 拍')", timeout=8)
+    b.js("tt.stop(); true")
+    assert not any("第 7 拍" in x for x in b.js("[...__st]"))
+    assert not b.errors, b.errors

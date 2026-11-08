@@ -1,7 +1,7 @@
 // 练习页的纯函数：曲子数据 → 播放和显示要用的结构，段落、换段、练习记录文案等。
 // 不碰 DOM、不读 store，Node 测试直接导入（tests/js/trainer.test.mjs）。
 
-import { toAlphaTex, durToTicks } from '../score.js';
+import { toAlphaTex, durToTicks, TICKS } from '../score.js';
 import { STRINGS, STANDARD, TECH_NAME, WARN_CODES, parseDur } from '../vocab.js';
 
 export const NN = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
@@ -113,6 +113,9 @@ export function stepSection({ a, b, n, shown, secs }, dir) {
   if (na === a) return { msg: dir > 0 ? '已经到曲尾了' : '已经到开头了' }; // 不能平移时别从段首重新播放
   return { a: na, b: na + len - 1 };
 }
+
+/** 小节里的第几拍（播放状态栏用）：按拍号的分母数，6/8 拍一小节 6 拍（八分音符一拍），不是按四分音符数成 3 拍。tick 从小节开头算 */
+export const beatNumber = (tick, den = 4) => Math.floor(tick / (TICKS * 4 / (den || 4)) + 1e-6) + 1;
 
 export const rangeLabel = (a, b, n) => (!n ? '—' : a === 0 && b === n - 1 && n > 1 ? '全曲' : a === b ? `第 ${a + 1} 小节` : `第 ${a + 1}–${b + 1} 小节`);
 export const loopLabel = (a, b, n) => (!n ? '—' : a === b ? `第 ${a + 1} 小节` : `第 ${a + 1}–${b + 1} 小节`);
