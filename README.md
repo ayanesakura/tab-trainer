@@ -167,6 +167,8 @@ uv run --with websockets python scripts/make_eval_song.py 曲子.gp5 eval-xxx --
 uv run python -m app.evaluate eval-xxx --yes
 ```
 
+改了 `deriveSong`（比如新认出一种技巧）之后，已经做好的评测曲里还是旧的答案。`scripts/refresh_eval_truth.py 曲子.gp5 eval-xxx` 按原文件重新转换一遍、列出变了的小节，加 `--write` 写回；图片、版面和小节 id 不动，默认只换音符（拍上的和弦名、扫弦、歌词照旧，节奏也变了的小节只列出来，`--whole` 才整个换）。
+
 版面检测找到的小节数和文件对不上时脚本会报错，这本身就说明版面检测在这种排版上有问题。报错里会同时列出 alphaTab 实际每行几个小节，对照一下就知道是哪一行出的问题；加 `--save-full 图.png` 可以另存整张渲染图。
 
 谱面样式可以换，让评测集不全是一个样子：
@@ -276,6 +278,7 @@ UPDATE_PROMPTS=1 uv run pytest tests/test_prompts.py   # 有意改了提示词�
 ```bash
 uv run python -m app.evaluate eval-amy --yes [--systems 0,5] [--double-check doubts|all] [--no-split]
 uv run --with websockets python scripts/make_eval_song.py 曲子.gp5 eval-xxx        # Guitar Pro 文件 → 评测曲
+uv run python scripts/refresh_eval_truth.py 曲子.gp5 eval-xxx [--write]           # deriveSong 改了之后：按原文件更新评测曲的答案
 uv run --with websockets python scripts/make_chord_eval.py eval-c-xxx --seed 1 --style mixed [--degrade]  # 合成弹唱谱
 uv run python scripts/make_real_eval.py <曲子 id> eval-real-xxx [--all | --include-clean]  # 核对过的真实谱子 → 评测曲
 ```

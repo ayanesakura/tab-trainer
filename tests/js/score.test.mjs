@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import * as at from '../../app/static/vendor/alphatab/alphaTab.core.min.mjs';
 import { toAlphaTex, deriveSong, splitTicks, durToTicks, ticksToDur, eventIndexAt, DERIVE_VERSION, CHORD_PAD } from '../../app/static/js/score.js';
-import { deriveView } from '../../app/static/js/trainer/view.js';
+import { deriveView, noteMidi } from '../../app/static/js/trainer/view.js';
 
 const parse = tex => {
   const settings = new at.Settings();
@@ -195,6 +195,49 @@ test('dead notes get fret 0 and natural harmonics take their harmonic node', () 
   assert.equal(d.version, DERIVE_VERSION);
   // 我们的数据 → alphaTex → alphaTab → 我们的数据：x / nh 的品格不变
   assert.deepEqual(norm(deriveSong(parse(toAlphaTex(d).tex), 0).bars), norm(d.bars));
+});
+
+test('tapped harmonics: GP stores the tap as an offset, we keep the fret printed in <>', () => {
+  const score = gpRoundTrip(`\\track "G" \\staff {tabs} \\tuning (E4 B3 G3 D3 A2 E2) . 0.1.4 5.3.4 2.3.4 7.2.4`);
+  const [b0, b1, b2, b3] = score.tracks[0].staves[0].bars[0].voices[0].beats;
+  // felicity 的 GP 文件里就是这样存的：谱上画成 <fret + harmonicValue>
+  Object.assign(b0.notes[0], { harmonicType: 4, harmonicValue: 19 }); // 0 <19>
+  Object.assign(b1.notes[0], { harmonicType: 4, harmonicValue: 17 }); // 5 <22>
+  Object.assign(b2.notes[0], { harmonicType: 4, harmonicValue: 21.7 }); // 2 <23.7> → 24
+  Object.assign(b3.notes[0], { harmonicType: 4, harmonicValue: 0 }); // 没记位置：按高 12 品
+  const d = deriveSong(score, 0);
+  const sig = d.bars[0].events.map(e => e.notes.map(n => `${n.string}/${n.fret}${n.tech.join('')}<${n.harm}>`).join(','));
+  assert.deepEqual(sig, ['1/0th<19>', '3/5th<22>', '3/2th<24>', '2/7th<19>']);
+  // 我们的数据 → alphaTex：th 的参数是比按的品高几品（alphaTab 自己按这个画 <品 + N>、算音高）
+  const { tex } = toAlphaTex(d);
+  assert.match(tex, /0\.1\{th 19\}\.4 5\.3\{th 17\}\.4 2\.3\{th 22\}\.4 7\.2\{th 12\}\.4/);
+  const back = deriveSong(parse(tex), 0);
+  assert.deepEqual(back.bars[0].events.map(e => e.notes[0].harm), [19, 22, 24, 19]);
+  // 普通的音没有 harm 这个键（存盘的数据不变）
+  const plain = deriveSong(parse(toAlphaTex(SYNTH).tex), 0);
+  assert.ok(plain.bars.every(b => b.events.every(e => e.notes.every(n => !('harm' in n)))));
+});
+
+test('tapped harmonics play the harmonic pitch, not the fretted one', () => {
+  const song = {
+    meta: { tuning: ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'], time_signature: [4, 4] },
+    bars: [{ events: [
+      { dur: '1', notes: [N(1, 0)] },
+      { dur: '1', notes: [{ ...N(1, 0, ['th']), harm: 19 }] },
+      { dur: '1', notes: [{ ...N(1, 0, ['th']), harm: 12 }] },
+      { dur: '1', notes: [{ ...N(3, 5, ['th']), harm: 22 }] },
+    ] }],
+  };
+  const score = parse(toAlphaTex(song).tex);
+  const settings = new at.Settings();
+  const midi = new at.midi.MidiFile();
+  new at.midi.MidiFileGenerator(score, settings, new at.midi.AlphaSynthMidiFileHandler(midi)).generate();
+  const keys = midi.tracks.flatMap(t => t.events).filter(e => e.type === 0x90).map(e => e.noteKey);
+  // 空弦 E4 = 64；点 19 品 = 高八度加五度（83）；点 12 品 = 高八度（76）；3 弦按 5 品（C4 = 60）点 22 品 = 高三个八度（96）
+  assert.deepEqual(keys, [64, 83, 76, 96]);
+  // 练节奏时的示范音（view.js 的 noteMidi）也一样
+  const v = deriveView({ id: 's', meta: { ...song.meta, tuning_midi: [64, 59, 55, 50, 45, 40] }, bars: song.bars, pages: [] });
+  assert.deepEqual(v.bars[0].map(e => noteMidi(e.notes[0], v)), [64, 83, 76, 96]);
 });
 
 // GP 里的小节可以比拍号长：多出来的拍从小节长度处（或更后面）开始，最后一个音的时值按它自己的算，不能是 0 或负数

@@ -1,6 +1,7 @@
 // 我们的小节数据 ⇄ alphaTab 谱面 的转换。浏览器和 Node 测试共用（不依赖 DOM）。
 //
-// 我们的数据：bar.events = [{ dur: "1/2", notes: [{ string, fret, tech: [...], grace, bend }], chord?, strum? }]
+// 我们的数据：bar.events = [{ dur: "1/2", notes: [{ string, fret, tech: [...], grace, bend, harm? }], chord?, strum? }]
+//   - harm：点弦泛音（tech th）右手点的品，谱上写在 <> 里（"5 <22>"：fret 5、harm 22）；别的音没有这个键
 //   - dur：到下一个起拍的时长，单位是四分音符；string：1 = 最高音弦（最细）
 //   - chord：从这个拍开始的和弦名；strum："down" 下扫（从低音弦扫向高音弦）/ "up" 上扫
 //   - lyrics：从这个拍开始唱的歌词，每段一个字符串（第 1 段在前）
@@ -10,7 +11,7 @@
 //   击弦、滑音标在“起始音”上。转换时要把这些技巧挪到同一根弦的前一个音；前一个音拆成了几段（连音线接着）时
 //   挪到最后一段上（alphaTab 把击弦 / 滑音连到起始音后面紧跟着的那个音，标在第一段就连到了它自己的延续上）。
 
-import { DIRECTIONS, GRID as GRID_TICKS, TICKS_PER_QUARTER, STRINGS, parseDur } from './vocab.js';
+import { DIRECTIONS, GRID as GRID_TICKS, TICKS_PER_QUARTER, STRINGS, INSTRUMENT, parseDur } from './vocab.js';
 
 export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数（960）
 
@@ -24,7 +25,8 @@ export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数�
 // 8：弹唱谱：拍上的和弦名（chord）、扫弦方向（strum）、小节用到的和弦指法（shapes）
 // 9：歌词（lyrics，每段一个字符串）
 // 10：写着和弦名或歌词的休止 / 延音拍保留成没有新音的事件（原来并进前一个音，和弦、歌词丢了）
-export const DERIVE_VERSION = 10;
+// 11：点弦泛音（GP 的 Tap harmonic）记成 tech th + harm（右手点的品），品格仍是左手按的品
+export const DERIVE_VERSION = 11;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -85,6 +87,12 @@ const DIRECTION_NAMES = DIRECTIONS;
 
 const barQ = ts => ts[0] * 4 / ts[1]; // 一小节几拍（四分音符）
 
+/** 点弦泛音点的品比按的品高几品（alphaTex 的 th 参数、泛音的音高都按它算）。没记点的品（或不比按的品高）时按 12 品 */
+export function tapOffset(fret, harm) {
+  const d = (harm || 0) - fret;
+  return d > 0 ? d : 12;
+}
+
 /**
  * 小节里真正弹的事件：[{e, q: 时值（拍）}]。和练习页的 deriveView 一致：起拍在小节长度处或更后面的事件不弹（不写进谱子，
  * 否则会叠到下一小节上、这一小节画得太满），最后一个音超出小节的部分截掉。写不满的小节照原样。
@@ -135,6 +143,8 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
         if (tech.has('si')) fx.add('sib');
         if (tech.has('nh')) fx.add('nh');
         if (tech.has('ah')) fx.add('ah 12');
+        // 点弦泛音：alphaTex 的 th N 里 N 是比按的品高几品（alphaTab 谱上画成 <品 + N>），我们存的是点的品
+        if (tech.has('th')) fx.add(`th ${tapOffset(n.fret, n.harm)}`);
         if (tech.has('pm')) fx.add('pm');
         if (tech.has('x')) fx.add('x');
         if (tech.has('vib')) fx.add('v');
@@ -282,6 +292,13 @@ export function deriveSong(score, trackIndex = 0) {
     notes: '',
   };
   const ours = s => nStr + 1 - s; // 模型里 1 = 最低音弦，我们 1 = 最高音弦
+  // 点弦泛音右手点的品：GP / alphaTab 的 harmonicValue 是比按的品高几品（谱上画 <fret + harmonicValue>，
+  // "5 <22>" 存成 fret 5、harmonicValue 17），我们记谱上写的那个品（小数的四舍五入，<23.7> → 24）。
+  // 没记位置的按高 12 品；超出范围的不当点弦泛音（照普通音记），免得整个小节被后端拒收
+  const tapFret = n => {
+    const harm = Math.round(n.fret + (n.harmonicValue > 0 ? n.harmonicValue : 12));
+    return harm > n.fret && harm <= INSTRUMENT.max_tap_fret ? harm : 0;
+  };
   // 我们的品格 = 谱上写的数字：闷音画成 x，GP 文件里却可能留着按弦时的品格，记 0；
   // 自然泛音 GP 里品格常记 0、泛音点另存（谱上画 <12>），取泛音点（小数的四舍五入）
   // （倚音只存一个品格、没有技巧，闷音倚音记 0 会变成空弦倚音，所以倚音不走这里）
@@ -339,13 +356,17 @@ export function deriveSong(score, trackIndex = 0) {
           if (n.slideInType === 1) tech.push('si');
           if (n.harmonicType === 1) tech.push('nh');
           if (n.harmonicType === 2) tech.push('ah');
+          const harm = n.harmonicType === 4 ? tapFret(n) : 0;
+          if (harm) tech.push('th');
           if (n.isPalmMute) tech.push('pm');
           if (n.isDead) tech.push('x');
           if (n.vibrato) tech.push('vib');
           let bend = 0;
           if (n.bendType && n.maxBendPoint) { tech.push('bend'); bend = n.maxBendPoint.value / 2; }
           if (beat.brushType === 3 || beat.brushType === 4) tech.push('roll');
-          byTick.get(start).push({ string: ours(n.string), fret: fretOf(n), tech, grace: -1, bend });
+          const note = { string: ours(n.string), fret: fretOf(n), tech, grace: -1, bend };
+          if (harm) note.harm = harm;
+          byTick.get(start).push(note);
         }
       }
     }

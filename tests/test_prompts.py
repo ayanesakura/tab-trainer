@@ -91,3 +91,21 @@ def test_prompts_match_the_snapshot(monkeypatch):
     for name in want:
         assert got[name] == want[name], name
     assert set(got) == set(want)
+
+
+def test_note_text_shows_the_tapped_fret_like_the_tab():
+    """给模型的文字版小节：点弦泛音写成谱上的样子（按的品 + <点的品>），别的音不变。"""
+    bar = {
+        "n": 12,
+        "events": [
+            {
+                "dur": "4",
+                "notes": [
+                    {"string": 1, "fret": 0, "tech": ["th"], "grace": -1, "bend": 0, "harm": 19},
+                    {"string": 4, "fret": 2, "tech": [], "grace": -1, "bend": 0},
+                ],
+            }
+        ],
+    }
+    assert prompts.bar_text(bar) == "第12小节: 4拍 1弦0品<19>[th] 4弦2品"
+    assert "th tapped harmonic" in prompts.NOTATION_KEY

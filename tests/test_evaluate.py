@@ -18,6 +18,21 @@ def test_compare_bar_counts_notes_rhythm_and_techniques():
     assert c["missing"] == [(evaluate.Fraction(1, 2), 1, 4)]
 
 
+def test_tapped_harmonic_position_counts_as_part_of_the_technique():
+    """点弦泛音：音照常按 (起拍, 弦, 品) 比（品 = 左手按的），点错了品算技巧错。"""
+
+    def th(fret, harm):
+        return [{"dur": "4", "notes": [{"string": 1, "fret": fret, "tech": ["th"], "harm": harm}]}]
+
+    assert evaluate.compare_bar(th(0, 19), th(0, 19))["techs"] == (1, 1, 1)
+    c = evaluate.compare_bar(th(0, 19), th(0, 12))
+    assert c["notes"] == (1, 1, 1) and c["exact"]  # 音和节奏都对
+    assert c["techs"] == (0, 1, 1)  # 点的位置错了
+    # 以前的读法：把点的品当成按的品、没有技巧
+    c = evaluate.compare_bar(th(0, 19), [ev("4", (1, 19))])
+    assert c["notes"] == (0, 1, 1) and c["techs"] == (0, 1, 0)
+
+
 def test_missing_bar_scores_zero_recall():
     c = evaluate.compare_bar([ev("4", (2, 0))], None)
     assert c["notes"] == (0, 1, 0) and not c["exact"]

@@ -4,7 +4,7 @@ import { get, set, on } from './store.js';
 import { $, UI, setButton, songUrl } from './dom.js';
 import { put, post, withBusy } from '../lib/api.js';
 import { DUR_CHOICES, durToTicks, eventIndexAt, retimeEvent } from '../score.js';
-import { TECH_NAME, STRINGS } from '../vocab.js';
+import { TECH_NAME, STRINGS, INSTRUMENT } from '../vocab.js';
 import { stop, setPlayerHooks, holdBarWhile } from './player.js';
 import { refresh, applySong, conflict, isLocked, lockedToast } from './song.js';
 
@@ -98,7 +98,7 @@ const legend = items => items.map(x => `<span>${x}</span>`).join('');
 const LEGEND_PLAY = legend(['点小节：从这里开始播放', '<kbd>Shift</kbd> + 点：把循环扩到这个小节', '点音符：试听', '<i class="review-key"></i>待核对']);
 const LEGEND_EDIT = legend(['改音：点音符改弦、品、技巧和时值', '点拍上的空白处：改和弦、填品位加音', '<kbd>Enter</kbd> 保存', '<kbd>Esc</kbd> 关闭', `<kbd>${UNDO_KEY}</kbd> 撤销`]);
 // 改音面板里的技巧（推弦不在面板里，原样保留）
-const NP_TECH = ['h', 'p', 'sl', 'si', 'pm', 'x', 'nh', 'ah', 'vib', 'roll'];
+const NP_TECH = ['h', 'p', 'sl', 'si', 'pm', 'x', 'nh', 'ah', 'th', 'vib', 'roll'];
 let np = null, npLayer = null, pendingClick = null, setNpStr = null, setNpStrum = null;
 const pointer = { x: 0, y: 0 };
 
@@ -139,6 +139,7 @@ export function openNotePop(beat, note) {
   np = { bi, ei, ni, barId: s.bars[bi].id, rev: s.bars[bi].rev, snap: s.bars[bi].events, string: cur ? cur.string : freeString(ev, note ? STRINGS + 1 - note.string : 1), fret: cur ? cur.fret : '', tech: new Set(cur ? cur.tech : []), dur: ev.dur, chord: ev.chord || '', strum: ev.strum || '' };
   set('ui.bar', bi);
   $('npFret').value = np.fret; // 先填好：renderNotePop 按它判断加不加音
+  $('npHarm').value = cur && cur.harm ? cur.harm : '';
   renderNotePop();
   $('npChord').value = np.chord;
   const card = $('scoreCard').getBoundingClientRect(), pop = $('notePop');
@@ -177,6 +178,7 @@ function renderNotePop() {
   setNpStr(String(np.string));
   setNpStrum(np.strum);
   $('npTech').querySelectorAll('button').forEach(b => { const v = np.tech.has(b.dataset.t); b.classList.toggle('on', v); b.setAttribute('aria-pressed', v); });
+  $('npHarmRow').hidden = !np.tech.has('th'); // 点弦泛音才有“点哪一品”
   $('npDel').hidden = $('npAdd').hidden = add;
   const curT = durToTicks(np.dur);
   let durOk = true;
@@ -198,16 +200,19 @@ async function saveNotePop() {
   if (!np || npConflict() || barBusy(np.barId)) return;
   const addNote = npAddsNote(), fret = parseInt($('npFret').value, 10);
   if (addNote && !(fret >= 0 && fret <= 30)) { npError('品位要在 0–30 之间'); return; }
+  const th = addNote && np.tech.has('th'), harm = th ? parseInt($('npHarm').value, 10) : 0, maxTap = INSTRUMENT.max_tap_fret;
+  if (th && !(harm > fret && harm <= maxTap)) { npError(`点弦泛音点的品要比按的品高、最多 ${maxTap} 品`); return; }
   const bar = get('song').bars[np.bi], events = structuredClone(barEvents(np.bi)), ev = events[np.ei];
   if (!bar || bar.id !== np.barId || !ev || (np.ni >= 0 && !ev.notes[np.ni])) { closeNotePop(); UI.toast('谱子刚更新过，请重新点这个音', 'info'); return; }
   const old = np.ni >= 0 ? ev.notes[np.ni] : { grace: -1, bend: 0 };
   const tech = NP_TECH.filter(k => np.tech.has(k));
   if (old.tech && old.tech.includes('bend')) tech.push('bend'); // 推弦不在面板里，原样保留
   const n = { ...old, string: np.string, fret, tech };
+  if (th) n.harm = harm; else delete n.harm; // harm 只有点弦泛音才有
   const retimed = durToTicks(np.dur) !== durToTicks(ev.dur);
   const chord = $('npChord').value.trim().slice(0, 24);
   const beatSame = chord === (ev.chord || '') && np.strum === (ev.strum || '');
-  const same = beatSame && !retimed && (!addNote || np.ni >= 0 && old.string === n.string && old.fret === n.fret && [...(old.tech || [])].sort().join() === [...tech].sort().join());
+  const same = beatSame && !retimed && (!addNote || np.ni >= 0 && old.string === n.string && old.fret === n.fret && (old.harm || 0) === (n.harm || 0) && [...(old.tech || [])].sort().join() === [...tech].sort().join());
   if (chord) ev.chord = chord; else delete ev.chord;
   if (np.strum) ev.strum = np.strum; else delete ev.strum;
   if (same) { closeNotePop(); return; } // 没改就不保存（保存会清掉这一小节的 AI 不确定说明）
@@ -282,7 +287,7 @@ export function initEditor() {
   $('npClose').onclick = closeNotePop;
   $('npSave').onclick = saveNotePop;
   $('npDel').onclick = deleteNotePop;
-  $('npAdd').onclick = () => { const ev = barEvents(np.bi)[np.ei]; np = { ...np, ni: -1, string: freeString(ev, np.string), fret: 0, tech: new Set() }; $('npFret').value = 0; renderNotePop(); $('npFret').focus(); $('npFret').select(); };
+  $('npAdd').onclick = () => { const ev = barEvents(np.bi)[np.ei]; np = { ...np, ni: -1, string: freeString(ev, np.string), fret: 0, tech: new Set() }; $('npFret').value = 0; $('npHarm').value = ''; renderNotePop(); $('npFret').focus(); $('npFret').select(); };
   $('npFretDown').onclick = () => npStep(-1);
   $('npFretUp').onclick = () => npStep(1);
   $('npFret').addEventListener('input', () => { if (!np) return; np.fret = $('npFret').value === '' ? '' : parseInt($('npFret').value, 10); renderNotePop(); });
@@ -297,12 +302,14 @@ export function initEditor() {
     if (np.tech.has(k)) np.tech.delete(k);
     else {
       np.tech.add(k);
-      // 互斥的几组：击弦 / 勾弦 / 滑音 / 滑入只能有一个；两种泛音只能有一个
-      for (const g of [['h', 'p', 'sl', 'si'], ['nh', 'ah']]) if (g.includes(k)) g.forEach(o => o !== k && np.tech.delete(o));
+      // 互斥的几组：击弦 / 勾弦 / 滑音 / 滑入只能有一个；几种泛音只能有一个
+      for (const g of [['h', 'p', 'sl', 'si'], ['nh', 'ah', 'th']]) if (g.includes(k)) g.forEach(o => o !== k && np.tech.delete(o));
+      // 点弦泛音还没写点哪一品：先填最常见的高 12 品
+      if (k === 'th' && $('npHarm').value === '') $('npHarm').value = Math.min((parseInt($('npFret').value, 10) || 0) + 12, INSTRUMENT.max_tap_fret);
     }
     renderNotePop();
   };
-  $('npFret').addEventListener('keydown', e => {
+  for (const id of ['npFret', 'npHarm']) $(id).addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); saveNotePop(); }
   });
   $('score').addEventListener('mousedown', e => { pointer.x = e.clientX; pointer.y = e.clientY; }, true);

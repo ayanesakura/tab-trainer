@@ -111,6 +111,7 @@
             <div class="np-row"><span class="lbl" id="npStrLbl">弦</span><div class="seg sm" id="npStr" aria-labelledby="npStrLbl"><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button><button data-v="6">6</button></div><span class="hint">1 弦最细</span></div>
             <div class="np-row"><label class="lbl" for="npFret">品</label><button class="icon-btn sm" id="npFretDown" data-ic="minus" aria-label="品位减 1"></button><input class="input num np-fret" type="number" id="npFret" min="0" max="30"><button class="icon-btn sm" id="npFretUp" data-ic="plus" aria-label="品位加 1"></button><span class="hint">从变调夹算起</span></div>
             <div class="np-row align-top"><span class="lbl" id="npTechLbl">技巧</span><div class="chips multi" id="npTech" role="group" aria-labelledby="npTechLbl"></div></div>
+            <div class="np-row" id="npHarmRow" hidden><label class="lbl" for="npHarm">点弦</label><input class="input num np-fret" type="number" id="npHarm" min="1" max="36"><span class="hint">右手点的品（谱上 &lt;&gt; 里的数）</span></div>
             <div class="np-row align-top"><span class="lbl" id="npDurLbl" title="这一拍到下一个音的时长，整拍的音一起改">时值</span><div class="chips multi" id="npDur" role="group" aria-labelledby="npDurLbl"></div></div>
             <div class="np-row"><label class="lbl" for="npChord" title="这一拍开始的和弦名和扫弦方向，整拍一起改">和弦</label><input class="input np-chord" id="npChord" maxlength="24" placeholder="无" autocomplete="off" spellcheck="false"><div class="seg sm" id="npStrum" aria-label="扫弦"><button data-v="">不扫</button><button data-v="down" title="从低音弦扫向高音弦">↓ 下扫</button><button data-v="up" title="从高音弦扫向低音弦">↑ 上扫</button></div></div>
             <div class="np-msg" id="npMsg"></div>
@@ -152,7 +153,7 @@
               </div>
               <div class="editor" id="editor" hidden>
                 <textarea class="input" id="edText" spellcheck="false" aria-label="本小节的数据（JSON）"></textarea>
-                <div class="hint">每行一个事件：dur = 到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string 弦（1 最细）、fret 品；tech 可用 h p sl si pm nh ah roll x vib bend；grace 倚音品位（-1 表示没有）。</div>
+                <div class="hint">每行一个事件：dur = 到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string 弦（1 最细）、fret 品；tech 可用 h p sl si pm nh ah th roll x vib bend；grace 倚音品位（-1 表示没有）；点弦泛音（th）的 harm 是右手点的品。</div>
                 <div class="ed-bar"><button class="btn sm primary" id="edSave">保存</button><button class="btn sm ghost" id="edCancel">取消</button><span class="hint" id="edMsg"></span></div>
               </div>
             </details>

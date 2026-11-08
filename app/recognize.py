@@ -184,7 +184,7 @@ def ocr_disagreements(
 
     - OCR 在这个小节什么都没读到：不判断（可能是没读出来，不代表没有音）；
     - 死音（谱上写 x）OCR 不读，不比较；倚音的小数字 OCR 会读到，算进去；
-    - 人工泛音旁边标的“品位 + 12”（如 2<14>）OCR 会多读一个 14，允许；
+    - 人工泛音旁边标的“品位 + 12”（如 2<14>）、点弦泛音点的品（如 5<22> 的 22）OCR 会多读一个，允许；
     - 整行一致率不到一半，或 OCR 只读对了 AI 写的音的不到 60%：多半是 OCR 在这种排版上读不准，整行都不判断。
     tied_in：图上第一个小节之前每根弦最后一个音的品位（右半行接左半的音、一行接上一行的音；{} = 前面没有音）。
     None = 不知道（各行并行识别，上一行还没结果）：第一个小节 AI 这边没有对不上的音时，OCR 多读的音每根弦
@@ -214,6 +214,8 @@ def ocr_disagreements(
                     ai[(n["string"], n["grace"])] += 1
                 if "ah" in n["tech"]:
                     harmonic_marks[(n["string"], n["fret"] + 12)] += 1
+                if n.get("harm"):  # 点弦泛音：谱上 <19> 这样的点弦位置 OCR 也会读到，不是另一个音
+                    harmonic_marks[(n["string"], n["harm"])] += 1
         got = Counter(seen) - harmonic_marks
         # 两位数的两个数字隔得稍远时 OCR 会读成两个音（11 → 1、1）：AI 写的两位数能由这几位拼出来就算一致
         for (st, f), k in list((ai - got).items()):
@@ -594,12 +596,21 @@ def _last_frets(bars: list[dict]) -> dict[int, int]:
 
 
 def _bar_key(bar: dict) -> tuple:
-    """比较两遍识别是否一致：每个起拍的时间、弦、品和技巧，以及小节总长（最后一个音的时值不同也算不一样）。"""
+    """比较两遍识别是否一致：每个起拍的时间、弦、品和技巧（点弦泛音连同点的品），以及小节总长
+    （最后一个音的时值不同也算不一样）。"""
     t, out = Fraction(0), []
     for e in bar["events"]:
         if e["notes"]:
             out.append(
-                (t, tuple(sorted((n["string"], n["fret"], tuple(sorted(n["tech"]))) for n in e["notes"])))
+                (
+                    t,
+                    tuple(
+                        sorted(
+                            (n["string"], n["fret"], tuple(sorted(n["tech"])), n.get("harm", 0))
+                            for n in e["notes"]
+                        )
+                    ),
+                )
             )
         t += parse_dur(e["dur"])
     return (*out, t)

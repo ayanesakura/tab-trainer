@@ -127,7 +127,7 @@ export function playEvent(e, when) {
     else pluck(n.s, m, t, {
       mode: tk.has('pm') || tk.has('x') ? 'm' : legato ? 's' : 'n',
       gain: tk.has('x') ? 0.35 : legato ? 0.6 : 0.9,
-      harm: tk.has('nh') || tk.has('ah'),
+      harm: tk.has('nh') || tk.has('ah') || tk.has('th'),
       slideIn: tk.has('si'),
     });
     if (n.bend > 0 && voices[n.s]) slideTo(n.s, m + n.bend, t + 0.18); // 推弦
@@ -139,6 +139,7 @@ export function playEvent(e, when) {
 // ev(拍内位置, 时值(拍), "弦-品 弦-品 ...", "技巧")
 // 技巧：h 击弦  p 勾弦  sl 滑音（从同一根弦上一个音滑过来）  si 从下方滑入  pm 闷音
 //       nh 自然泛音（品数=泛音点）  ah 人工泛音（按品 + 12 品处泛音）  roll 琶音
+//       th 点弦泛音（右手点的品写成 "弦-品:t点的品"，如 "1-0:t19"）
 // 第 4 个参数的技巧作用于整组音；只作用于某个音时写在音后面，如 "1-4:h:g2 2-4"
 // （g2 = 先弹 2 品倚音再进入该音）。
 // 品数从变调夹算起，与原谱一致。
@@ -149,7 +150,7 @@ function ev(t, d, notes, tech = '') {
     const [sf, ...mods] = x.split(':');
     const [s, f] = sf.split('-').map(Number);
     const n = { s, f, tech: new Set(et), grace: null };
-    for (const m of mods) { if (/^g\d+$/.test(m)) n.grace = +m.slice(1); else n.tech.add(m); }
+    for (const m of mods) { if (/^g\d+$/.test(m)) n.grace = +m.slice(1); else if (/^t\d+$/.test(m)) { n.harm = +m.slice(1); n.tech.add('th'); } else n.tech.add(m); }
     return n;
   });
   const all = new Set(); ns.forEach(n => n.tech.forEach(k => all.add(k)));
@@ -163,6 +164,7 @@ const DEMOS = {
   p: [ev(0,.5,'1-2'), ev(.5,1.5,'1-0','p')],
   nh: [ev(0,2,'2-5','nh')],
   ah: [ev(0,1.5,'3-2'), ev(1.5,2,'3-2','ah')],
+  th: [ev(0,1,'1-0 2-0 3-0'), ev(1,2,'1-0:t12 2-0:t12 3-0:t12'), ev(3,2,'1-0:t19 2-0:t19')],
   roll: [ev(0,2,'4-13 3-15 2-16 1-14','roll')],
   grace: [ev(0,1,'1-4:h:g2'), ev(1.5,1,'3-3:sl:g2')],
   si: [ev(0,1.5,'2-5 3-5','si'), ev(1.5,1.5,'1-6 2-7','si')],

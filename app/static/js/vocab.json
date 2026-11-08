@@ -5,7 +5,8 @@
     "strings": 6,
     "standard_tuning": ["E4", "B3", "G3", "D3", "A2", "E2"],
     "max_fret": 24,
-    "max_fret_written": 30
+    "max_fret_written": 30,
+    "max_tap_fret": 36
   },
   "ticks_per_quarter": 960,
   "grid_ticks": 20,
@@ -17,6 +18,7 @@
     { "code": "pm",   "sym": "P.M.", "name": "闷音" },
     { "code": "nh",   "sym": "<>",   "name": "自然泛音" },
     { "code": "ah",   "sym": "AH",   "name": "人工泛音" },
+    { "code": "th",   "sym": "T.H.", "name": "点弦泛音" },
     { "code": "roll", "sym": "琶",   "name": "琶音" },
     { "code": "x",    "sym": "x",    "name": "死音" },
     { "code": "vib",  "sym": "~",    "name": "揉弦" },

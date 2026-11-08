@@ -270,7 +270,7 @@
   {
    "events": [
     {
-     "dur": "4",
+     "dur": "2",
      "notes": [
       {
        "string": 3,
@@ -282,6 +282,31 @@
        "bend": 0
       }
      ]
+    },
+    {
+     "dur": "2",
+     "notes": [
+      {
+       "string": 1,
+       "fret": 0,
+       "tech": [
+        "th"
+       ],
+       "grace": -1,
+       "bend": 0,
+       "harm": 19
+      },
+      {
+       "string": 3,
+       "fret": 5,
+       "tech": [
+        "th"
+       ],
+       "grace": -1,
+       "bend": 0,
+       "harm": 22
+      }
+     ]
     }
    ],
    "directions": [
@@ -290,5 +315,5 @@
   }
  ],
  "trackName": "Guitar",
- "version": 10
+ "version": 11
 }

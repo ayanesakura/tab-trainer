@@ -47,6 +47,7 @@ function drawEvent(e, ghost) {
       el('text', { x, y: y + 4, 'text-anchor': 'middle', class: 'fb-num' + (n.f === 0 ? ' open' : '') }, dyn).textContent = n.f;
     }
     if (n.tech.has('ah') && n.f + 12 <= FB.MAXF) diamond(fx(n.f + 12), y, 8.5, k);
+    if (n.tech.has('th') && n.harm > n.f && n.harm <= FB.MAXF) diamond(fx(n.harm), y, 8.5, k); // 点弦泛音：右手点的品
   }
 }
 function paintNotes() {
