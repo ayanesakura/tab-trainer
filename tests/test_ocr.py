@@ -11,8 +11,11 @@ pytestmark = pytest.mark.skipif(
 FONT = "/System/Library/Fonts/Helvetica.ttc"
 
 
-def _tab_image(notes, sp=20, bars=2, width=900):
-    """画一行六线谱：notes = [(小节, 小节内第几个位置 0..7, 弦, 品)]。返回 (灰度图, 弦线 y, 小节范围)。"""
+def _tab_image(notes, sp=20, bars=2, width=900, stems=(), ink=0):
+    """画一行六线谱：notes = [(小节, 小节内第几个位置 0..7, 弦, 品)]，品也可以写成 "(5)"、"<7>" 这样的字符串。
+    stems = [(小节, 位置, 从第几弦, 到第几弦)]：只有六线谱的谱子里画在谱线中间的符干（和音一样被数字截断）。
+    ink：数字的灰度（0 = 黑）。
+    返回 (灰度图, 弦线 y, 小节范围)。"""
     img = Image.new("L", (width, 8 * sp), 255)
     d = ImageDraw.Draw(img)
     lines = [sp * 1.5 + i * sp for i in range(6)]
@@ -27,12 +30,21 @@ def _tab_image(notes, sp=20, bars=2, width=900):
         font = ImageFont.truetype(FONT, int(sp * 0.85))
     except OSError:
         font = ImageFont.load_default(size=int(sp * 0.85))
+
+    def at(bar, pos):
+        return spans[bar][0] + 20 + pos * (bw - 40) / 7
+
+    for bar, pos, s0, s1 in stems:
+        d.line([(at(bar, pos), lines[s0 - 1]), (at(bar, pos), lines[s1 - 1] + 2.5 * sp)], fill=0, width=2)
     for bar, pos, string, fret in notes:
-        x = spans[bar][0] + 20 + pos * (bw - 40) / 7
+        x = at(bar, pos)
         y = lines[string - 1]
+        if str(fret)[0] in "(<":  # 括号和数字之间留一点空（Helvetica 的 > 会贴到数字上，印刷谱里是分开的）
+            fret = f"{fret[0]}\u200a{fret[1:-1]}\u200a{fret[-1]}"
         box = d.textbbox((x, y), str(fret), font=font, anchor="mm")
-        d.rectangle([box[0] - 2, box[1], box[2] + 2, box[3]], fill=255)  # 数字压断谱线，和印刷谱一样
-        d.text((x, y), str(fret), font=font, fill=0, anchor="mm")
+        # 数字压断谱线和符干，和印刷谱一样
+        d.rectangle([box[0] - 2, box[1] - 3, box[2] + 2, box[3] + 3], fill=255)
+        d.text((x, y), str(fret), font=font, fill=ink, anchor="mm")
     import numpy as np
 
     return np.asarray(img), lines, spans
@@ -52,6 +64,50 @@ def test_reads_frets_on_the_right_strings():
     got = ocr.read_system(gray, lines, spans)
     want = [sorted((s, f) for b, _, s, f in notes if b == i) for i in range(2)]
     assert [sorted(x) for x in got] == want
+
+
+def test_detail_reports_brackets_without_changing_the_digits():
+    """detail=True：每个音多了括号标记（鬼音 / 小节开头的延续音画成 (n)，泛音画成 <n>），读到的音和顺序不变。"""
+    notes = [
+        (0, 0, 2, "(5)"),
+        (0, 2, 3, 7),
+        (0, 4, 4, "<12>"),
+        (1, 0, 1, "<7>"),
+        (1, 3, 5, "(10)"),
+        (1, 5, 6, 3),
+    ]
+    gray, lines, spans = _tab_image(notes)
+    plain = ocr.read_system(gray, lines, spans)
+    detail = ocr.read_system(gray, lines, spans, detail=True)
+    assert [[(d.string, d.fret) for d in bar] for bar in detail] == plain
+    flags = {(d.string, d.fret): (d.paren, d.angle) for bar in detail for d in bar}
+    assert flags == {
+        (2, 5): (True, False),
+        (3, 7): (False, False),
+        (4, 12): (False, True),
+        (1, 7): (False, True),
+        (5, 10): (True, False),
+        (6, 3): (False, False),
+    }
+    # 括号不会被当成数字读出来（"<7>" 读成 77、")" 读成 1）
+    assert sorted(plain[0]) == [(2, 5), (3, 7), (4, 12)]
+
+
+def test_stems_between_strings_are_not_read_as_ones():
+    """只有六线谱的谱子：符干画在谱线中间、被数字截成一段段，夹在两根弦线之间的一段不能当成 1；真的 1 照读。"""
+    notes = [(0, 0, 2, 3), (0, 0, 4, 2), (0, 3, 3, 1), (1, 2, 1, 1), (1, 2, 4, 5)]
+    stems = [(0, 0, 2, 6), (1, 2, 1, 6)]
+    gray, lines, spans = _tab_image(notes, stems=stems)
+    got = ocr.read_system(gray, lines, spans)
+    assert [sorted(b) for b in got] == [[(2, 3), (3, 1), (4, 2)], [(1, 1), (4, 5)]]
+
+
+def test_reads_light_gray_digits():
+    """浅灰色的数字（有的软件把第二声部画成灰色，压缩、模糊后更浅）也读得到。"""
+    notes = [(0, 0, 5, 0), (0, 2, 2, 3), (1, 1, 6, 2), (1, 4, 3, 12)]
+    gray, lines, spans = _tab_image(notes, ink=190)
+    got = ocr.read_system(gray, lines, spans)
+    assert [sorted(b) for b in got] == [[(2, 3), (5, 0)], [(3, 12), (6, 2)]]
 
 
 def test_disagreements_rules():
