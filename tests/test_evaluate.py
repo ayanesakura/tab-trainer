@@ -172,10 +172,11 @@ def test_refine_pass_reports_before_and_after(data_dir, monkeypatch):
     assert rep["summary"]["bar_exact_rate"] == round(2 / 3, 4)  # 精修之前
     assert rf["bar_exact_before"] == round(2 / 3, 4) and rf["bar_exact_after"] == round(2 / 3, 4)
     assert rf["fixed"] == 1 and rf["broke"] == 1 and rf["changed"] == 2 and rf["bars_checked"] == 3
-    assert rf["cost_usd"] == 0.15  # 替身每次核对 $0.05，和识别的费用分开记
+    assert rf["confirmed"] == 2 and rf["rejected"] == 0  # 提出的改动都再核对了一遍，结果一样
+    assert rf["cost_usd"] == 0.25  # 替身每次核对 $0.05（3 个小节 + 2 次确认），和识别的费用分开记
     assert rep["summary_refined"]["bars"] == 3
     row = next(r for r in rep["bars"] if r["bar"] == 2)
     assert row["refine_changed"] and row["cmp_refined"]["exact"] and not row["cmp"]["exact"]
     md = evaluate.to_markdown(rep)
-    assert "## 精修" in md and "改对 1 个，改坏 1 个" in md
+    assert "## 精修" in md and "改对 1 个，改坏 1 个" in md and "确认 2 个" in md
     assert evaluate.refine_bars_to_check(store.load(sid), [0]) == 3

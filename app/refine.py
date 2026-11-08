@@ -6,6 +6,7 @@
 
 - 核对哪些小节（pick）：只有图片 / PDF 曲子；跳过用户手改过的、确认过没问题的、识别失败按休止占位的、所在行正在识别的，
   以及整行当一个小节的（没检测到小节线，裁不出一个小节）。核对过、音没再变的（refine_key）不再核对；全都核对过时整首重来。
+- 确认（CONFIRM_CHANGES）：模型提出改动时再独立核对一两遍，有两遍提出一模一样的改动才改，否则不改、标成待核对（见 verify）。
 - 写回：每个小节核对完马上写回，但只在这个小节还在、rev 没变（期间用户没改过）、仍然该核对时才写，否则悄悄跳过。
   改了的小节：提示 / 问答 / 练习建议按“音变了”处理（staleness.refine_bar），改之前的内容记在 bar["refine"]，可以撤销（undo）。
 - 任务：activity kind = refine，期间照常能练、能改；进度 {stage: 精修, done, total}；全局名额和识别共用（recognize.run_queued），
@@ -36,6 +37,8 @@ log = logging.getLogger("tab_trainer.refine")
 PAD = 0.15  # 裁剪时小节左右各多带它宽度的 15%
 COST_PER_BAR = 0.055  # 评测里的平均费用（美元 / 小节，Opus、high）：确认框里的预估
 SECONDS_PER_BAR = 60  # 一次核对大约多久（几个小节并行）：确认框里的“约 N 分钟”
+# 模型提出改动时再独立核对一两遍，有两遍提出一模一样的改动才改（见 verify）
+CONFIRM_CHANGES = True
 
 
 # ---------------------------------------------------------------------------
@@ -94,20 +97,57 @@ def verify(
     meta: dict,
     previous: list[dict] | None,
     time_signature: list[int] | None = None,
-) -> tuple[dict, list[dict] | None]:
-    """核对一个小节。返回 (模型的回答, 改正后的事件)；没改、改出来格式不对或者和原来一样时事件是 None。"""
+    cancel: threading.Event | None = None,
+) -> dict:
+    """核对一个小节。返回 {out: 模型的回答, events: 要改成的事件（不改是 None）, status, note}：
+    - status = unchanged：模型说没问题（或者改出来的格式不对、和原来一样）；
+    - accepted：模型提出了改动、不做确认（CONFIRM_CHANGES 关着）直接采用；
+    - confirmed：再独立核对一遍（还是对着原来的读法），提出了一模一样的改动（第二遍不一样就核对第三遍，三遍里有两遍一样才算）；
+    - rejected：几遍提出的改动对不上，不改；note 是要加到这个小节“不确定”说明里的话，提醒用户对照原谱。
+    改动很少（约 1/20 的小节），确认多花的钱不多，能挡掉偶尔的改坏（评测：模糊的截图上把倚音当成了十六分音符）。
+    cancel：确认的几遍之间点了取消就不再核对（Cancelled）。"""
     img, span = crop(page, sysinfo, bar["region"])
-    out = claude.verify_bar(img, meta, span, bar["events"], previous, time_signature)
-    if not out.get("changed"):
-        return out, None
-    try:
-        events = clean_events(out.get("events") or [])
-    except ValueError as e:
-        log.info("refine: bar %s returned bad events: %s", bar.get("id"), e)
-        return out, None
-    if not events or same_events(events, bar["events"]):
-        return out, None
-    return out, events
+
+    def propose() -> tuple[dict, list[dict] | None]:
+        out = claude.verify_bar(img, meta, span, bar["events"], previous, time_signature)
+        if not out.get("changed"):
+            return out, None
+        try:
+            events = clean_events(out.get("events") or [])
+        except ValueError as e:
+            log.info("refine: bar %s returned bad events: %s", bar.get("id"), e)
+            return out, None
+        if not events or same_events(events, bar["events"]):
+            return out, None
+        return out, events
+
+    first = propose()
+    if first[1] is None:
+        return {"out": first[0], "events": None, "status": "unchanged", "note": ""}
+    if not CONFIRM_CHANGES:
+        return {"out": first[0], "events": first[1], "status": "accepted", "note": ""}
+    runs = [first]
+    for _ in range(2):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        runs.append(propose())
+        agreed = _agreed(runs)
+        if agreed:
+            return {"out": agreed[0], "events": agreed[1], "status": "confirmed", "note": ""}
+    diff = str(first[0].get("diff") or "").strip()
+    note = "精修时发现这个小节可能读错了，但几次核对的结果不一致，没有改，请对照原谱核对" + (
+        f"：{diff}" if diff else "。"
+    )
+    return {"out": first[0], "events": None, "status": "rejected", "note": note}
+
+
+def _agreed(runs: list[tuple[dict, list[dict] | None]]) -> tuple[dict, list[dict]] | None:
+    """几遍核对里有两遍提出了一模一样的改动：返回 (先提出它的那遍的回答, 改动)。"""
+    props = [(out, ev) for out, ev in runs if ev is not None]
+    for i, (out, ev) in enumerate(props):
+        if any(same_events(ev, other) for _, other in props[i + 1 :]):
+            return out, ev
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +198,7 @@ def _begin(s: dict, n: int) -> None:
 def _run(sid: str, ids: list[str], cancel: threading.Event, whole: bool) -> None:
     """跑完一次精修并收尾（结束提示、整首的结果、费用）。错误都在这里处理，不往外抛。"""
     meter = jobs.UsageMeter(None)
-    tally = {"checked": 0, "changed": 0, "failed": 0, "error": ""}
+    tally = {"checked": 0, "changed": 0, "doubtful": 0, "failed": 0, "error": ""}
     done = False
     try:
         meter = jobs.UsageMeter(config.new_llm())
@@ -167,6 +207,8 @@ def _run(sid: str, ids: list[str], cancel: threading.Event, whole: bool) -> None
         msg = f"精修完成：检查了 {tally['checked']} 个小节，改了 {tally['changed']} 个"
         if tally["changed"]:
             msg += "（小节卡片上能看到改了什么，也能撤销）"
+        if tally["doubtful"]:
+            msg += f"；{tally['doubtful']} 个小节几次核对的结果不一致，没有改，标成了待核对"
         if tally["failed"]:
             msg += f"；{tally['failed']} 个小节没核对成（{tally['error']}），可以再点“精修”重试"
         notice = ("warn" if tally["failed"] else "info", msg + "。")
@@ -198,7 +240,7 @@ def refine_bars(
     sid: str, ids: list[str], cancel: threading.Event, meter: jobs.UsageMeter, tally: dict
 ) -> None:
     """并行核对 ids 里的小节（每首最多 row_concurrency 个，所有曲子共用识别的全局名额），每个核对完就写回。
-    tally 累计 checked / changed / failed / error（取消时调用方照样能拿到已完成的部分）。取消：Cancelled。"""
+    tally 累计 checked / changed / doubtful（几遍核对对不上、标成待核对的）/ failed / error（取消时调用方照样能拿到已完成的部分）。取消：Cancelled。"""
     song = store.load(sid)
     bars = song["bars"]
     index = {b["id"]: i for i, b in enumerate(bars)}
@@ -224,6 +266,7 @@ def refine_bars(
                 song["meta"],
                 prev["events"] if prev else None,
                 bar.get("time_signature"),
+                cancel,
             )
 
         return recognize.run_queued(go, cancel)
@@ -235,7 +278,7 @@ def refine_bars(
             meter.charge(s)
             if result is None:
                 return
-            out, events = result
+            out, events = result["out"], result["events"]
             cur = next((b for b in s["bars"] if b.get("id") == bar["id"]), None)
             # 核对期间这个小节被改过（rev 变了）、被重新识别掉了、或者已经不该核对（确认过、正在识别）：不写
             if cur is None or int(cur.get("rev") or 0) != int(bar.get("rev") or 0) or not eligible(s, cur):
@@ -245,6 +288,12 @@ def refine_bars(
                 diff = str(out.get("diff") or "").strip()
                 staleness.refine_bar(s, cur, events, str(out.get("uncertain") or "").strip(), diff)
                 tally["changed"] += 1
+            elif result["note"] and result["note"] not in (cur.get("uncertain") or ""):
+                # 几遍核对对不上：不改音，标成待核对（不确定说明里写上第一遍说的问题）
+                cur["uncertain"] = " ".join(
+                    x for x in (str(cur.get("uncertain") or "").strip(), result["note"]) if x
+                )
+                tally["doubtful"] += 1
             cur["refine_key"] = notes_key(cur)
 
         meter.update(sid, apply)

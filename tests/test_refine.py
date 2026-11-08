@@ -75,11 +75,11 @@ def test_refine_rewrites_changed_bars_and_keeps_the_old_reading(client, sync_job
     assert v["notice"] == {"kind": "info", "msg": v["notice"]["msg"]}
     assert v["notice"]["msg"].startswith("精修完成：检查了 6 个小节，改了 2 个")
     assert v["activity"] is None and v["busy"] is False and v["progress"] is None
-    # 费用记到曲子上（替身每次核对 $0.05）
-    assert round(v["usage"]["cost_usd"] - before["usage"].get("cost_usd", 0), 4) == 0.3
+    # 费用记到曲子上（替身每次核对 $0.05）：6 个小节各一次，改了的 2 个再核对一次确认
+    assert round(v["usage"]["cost_usd"] - before["usage"].get("cost_usd", 0), 4) == 0.4
     calls = _verifies()
-    assert len(calls) == 6
-    assert sorted(c["previous"] for c in calls) == [False] + [True] * 5  # 第 1 小节前面没有小节
+    assert len(calls) == 8
+    assert sorted(c["previous"] for c in calls) == [False] + [True] * 7  # 第 1 小节前面没有小节
     for c in calls:
         a, z = c["span"]
         assert 0 < a < z < c["size"][0]  # 左右各多带了一点邻居
@@ -167,22 +167,59 @@ def test_cancel_stops_the_remaining_bars(client, sync_jobs, monkeypatch):
     sid = _song()
     monkeypatch.setattr(config.settings, "row_concurrency", 1)
     cost = store.load(sid)["usage"].get("cost_usd", 0)
-    fix = change_fret(0, 9)
 
     def verify(img, meta, span, events, previous, ts):
         jobs.jobs.cancel(sid)  # 核对第一个小节时用户点了取消
-        return fix(img, meta, span, events, previous, ts)
+        return {"diff": "", "changed": False, "events": events, "uncertain": ""}
 
     monkeypatch.setattr(FakeClaude, "verify_result", verify)
     client.post(f"/api/songs/{sid}/refine")
     s = store.load(sid)
     assert len(_verifies()) == 1  # 后面的不再发请求
-    assert s["bars"][0]["refine"]  # 已经核对完的照常写回
+    assert s["bars"][0]["refine_key"] == notes_key(s["bars"][0])  # 已经核对完的照常写回
     assert s["activity"] is None and s["progress"] is None
-    assert s["notice"]["msg"] == "精修已取消：检查了 1 个小节，改了 1 个，改好的会保留。"
+    assert s["notice"]["msg"] == "精修已取消：检查了 1 个小节，改了 0 个，改好的会保留。"
     assert "refined" not in s  # 没做完整首
     assert round(s["usage"]["cost_usd"] - cost, 4) == 0.05  # 发出去的请求照样记账
     assert jobs.jobs.running(sid) is False
+
+
+def test_a_change_is_only_made_when_two_reads_agree(client, sync_jobs, monkeypatch):
+    """模型提出改动时再独立核对：两遍提出一模一样的改动才改；三遍都对不上就不改，标成待核对。"""
+    sid = _song()
+    proposals = {1: iter([7, 8, None]), 2: iter([5, None, 5])}  # 1 品的小节三遍都不一样；2 品的第一、三遍一样
+
+    def verify(img, meta, span, events, previous, ts):
+        fret = events[0]["notes"][0]["fret"]
+        new = next(proposals[fret], None) if fret in proposals else None
+        if new is None:
+            return {"diff": "", "changed": False, "events": events, "uncertain": ""}
+        fixed = [{**e, "notes": [{**n, "fret": new} for n in e["notes"]]} for e in events]
+        return {"diff": f"应是 {new} 品", "changed": True, "events": fixed, "uncertain": ""}
+
+    monkeypatch.setattr(config.settings, "row_concurrency", 1)  # 按顺序核对，两行同样品位的小节各用一次 iter
+    monkeypatch.setattr(FakeClaude, "verify_result", verify)
+    client.post(f"/api/songs/{sid}/refine")
+    s = store.load(sid)
+    b1, b2 = s["bars"][1], s["bars"][2]
+    assert b1["events"][0]["notes"][0]["fret"] == 1 and "refine" not in b1  # 没改
+    assert "几次核对的结果不一致" in b1["uncertain"] and "应是 7 品" in b1["uncertain"]
+    v = client.get(f"/api/songs/{sid}").json()
+    assert v["bars"][1]["needs_review"] is True  # 标成待核对
+    assert (
+        b2["events"][0]["notes"][0]["fret"] == 5 and b2["refine"]["diff"] == "应是 5 品"
+    )  # 第三遍和第一遍一样
+    assert (
+        len([c for c in _verifies() if c["verify"][0][0]["fret"] == 1]) == 4
+    )  # 第 2 行的 1 品小节：一遍就说没问题
+    assert "1 个小节几次核对的结果不一致" in s["notice"]["msg"]
+
+    monkeypatch.setattr(refine, "CONFIRM_CHANGES", False)  # 关掉确认：第一遍提出的改动直接采用
+    store.update(sid, lambda x: x["bars"][4].pop("refine_key"))
+    proposals[1] = iter([9])
+    FakeClaude.calls.clear()
+    client.post(f"/api/songs/{sid}/refine")
+    assert store.load(sid)["bars"][4]["events"][0]["notes"][0]["fret"] == 9 and len(_verifies()) == 1
 
 
 def test_a_failing_bar_does_not_stop_the_others(client, sync_jobs, monkeypatch):

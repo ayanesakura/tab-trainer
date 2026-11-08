@@ -287,7 +287,7 @@ table.tune td b { font-variant-numeric: tabular-nums; }
   .side { position: static; max-height: none; overflow: visible; }
   .bar-card .card-h { position: static; }
   .bar-card .body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
-  .bar-card .body > .tags, .bar-card .body > .tip, .bar-card .body > .warns, .bar-card .body > .review-row, .bar-card .body > .practice-line, .bar-card .body > .fix { grid-column: 1 / -1; }
+  .bar-card .body > .tags, .bar-card .body > .tip, .bar-card .body > .warns, .bar-card .body > .refine-row, .bar-card .body > .review-row, .bar-card .body > .practice-line, .bar-card .body > .fix { grid-column: 1 / -1; }
   .bar-card .body > .paper { grid-column: 1; }
   .bar-card .body > .coach { grid-column: 2; border-top: 0; padding-top: 0; }
   .bar-card .body > .paper[hidden] + .coach { grid-column: 1 / -1; }
@@ -312,6 +312,12 @@ table.tune td b { font-variant-numeric: tabular-nums; }
 .chord-diagram .cd-dot { fill: var(--accent); }
 .chord-diagram .cd-open { fill: none; stroke: var(--fg-2); stroke-width: 1; }
 .review-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* 精修改过的小节：改了什么 + 撤销 */
+.refine-row { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--accent-soft); font-size: var(--fs-1); }
+.refine-diff { display: flex; gap: 6px; align-items: flex-start; white-space: pre-wrap; }
+.refine-diff .ic { color: var(--accent); margin-top: 2px; }
+.refine-acts { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.refine-acts .hint { overflow-wrap: anywhere; }
 .warns.reviewed { opacity: .6; }
 #lyricLayer { position: absolute; inset: 0; pointer-events: none; }
 #lyricLayer .lyric { position: absolute; transform: translateX(-2px); font-size: 13px; line-height: 16px; color: var(--fg); white-space: nowrap; }

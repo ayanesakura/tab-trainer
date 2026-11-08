@@ -249,6 +249,7 @@ def run(
                     refine_checked=r is not None and not r["error"],
                     refine_changed=bool(r and r["events"] is not None),
                     refine_diff=(r or {}).get("diff", ""),
+                    refine_status=(r or {}).get("status", ""),
                     refine_error=(r or {}).get("error", ""),
                 )
             rows.append(row)
@@ -268,6 +269,10 @@ def run(
                 "fixed": sum(1 for r in rows if not r["cmp"]["exact"] and r["cmp_refined"]["exact"]),
                 "broke": sum(1 for r in rows if r["cmp"]["exact"] and not r["cmp_refined"]["exact"]),
                 "errors": sum(1 for r in rows if r["refine_error"]),
+                # 模型提出的改动：再核对后确认了几个、几遍对不上没改几个（refine.CONFIRM_CHANGES）
+                "confirm_changes": refine.CONFIRM_CHANGES,
+                "confirmed": sum(r["refine_status"] == "confirmed" for r in rows),
+                "rejected": sum(r["refine_status"] == "rejected" for r in rows),
                 "bar_exact_before": round(before / n, 4) if n else 0.0,
                 "bar_exact_after": round(after / n, 4) if n else 0.0,
             },
@@ -311,7 +316,7 @@ def run_refine(
 ) -> tuple[dict[tuple[int, int], dict], dict]:
     """对识别结果做一遍精修（和应用里一样：app/refine.verify，按识别出的小节位置裁图，上一小节的识别结果当上下文）。
     只核对要评分的小节（有 eval_bars 时）；用单独的模型客户端，费用分开记。
-    返回 ({(行号, 行内序号): {events（没改是 None）, diff, error}}, {cost_usd, usage, seconds})。"""
+    返回 ({(行号, 行内序号): {events（没改是 None）, diff, status（见 refine.verify）, error}}, {cost_usd, usage, seconds})。"""
     claude = Claude(cfg)
     meta = truth["meta"]
     by_sys: dict[int, list[dict]] = {}
@@ -342,12 +347,13 @@ def run_refine(
         si, k, b, prev, ts = job
         sysinfo = truth["systems"][si]
         try:
-            out, events = refine.verify(
+            r = refine.verify(
                 claude, pages[sysinfo["page"]], sysinfo, b, meta, prev["events"] if prev else None, ts
             )
         except Exception as e:  # noqa: BLE001 - 一个小节失败照样出报告
-            return (si, k), {"events": None, "diff": "", "error": friendly(e)}
-        return (si, k), {"events": events, "diff": str(out.get("diff") or ""), "error": ""}
+            return (si, k), {"events": None, "diff": "", "status": "error", "error": friendly(e)}
+        diff = str(r["out"].get("diff") or "")
+        return (si, k), {"events": r["events"], "diff": diff, "status": r["status"], "error": ""}
 
     started = time.time()
     with ThreadPoolExecutor(concurrency) as pool:
@@ -438,6 +444,11 @@ def to_markdown(rep: dict, worst: int = 12) -> str:
             f"（核对 {rf['bars_checked']} 个，改了 {rf['changed']} 个：改对 {rf['fixed']} 个，改坏 {rf['broke']} 个"
             + (f"，{rf['errors']} 个核对失败" if rf["errors"] else "")
             + "）",
+            (
+                f"- 提出的改动再核对：确认 {rf['confirmed']} 个，几遍对不上没改 {rf['rejected']} 个"
+                if rf.get("confirm_changes")
+                else "- 提出的改动没有再核对（CONFIRM_CHANGES 关着）"
+            ),
             (
                 f"- 音符 F1：{s['notes']['f1']:.1%} → {sr['notes']['f1']:.1%}；"
                 f"节奏 F1：{s['rhythm']['f1']:.1%} → {sr['rhythm']['f1']:.1%}"
