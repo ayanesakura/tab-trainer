@@ -74,24 +74,37 @@ def create_song(uploads: list[tuple[str, bytes]], title: str = "") -> str:
     if any(score_ext(n) for n, _ in uploads):
         return _create_score_song(uploads, title)
     sid = store.new_id()
-    d = store.song_dir(sid)
-    try:
-        pages = save_pages(uploads, d / "pages")
-    except BaseException:
-        shutil.rmtree(d, ignore_errors=True)
-        raise
-    if not pages:
-        shutil.rmtree(d, ignore_errors=True)
-        raise Invalid("文件里没有可用的页面")
-    song = new_song(
-        sid,
-        "pdf" if any(_is_pdf(n, data) for n, data in uploads) else "image",
-        title=title.strip(),
-        progress={"stage": "排队中", "done": 0, "total": 0},
-        pages=pages,
-    )
-    store.save(song, create=True)
+    with _staged(sid) as tmp:
+        pages = save_pages(uploads, tmp / "pages")
+        if not pages:
+            raise Invalid("文件里没有可用的页面")
+        song = new_song(
+            sid,
+            "pdf" if any(_is_pdf(n, data) for n, data in uploads) else "image",
+            title=title.strip(),
+            progress={"stage": "排队中", "done": 0, "total": 0},
+            pages=pages,
+        )
+        _write_new(tmp, song)
     return sid
+
+
+@contextmanager
+def _staged(sid: str) -> Iterator:
+    """新曲子先在临时目录里准备好（页面 / 原文件、song.json），最后改名成曲子目录：中途出错或崩溃不会留下
+    没有 song.json 的曲子目录（曲库里看不见、也不会被清理）。临时目录启动时会被清掉（store.clean_temp_dirs）。"""
+    tmp = store.staging_dir()
+    try:
+        yield tmp
+        if not store.install(tmp, sid):
+            raise RuntimeError(f"曲子目录已经存在：{sid}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _write_new(tmp, song: dict) -> None:
+    song["rev"] = int(song.get("rev") or 0) + 1  # 和 store.save 一样算一次保存
+    store.write_song(tmp, song)
 
 
 def check_upload_sizes(uploads: list[tuple[str, bytes]]) -> None:
@@ -226,19 +239,19 @@ def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
             f"“{name.rsplit('/', 1)[-1]}”不是有效的 Guitar Pro / MusicXML 文件（文件内容和扩展名对不上），可能已损坏或只是改了扩展名"
         )
     sid = store.new_id()
-    d = store.song_dir(sid)
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"source{ext}").write_bytes(data)
-    stem = name.rsplit("/", 1)[-1][: -len(ext)]
-    song = new_song(
-        sid,
-        next(k for k, exts in SCORE_FILES.items() if ext in exts),
-        source=f"source{ext}",
-        title=title.strip() or stem,
-        status="imported",  # 文件在浏览器里第一次成功解析后才变成 ready（见 set_derived / import_failed）
-        track=0,
-    )
-    store.save(song, create=True)
+    with _staged(sid) as tmp:
+        (tmp / "pages").rmdir()  # GP / MusicXML 没有页面
+        (tmp / f"source{ext}").write_bytes(data)
+        stem = name.rsplit("/", 1)[-1][: -len(ext)]
+        song = new_song(
+            sid,
+            next(k for k, exts in SCORE_FILES.items() if ext in exts),
+            source=f"source{ext}",
+            title=title.strip() or stem,
+            status="imported",  # 文件在浏览器里第一次成功解析后才变成 ready（见 set_derived / import_failed）
+            track=0,
+        )
+        _write_new(tmp, song)
     return sid
 
 
