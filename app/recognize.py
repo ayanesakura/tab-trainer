@@ -38,7 +38,9 @@ log = logging.getLogger("tab_trainer.recognize")
 
 LABEL_STRINGS = True  # 在裁剪图上标弦号（见 label_strings）
 OCR_CHECK = True  # 用本机数字识别校对 AI 读出的弦和品（见 app/ocr.py、ocr_disagreements）
-SPLIT_ROWS = False  # 太宽的行切成两半识别（见 _should_split / _transcribe_halves）；评测后再决定默认值
+# 太宽的行切成两半识别（见 _should_split / _transcribe_halves）。评测：难的指弹行两次平均 94.7%（不切三次平均 90.6%），
+# 合成弹唱谱 99%（不切约 98%）；费用多约 23%，耗时不变
+SPLIT_ROWS = True
 
 
 # ---------------------------------------------------------------------------

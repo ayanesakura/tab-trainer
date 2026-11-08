@@ -15,6 +15,7 @@ def data_dir(tmp_path, monkeypatch):
     FakeClaude.tab_lines = []
     monkeypatch.setattr(recognize, "OCR_CHECK", False)  # 合成谱子上的数字和替身模型的结果对不上；OCR 单独测
     monkeypatch.setattr(store, "STRICT", True)  # 每次写盘都检查不变量（model.problems）
+    monkeypatch.setattr(recognize, "SPLIT_ROWS", False)  # 合成谱子的行也够宽，切半会改变调用次数；切半单独测
     return tmp_path
 
 
