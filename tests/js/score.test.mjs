@@ -275,3 +275,16 @@ test('rolled chords keep their direction (wavy arrow toward string 1 = low to hi
   assert.deepEqual(back.bars[0].events.map(e => e.strum), ['down', 'up']);
   assert.deepEqual(norm(back.bars), norm(song.bars));
 });
+
+test('chords and lyrics on a rest or a tied beat are kept as an event with no new notes', () => {
+  const score = parse(String.raw`.
+\track "G" { instrument 25 }
+\staff {score tabs}
+\tuning (E4 B3 G3 D3 A2 E2)
+(0.1 1.2 0.3).2{ch "C"} r.4{ch "G"} (3.1 0.2 0.3).8 r.8 | (3.1 0.2 0.3).2 (3.1{t} 0.2{t} 0.3{t}).4{ch "Em" lyrics "啊"} (0.1 0.2 0.3).4`);
+  const d = deriveSong(score, 0);
+  const show = b => b.events.map(e => [e.dur, e.notes.length, e.chord || '', (e.lyrics || []).join('')]);
+  // 第一小节：休止上的 G 保留成空事件；最后那个没写和弦的休止照旧并进前一个音
+  assert.deepEqual(show(d.bars[0]), [['2', 3, 'C', ''], ['1', 0, 'G', ''], ['1', 3, '', '']]);
+  assert.deepEqual(show(d.bars[1]), [['2', 3, '', ''], ['1', 0, 'Em', '啊'], ['1', 3, '', '']]);
+});

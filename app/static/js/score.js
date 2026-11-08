@@ -22,7 +22,8 @@ export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数�
 // 6：GBK 乱码判断收紧（Canção、Größe 这类西文曲名不再被误当成乱码），只看 GP3–5 / GPX 文件
 // 8：弹唱谱：拍上的和弦名（chord）、扫弦方向（strum）、小节用到的和弦指法（shapes）
 // 9：歌词（lyrics，每段一个字符串）
-export const DERIVE_VERSION = 9;
+// 10：写着和弦名或歌词的休止 / 延音拍保留成没有新音的事件（原来并进前一个音，和弦、歌词丢了）
+export const DERIVE_VERSION = 10;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -332,8 +333,10 @@ export function deriveSong(score, trackIndex = 0) {
         }
       }
     }
-    // 只保留有新音的起拍（以及小节开头的休止）
-    const ticks = [...byTick.keys()].filter(t => byTick.get(t).length || t === 0).sort((a, b) => a - b);
+    // 只保留有新音的起拍、小节开头，以及写着和弦名或歌词的休止 / 延音（连音线延续的音）：
+    // 这种拍记成没有新音的事件（同小节开头被延续的音一样），和弦、歌词才不会丢。别的休止并进前一个音
+    const marked = t => { const i = beatInfo.get(t); return !!(i && (i.chord || i.lyrics)); };
+    const ticks = [...byTick.keys()].filter(t => byTick.get(t).length || t === 0 || marked(t)).sort((a, b) => a - b);
     if (!ticks.length || ticks[0] !== 0) {
       ticks.unshift(0);
       byTick.set(0, byTick.get(0) || []);

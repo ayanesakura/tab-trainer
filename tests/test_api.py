@@ -394,12 +394,11 @@ def test_job_and_file_routes_over_http(data_dir, sync_jobs):
     assert c.get(f"/api/songs/{gp}").json()["is_score"]
 
 
-def test_confirming_a_bar_clears_needs_review_until_its_notes_change(data_dir):
+def test_confirming_a_bar_clears_needs_review_until_its_notes_change(data_dir, sync_jobs):
     c = TestClient(main.app, base_url="http://127.0.0.1:8765")
-    sid = c.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
+    sid = c.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]  # 上传后同步识别完
     from app import store
 
-    recognize.run_parse(sid)
     store.update(sid, lambda s: s["bars"][0].update(uncertain="第 3 拍看不清"))
     bar = c.get(f"/api/songs/{sid}").json()["bars"][0]
     assert bar["needs_review"] and not bar["reviewed"] and "reviewed_rev" not in bar
