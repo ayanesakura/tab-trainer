@@ -20,8 +20,10 @@
 .view.narrow { max-width: 1040px; margin: 0 auto; padding-top: var(--sp-3); }
 .practice-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-w); gap: var(--sp-4); align-items: start; }
 .main-col { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
-.notices { display: flex; flex-direction: column; gap: var(--sp-2); }
-.notices .notice { align-items: center; padding: 5px 12px; min-height: 34px; }
+/* 几条通知合成一张卡片，中间细线分开（不再是一摞独立的卡片） */
+.notices { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.notices .notice { align-items: center; padding: 5px 12px; min-height: 36px; border: 0; border-radius: 0; }
+.notices .notice + .notice { border-top: 1px solid var(--line-2); }
 .notices .notice > .dot, .notices .notice > .spinner { margin-top: 0; }
 .notices .n-acts { margin: -2px -6px -2px 0; }
 /* 长的备注默认只显示一行，点一下展开 */
@@ -46,7 +48,7 @@
 .status .l2 { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .grp { display: flex; align-items: center; gap: var(--sp-1); flex: none; }
 .bpm { color: var(--muted); font-size: var(--fs-1); min-width: 62px; white-space: nowrap; }
-.bpm b { color: var(--fg); font-size: var(--fs-3); font-variant-numeric: tabular-nums; }
+.bpm b { color: var(--fg); font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; vertical-align: -1px; } /* 速度是控制条上最常看的数：字号大一档 */
 #bpm { width: 120px; }
 .loop-label { font-weight: 500; font-variant-numeric: tabular-nums; min-width: 92px; text-align: center; white-space: nowrap; }
 /* 起止小节：浅底的小输入框，一看就知道能点进去改 */
@@ -356,3 +358,7 @@ table.tune td b { font-variant-numeric: tabular-nums; }
 .warns.reviewed { opacity: .6; }
 #lyricLayer { position: absolute; inset: 0; pointer-events: none; }
 #lyricLayer .lyric { position: absolute; transform: translateX(-2px); font-size: 13px; line-height: 16px; color: var(--fg); white-space: nowrap; }
+
+/* 小节卡片标题里的小节号、指板图例里的“?”（悬停看说明） */
+#barNo { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; margin: 0 2px; }
+.fb-legend .hint { cursor: help; }

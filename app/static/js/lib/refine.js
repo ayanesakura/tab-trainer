@@ -9,12 +9,12 @@ export function refineConfirm(est, title = '') {
   const cost = Number(est.cost_usd || 0).toFixed(2);
   return {
     title: title ? `精修整首“${title}”？` : '精修整首曲子？',
-    text: `会把 ${est.bars} 个小节逐个放大，让 AI 对照原谱逐拍核对；改了的小节会标出改了什么，可以撤销。手改过、确认过没问题的小节不核对（可以在小节卡片上单独精修）。\n`
-      + `预计约 $${cost}，约 ${est.minutes || 1} 分钟。期间可以照常练习，随时可以取消。`,
+    text: `AI 逐个放大核对 ${est.bars} 个小节，约 $${cost}，约 ${est.minutes || 1} 分钟。\n`
+      + '改动会标出来、可撤销；手改过和已确认的小节跳过。期间可以照常练习。',
     ok: '开始精修',
   };
 }
-export const NO_REFINE = '没有可以精修的小节（手改过、确认过没问题的小节不再核对）';
+export const NO_REFINE = '没有要精修的小节（手改过和已确认的跳过）';
 
 /** 费用：$0.2、$0.8、$1.25（不补零） */
 const usd = x => `$${Number(Number(x || 0).toFixed(2))}`;

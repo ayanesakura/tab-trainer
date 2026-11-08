@@ -37,7 +37,7 @@ function render() {
   $('askBtn').disabled = busy;
   const otherN = busy && !mine ? (s.bars.find(b => b.id === pending.bar) || {}).n || '' : '';
   $('askBtn').title = otherN ? `正在回答第 ${otherN} 小节的问题，回答完再问` : '';
-  setButton($('askBtn'), mine ? '<span class="spinner"></span>回答中…' : busy ? `<span class="spinner"></span>等第 ${otherN} 小节` : UI.icon('sparkle') + '问 AI');
+  setButton($('askBtn'), mine ? '<span class="spinner"></span>回答中…' : busy ? `<span class="spinner"></span>等第 ${otherN} 小节` : '提问');
 }
 
 // 收到一段回答：只改正在回答的那一条（不重画整个列表）；它不在屏幕上（看的是别的小节）就只记下
