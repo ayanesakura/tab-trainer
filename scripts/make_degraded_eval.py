@@ -36,6 +36,9 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=1)
     a = ap.parse_args()
 
+    # 只覆盖这个脚本自己生成的评测曲：目标写错（比如和原曲同名）时不能把别的曲子删掉
+    if a.dst == a.src or not a.dst.startswith("eval-d-"):
+        raise SystemExit(f"目标 id 要以 eval-d- 开头、且和原曲不同：{a.dst}")
     song = store.load(a.src)
     out = copy.deepcopy(song)
     dst = store.SONGS / a.dst
