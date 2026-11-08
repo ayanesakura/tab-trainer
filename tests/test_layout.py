@@ -395,3 +395,19 @@ def test_upper_rows_own_stems_and_beams_stay_with_it():
     beam_bottom = t1 + 60 + stem + 2
     assert a["bottom"] >= beam_bottom and b["top"] >= beam_bottom  # 横梁完整地在第一行里
     assert b["top"] <= t2 - 3
+
+
+def test_narrow_first_bar_after_a_single_barline_is_kept():
+    """行首第一小节很窄（只有一个全音符和弦，5 个线距）、后面是普通的单小节线：是小节，不能当成谱号那一段丢掉。"""
+    sp = 14
+    img = Image.new("L", (1200, 400), 255)
+    d = ImageDraw.Draw(img)
+    tab_top = 150
+    for i in range(6):
+        d.line([(60, tab_top + i * sp), (1140, tab_top + i * sp)], fill=170)
+    for x in (60, 130, 600, 1140):
+        d.line([(x, tab_top), (x, tab_top + 70)], fill=40, width=2)
+    d.text((95, tab_top + 10), "3", fill=0)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3]
+    assert abs(r["systems"][0]["bars"][0][0] - 60) <= 3
