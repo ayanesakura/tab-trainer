@@ -47,6 +47,9 @@ test('api：成功返回 JSON，JSON 请求体带 Content-Type', async () => {
 test('api：错误统一成 ApiError(detail)，非 JSON 的错误体也不崩', async () => {
   globalThis.fetch = reply(409, '{"detail":"曲子在别处改过了"}');
   await assert.rejects(api.get('/a'), e => e instanceof api.ApiError && e.message === '曲子在别处改过了' && e.status === 409);
+  // 有任务在跑（423 Locked）和 409 一样：把服务器的说明原样给出来
+  globalThis.fetch = reply(423, '{"detail":"这首曲子正在识别，完成后再调整页面"}');
+  await assert.rejects(api.upload('/a', []), e => e.message === '这首曲子正在识别，完成后再调整页面' && e.status === 423);
   globalThis.fetch = reply(400, '{"detail":[{"msg":"标题太长"}]}');
   await assert.rejects(api.post('/a', {}), { message: '标题太长' });
   globalThis.fetch = reply(502, '<html>Bad gateway</html>', 'text/html');
@@ -84,7 +87,7 @@ test('api：poll 出错退避重试，while 为假时停下', async () => {
 test('api：transient 只把连不上和 502 / 503 / 504 当成可以自动重试', () => {
   assert.equal(api.transient(new api.ApiError('连不上', 0)), true);
   for (const st of [502, 503, 504]) assert.equal(api.transient(new api.ApiError('x', st)), true, st);
-  for (const st of [400, 404, 409, 500]) assert.equal(api.transient(new api.ApiError('x', st, { detail: 'x' })), false, st);
+  for (const st of [400, 404, 409, 423, 500]) assert.equal(api.transient(new api.ApiError('x', st, { detail: 'x' })), false, st);
 });
 
 test('api：poll stop() 之后 now() 重新开始，页面从后台回来照样补一次（监听只挂一个）', async () => {
