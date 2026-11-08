@@ -73,17 +73,24 @@ def _seed():
 
 def _gp_bytes() -> bytes:
     """用仓库里的 alphaTab 把一小段 alphaTex 导出成 Guitar Pro 7 文件。"""
+    return gp_from_tex(
+        '\\title "E2E GP"\n.\n\\track "Guitar" { instrument 25 }\n\\staff {score tabs}\n'
+        "0.6.4 2.5.4 2.4.4 1.3.4 | 0.2.2 1.1.2 | 3.1.1"
+    )
+
+
+def gp_from_tex(tex: str) -> bytes:
+    """alphaTex 文本 → Guitar Pro 7 文件（用仓库里的 alphaTab 导出）。"""
+    import base64
+
     code = """
 import * as at from '__ROOT__/app/static/vendor/alphatab/alphaTab.core.min.mjs';
 const s = new at.Settings(); const imp = new at.importer.AlphaTexImporter();
-imp.initFromString('\\\\title "E2E GP"\\n.\\n\\\\track "Guitar" {{ instrument 25 }}\\n\\\\staff {{score tabs}}\\n0.6.4 2.5.4 2.4.4 1.3.4 | 0.2.2 1.1.2 | 3.1.1', s);
+imp.initFromString(process.argv[1], s);
 process.stdout.write(Buffer.from(new at.exporter.Gp7Exporter().export(imp.readScore(), s)).toString('base64'));
-""".format()
-    code = code.replace("__ROOT__", str(ROOT))
-    import base64
-
+""".replace("__ROOT__", str(ROOT))
     out = subprocess.run(
-        ["node", "--input-type=module", "-e", code], capture_output=True, text=True, check=True
+        ["node", "--input-type=module", "-e", code, tex], capture_output=True, text=True, check=True
     )
     return base64.b64decode(out.stdout)
 

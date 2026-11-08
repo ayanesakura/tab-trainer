@@ -147,3 +147,32 @@ def test_confirming_a_doubtful_bar(server, trainer):
         assert not b.errors, b.errors
     finally:
         store.delete(sid)
+
+
+def test_gp_lyrics_on_the_practised_track_that_is_not_track_0(server, trainer):
+    """GP 文件里练的音轨不是第 0 个（前面有贝斯）：歌词按画出来的那个音轨找，下面留出地方、写一次。"""
+    from app import songs
+    from tests.e2e.conftest import gp_from_tex
+
+    tex = r"""\title "Two"
+.
+\track "Bass" { instrument 33 }
+\staff {tabs}
+\tuning (G2 D2 A1 E1)
+0.4.4 0.4.4 0.4.4 0.4.4 | 0.4.4 0.4.4 0.4.4 0.4.4
+\track "Gtr" { instrument 25 }
+\staff {score tabs}
+\tuning (E4 B3 G3 D3 A2 E2)
+0.1.4{lyrics "la"} 1.2.4{lyrics "li"} 0.3.4 2.4.4 | 0.1.4{lyrics "lo"} 1.2.4 0.3.4 2.4.4
+"""
+    sid = songs.create_song([("two.gp", gp_from_tex(tex))])
+    try:
+        b = trainer(sid)
+        assert b.js("tt.api.tracks.map(t => t.index)") == [1]
+        b.wait_for("document.querySelectorAll('#lyricLayer .lyric').length > 0", timeout=10)
+        texts = b.js("[...document.querySelectorAll('#lyricLayer .lyric')].map(e => e.textContent)")
+        assert texts == ["la", "li", "lo"]  # 五线谱 + 六线谱两行谱表，歌词也只写一次
+        assert b.js("tt.api.settings.display.systemPaddingBottom") > 10  # 下面留了写歌词的地方
+        assert not b.errors, b.errors
+    finally:
+        server["store"].delete(sid)

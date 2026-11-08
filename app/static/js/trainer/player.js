@@ -299,7 +299,9 @@ export function barBox(bi) {
 // 歌词：alphaTab 只看六线谱时把歌词画在谱表上方（和弦图上面），看着像是上一行的；这里自己画在每行六线谱的下方，
 // 对准各拍的位置，多段歌词一段一行
 const LYRIC_LINE = 20;
-const beatsOf = score => score.tracks[0].staves[0].bars.flatMap(b => b.voices.flatMap(v => v.beats));
+// 画出来的音轨：GP 文件可能有好几个音轨，api.load(bytes, [track]) 只画练的那一个（不一定是第 0 个）
+const shownTrack = score => (api && api.score === score && api.tracks[0]) || score.tracks[(get('view.source') || {}).track || 0] || score.tracks[0];
+const beatsOf = score => shownTrack(score).staves[0].bars.flatMap(b => b.voices.flatMap(v => v.beats));
 function lyricLines(score) {
   let n = 0;
   for (const b of beatsOf(score)) if (b.lyrics) n = Math.max(n, b.lyrics.filter(Boolean).length && b.lyrics.length);
@@ -311,12 +313,14 @@ function drawLyrics() {
   layer.replaceChildren();
   const look = api && (api.boundsLookup || (api.renderer && api.renderer.boundsLookup)), surface = $('score').querySelector('.at-surface');
   if (!look || !surface || !api.score || !lyricLines(api.score)) return;
+  const seen = new Set(); // 五线谱 + 六线谱都显示时同一个拍在两行谱表里各有一份位置：歌词只写一次
   for (const sys of look.staffSystems) {
     // 一行的范围包括下面留的空（systemPaddingBottom）：歌词从这段空白的顶上开始写
     const bottom = surface.offsetTop + sys.realBounds.y + sys.realBounds.h - api.settings.display.systemPaddingBottom;
     for (const mb of sys.bars) for (const bar of mb.bars) for (const bb of bar.beats) {
       const lyr = bb.beat.lyrics;
-      if (!lyr || bb.beat.voice.index !== 0) continue;
+      if (!lyr || bb.beat.voice.index !== 0 || seen.has(bb.beat)) continue;
+      seen.add(bb.beat);
       lyr.forEach((text, k) => {
         if (!text) return;
         const el = document.createElement('span');
