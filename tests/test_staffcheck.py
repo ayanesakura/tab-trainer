@@ -127,3 +127,13 @@ def test_parenthesized_columns_do_not_take_part():
     cols = [sc.Column(100, frozenset({1}), False), sc.Column(200, frozenset({6}), True)]
     r = sc.check_bar(cols, [], [_ev((1, 0))], STD, 0, tol=0, sp=18)
     assert not r["extra_cols"] and r["cols"] == 1
+
+
+def test_hints_name_the_beat_and_what_the_image_shows():
+    cols = _cols((100, {1}), (200, {6}), (300, {6}))
+    heads = [sc.Head(100, 0, 7, 10, 8)]  # E5（记谱）= E4
+    events = [_ev((2, 5), dur="1"), _ev((6, 3), dur="3")]  # 2 弦 5 品也是 E4，但弦不对
+    r = sc.check_bar(cols, heads, events, STD, 0, tol=15, sp=18)
+    hs = sc.hints(r, events)
+    assert "第 1 拍：图上这一列 1 弦有数字，你写的是 2 弦" in hs
+    assert any("图上还有一列 6 弦的数字" in h for h in hs)

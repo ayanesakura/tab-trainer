@@ -91,6 +91,9 @@ COMBOS = {
     "any (U|W|A|B2|C)": lambda x: (
         SIGNALS["U|W"](x) or SIGNALS["A staff>=1"](x) or SIGNALS["B sf>=2"](x) or SIGNALS["C any"](x)
     ),
+    "none of U|W|A|C (clean, no OMR)": lambda x: (
+        not (SIGNALS["U|W"](x) or SIGNALS["A staff>=1"](x) or SIGNALS["C any"](x))
+    ),
     "none of U|W|A|B1|C (=clean)": lambda x: (
         not (SIGNALS["U|W"](x) or SIGNALS["A staff>=1"](x) or SIGNALS["B sf>=1"](x) or SIGNALS["C any"](x))
     ),

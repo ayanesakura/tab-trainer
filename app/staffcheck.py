@@ -285,8 +285,9 @@ def check_bar(
     tol: float,
     prev_events: list[dict] | None = None,
     sp: float = 0.0,
+    span: tuple[float, float] | None = None,
 ) -> dict:
-    """按起拍逐个比。sp：六线谱线距。cols：这个小节里六线谱的数字列（从左到右）；heads：这个小节的符头（没有五线谱时为空）。
+    """按起拍逐个比。sp：六线谱线距；span：小节的横向范围（对齐时位置差得远的稍微加一点代价，分不出时按位置挑）。cols：这个小节里六线谱的数字列（从左到右）；heads：这个小节的符头（没有五线谱时为空）。
 
     AI 的起拍（有音的事件）按先后和图上的数字列做序列对齐（动态规划）：一对的代价是弦对不上的个数
     （图上这一列哪几根弦有数字 vs AI 这个起拍用了哪几根弦），加上这一列的符头里 AI 这个起拍解释不了的个数；
@@ -317,6 +318,18 @@ def check_bar(
 
     prev_all = [note_pitches(nn, open_midi, capo) for e in prev_events or [] for nn in e.get("notes") or []]
 
+    # 起拍在小节里的位置（按时值）和数字列的位置（按横坐标）都折成 0–1
+    from fractions import Fraction
+
+    t, starts = Fraction(0), []
+    for e in events or []:
+        if e.get("notes"):
+            starts.append(t)
+        t += Fraction(str(e["dur"]))
+    t_frac = [float(x / t) if t else 0.0 for x in starts]
+    a, b = span if span else ((live[0].x - sp, live[-1].x + sp) if live else (0.0, 1.0))
+    x_frac = [(c.x - a) / (b - a) if b > a else 0.0 for c in live]
+
     def pair_cost(i: int, j: int) -> tuple[int, int]:
         ss = {n["string"] for n in onsets[i]}
         smiss = len(ss ^ set(live[j].strings))
@@ -336,7 +349,8 @@ def check_bar(
                 continue
             if i < n and j < m:
                 sm, hm = pair_cost(i, j)
-                v = dp[i][j] + sm + hm
+                # 一对再差也比“跳过一列 + 跳过一个起拍”便宜一点：个数对得上时按位置配对
+                v = dp[i][j] + min(sm + hm, 2 * GAP - 0.5) + 0.5 * abs(t_frac[i] - x_frac[j])
                 if v < dp[i + 1][j + 1]:
                     dp[i + 1][j + 1], back[i + 1][j + 1] = v, ("pair", sm, hm)
             if j < m:  # 图上多一列：倚音（下一个起拍有倚音、或者这一列挨着旁边一列时不算钱）
@@ -373,4 +387,51 @@ def check_bar(
         "cols": m,
         "onsets": n,
         "col_heads": col_heads,
+        "live": live,
+        "onset_notes": onsets,
+        "onset_pitches": pitches,
     }
+
+
+def _strings(ss) -> str:
+    return "、".join(str(x) for x in sorted(ss)) + " 弦"
+
+
+def hints(r: dict, events: list[dict] | None) -> list[str]:
+    """check_bar 的结果写成给核对模型看的线索（中文短句）：哪个起拍（按拍数）、图上看到了什么、AI 写的是什么。
+    只说对不上的地方，不给答案（数字本身没读，五线谱的升降号也没认）。"""
+    from fractions import Fraction
+
+    from app.music import midi_to_name
+
+    beats, t = [], Fraction(0)
+    for e in events or []:
+        if e.get("notes"):
+            beats.append(t)
+        t += Fraction(str(e["dur"]))
+
+    def at(i: int) -> str:
+        return f"第 {float(beats[i]) + 1:g} 拍" if i < len(beats) else f"第 {i + 1} 个起拍"
+
+    out = []
+    for i, j, sm, hm in r["pairs"]:
+        mine = {n["string"] for n in r["onset_notes"][i]}
+        if sm:
+            out.append(
+                f"{at(i)}：图上这一列 {_strings(r['live'][j].strings)}有数字，你写的是 {_strings(mine)}"
+            )
+        if hm:
+            ok = [p for k in range(i + 1) for p in r["onset_pitches"][k]]
+            miss = [h for h in r["col_heads"][j] if not any(head_ok(h, p) for p in ok)]
+            names = "、".join(sorted({midi_to_name(h.natural_midi() - 12) for h in miss}))
+            out.append(f"{at(i)}：五线谱这里有 {names} 附近的音（不计升降），你这个起拍里没有")
+    for j in r["extra_cols"]:
+        c = r["live"][j]
+        prev = [i for i, jj, *_ in r["pairs"] if jj < j]
+        where = f"{at(prev[-1])}之后" if prev else "小节开头"
+        out.append(f"{where}图上还有一列 {_strings(c.strings)}的数字，你的结果里没有对应的起拍")
+    for i in r["extra_onsets"]:
+        out.append(
+            f"{at(i)}（{_strings({n['string'] for n in r['onset_notes'][i]})}）在图上找不到对应的一列数字"
+        )
+    return out
