@@ -6,7 +6,7 @@ import {
   deriveView, sectionsOf, stepSection, practiceText, resumeInfo, rangeLabel, loopLabel, barTags, planRange,
   songSubtitle, explainState, needsReview, warnText, showNote, tuningInput, nameToMidi, noteMidi, beatNumber, eventsText,
 } from '../../app/static/js/trainer/view.js';
-import { refineConfirm } from '../../app/static/js/lib/refine.js';
+import { refineConfirm, barRefineHint, rowRefineHint, refineTime, refineScopeLabel } from '../../app/static/js/lib/refine.js';
 import { gbkFromMojibake, scoreNeedsGbk } from '../../app/static/js/score.js';
 
 const N = (string, fret, tech = [], grace = -1) => ({ string, fret, tech, grace, bend: 0 });
@@ -227,9 +227,24 @@ test('eventsText：小节的文字版（精修之前的读法）', () => {
 
 test('refineConfirm：确认框写出要核对的小节数、预估费用和时间', () => {
   const c = refineConfirm({ bars: 40, cost_usd: 2.2, minutes: 10 }, '曲子');
-  assert.equal(c.title, '精修“曲子”？');
+  assert.equal(c.title, '精修整首“曲子”？');
   assert.match(c.text, /40 个小节/);
   assert.match(c.text, /约 \$2\.20，约 10 分钟/);
   assert.equal(refineConfirm({ bars: 0, cost_usd: 0, minutes: 0 }), null);
   assert.equal(refineConfirm(null), null);
+});
+
+test('精修这个小节 / 这一行：预估文字和进行中的范围', () => {
+  assert.equal(barRefineHint({ bars: 1, cost_usd: 0.2, minutes: 2, seconds: 75 }), '约 $0.2，1–2 分钟');
+  assert.equal(rowRefineHint({ bars: 4, cost_usd: 0.8, minutes: 2, seconds: 75 }), '这一行 4 个小节，约 $0.8，1–2 分钟');
+  assert.equal(rowRefineHint({ bars: 8, cost_usd: 1.6, minutes: 3, seconds: 150 }), '这一行 8 个小节，约 $1.6，2–3 分钟');
+  assert.equal(rowRefineHint(null), '');
+  assert.equal(refineTime(120), '约 2 分钟');
+  assert.equal(refineTime(30), '约 1 分钟');
+  const ids = ['a', 'b', 'c'];
+  assert.equal(refineScopeLabel({ scope: 'bars', bars: ['c'] }, ids), '第 3 小节');
+  assert.equal(refineScopeLabel({ scope: 'row', row: 2, bars: ['a', 'b'] }, ids), '第 3 行（2 个小节）');
+  assert.equal(refineScopeLabel({ scope: 'bars', bars: ['a', 'b'] }, ids), '2 个小节');
+  assert.equal(refineScopeLabel({ scope: 'song', bars: ids }, ids), '整首');
+  assert.equal(refineScopeLabel({ kind: 'refine' }, ids), '整首'); // 早先的任务没有范围
 });

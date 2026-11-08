@@ -11,7 +11,7 @@ import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange,
 import { DERIVE_VERSION, deriveSong } from '../score.js';
 import { alphaTab, setLoop, setTempo, setPlayerHooks } from './player.js';
 import { notice } from './notices.js';
-import { refineConfirm, NO_REFINE } from '../lib/refine.js';
+import { refineConfirm, NO_REFINE, refineScopeLabel } from '../lib/refine.js';
 
 
 // ---------------------------------------------------------------------
@@ -103,7 +103,12 @@ function progressText(s) {
   const unit = { explain: '批', refine: '小节' }[a.kind] || '行';
   const n = pr.total ? `（${pr.done}/${pr.total} ${unit}）` : '';
   if (a.kind === 'explain') return `正在生成讲解${n}，可以照常练习。`;
-  if (a.kind === 'refine') return `正在精修：逐小节放大核对${n}，可以照常练习；改了的小节会标出来。`;
+  if (a.kind === 'refine') {
+    const label = esc(refineScopeLabel(a, s.bars.map(b => b.id)));
+    if (a.scope === 'bars' && (a.bars || []).length === 1) return `正在精修${label}，可以照常练习。`;
+    if (a.scope === 'bars' || a.scope === 'row') return `正在精修${label}${pr.total ? `：已核对 ${pr.done}/${pr.total}` : ''}，可以照常练习。`;
+    return `正在精修整首：逐小节放大核对${n}，可以照常练习；改了的小节会标出来。`;
+  }
   if (a.kind === 'reparse_row') return `${esc(pr.stage || '正在重新识别')}${n}，其他小节可以照常练习。`;
   if (a.restaging) return `正在重新识别：${esc(pr.stage || '')}${n}，完成前不能改谱。`;
   return `正在识别：${esc(pr.stage || '')}${n}，已识别的小节可以先练。`;
@@ -119,14 +124,14 @@ async function retryFailed(btn, n) {
   await refresh();
 }
 
-// 精修：确认框里给出要核对的小节数、预估费用和时间（后端算好的 refine_estimate）
+// 精修整首：确认框里给出要核对的小节数、预估费用和时间（后端算好的 refine_estimate）
 async function startRefine(btn) {
   const s = get('song'), c = refineConfirm(s && s.refine_estimate);
   if (!c) { UI.toast(NO_REFINE, 'info', 5000); return; }
   if (!await UI.confirm(c.text, { title: c.title, ok: c.ok })) return;
   await withBusy(btn, async () => {
-    try { await post(songUrl('/refine')); UI.toast('已开始精修', 'info'); }
-    catch (e) { UI.toast(e.message, 'err', 5000); }
+    try { await post(songUrl('/refine')); UI.toast('已开始精修整首', 'info'); }
+    catch (e) { if (isLocked(e)) lockedToast(e); else UI.toast(e.message, 'err', 5000); }
   });
   await refresh();
 }
@@ -134,9 +139,9 @@ function renderRefineBtn(s) {
   const btn = $('refineBtn');
   btn.hidden = isScore(s) || !s.bars.length;
   btn.disabled = !!s.busy;
-  btn.title = s.activity && s.activity.kind === 'refine' ? '正在精修'
-    : s.refined ? `上次精修：${s.refined.at}，检查了 ${s.refined.checked} 个小节，改了 ${s.refined.changed} 个`
-    : '精修：每小节放大，让 AI 对照原谱逐拍核对（约 $0.2 / 小节）';
+  btn.title = s.activity && s.activity.kind === 'refine' ? `正在精修${refineScopeLabel(s.activity, s.bars.map(b => b.id))}`
+    : s.refined ? `上次精修整首：${s.refined.at}，检查了 ${s.refined.checked} 个小节，改了 ${s.refined.changed} 个`
+    : '精修整首：每小节放大，让 AI 对照原谱逐拍核对（约 $0.2 / 小节）';
 }
 
 async function explain(btn) {

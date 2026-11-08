@@ -98,10 +98,10 @@ def test_search_tags_menu_and_theme(server, browser):
         b.js(f"document.querySelector('[data-more=\"{gp}\"]').click(); true")
         items = b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
         assert "重命名" in items and "管理原谱页面" not in items and "整首重新识别" not in items
+        assert "精修整首" not in items
         b.js(f"document.querySelector('[data-more=\"{img}\"]').click(); true")
-        assert "管理原谱页面" in b.js(
-            "[...document.querySelectorAll('.menu button')].map(x => x.textContent)"
-        )
+        items = b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
+        assert "管理原谱页面" in items and "精修整首" in items
         # 外观按钮：跟随系统 → 浅色 → 深色 → 跟随系统；<html data-theme> 总是实际生效的 light / dark
         b.js("localStorage.setItem('tt-theme', 'system'); true")
         b.open(server["base"] + "/")

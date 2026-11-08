@@ -95,7 +95,7 @@ const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 const UNDO_KEY = IS_MAC ? '⌘Z' : 'Ctrl+Z';
 // 谱面上方的操作说明：一项一个 <span>（.legend 是 flex，项与项之间有间距，项里面的文字和按键不能被拆开）
 const legend = items => items.map(x => `<span>${x}</span>`).join('');
-const LEGEND_PLAY = legend(['点小节：从这里开始播放', '<kbd>Shift</kbd> + 点：把循环扩到这个小节', '点音符：试听', '<i class="review-key"></i>待核对']);
+const LEGEND_PLAY = legend(['点小节：从这里开始播放', '<kbd>Shift</kbd> + 点：把循环扩到这个小节', '点音符：试听', '<i class="review-key"></i>待核对', '<i class="refine-key"></i>精修改过']);
 const LEGEND_EDIT = legend(['改音：点音符改弦、品、技巧和时值', '点拍上的空白处：改和弦、填品位加音', '<kbd>Enter</kbd> 保存', '<kbd>Esc</kbd> 关闭', `<kbd>${UNDO_KEY}</kbd> 撤销`]);
 // 改音面板里的技巧（推弦不在面板里，原样保留）
 const NP_TECH = ['h', 'p', 'sl', 'si', 'pm', 'x', 'nh', 'ah', 'th', 'vib', 'roll'];

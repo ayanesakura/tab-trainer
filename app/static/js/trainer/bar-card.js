@@ -1,14 +1,16 @@
-// 侧栏的小节卡片：编号、技巧标签、这一小节的和弦（弹唱谱）、提示、待核对说明（可以确认没问题）、精修改了什么（可以撤销）、原谱截图。
+// 侧栏的小节卡片：编号、技巧标签、这一小节的和弦（弹唱谱）、提示、待核对说明（可以确认没问题）、精修改了什么（可以撤销）、
+// 精修这个小节 / 这一行、原谱截图。
 // 正在看的小节是 store 的 ui.bar。
 // 敲节奏打开时（rhythm.on）这张卡片收起来，位置让给节奏卡片。
 
 import { get, on } from './store.js';
 import { $, UI, esc, songUrl, setButton } from './dom.js';
-import { put, withBusy } from '../lib/api.js';
-import { applySong, writeFailed } from './song.js';
+import { post, put, withBusy } from '../lib/api.js';
+import { applySong, writeFailed, refresh, isLocked, lockedToast } from './song.js';
 import { barTags, warnText, isScore, eventsText } from './view.js';
 import { images, loadImages } from './page-images.js';
 import { barChords, chordShapes, chordSVG } from './chords.js';
+import { barRefineHint, rowRefineHint, refineScopeLabel } from '../lib/refine.js';
 
 function renderCard() {
   const bi = get('ui.bar'), s = get('song'), v = get('view');
@@ -39,8 +41,53 @@ function renderCard() {
     $('undoRefineBtn').disabled = !!sb.locked;
     $('undoRefineBtn').title = sb.locked || '恢复成精修之前的读法';
   }
+  renderRefineScope(s, sb);
   drawCrop();
 }
+
+// 精修这个小节 / 这一行（便宜，不弹确认框）：手改过、确认过的也核对；“识别有误？”里写了哪里不对就一起告诉 AI。
+// 正在精修的小节显示“精修中…”，别的小节的按钮先禁用（同一时间只能有一个任务）。
+function renderRefineScope(s, sb) {
+  const scopes = s.refine_scopes, rowEst = scopes && (scopes.rows || [])[sb.system];
+  const canBar = !!sb.refinable && !!scopes, canRow = !!rowEst;
+  $('refineScope').hidden = isScore(s) || !(canBar || canRow);
+  if ($('refineScope').hidden) return;
+  const a = s.activity, refining = !!a && a.kind === 'refine', mine = refining && (a.pending || []).includes(sb.id);
+  $('refineScopeBtns').hidden = mine;
+  $('refineBusy').hidden = !mine;
+  $('refineBarBtn').hidden = !canBar;
+  $('refineRowBtn').hidden = !canRow;
+  const why = refining ? '正在精修，完成后再试' : s.busy ? '正在处理中，完成后再试' : sb.locked || '';
+  const barHint = canBar ? barRefineHint(scopes.bar) : '', rowHint = canRow ? rowRefineHint(rowEst) : '';
+  const note = $('hintInput').value.trim() ? '（会带上“哪里不对”里写的说明）' : '';
+  for (const [btn, est] of [[$('refineBarBtn'), barHint && `这个小节${barHint}`], [$('refineRowBtn'), rowHint]]) {
+    btn.disabled = !!why;
+    btn.title = why || `让 AI 放大对照原谱逐拍核对：${est}。手改过、确认过的也核对，改了能撤销`;
+  }
+  $('refineScopeHint').textContent = mine
+    ? `正在精修${refineScopeLabel(a, s.bars.map(b => b.id))}`
+    : [barHint && `这个小节${barHint}`, rowHint].filter(Boolean).join('；') + note;
+}
+
+async function refineScope(kind) {
+  const bi = get('ui.bar'), s = get('song'), sb = s && s.bars[bi];
+  if (!sb) return;
+  const btn = kind === 'bar' ? $('refineBarBtn') : $('refineRowBtn');
+  const body = kind === 'bar' ? { bars: [sb.id] } : { system: sb.system };
+  const hint = $('hintInput').value.trim();
+  if (hint) body.hint = hint;
+  await withBusy(btn, async () => {
+    try {
+      await post(songUrl('/refine'), body);
+      UI.toast(kind === 'bar' ? `已开始精修第 ${bi + 1} 小节` : `已开始精修第 ${sb.system + 1} 行`, 'info');
+    } catch (e) {
+      if (isLocked(e)) lockedToast(e); else UI.toast(e.message, 'err', 5000);
+    }
+  });
+  await refresh();
+  scopeNow(); // withBusy 结束时把按钮还原成点之前的样子：按新状态重画一次
+}
+function scopeNow() { const s = get('song'), sb = s && s.bars[get('ui.bar')]; if (sb) renderRefineScope(s, sb); }
 
 async function undoRefine() {
   const bi = get('ui.bar'), sb = (get('song').bars || [])[bi];
@@ -90,6 +137,10 @@ function drawCrop() {
 export function initBarCard() {
   $('reviewBtn').onclick = toggleReview;
   $('undoRefineBtn').onclick = undoRefine;
+  $('refineBarBtn').onclick = () => refineScope('bar');
+  $('refineRowBtn').onclick = () => refineScope('row');
+  $('hintInput').addEventListener('input', scopeNow);
+  on(['song.activity', 'song.busy', 'song.refine_scopes'], scopeNow); // 精修开始 / 核对完一个小节：只重画这一行（不重画截图）
   on('view', v => { if (v) loadImages(v.pages); });
   document.addEventListener('tt-images', drawCrop);
   on(['ui.bar', 'view', 'song.bars', 'song.is_score'], renderCard);

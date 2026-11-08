@@ -265,7 +265,7 @@ function openMore(btn) {
     image && { label: '管理原谱页面', icon: 'image', onClick: () => openPages(id) },
     image && s.failed_rows > 0 && { label: `重试失败的 ${s.failed_rows} 行`, icon: 'refresh', onClick: () => retryFailed(s) },
     image && { label: '整首重新识别', icon: 'refresh', onClick: () => reparse(s) },
-    image && s.bars > 0 && { label: s.refined ? '再精修一遍' : '精修', icon: 'sparkle', onClick: () => refineSong(s) },
+    image && s.bars > 0 && { label: '精修整首', icon: 'sparkle', onClick: () => refineSong(s) },
     { label: '导出曲子包', icon: 'upload', onClick: () => exportSongs([id]) },
     'sep',
     { label: '删除', icon: 'trash', danger: true, onClick: () => remove(s) },
@@ -291,11 +291,11 @@ async function reparse(s) {
     { title: `整首重新识别“${s.title}”？`, ok: '重新识别' });
   if (ok) await act(() => api.post(`/api/songs/${s.id}/parse`), '已开始重新识别', 'info');
 }
-// 精修：确认框里给出要核对的小节数、预估费用和时间（后端算好的 refine_estimate）
+// 精修整首：确认框里给出要核对的小节数、预估费用和时间（后端算好的 refine_estimate）
 async function refineSong(s) {
   const c = refineConfirm(s.refine_estimate, s.title);
   if (!c) { toast(NO_REFINE, 'info', 4000); return; }
-  if (await UI.confirm(c.text, { title: c.title, ok: c.ok })) await act(() => api.post(`/api/songs/${s.id}/refine`), '已开始精修', 'info');
+  if (await UI.confirm(c.text, { title: c.title, ok: c.ok })) await act(() => api.post(`/api/songs/${s.id}/refine`), '已开始精修整首', 'info');
 }
 async function retryFailed(s) {
   const ok = await UI.confirm('会再调用 AI，只重新识别失败的行；已经识别好的小节不动。', { title: `重试“${s.title}”失败的 ${s.failed_rows} 行？`, ok: '重试' });
