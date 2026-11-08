@@ -67,6 +67,8 @@ $('title').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) $('upload
 
 // ---------------- 曲子包 ----------------
 async function importBundles(files) {
+  // 上一个包还在导入：withBusy 会直接忽略，这里说一声（不然拖进来的包悄悄没了）
+  if ($('importBtn').getAttribute('aria-busy') === 'true') { toast('正在导入，稍后再试', 'err', 4000); return; }
   await api.withBusy($('importBtn'), async () => {
     toast('正在导入…', 'info', 60000);
     try {

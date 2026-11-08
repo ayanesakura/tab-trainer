@@ -559,3 +559,23 @@ def test_api_key_kept_on_failed_save_and_saved_before_test(server, browser):
     b.wait_for(f"__calls.includes('TEST') && {idle.format('testBtn')}")
     assert b.js("__calls") == ["TEST"]
     assert not b.errors, b.errors
+
+
+def test_second_bundle_import_while_importing_says_so(server, browser):
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for("!!document.querySelector('.song-row')")
+    # 第一次导入一直不返回
+    b.js("""window.__imports = 0; const of = window.fetch;
+      window.fetch = (u, init) => { if (String(u).includes('/api/import')) { window.__imports++; return new Promise(() => {}); } return of(u, init); };
+      window.__zip = () => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'a.zip', { type: 'application/zip' }));
+        const input = document.getElementById('file'); input.files = dt.files; input.dispatchEvent(new Event('change')); };
+      __zip(); true""")
+    b.wait_for("window.__imports === 1")
+    b.js("__zip(); true")
+    b.wait_for(
+        "[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('正在导入，稍后再试'))",
+        timeout=5,
+    )
+    assert b.js("window.__imports") == 1
+    assert not b.errors, b.errors
