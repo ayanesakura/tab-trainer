@@ -780,6 +780,49 @@ def test_failed_row_reparse_still_records_its_cost(data_dir, sync_jobs, monkeypa
     assert after["usage"]["output_tokens"] == before["output_tokens"] + 20
 
 
+def test_cost_is_not_lost_when_saving_the_result_fails(data_dir, sync_jobs, monkeypatch):
+    """写回结果时存盘失败：这次的用量没写进去，之后的写入（失败处理）要把它补上，不能当成已经记过。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    before = store.load(sid)["usage"]
+    real_save, real_transcribe = store.save, FakeClaude.transcribe
+    fails = []
+
+    def transcribe(self, *a, **kw):
+        fails.append("armed")  # 识别完的第一次写回存盘失败
+        return real_transcribe(self, *a, **kw)
+
+    def flaky_save(song, *a, **kw):
+        if fails == ["armed"]:
+            fails.append("failed")
+            raise OSError("磁盘满了")
+        return real_save(song, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    monkeypatch.setattr(store, "save", flaky_save)
+    recognize.start_reparse(sid, 1)
+    after = store.load(sid)
+    assert fails and after["systems"][1]["status"] == "error"
+    assert after["usage"]["input_tokens"] == before["input_tokens"] + 10  # 新建的替身一开始就带 10
+    assert after["usage"]["output_tokens"] == before["output_tokens"] + 20
+
+
+def test_usage_meter_commits_only_after_the_write(monkeypatch):
+    """charge 记上的部分要等写盘成功才算数：写盘失败，下一次 charge 连同这次一起记。"""
+    meter = jobs.UsageMeter(FakeClaude(None))
+    s = {}
+
+    def failing_update(sid, fn):
+        fn({})
+        raise OSError("磁盘满了")
+
+    monkeypatch.setattr(store, "update", failing_update)
+    with pytest.raises(OSError):
+        meter.update("x", meter.charge)
+    meter.charge(s)
+    assert s["usage"]["input_tokens"] == 10 and s["usage"]["output_tokens"] == 20
+
+
 @pytest.mark.parametrize("how", ["error", "cancel"])
 def test_header_cost_is_recorded_when_the_parse_stops_before_any_row(data_dir, sync_jobs, monkeypatch, how):
     real = FakeClaude.read_meta
@@ -1093,7 +1136,7 @@ def test_ocr_tie_from_the_left_half_is_not_a_disagreement():
     """右半行开头写成括号的延续音（接左半最后的 2 弦 5 品）：OCR 读到、AI 不写，不算不一致。"""
     bars = [{"events": [{"dur": "1", "notes": [{"string": 1, "fret": 3, "tech": []}]}]}]
     seen = [[(1, 3), (2, 5)]]
-    assert recognize.ocr_disagreements(bars, seen) != {}
+    assert recognize.ocr_disagreements(bars, seen, tied_in={}) != {}
     assert recognize.ocr_disagreements(bars, seen, tied_in={2: 5}) == {}
     left = [
         {
@@ -1150,3 +1193,253 @@ def test_chord_diagram_majority_goes_to_the_model_as_context_not_as_the_users_hi
         FakeClaude(None), sid, song, [(0, None, note)], threading.Event(), lambda *a: None
     )
     assert seen and all(h == "" and note in c for h, c in seen)
+
+
+def _planned_song():
+    sid = songs.create_song([("p1.png", score_png())])
+    song = store.load(sid)
+    song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+    song["systems"] = recognize.plan_systems(sid, song)
+    return sid, song
+
+
+def _note(s, f):
+    return {"string": s, "fret": f, "tech": [], "grace": -1, "bend": 0}
+
+
+def _bars(first_bar, n, durs, fret=0):
+    return {
+        "bars": [
+            {
+                "number": first_bar + i,
+                "events": [{"dur": d, "notes": [_note(1, fret + i)]} for d in durs(i)],
+                "tip": "",
+                "uncertain": "",
+            }
+            for i in range(n)
+        ]
+    }
+
+
+def test_ocr_tie_at_the_start_of_a_row_is_not_a_disagreement():
+    """行首写成括号的延续音（接上一行最后的音）：上一行的音已知时按它判断；
+    不知道（各行并行识别）时，第一个小节 AI 这边没有对不上的音，OCR 多读的音不算不一致（和后面小节同一个规则）。"""
+    bars = [{"events": [{"dur": "1", "notes": [{"string": 1, "fret": 3, "tech": []}]}]}]
+    seen = [[(1, 3), (2, 5)]]
+    assert recognize.ocr_disagreements(bars, seen) == {}  # 不知道上一行
+    assert recognize.ocr_disagreements(bars, seen, tied_in={2: 5}) == {}
+    assert recognize.ocr_disagreements(bars, seen, tied_in={}) != {}  # 第一行：前面没有音
+    assert recognize.ocr_disagreements(bars, seen, tied_in={2: 7}) != {}
+    # AI 这边也有对不上的音（1 弦 3 品其实在 2 弦）：照样报
+    chord = [{"events": [{"dur": "1", "notes": [_note(1, 3), _note(3, 2), _note(4, 2), _note(5, 0)]}]}]
+    out = recognize.ocr_disagreements(chord, [[(2, 3), (3, 2), (4, 2), (5, 0), (2, 5)]])
+    assert dict(out[0][0]) == {(2, 3): 1, (2, 5): 1}
+
+
+def test_row_recognition_passes_the_previous_rows_last_notes_for_ocr(data_dir, monkeypatch):
+    """前一行已经有结果时（单行重新识别、补页、重试），把它最后的音告诉 OCR 校对；第一行前面什么都没有。"""
+    seen = []
+    monkeypatch.setattr(
+        recognize, "transcribe_queued", lambda *a, **kw: seen.append((a[3], kw.get("tied_in"))) or []
+    )
+    sid, song = _planned_song()
+    song["bars"] = [
+        {"system": 0, "events": [{"dur": "1", "notes": [_note(2, 5), _note(3, 7)]}]},
+        {"system": 0, "events": [{"dur": "1", "notes": [_note(2, 8)]}]},
+    ]
+    recognize._recognize_rows(
+        FakeClaude(None), sid, song, [(0, None), (1, None)], threading.Event(), lambda *a: None
+    )
+    assert sorted(seen, key=lambda x: x[0]) == [(0, {}), (1, {2: 8, 3: 7})]
+
+
+def test_single_bar_row_with_wrong_length_gets_the_normal_length_problem(data_dir, monkeypatch):
+    """只有 1 个小节的行（短的末行、1 小节的右半行）时值不对：按普通的时值问题返修，
+    不能说“整行每个小节都一样长、可能前面变了拍号”（模型会写个错的拍号，带到后面所有行）。"""
+    sid, song = _planned_song()
+    song["systems"][0]["spans"] = song["systems"][0]["spans"][:1]
+    problems = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        if kw.get("problems"):
+            problems.append(kw["problems"])
+        return _bars(first_bar, len(spans), lambda i: ["3"])
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="off", split=False)
+    assert problems and all("变了拍号" not in p for p in problems[0])
+    assert any("时值合计 3 拍" in p for p in problems[0])
+
+
+def test_retry_with_the_wrong_bar_count_does_not_replace_a_right_count_read(data_dir, monkeypatch):
+    """第一遍小节数对、有两个时值问题；返修少了一个小节（OCR 不比，问题反而少）：小节数对的优先。
+    之后重读又出错时，也不能留下小节数不对的结果。"""
+    sid, song = _planned_song()
+    reads = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, previous=None, **kw):
+        reads.append(previous is not None)
+        if len(reads) == 3:
+            raise RuntimeError("断了")
+        if previous is None:  # 第一遍：前两个小节少一拍
+            return _bars(first_bar, len(spans), lambda i: ["1"] * (3 if i < 2 else 4))
+        return _bars(first_bar, len(spans) - 1, lambda i: ["1"] * 4)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="off", split=False)
+    assert len(bars) == 3
+
+
+def test_doubts_mode_ignores_info_only_warnings(data_dir, monkeypatch):
+    """doubts：五连音之类“不在播放网格上”的提醒读对了也会有，不算疑问，不为它再读一遍。"""
+    sid, song = _planned_song()
+    reads = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        reads.append(first_bar)
+        return _bars(first_bar, len(spans), lambda i: ["1/5"] * 5 + ["3"])
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="doubts", split=False)
+    assert reads == [1] and all(w["code"] == "off_grid" for b in bars for w in b["warn"])
+
+
+def test_failed_row_write_stops_the_other_rows_and_leaves_no_row_pending(data_dir, sync_jobs, monkeypatch):
+    """第一次识别时写回一行出错（存盘失败之类）：还没开始的行不再发请求；结束后没有行停在“等待 / 识别中”，
+    都标成失败（“重试失败的行”才找得到它们）。"""
+    monkeypatch.setattr(config.settings, "row_concurrency", 1)
+    real = recognize.apply_time_signatures
+    boom = []
+
+    def flaky(bars, meta):
+        if not boom:
+            boom.append(1)
+            raise OSError("磁盘满了")
+        return real(bars, meta)
+
+    monkeypatch.setattr(recognize, "apply_time_signatures", flaky)
+    real_queued = recognize.transcribe_queued
+
+    def queued(*a, cancel=None, **kw):
+        if a[3] == 1:  # 第二行等第一行写回（出错）之后才开始：不然要看两个线程谁快
+            cancel.wait(2)
+        return real_queued(*a, cancel=cancel, **kw)
+
+    monkeypatch.setattr(recognize, "transcribe_queued", queued)
+    sid = songs.create_song([("p1.png", score_png())])
+    assert recognize.start_parse(sid)
+    song = store.load(sid)
+    assert boom and song["status"] == "error"
+    assert [c["first_bar"] for c in FakeClaude.calls if not c["retry"]] == [1]  # 第二行没有再发请求
+    assert [x["status"] for x in song["systems"]] == ["error", "error"]
+    assert recognize.failed_rows(song) == [0, 1]
+
+
+def test_rows_locked_for_a_redo_are_released_when_the_job_fails(data_dir, sync_jobs, monkeypatch):
+    """重试失败的行之后要按新拍号重做别的行（这些行被标成识别中）：重做没跑成，它们也要标成失败，不能一直锁着。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    store.update(sid, lambda s: s["systems"][0].update(status="error", error="断了"))
+    real = recognize._recognize_rows
+    n = []
+
+    def rows(*a, **kw):
+        n.append(1)
+        if len(n) == 2:
+            raise RuntimeError("断了")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(recognize, "_recognize_rows", rows)
+    monkeypatch.setattr(recognize, "_rows_to_redo", lambda *a, **kw: [(1, [3, 4], "")])
+    recognize.start_retry_failed(sid)
+    song = store.load(sid)
+    assert song["activity"] is None
+    assert [x["status"] for x in song["systems"]] == ["done", "error"]
+
+
+def test_failed_rerecognition_keeps_the_previous_failed_status(data_dir, sync_jobs, monkeypatch):
+    """原来有行失败（曲子是“识别失败”）时整首重新识别又失败：状态照旧是失败（不能变成“可练习”），提示说明还有失败的行。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+
+    def broken(s):
+        s["systems"][1].update(status="error", error="断了")
+        s["status"] = "error"
+
+    store.update(sid, broken)
+    monkeypatch.setattr(FakeClaude, "read_meta", lambda self, page: 1 / 0)
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    assert after["status"] == "error" and after["activity"] is None
+    assert "原来的结果保留不变" in after["notice"]["msg"] and "重试失败的行" in after["notice"]["msg"]
+    assert recognize.failed_rows(after) == [1]
+
+
+def test_error_after_the_new_result_is_swapped_in_does_not_claim_the_old_one_was_kept(
+    data_dir, sync_jobs, monkeypatch
+):
+    """重新识别的新结果已经换上之后才出错（收尾时存盘失败之类）：不能说“原来的结果保留不变”。"""
+    sid, _ = _parsed_song_with_user_data()
+    monkeypatch.setattr(recognize.staleness, "store_plan", lambda *a, **kw: 1 / 0)
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    assert after["activity"] is None and after["status"] == "ready"
+    assert "原来的结果保留不变" not in after["notice"]["msg"]
+
+
+def _ts_aware_transcribe(declare):
+    """替身模型：第 1 行在 declare 给出的小节（行内序号 → 拍号）写变拍号；知道是 3/4 的小节写 3 拍，否则 4 拍。
+    记下 (起始小节, 开头拍号)。"""
+    starts = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, start_ts=None, **kw):
+        ts = start_ts or meta["time_signature"]
+        starts.append((first_bar, start_ts))
+        bars = []
+        for i in range(len(spans)):
+            mark = declare.get(i) if first_bar == 1 else None
+            ts = mark or ts
+            bars.append(
+                {
+                    "number": first_bar + i,
+                    "time_signature": mark or [],
+                    "events": [{"dur": "1", "notes": [_note(1, k)]} for k in range(ts[0])],
+                    "tip": "",
+                    "uncertain": "",
+                }
+            )
+        return {"bars": bars}
+
+    return transcribe, starts
+
+
+def test_reparse_of_the_first_row_fixes_the_header_time_signature_and_redoes_later_rows(
+    data_dir, monkeypatch
+):
+    """单行重新识别第一行，这次第 1 小节写着 3/4（谱头读错了）：全曲拍号改成 3/4，后面按 4/4 识别的行按 3/4 重做。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    transcribe, starts = _ts_aware_transcribe({0: [3, 4]})
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    recognize.reparse_system(sid, 0)
+    s = store.load(sid)
+    assert s["meta"]["time_signature"] == [3, 4] and "ts_change" not in s["bars"][0]
+    assert [f for f, _ in starts] == [1, 4]  # 第二行重做了（全曲已经是 3/4，不用再特别告诉模型）
+    assert all(x["status"] == "done" for x in s["systems"]) and all(not b["warn"] for b in s["bars"])
+    assert s["activity"] is None
+
+
+def test_retrying_a_row_that_now_changes_the_time_signature_redoes_the_rows_after_it(
+    data_dir, sync_jobs, monkeypatch
+):
+    """重试 / 补页识别的行写了变拍号：后面没有重试的行开头的拍号跟着变了，按新拍号重做（补页插在前面时同理）。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    store.update(sid, lambda s: s["systems"][0].update(status="error", error="断了"))
+    transcribe, starts = _ts_aware_transcribe({1: [3, 4]})
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    recognize.start_retry_failed(sid)
+    s = store.load(sid)
+    assert (4, [3, 4]) in starts  # 第二行按 3/4 重做
+    assert [b.get("time_signature") for b in s["bars"]] == [None] + [[3, 4]] * 5
+    assert all(not b["warn"] for b in s["bars"]) and all(x["status"] == "done" for x in s["systems"])

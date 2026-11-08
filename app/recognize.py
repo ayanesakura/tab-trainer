@@ -58,6 +58,9 @@ def start_parse(sid: str, cancel: threading.Event | None = None) -> bool:
                 _end_parse(sid, "cancelled", ("warn", "识别已取消，已完成的行会保留。"))
         except RestageFailed as e:
             _end_restage(sid, f"重新识别没有全部成功（{e}）")
+        except Swapped as e:
+            log.exception("song=%s parse failed after the new result was saved", sid)
+            _end_parse(sid, "error", ("error", str(e)))
         except Exception as e:
             rid = request_id_of(e)
             log.exception("request_id=%s song=%s parse failed", rid, sid)
@@ -84,7 +87,29 @@ def _begin_parse(s: dict, stage: str = "排队中") -> None:
 
 
 def _end_parse(sid: str, status: str, notice: tuple[str, str] | None) -> None:
-    store.update(sid, lambda s: state.finish(s, status=status, notice=notice, source="parse"))
+    def apply(s):
+        _fail_unfinished_rows(s, "已取消" if status == "cancelled" else "识别中断，没有识别")
+        systems = s.get("systems") or []
+        if status == "error" and notice and s.get("bars") and all(x.get("status") == "done" for x in systems):
+            # 每一行都识别完、写好了，出错在最后（生成练习建议、收尾存盘；重新识别时新结果已经换上）：不算识别失败
+            state.finish(
+                s,
+                status="ready",
+                notice=("warn", "识别结果已保存，但收尾时出错：" + notice[1]),
+                source="parse",
+            )
+            return
+        state.finish(s, status=status, notice=notice, source="parse")
+
+    store.update(sid, apply)
+
+
+def _fail_unfinished_rows(s: dict, why: str) -> None:
+    """任务结束时还停在“等待 / 识别中”的行（没轮到、被取消、写回出错、锁着等重做的）标成失败：
+    不然它们一直锁着，“重试失败的行”也找不到。"""
+    for x in s.get("systems") or []:
+        if x.get("status") in ("parsing", "pending"):
+            x.update(status="error", error=why)
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +186,9 @@ def ocr_disagreements(
     - 死音（谱上写 x）OCR 不读，不比较；倚音的小数字 OCR 会读到，算进去；
     - 人工泛音旁边标的“品位 + 12”（如 2<14>）OCR 会多读一个 14，允许；
     - 整行一致率不到一半，或 OCR 只读对了 AI 写的音的不到 60%：多半是 OCR 在这种排版上读不准，整行都不判断。
-    tied_in：图上第一个小节之前每根弦最后一个音的品位（一行切成两半时，右半开头的延续音接的是左半的音）。
+    tied_in：图上第一个小节之前每根弦最后一个音的品位（右半行接左半的音、一行接上一行的音；{} = 前面没有音）。
+    None = 不知道（各行并行识别，上一行还没结果）：第一个小节 AI 这边没有对不上的音时，OCR 多读的音每根弦
+    放过一个（可能是接上一行的延续音），和后面小节的规则一样。
     """
     pairs = []
     ai_total = 0  # 整行 AI 写的音（不含闷音）
@@ -170,6 +197,7 @@ def ocr_disagreements(
     )  # 每根弦上最后一个音的品位（判断跨小节线、写成括号的延续音）
     for i, (bar, seen) in enumerate(zip(bars, ocr_bars, strict=False)):
         tied_ok = set(last_fret.items())
+        unknown_tie = i == 0 and tied_in is None
         ai: Counter = Counter()
         harmonic_marks: Counter = Counter()
         for e in bar["events"]:
@@ -194,9 +222,13 @@ def ocr_disagreements(
         # 连音线跨过小节线延续的音，谱上常写成“(5)”，OCR 会读到，但它不是新起拍：上一小节这根弦的最后一个音
         # 就是这个品位、而且 AI 这边没有对不上的音（读错弦是两边各多一个，延续音只是 OCR 多一个），就不算多出来的
         if not (ai - got):
+            loose: set[int] = set()  # 不知道上一行时，已经放过一个的弦
             for key, k in list((got - ai).items()):
                 if key in tied_ok:
                     got[key] -= k
+                elif unknown_tie and key[0] not in loose:
+                    got[key] -= 1
+                    loose.add(key[0])
             got += Counter()  # 去掉计数为 0 的
         if got:
             pairs.append((i, ai, got))
@@ -247,13 +279,13 @@ def transcribe_system(
 ) -> list[dict]:
     """识别一行。double_check：off / doubts（第一遍有警告或“不确定”才再读）/ all，见 config.double_check_mode；
     None = 按设置。split：一行太宽时切成左右两半分别识别（None = 按 SPLIT_ROWS，见 _should_split）。
-    context：程序给模型的补充说明（不是用户的话）；tied_in：见 ocr_disagreements（右半行用）。"""
+    context：程序给模型的补充说明（不是用户的话）；tied_in：见 ocr_disagreements（见 _tied_in）。"""
     if double_check is None:
         double_check = config.double_check()
     sysinfo = song["systems"][si]
     if (SPLIT_ROWS if split is None else split) and _should_split(sysinfo):
         return _transcribe_halves(
-            claude, sid, song, si, first_bar, hint, cancel, start_ts, double_check, context
+            claude, sid, song, si, first_bar, hint, cancel, start_ts, double_check, context, tied_in
         )
     page = song["pages"][sysinfo["page"]]
     x0, x1, y0, y1 = sysinfo["crop"]
@@ -327,6 +359,8 @@ def transcribe_system(
             bars.append(bar)
         if (
             not cur_ts
+            and len(bars)
+            >= 2  # 只有 1 个小节（短的末行、1 小节的半行）看不出“整行一样长”，按普通的时值问题返修
             and len(lengths) == len(bars)
             and len(set(lengths)) == 1
             and lengths[0] != bar_length(meta)
@@ -365,6 +399,10 @@ def transcribe_system(
                 bars[i]["_ocr"] = (only_ocr, only_ai)
         return raw, bars, issues
 
+    def rank(bars, issues) -> tuple[bool, int]:
+        # 小节数对的优先（小节数不对时 OCR 不比，问题数显得少），再看问题少的
+        return (bool(spans) and len(bars) != len(spans), len(issues))
+
     def read_once() -> tuple[list[dict], list]:
         """读一遍这一行：有问题返修一次；返修后小节数还不对就从头再读一次。"""
         raw, bars, issues = run()
@@ -378,7 +416,7 @@ def transcribe_system(
             except Exception as e:  # noqa: BLE001 - 返修出错（过载、断线）：用第一次的结果，警告照常标在小节上
                 log.warning("request_id=%s song=%s system=%d retry failed: %s", request_id_of(e), sid, si, e)
             else:
-                if len(issues2) <= len(issues):
+                if rank(bars2, issues2) <= rank(bars, issues):
                     bars, issues = bars2, issues2
         if spans and len(bars) != len(spans):
             # 返修后小节数还是不对（模型漏了 / 合并了整小节，比读错一个音严重得多）：不带上次的结果重新读一遍，取问题少的
@@ -395,12 +433,17 @@ def transcribe_system(
             except Exception as e:  # noqa: BLE001 - 重读出错：用前面的结果
                 log.warning("request_id=%s song=%s system=%d reread failed: %s", request_id_of(e), sid, si, e)
             else:
-                if len(bars3) == len(spans) or len(issues3) < len(issues):
+                if rank(bars3, issues3) < rank(bars, issues):
                     bars, issues = bars3, issues3
         return bars, issues
 
     bars, _ = read_once()
-    doubtful = any(b.get("warn") or b.get("_ocr") or str(b.get("uncertain") or "").strip() for b in bars)
+    doubtful = any(
+        any(w.get("code") not in _INFO_ONLY for w in b.get("warn") or [])
+        or b.get("_ocr")
+        or str(b.get("uncertain") or "").strip()
+        for b in bars
+    )
     if (
         spans
         and len(bars) == len(spans)
@@ -457,6 +500,7 @@ def _transcribe_halves(
     start_ts: list[int] | None,
     double_check: str,
     context: str = "",
+    tied_in: dict[int, int] | None = None,
 ) -> list[dict]:
     """把一行切成左右两半，先识别左半，再带上左半结束时的拍号和和弦识别右半（右半开头延续的和弦，
     图上可能看不到它的和弦图）。图小了一半，能放大得更多，密集的符杠、小数字更容易看清。"""
@@ -489,6 +533,7 @@ def _transcribe_halves(
         double_check,
         split=False,
         context=context,
+        tied_in=tied_in,
     )
     meta = song["meta"]
     ts = start_ts or meta["time_signature"]
@@ -525,6 +570,15 @@ def _transcribe_halves(
     return left + right
 
 
+def _tied_in(song: dict, si: int) -> dict[int, int] | None:
+    """第 si 行开头之前每根弦最后一个音的品位（给 OCR 校对认行首的延续音）：第一行前面没有音；
+    上一行还没有结果（各行并行识别）时不知道，返回 None。"""
+    if si == 0:
+        return {}
+    prev = [b for b in song.get("bars") or [] if b.get("system") == si - 1]
+    return _last_frets(prev) if prev else None
+
+
 def _last_frets(bars: list[dict]) -> dict[int, int]:
     """每根弦上最后一个音的品位（闷音不算）。"""
     out: dict[int, int] = {}
@@ -548,6 +602,8 @@ def _bar_key(bar: dict) -> tuple:
     return (*out, t)
 
 
+# 只是提醒、读对了也会有的警告（五连音之类不在播放网格上）：doubts 模式不为它再读一遍
+_INFO_ONLY = frozenset({"off_grid"})
 # 读错的明显迹象：两遍读法不一样又没有多数时，选没有这些警告的那遍
 _BAD_READ = frozenset({"length", "placeholder", "empty", "string_range", "ocr_mismatch"})
 
@@ -623,12 +679,12 @@ def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
     claude = config.new_llm()
     meter = jobs.UsageMeter(claude)  # 每行完成就把新增的用量记上（中途失败也不漏记）
     try:
-        _run_parse(sid, cancel, claude, meter.charge)
+        _run_parse(sid, cancel, claude, meter)
     finally:  # 失败 / 取消时还没记上的（读谱头、没跑完的行）：已经发出去的请求也花了钱
         meter.flush(sid)
 
 
-def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
+def _run_parse(sid: str, cancel: threading.Event, claude: LLM, meter: jobs.UsageMeter) -> None:
     song = store.load(sid)
     restage = bool(song.get("bars"))
     store.update(sid, lambda s: _begin_parse(s, "读取谱头"))
@@ -661,9 +717,9 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
                     apply_time_signatures(s["bars"], s["meta"])
                 s["systems"][si].update(status=status, error=err)
             s["progress"]["done"] += 1
-            charge(s)
+            meter.charge(s)
 
-        store.update(sid, apply)
+        meter.update(sid, apply)
 
     used, errors = _recognize_rows(
         claude, sid, work, [(i, None) for i in range(len(systems))], cancel, on_row
@@ -725,8 +781,20 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
         if dropped and dropped[0]:
             note = f"重新识别完成；有 {dropped[0]} 个手改过的小节和新结果对不上，改动没有保留。"
 
+    try:
+        _finish_parse(sid, claude, meter, len(systems), restage, "；".join(errors) or note)
+    except Exception as e:
+        if restage:  # 新结果已经换上了，原来的结果不在了
+            raise Swapped(friendly(e)) from e
+        raise
+
+
+def _finish_parse(
+    sid: str, claude: LLM, meter: jobs.UsageMeter, n: int, restage: bool, msg: str | None
+) -> None:
+    """所有行都识别完、写好之后：生成练习建议，标成完成。"""
     song = store.load(sid)
-    store.patch(sid, progress={"stage": "生成练习建议", "done": len(systems), "total": len(systems)})
+    store.patch(sid, progress={"stage": "生成练习建议", "done": n, "total": n})
     seen = {b["id"]: b["events"] for b in song["bars"]}
     try:
         plan = claude.practice_plan(song["meta"], song["bars"])
@@ -737,11 +805,10 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, charge) -> None:
     def finish(s, meta=song["meta"]):
         if plan or not restage:  # 重新识别后生成建议失败：留着原来的建议（已标成过时）
             staleness.store_plan(s, plan, seen, meta)
-        charge(s)
-        msg = "；".join(errors) or note
+        meter.charge(s)
         state.finish(s, status="ready", notice=("warn", msg) if msg else None, source="parse")
 
-    store.update(sid, finish)
+    meter.update(sid, finish)
 
 
 # ---------------------------------------------------------------------------
@@ -770,11 +837,18 @@ def _recognize_rows(
     on_row(行号, 小节 | None, 错误说明 | None)。返回 (每行识别时用的开头拍号, 失败的说明)。"""
     meta_ts = song["meta"]["time_signature"]
     plan = [
-        (r[0], first_bar_of(song, r[0]), r[1] or _row_start_ts(song["bars"], song["meta"], r[0]), *r[2:3])
+        (
+            r[0],
+            first_bar_of(song, r[0]),
+            r[1] or _row_start_ts(song["bars"], song["meta"], r[0]),
+            _tied_in(song, r[0]),
+            *r[2:3],
+        )
         for r in rows
     ]
     errors: list[str] = []
-    with ThreadPoolExecutor(settings.row_concurrency) as pool:
+    pool = ThreadPoolExecutor(settings.row_concurrency)
+    try:
         futs = {
             pool.submit(
                 transcribe_queued,
@@ -786,8 +860,9 @@ def _recognize_rows(
                 cancel=cancel,
                 start_ts=ts if ts != meta_ts else None,  # 和全曲拍号一样就不用特别告诉模型
                 context=note[0] if note else "",  # 程序给的说明（和弦图读法），不是用户写的提示
+                tied_in=tied,
             ): si
-            for si, first, ts, *note in plan
+            for si, first, ts, tied, *note in plan
         }
         for fut in as_completed(futs):
             si = futs[fut]
@@ -804,6 +879,11 @@ def _recognize_rows(
             if cancel.is_set():
                 for f in futs:
                     f.cancel()  # 还没开始的行不再发请求；正在进行的请求会跑完
+    except BaseException:
+        cancel.set()  # 写回出错（存盘失败、曲子被删）：还没开始的行不再发请求，正在进行的读完这一次就停
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
     return {si: ts for si, _, ts, *_ in plan}, errors
 
 
@@ -834,13 +914,17 @@ def _row_start_ts(bars: list[dict], meta: dict, si: int) -> list[int]:
 
 
 def _rows_to_redo(
-    bars: list[dict], meta: dict, used: dict[int, list[int]], skip_edited: bool = True
+    bars: list[dict],
+    meta: dict,
+    used: dict[int, list[int]],
+    skip_edited: bool = True,
+    ts_only: set[int] | frozenset = frozenset(),
 ) -> list[tuple[int, list[int], str]]:
     """第一遍之后要再识别一次的行：(行号, 开头的拍号, 给模型的提示)。两种情况：
     - 开头实际的拍号（按前面各行写的变拍号推算）和识别时用的不一样（行首自己写了变拍号的不算，模型看得到）；
     - 弹唱谱：这一行读出的和弦图和别的行对同一个和弦的读法不一样（多数行一致时以多数为准，
       常见原因是“3fr.”这类位置标记算错了和弦图），带上多数的读法再识别，谱上的 x 才能换算对。
-    skip_edited：用户改过的行不重做（不覆盖用户的改动）。"""
+    skip_edited：用户改过的行不重做（不覆盖用户的改动）；ts_only：这几行只看拍号。"""
     consensus = _shape_consensus(bars)
     out = []
     for si in sorted(used):
@@ -851,6 +935,8 @@ def _rows_to_redo(
         ts_wrong = ts != used[si] and not row[0].get("ts_change")
         mine = {k: v for b in row for k, v in (b.get("shapes") or {}).items()}
         odd = {k: consensus[k] for k, v in mine.items() if k in consensus and v != consensus[k]}
+        if si in ts_only:
+            odd = {}
         if not ts_wrong and not odd:
             continue
         hint = ""
@@ -885,9 +971,11 @@ def _redo_progress(redo: list) -> dict:
     return {"stage": "复核个别行（变拍号、和弦图）", "done": 0, "total": len(redo)}
 
 
-def _lock_redo(s: dict, used: dict[int, list[int]], redo: list) -> None:
+def _lock_redo(
+    s: dict, used: dict[int, list[int]], redo: list, ts_only: set[int] | frozenset = frozenset()
+) -> None:
     """挑出要重做的行（填进 redo）并把它们标成识别中，在同一次读-改-写里：中间用户改了的行不会被重做覆盖。"""
-    redo[:] = _rows_to_redo(s["bars"], s["meta"], used)
+    redo[:] = _rows_to_redo(s["bars"], s["meta"], used, ts_only=ts_only)
     for si, *_ in redo:
         s["systems"][si].update(status="parsing", error=None)
     if redo:
@@ -898,13 +986,21 @@ class RestageFailed(Exception):
     """重新识别没有全部成功：不替换原来的结果。"""
 
 
+class Swapped(Exception):
+    """重新识别的新结果已经换上之后（生成练习建议、收尾时）出的错：原来的结果已经不在了，不能说“保留不变”。"""
+
+
 def _end_restage(sid: str, why: str) -> bool:
-    """重新识别没完成（失败 / 取消）：原来的结果没动过，恢复成可练习的状态。不是重新识别时返回 False。"""
+    """重新识别没完成（失败 / 取消）：原来的结果没动过，状态也照旧（原来有行失败的还是失败，
+    全部行都成功的是可练习）。不是重新识别（或新结果已经换上）时返回 False。"""
     done = []
 
     def apply(s):
         if state.restaging(s):
-            state.finish(s, status="ready", notice=("warn", f"{why}，原来的结果保留不变。"), source="parse")
+            msg = f"{why}，原来的结果保留不变。"
+            if failed_rows(s):
+                msg += f"原来有 {len(failed_rows(s))} 行没识别出来，可以点“重试失败的行”再试。"
+            state.finish(s, notice=("warn", msg), source="parse")  # 不给 status：照旧（见 state._settle）
             done.append(True)
 
     store.update(sid, apply)
@@ -933,11 +1029,11 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
             msg = "已取消" if isinstance(e, Cancelled) else friendly(e)
 
             def failed(x):
-                x["systems"][si].update(status="error", error=msg)
+                _fail_unfinished_rows(x, msg)  # 这一行，以及按新拍号锁着等重做的行
                 meter.charge(x)  # 失败 / 取消的这次也花了钱
                 state.finish(x)
 
-            store.update(sid, failed)
+            meter.update(sid, failed)
 
     jobs.start(sid, "这首曲子正在识别中", begin, run)
 
@@ -950,10 +1046,21 @@ def reparse_system(
     meter: jobs.UsageMeter | None = None,
 ) -> None:
     meter = meter or jobs.UsageMeter(config.new_llm())
+    cancel = cancel or threading.Event()
     song = store.load(sid)
     start_ts = _row_start_ts(song["bars"], song["meta"], si)  # 前面各行写的变拍号，这一行的图上看不到
     first = first_bar_of(song, si)
-    bars = transcribe_queued(meter.claude, sid, song, si, first, hint=hint, cancel=cancel, start_ts=start_ts)
+    bars = transcribe_queued(
+        meter.claude,
+        sid,
+        song,
+        si,
+        first,
+        hint=hint,
+        cancel=cancel,
+        start_ts=start_ts,
+        tied_in=_tied_in(song, si),
+    )
 
     def apply(s):
         others = {b["id"]: b.get("time_signature") for b in s["bars"] if b["system"] != si}
@@ -963,16 +1070,25 @@ def reparse_system(
         if any(b.get("time_signature") != others[b["id"]] for b in s["bars"] if b["id"] in others):
             staleness.invalidate_plan(s)  # 后面各行的拍号跟着变了
         meter.charge(s)
-        state.finish(s)
 
-    store.update(sid, apply)
+    meter.update(sid, apply)
+    failed = _redo_after(sid, song, {si: start_ts}, [si], cancel, meter, _row_writer(sid, meter))
+
+    def finish(s):
+        _fail_unfinished_rows(s, "已取消" if cancel.is_set() else "没有识别")
+        msg = (
+            "按新的拍号重做后面的行时有行没识别出来（"
+            + "；".join(failed)[:300]
+            + "），可以点“重试失败的行”再试"
+        )
+        state.finish(s, notice=("warn", msg) if failed else None, source="reparse_row")
+        meter.charge(s)
+
+    meter.update(sid, finish)
 
 
-def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what: str = "新加的页") -> None:
-    """后台识别已有曲子里的某几行（补页的新行、重试失败的行），每行完成就写回（其他行照常能练、能改）。
-    调用方已经登记任务、把这几行标成识别中（state.begin "reparse_row"）。what：结束提示里怎么称呼这几行。"""
-    meter = jobs.UsageMeter(None)
-    failed: list[str] = []
+def _row_writer(sid: str, meter: jobs.UsageMeter):
+    """识别已有曲子里的行时，每行结束就写回（_recognize_rows 的 on_row）。"""
 
     def on_row(si, bars, err):
         def apply(s):
@@ -984,38 +1100,56 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
                 s["progress"]["done"] = min(s["progress"]["total"], s["progress"]["done"] + 1)
             meter.charge(s)
 
-        store.update(sid, apply)
+        meter.update(sid, apply)
+
+    return on_row
+
+
+def _redo_after(
+    sid: str,
+    before: dict,
+    used: dict[int, list[int]],
+    rows: list[int],
+    cancel,
+    meter: jobs.UsageMeter,
+    on_row,
+) -> list[str]:
+    """已有曲子里的 rows 识别完之后（used：它们识别时开头的拍号；before：识别前的曲子）：
+    - 识别的是第一行：它第 1 小节写的拍号可能说明谱头的拍号读错了（同整首识别，见 _fix_header_time_signature）；
+    - 其他行开头实际的拍号（按现在各行写的变拍号推算）和它们当初识别时的（按 before 推算）不一样了
+      （这几行写了 / 去掉了变拍号、改了全曲拍号，补页插进来的新行写了变拍号），按新拍号再识别一次。
+    返回失败的说明。"""
+    if 0 in rows and not cancel.is_set():
+        fixed = []
+        store.update(sid, lambda s: fixed.append(_fix_header_time_signature(s, s.get("meta_user") or {})))
+        if fixed[0]:  # 第一行自己是按图上的拍号读的，不用重做
+            used = {**used, 0: store.load(sid)["meta"]["time_signature"]}
+    others = {k for k in range(len(before["systems"])) if k not in used}
+    used = {**{k: _row_start_ts(before["bars"], before["meta"], k) for k in others}, **used}
+    song = store.load(sid)
+    redo: list[tuple[int, list[int], str]] = []
+    # 先看一眼：没有要重做的就不写。别的行只看拍号（和弦图的多数读法整首识别时已经处理过）
+    if not cancel.is_set() and _rows_to_redo(song["bars"], song["meta"], used, ts_only=others):
+        store.update(sid, lambda s: _lock_redo(s, used, redo, ts_only=others))
+    if not redo:
+        return []
+    log.info("song=%s rerun rows after %s (time signature): %s", sid, rows, redo)
+    return _recognize_rows(meter.claude, sid, store.load(sid), redo, cancel, on_row)[1]
+
+
+def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what: str = "新加的页") -> None:
+    """后台识别已有曲子里的某几行（补页的新行、重试失败的行），每行完成就写回（其他行照常能练、能改）。
+    调用方已经登记任务、把这几行标成识别中（state.begin "reparse_row"）。what：结束提示里怎么称呼这几行。"""
+    meter = jobs.UsageMeter(None)
+    failed: list[str] = []
 
     try:
         meter = jobs.UsageMeter(config.new_llm())
         before = store.load(sid)
+        on_row = _row_writer(sid, meter)
         used, errs = _recognize_rows(meter.claude, sid, before, [(si, None) for si in rows], cancel, on_row)
         failed += errs
-        if 0 in rows and not cancel.is_set():
-            # 重试的是第一行：它第 1 小节写的拍号可能说明谱头的拍号读错了（同整首识别，见 _fix_header_time_signature）。
-            # 改了全曲拍号的话，之前按旧拍号识别的其他行也要按新拍号重做
-            fixed = []
-            store.update(sid, lambda s: fixed.append(_fix_header_time_signature(s, s.get("meta_user") or {})))
-            if fixed[0]:
-                old = {
-                    si: _row_start_ts(before["bars"], before["meta"], si)
-                    for si in range(len(before["systems"]))
-                    if si not in used
-                }
-                used = {**old, **used, 0: store.load(sid)["meta"]["time_signature"]}
-        # 新页上前面的行写了变拍号、后面的行并行识别时看不到：按实际的起始拍号再识别一次
-        song = store.load(sid)
-        redo: list[tuple[int, list[int], str]] = []
-        if not cancel.is_set() and _rows_to_redo(
-            song["bars"], song["meta"], used
-        ):  # 先看一眼：没有要重做的就不写
-
-            def begin_redo(s):
-                _lock_redo(s, used, redo)
-
-            store.update(sid, begin_redo)
-        if redo:
-            failed += _recognize_rows(meter.claude, sid, store.load(sid), redo, cancel, on_row)[1]
+        failed += _redo_after(sid, before, used, rows, cancel, meter, on_row)
     except Exception as e:  # 建客户端失败之类：没开始的行都标成失败
         rid = request_id_of(e)
         log.exception("request_id=%s song=%s new pages failed", rid, sid)
@@ -1023,14 +1157,13 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
     finally:
 
         def end(s):
-            for si in rows:
-                if si < len(s["systems"]) and s["systems"][si].get("status") in ("parsing", "pending"):
-                    s["systems"][si].update(status="error", error="已取消" if cancel.is_set() else "没有识别")
+            # 这几行，以及按新拍号锁着等重做的行
+            _fail_unfinished_rows(s, "已取消" if cancel.is_set() else "没有识别")
             msg = f"{what}有行没识别出来（" + "；".join(failed)[:300] + "），可以点“重试失败的行”再试"
             state.finish(s, notice=("warn", msg) if failed else None, source="reparse_row")
             meter.charge(s)
 
-        store.update(sid, end)
+        meter.update(sid, end)
 
 
 # ---------------------------------------------------------------------------

@@ -411,3 +411,88 @@ def test_narrow_first_bar_after_a_single_barline_is_kept():
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [3]
     assert abs(r["systems"][0]["bars"][0][0] - 60) <= 3
+
+
+def test_barlines_found_when_lines_have_a_faint_row_above():
+    """缩小过的截图：线距小（9 像素），每根谱线上面挨着一行浅灰的抗锯齿（不到 215、不到 200），线心落在半像素上。
+    小节线停在深色的那一行：判断两端是否连到 1 弦 / 6 弦时不能把谱线外面那行浅灰也算进去。"""
+    sp = 9
+    img = Image.new("L", (900, 200), 255)
+    d = ImageDraw.Draw(img)
+    tab_top = 80
+    for i in range(6):
+        y = tab_top + i * sp
+        d.line([(40, y - 1), (860, y - 1)], fill=210)
+        d.line([(40, y), (860, y)], fill=120)
+    for x in (40, 300, 580, 860):
+        d.line([(x, tab_top), (x, tab_top + 5 * sp)], fill=40, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3]
+
+
+@pytest.mark.parametrize("top", [0, 1])
+def test_staff_line_on_the_first_or_last_pixel_row(top):
+    """裁得很紧的截图：1 弦就在图片第一行（或 6 弦在最后一行）也不能崩。"""
+    sp = 14
+    img = Image.new("L", (900, top + 5 * sp + 1), 255)
+    d = ImageDraw.Draw(img)
+    for i in range(6):
+        d.line([(10, top + i * sp), (890, top + i * sp)], fill=120)
+    for x in (10, 450, 890):
+        d.line([(x, top), (x, top + 5 * sp)], fill=40, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2]
+
+
+def test_thick_lines_of_an_upscaled_screenshot():
+    """Retina 截图（2 倍放大、不模糊）：谱线有 3 像素粗、和相邻行合并后 4–5 行，页面又不高；
+    谱线粗细的上限要按线距算，不能按页高算。"""
+    sp = 28
+    img = Image.new("L", (1600, 600), 255)
+    d = ImageDraw.Draw(img)
+    for top in (120, 380):
+        for i in range(6):
+            y = top + i * sp
+            d.rectangle([(40, y), (1560, y + 3)], fill=150)
+        for x in (40, 800, 1560):
+            d.rectangle([(x, top), (x + 3, top + 5 * sp + 3)], fill=40)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2, 2]
+
+
+def test_one_row_split_by_a_coda_gap_does_not_make_the_page_two_columns():
+    """只有一行在 Coda 前隔开一大段（≥4 个线距）：整页还是单栏，缩进的首行仍排在最前面。"""
+    img = Image.new("L", (1200, 1000), 255)
+    d = ImageDraw.Draw(img)
+    _draw_tab(d, 150, 200, 1140, (200, 670, 1140))  # 首行缩进
+    _draw_tab(d, 400, 60, 600, (60, 330, 600))
+    _draw_tab(d, 400, 700, 1140, (700, 920, 1140))  # 同一行的 Coda，隔开 100 像素
+    _draw_tab(d, 650, 60, 1140, (60, 600, 1140))
+    r = detect_page(img)
+    assert [(s["x0"], round(s["lines"][0])) for s in r["systems"]] == [
+        (200, 150),
+        (60, 400),
+        (700, 400),
+        (60, 650),
+    ]
+    # 同一行的两段各自的纵向范围都包住整行谱线，和上下两行不重叠
+    for s in r["systems"]:
+        assert s["top"] < s["lines"][0] and s["lines"][-1] < s["bottom"]
+    a, b = r["systems"][1], r["systems"][2]
+    assert (a["top"], a["bottom"]) == (b["top"], b["bottom"])
+    assert r["systems"][0]["bottom"] <= a["top"] and a["bottom"] <= r["systems"][3]["top"]
+
+
+@pytest.mark.parametrize("offset", [0, 3, 40])
+def test_two_columns_slightly_offset_vertically(offset):
+    """双栏排版、右栏比左栏低几个像素到半行：两栏都要找到，先左栏再右栏。"""
+    img = Image.new("L", (1400, 1000), 255)
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        _draw_system(d, top, 60, 640, (60, 350, 640))
+        _draw_system(d, top + offset, 760, 1340, (760, 1050, 1340))
+    r = detect_page(img)
+    systems = r["systems"]
+    assert [s["x0"] for s in systems] == [60, 60, 760, 760]
+    assert [len(s["bars"]) for s in systems] == [2, 2, 2, 2]
+    assert systems[0]["top"] < systems[1]["top"] and systems[2]["top"] < systems[3]["top"]

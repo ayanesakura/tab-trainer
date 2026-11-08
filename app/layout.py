@@ -30,7 +30,14 @@ def _staff_lines(gray: np.ndarray, thr: float | None = None) -> list[float]:
     frac = dark.sum(1) / w
     if thr is None:
         thr = max(0.35, 0.6 * float(frac.max()))
-    return [(a + b) / 2 for a, b in _runs(frac >= thr) if b - a <= max(4, h // 250)]
+    runs = _runs(frac >= thr)
+    # 谱线不能太粗（太粗的是文字、色块）。上限按线距算：和最近的相邻候选线隔开的距离的 0.35 倍；
+    # 放大过的截图（Retina 2 倍）谱线有三四个像素粗，按页高算的固定上限会把它们全丢掉。原来的上限照旧保留
+    mids = [(a + b) / 2 for a, b in runs]
+    gaps = np.diff(mids) if len(mids) > 1 else np.zeros(0)
+    near = np.minimum(np.r_[np.inf, gaps], np.r_[gaps, np.inf]) if len(mids) > 1 else np.zeros(len(mids))
+    cap = max(4, h // 250)
+    return [m for (a, b), m, gap in zip(runs, mids, near) if b - a <= max(cap, 0.35 * gap)]
 
 
 def _spacing(staff: list[float]) -> float:
@@ -188,7 +195,8 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
 def _line_cover(g: np.ndarray, lines: list[float], need: int) -> float:
     """这组线横向有多大比例的地方至少 need 根是深色的（浅灰的谱线按 215 算）。"""
     ys = [round(y) for y in lines]
-    return float((np.stack([g[max(0, y - 1) : y + 2] < 215 for y in ys]).any(1).sum(0) >= need).mean())
+    # 每根线先在自己上下各一行里合并成一行再叠起来：线贴着图片上下边时切出来只有两行，直接叠形状对不上
+    return float((np.stack([(g[max(0, y - 1) : y + 2] < 215).any(0) for y in ys]).sum(0) >= need).mean())
 
 
 def _chord_diagrams(dark: np.ndarray, tab: list[float], sp: float, x0: int, x1: int) -> bool:
@@ -308,17 +316,10 @@ def _trim(group: list[float]) -> list[float]:
     return g
 
 
-def detect_page(img: Image.Image) -> dict:
-    """返回 {"width", "height", "systems": [...]}，每个 system 是一行六线谱：
-    top/bottom：这一行（含上方五线谱和标记）的纵向范围；x0/x1：谱线横向范围；
-    bars：小节横向范围列表 [[bx0, bx1], ...]；lines：六根弦线的纵坐标（1 弦在最上面）。"""
-    g = np.asarray(img.convert("L"))
-    h, w = g.shape
-    if min(h, w) < 16:  # 太小，不可能有谱线（下面按行 / 列统计会遇到空数组）
-        return {"width": w, "height": h, "systems": []}
+def _systems(g: np.ndarray, x_off: int = 0) -> list[dict]:
+    """在一块（整页或双栏里的一栏）里找六线谱行；横坐标加上 x_off 换回整页坐标。"""
     dark = g < 200
     staves = _find_staves(g)
-
     systems = []
     for ti, tab in enumerate(staves):
         if len(tab) != 6:
@@ -345,8 +346,9 @@ def detect_page(img: Image.Image) -> dict:
             # 小节线：六线谱上下线之间（掐头去尾）几乎全暗的竖列
             y_a, y_b = int(tab[0] + sp * 0.3), int(tab[-1] - sp * 0.3)
             colfrac = dark[y_a:y_b].mean(0)
+            # 两端只量到谱线以内：线心在半像素上时（谱线外挨着一行浅灰），向内取整，不把谱线外面那行算进去
             ends = np.minimum(
-                dark[int(tab[0]) : y_a + 1].mean(0), dark[y_b : int(np.ceil(tab[-1])) + 1].mean(0)
+                dark[int(np.ceil(tab[0])) : y_a + 1].mean(0), dark[y_b : int(tab[-1]) + 1].mean(0)
             )
             runs_bl = [
                 (a, b)
@@ -395,28 +397,77 @@ def detect_page(img: Image.Image) -> dict:
                         "first_top": first[0],
                         "tab_bottom": tab[-1],
                         "sp": sp,
-                        "x0": int(x0),
-                        "x1": int(x1),
-                        "bars": bars,
+                        "x0": int(x0) + x_off,
+                        "x1": int(x1) + x_off,
+                        "bars": [[a + x_off, b + x_off] for a, b in bars],
                         "lines": [round(float(y), 1) for y in tab],
                     }
                 )
+    return systems
 
-    # 阅读顺序：有一行被分成左右两段时按双栏处理（先左栏从上到下，再右栏）
-    rows: dict[float, int] = {}
-    for s_ in systems:
-        rows[s_["tab_bottom"]] = rows.get(s_["tab_bottom"], 0) + 1
-    two_col = any(n > 1 for n in rows.values())
-    for s_ in systems:
-        s_["col"] = int((s_["x0"] + s_["x1"]) / 2 > w / 2) if two_col else 0
-    systems.sort(key=lambda s_: (s_["col"], s_["tab_bottom"]))
 
+def _gutter(g: np.ndarray) -> tuple[int, int] | None:
+    """双栏排版的栏间空白：在谱线所在的行里（左半页或右半页一大半是线），页面中间 25%–75% 一段几乎没有墨迹的竖条，
+    返回最宽那段的（中线, 宽度）。单栏谱的谱线横穿页面中间，找不到（偶尔一根横贯全页的装饰线只占很少几行，不碍事）。"""
+    dark = g < 215
+    dark = dark[:-1] | dark[1:]
+    w = dark.shape[1]
+    half = w // 2
+    rows = (dark[:, :half].mean(1) >= 0.5) | (dark[:, half:].mean(1) >= 0.5)
+    if not rows.any():
+        return None
+    lo, hi = w // 4, w * 3 // 4
+    runs = _runs(dark[rows][:, lo:hi].mean(0) <= 0.05)
+    if not runs:
+        return None
+    a, b = max(runs, key=lambda r: r[1] - r[0])
+    if b - a < max(8, w * 0.02):
+        return None
+    return lo + int(a + b) // 2, int(b - a)
+
+
+def _columns(g: np.ndarray) -> list[dict] | None:
+    """双栏排版：中间有一条贯穿所有谱线的空白时，左右两栏分开找行（两栏上下错开几个像素时，整页一起找
+    谱线会交错在一起、一根也组不成谱表）。至少有两行左右两栏在同一高度（允许上下错开，只要纵向有重叠）
+    才算双栏：只是一行谱中间隔开一段（Coda 前的空白）不算；栏间空白也要有 4 个线距宽（和 _segments 分段的标准一样）。
+    不是双栏返回 None，按单栏处理。"""
+    found = _gutter(g)
+    if found is None:
+        return None
+    gut, width = found
+    left, right = _systems(g[:, :gut]), _systems(g[:, gut:], gut)
+    if not left or not right or width < 4 * max(s_["sp"] for s_ in left + right):
+        return None
+    pairs = sum(
+        any(a["lines"][0] <= b["lines"][-1] and b["lines"][0] <= a["lines"][-1] for b in right) for a in left
+    )
+    if pairs < 2:
+        return None
+    return [dict(s_, col=0) for s_ in left] + [dict(s_, col=1) for s_ in right]
+
+
+def detect_page(img: Image.Image) -> dict:
+    """返回 {"width", "height", "systems": [...]}，每个 system 是一行六线谱：
+    top/bottom：这一行（含上方五线谱和标记）的纵向范围；x0/x1：谱线横向范围；
+    bars：小节横向范围列表 [[bx0, bx1], ...]；lines：六根弦线的纵坐标（1 弦在最上面）。"""
+    g = np.asarray(img.convert("L"))
+    h, w = g.shape
+    if min(h, w) < 16:  # 太小，不可能有谱线（下面按行 / 列统计会遇到空数组）
+        return {"width": w, "height": h, "systems": []}
+    dark = g < 200
+    systems = _columns(g) or [dict(s_, col=0) for s_ in _systems(g)]
+    # 阅读顺序：双栏时先左栏从上到下，再右栏；同一行被空白（如 Coda 前）分成几段时从左到右
+    systems.sort(key=lambda s_: (s_["col"], s_["tab_bottom"], s_["x0"]))
     # 找行与行的分界时只看真正的黑色印刷（谱子照片上斜着的灰色水印、灰底不算）
     ink = g < 140
-    # 纵向范围：同一栏里相邻两行之间取中点；首行向上、末行向下各留一行谱高度左右的余量
-    for i, s_ in enumerate(systems):
-        prev = systems[i - 1] if i > 0 and systems[i - 1]["col"] == s_["col"] else None
-        nxt = systems[i + 1] if i + 1 < len(systems) and systems[i + 1]["col"] == s_["col"] else None
+    # 纵向范围：同一栏里相邻两行之间取中点；首行向上、末行向下各留一行谱高度左右的余量。
+    # 同一行被空白分成的几段（Coda 前）互相不算上下相邻：各自找正上方、正下方的行
+    for s_ in systems:
+        same = [t for t in systems if t["col"] == s_["col"]]
+        above = [t for t in same if t["tab_bottom"] < s_["first_top"]]
+        below = [t for t in same if t["first_top"] > s_["tab_bottom"]]
+        prev = max(above, key=lambda t: (t["tab_bottom"], t["x0"])) if above else None
+        nxt = min(below, key=lambda t: (t["first_top"], t["x0"])) if below else None
         height = s_["tab_bottom"] - s_["first_top"]
         top = (
             _row_split(prev, s_, ink)

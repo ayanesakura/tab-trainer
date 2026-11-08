@@ -120,6 +120,44 @@ def _fmt_note(x) -> str:
     return f"{float(t):g}拍:{s}弦{f}品"
 
 
+def rows_to_eval(truth: dict, systems: list[int] | None) -> list[int]:
+    """要评测的行：指定了就用指定的；真实谱子做的评测曲（scripts/make_real_eval.py）只有用户核对过的小节
+    （eval_bars）算标准答案，只评这些小节所在的行；否则全部行。"""
+    scored = set(truth.get("eval_bars") or [])
+    if systems is not None:
+        return systems
+    if scored:
+        return sorted({b["system"] for b in truth["bars"] if b["n"] in scored})
+    return list(range(len(truth["systems"])))
+
+
+def start_ts(truth: dict, si: int) -> list[int] | None:
+    """第 si 行开头生效的拍号：前面各行最后一个小节的拍号（这一行自己第 1 小节写的变拍号不算，模型在图上看得到；
+    和应用里一样，见 recognize._row_start_ts）。和全曲拍号一样时返回 None（应用里这时不特别告诉模型）。"""
+    prev = [b for b in truth["bars"] if b["system"] < si]
+    ts = (prev[-1].get("time_signature") if prev else None) or truth["meta"]["time_signature"]
+    return None if ts == truth["meta"]["time_signature"] else ts
+
+
+def estimate(
+    truth: dict, sys_idx: list[int], price: tuple[float, float] | None, double: str, split: bool | None
+):
+    """预估调用次数和费用：(最少次数, 最多次数, 最少费用, 最多费用)；不知道价格时费用为 None。
+    每读一遍 1–2 次调用（有问题时返修一次；返修后小节数还不对时再重读一次，很少见，不算）；切成两半的行每遍 2 倍；
+    双重校对 all 每行至少读两遍、最多三遍，doubts 一到三遍。"""
+    do_split = recognize.SPLIT_ROWS if split is None else split
+    base = sum(
+        2 if do_split and si < len(truth["systems"]) and recognize._should_split(truth["systems"][si]) else 1
+        for si in sys_idx
+    )
+    reads = {"off": (1, 1), "doubts": (1, 3), "all": (2, 3)}[double]
+    lo, hi = base * reads[0], base * reads[1] * 2
+    if not price:
+        return lo, hi, None, None
+    per = (EST_TOKENS_PER_CALL[0] * price[0] + EST_TOKENS_PER_CALL[1] * price[1]) / 1e6
+    return lo, hi, lo * per, hi * per
+
+
 def run(
     sid: str,
     cfg: LLMConfig,
@@ -129,15 +167,11 @@ def run(
     double: str = "off",
     split: bool | None = None,  # None = 和应用里一样（recognize.SPLIT_ROWS）
 ) -> dict:
+    """price_model：按这个模型的价格估算费用（--price-as）；不给就用模型客户端按实际回答的模型记的钱
+    （服务端兜底换了模型时也对）。"""
     truth = store.load(sid)
-    # 真实谱子做的评测曲（scripts/make_real_eval.py）：只有用户核对过的小节算标准答案，只评这些小节所在的行
     scored = set(truth.get("eval_bars") or [])
-    if systems is not None:
-        sys_idx = systems
-    elif scored:
-        sys_idx = sorted({b["system"] for b in truth["bars"] if b["n"] in scored})
-    else:
-        sys_idx = list(range(len(truth["systems"])))
+    sys_idx = rows_to_eval(truth, systems)
     claude = Claude(cfg)
     raw_calls: list[dict] = []  # 模型原始输出（含五线谱音名），清洗后的数据里没有，排查校验时用
     real_transcribe = claude.transcribe
@@ -158,12 +192,17 @@ def run(
         first = by_sys[si][0]["n"] if by_sys.get(si) else 1
         try:
             # 这一行开头的拍号按标准答案给（整首识别时由前面各行的结果带过来，见 recognize.run_parse）
-            row = by_sys.get(si) or []
-            ts = (row[0].get("time_signature") if row else None) or truth["meta"]["time_signature"]
             return (
                 si,
                 recognize.transcribe_system(
-                    claude, sid, truth, si, first, start_ts=ts, double_check=double, split=split
+                    claude,
+                    sid,
+                    truth,
+                    si,
+                    first,
+                    start_ts=start_ts(truth, si),
+                    double_check=double,
+                    split=split,
                 ),
                 None,
             )
@@ -201,6 +240,8 @@ def run(
         "song": sid,
         "model": cfg.model,
         "effort": cfg.effort,
+        "double_check": double,
+        "split": recognize.SPLIT_ROWS if split is None else split,
         "systems": sys_idx,
         "bar_count_mismatch": {
             si: [len(by_sys.get(si, [])), len(p)] for si, p, _ in results if len(p) != len(by_sys.get(si, []))
@@ -208,7 +249,8 @@ def run(
         "errors": errors,
         "summary": summarize(rows),
         "usage": usage,
-        # 指定了 --price-as 就按它估算；否则用客户端按实际模型记的钱（网关前缀的模型名也能查到价）
+        "price_as": price_model or None,
+        # 指定了 --price-as 就按它估算；否则用客户端按实际回答的模型记的钱（服务端兜底换了模型、网关前缀的模型名都对）
         "cost_usd": round(
             usage["input_tokens"] / 1e6 * price[0] + usage["output_tokens"] / 1e6 * price[1]
             if price
@@ -249,7 +291,8 @@ def to_markdown(rep: dict, worst: int = 12) -> str:
         f"# 识别评测：{rep['song']}",
         "",
         (
-            f"- 模型 `{rep['model']}`，精细度 `{rep['effort']}`，{len(rep['systems'])} 行 / {s['bars']} 小节，"
+            f"- 模型 `{rep['model']}`，精细度 `{rep['effort']}`，双重校对 `{rep.get('double_check', 'off')}`，"
+            f"切半 `{rep.get('split', '-')}`，{len(rep['systems'])} 行 / {s['bars']} 小节，"
             f"用时 {rep['seconds']} 秒，约 ${rep['cost_usd']}（{rep['usage']['input_tokens']} 输入 + "
             f"{rep['usage']['output_tokens']} 输出 token）"
         ),
@@ -328,7 +371,7 @@ def main() -> None:
         print(to_markdown(rep))
         return
     systems = [int(x) for x in a.systems.split(",")] if a.systems else None
-    n_sys = len(systems) if systems is not None else len(truth["systems"])
+    sys_idx = rows_to_eval(truth, systems)
     cfg = config.llm_config()
     if a.model:
         cfg.model = a.model
@@ -336,21 +379,18 @@ def main() -> None:
         cfg.effort = a.effort
     if a.base_url:
         cfg.base_url = a.base_url
-    price_model = a.price_as or cfg.model
-    price = price_of(price_model)
-    est = (
-        f"约 ${n_sys * (EST_TOKENS_PER_CALL[0] * price[0] + EST_TOKENS_PER_CALL[1] * price[1]) / 1e6:.2f}"
-        f"–{2 * n_sys * (EST_TOKENS_PER_CALL[0] * price[0] + EST_TOKENS_PER_CALL[1] * price[1]) / 1e6:.2f}"
-        if price
-        else "未知（模型不在价格表里）"
+    lo, hi, c_lo, c_hi = estimate(truth, sys_idx, price_of(a.price_as or cfg.model), a.double_check, a.split)
+    est = f"约 ${c_lo:.2f}–{c_hi:.2f}" if c_lo is not None else "未知（模型不在价格表里）"
+    print(
+        f"评测 {a.song}：{len(sys_idx)} 行谱子，模型 {cfg.model}，精细度 {cfg.effort}，"
+        f"双重校对 {a.double_check}，切半 {recognize.SPLIT_ROWS if a.split is None else a.split}"
     )
-    print(f"评测 {a.song}：{n_sys} 行谱子，模型 {cfg.model}，精细度 {cfg.effort}")
-    print(f"将调用模型 {n_sys}–{2 * n_sys} 次（时值不对的行会返修一次），预估费用 {est}")
+    print(f"将调用模型 {lo}–{hi} 次（有问题的行会返修、重读），预估费用 {est}")
     if not a.yes:
         print("这只是计划。确认要运行请加 --yes。")
         return
 
-    rep = run(a.song, cfg, systems, a.concurrency, price_model, a.double_check, a.split)
+    rep = run(a.song, cfg, systems, a.concurrency, a.price_as or "", a.double_check, a.split)
     model_tag = (a.model or cfg.model or "").split("/")[-1]
     out = store.DATA / "evals" / f"{time.strftime('%Y%m%d-%H%M%S')}-{a.song}-{model_tag}"
     out.mkdir(parents=True, exist_ok=True)
