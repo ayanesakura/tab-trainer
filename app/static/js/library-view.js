@@ -79,8 +79,10 @@ export function costText(s) {
   return `<span class="cost" title="${esc(tip.join('；'))}">${esc(text)}${s.unpriced_tokens && usd ? ' +' : ''}</span>`;
 }
 
-// 识别失败 / 取消、又没有可练的小节时的下一步：模型设置的问题去设置，其他的（图片 / PDF 曲子）重新识别
-const SETTINGS_ERR = /API key|模型设置|模型名|Base URL|余额|额度/i;
+// 识别失败 / 取消、又没有可练的小节时的下一步：模型设置的问题去设置，其他的（图片 / PDF 曲子）重新识别。
+// 只认 key / 模型名 / 权限这类改了设置才会好的错误（文字和 app/llm.py 的 friendly() 对应：没设 key、key 无效、403、模型不存在）；
+// 429 “额度不足”、过载、连不上 / 连接中断（提到 Base URL）、超时这些稍后重试就可能好，给重试按钮
+const SETTINGS_ERR = /API key|模型名|模型设置|（403）/i;
 export const settingsError = s => s.status === 'error' && s.notice && SETTINGS_ERR.test(s.notice.msg || '');
 const retryButton = s => `<button class="btn sm act" data-k="retry-failed" data-retry-failed="${esc(s.id)}" title="只重新识别没识别出来的行">${icon('refresh', 12)}重试失败的 ${esc(s.failed_rows)} 行</button>`;
 export function fixAction(s) {

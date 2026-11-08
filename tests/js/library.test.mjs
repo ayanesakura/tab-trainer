@@ -53,6 +53,17 @@ test('costText：精确 / 估算 / 只有 token', () => {
 test('fixAction / rowHTML：失败的曲子给下一步，重试失败的行优先', () => {
   const keyErr = song({ status: 'error', bars: 0, notice: { kind: 'error', msg: '还没有设置 API key' } });
   assert.match(fixAction(keyErr), /去设置/);
+  // app/llm.py friendly() 的文字：改设置才会好的 → 去设置；暂时的（429 额度、连不上、连接中断提到 Base URL）→ 重试
+  const err = (msg, o) => song({ status: 'error', bars: 0, failed_rows: 2, notice: { kind: 'error', msg }, ...o });
+  for (const msg of ['API key 无效，请在曲库页顶部的“设置”里检查。', '模型不存在或无权访问，请检查“设置”里的模型名。',
+    '模型服务拒绝了这次请求（403）：forbidden', '第 1 行：还没有设置 API key：请在曲库页顶部的“设置”里填写'])
+    assert.match(fixAction(err(msg)), /去设置/, msg);
+  for (const msg of ['第 1 行：调用太频繁或额度不足（429），稍后再试。；第 2 行：调用太频繁或额度不足（429），稍后再试。',
+    '第 1 行：和模型服务的连接中断了，请稍后重试（网络不稳定时可以检查网络或 Base URL）。', '连不上模型服务，请检查网络或 Base URL。',
+    '模型服务返回错误 529：Overloaded']) {
+    assert.match(fixAction(err(msg)), /重试失败的 2 行/, msg);
+    assert.match(rowHTML(err(msg, { bars: 4 })), /重试失败的 2 行/, msg); // 有小节可练时也给重试
+  }
   assert.match(fixAction(song({ status: 'error', bars: 0 })), /data-retry="s1".*重新识别/);
   assert.match(fixAction(song({ status: 'error', bars: 0, failed_rows: 2 })), /重试失败的 2 行/);
   assert.equal(fixAction(song({ status: 'error', bars: 0, is_score: true })), '');
