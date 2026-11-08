@@ -41,7 +41,12 @@ settings = Settings()
 # 模型设置
 # ---------------------------------------------------------------------------
 def mask(key: str) -> str:
-    return key[:7] + "…" + key[-4:] if len(key) > 14 else ("已设置" if key else "")
+    """设置页显示的 key：长的（官方 key）露前 4 位和后 4 位，中等长度（网关的短 key）只露后 4 位，太短的一位都不露。"""
+    if len(key) >= 32:
+        return key[:4] + "…" + key[-4:]
+    if len(key) >= 16:
+        return "…" + key[-4:]
+    return "已设置" if key else ""
 
 
 def public_settings() -> dict:

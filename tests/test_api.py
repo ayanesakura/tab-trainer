@@ -245,6 +245,20 @@ def test_upload_decode_errors_are_400_but_other_errors_are_not(client, monkeypat
     assert not isinstance(e.value, ValueError)
 
 
+@pytest.mark.parametrize(
+    ("key", "shown"),
+    [
+        ("", ""),
+        ("abcdefghij", "已设置"),  # 太短：露几位就等于露了一大半
+        ("gw-0123456789abcdef", "…cdef"),  # 网关的短 key：只露最后 4 位
+        ("sk-ant-api03-" + "x" * 80 + "WXYZ", "sk-a…WXYZ"),
+    ],
+)
+def test_api_key_mask_shows_only_a_small_share(key, shown):
+    """reviewer：以前露前 7 位 + 后 4 位，15–20 位的网关 key 大半都看得见。"""
+    assert config.mask(key) == shown
+
+
 def test_settings_endpoints(client, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     s = client.get("/api/settings").json()
@@ -259,7 +273,7 @@ def test_settings_endpoints(client, monkeypatch):
     s = client.put(
         "/api/settings", json={"api_key": " sk-ant-1234567890abcdef ", "base_url": "http://gw"}
     ).json()
-    assert s["api_key_masked"] == "sk-ant-…cdef" and s["base_url"] == "http://gw"
+    assert s["api_key_masked"] == "…cdef" and s["base_url"] == "http://gw"
     from app import store
 
     assert store.load_config()["api_key"] == "sk-ant-1234567890abcdef"  # 去掉首尾空白，原样存
