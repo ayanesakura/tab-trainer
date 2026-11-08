@@ -155,7 +155,9 @@ def run(
             ts = (row[0].get("time_signature") if row else None) or truth["meta"]["time_signature"]
             return (
                 si,
-                recognize.transcribe_system(claude, sid, truth, si, first, start_ts=ts, double_check=double),
+                recognize.transcribe_system(
+                    claude, sid, truth, si, first, start_ts=ts, double_check=double, split=split
+                ),
                 None,
             )
         except Exception as e:  # noqa: BLE001 - 单行失败照样出报告
