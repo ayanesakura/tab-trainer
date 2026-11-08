@@ -37,6 +37,13 @@ test('stateHTML / barsText：状态说明，后端文字要转义', () => {
   assert.match(stateHTML(song({ status: 'error', is_score: true })), /曲谱读取失败/);
   assert.match(stateHTML(song({ busy: true, recognizing: true, progress: { stage: '识别', done: 2, total: 4 } })), /2\/4 行.*aria-valuenow="50"/);
   assert.match(stateHTML(song({ needs_review_bars: 3 })), /3 小节待核对/);
+  // 精修：进度按小节数；做完是“已精修”，刚做完的说明（info）用绿色，不重复显示“已精修”
+  assert.match(stateHTML(song({ busy: true, activity: { kind: 'refine' }, progress: { stage: '精修', done: 3, total: 12 } })), /3\/12 小节/);
+  const refined = { at: '2026-11-08 10:00', checked: 12, changed: 2 };
+  assert.match(stateHTML(song({ refined })), /badge ok[^>]*改了 2 个">已精修/);
+  const done = stateHTML(song({ refined, notice: { kind: 'info', msg: '精修完成：检查了 12 个小节，改了 2 个。' } }));
+  assert.match(done, /badge ok notice-badge/);
+  assert.doesNotMatch(done, />已精修</);
   assert.equal(barsText(song()), '8 小节');
   assert.equal(barsText(song({ bars: 0, is_score: true })), '已导入');
   assert.equal(barsText(song({ status: 'error' })), '');

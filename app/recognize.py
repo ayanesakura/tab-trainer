@@ -17,7 +17,7 @@ from app.errors import Busy, Invalid
 from app.jobs import Cancelled
 from app.layout import detect_page
 from app.llm import LLM, LLMError, friendly, request_id_of
-from app.model import is_score
+from app.model import is_score, notes_key
 from app.music import (
     PLACEHOLDER_MSG,
     apply_time_signatures,
@@ -66,6 +66,11 @@ def start_parse(sid: str, cancel: threading.Event | None = None) -> bool:
             log.exception("request_id=%s song=%s parse failed", rid, sid)
             if not _end_restage(sid, "重新识别失败：" + friendly(e)):
                 _end_parse(sid, "error", ("error", friendly(e)))
+        else:
+            if (
+                store.load(sid).get("status") == "ready"
+            ):  # 识别成功（个别行失败也算）：设置了自动精修就接着精修整首
+                _auto_refine(sid, cancel, None)
 
     try:
         jobs.start(sid, "", _begin_parse, run, cancel)
@@ -102,6 +107,28 @@ def _end_parse(sid: str, status: str, notice: tuple[str, str] | None) -> None:
         state.finish(s, status=status, notice=notice, source="parse")
 
     store.update(sid, apply)
+
+
+def _auto_refine(sid: str, cancel: threading.Event, before: set | None) -> None:
+    """设置了自动精修（config.refine_mode）时，识别结束后在同一个任务里接着精修。
+    before：识别开始前各小节的 (id, 音符指纹)（_bar_keys），只精修这之后新识别出的小节；None = 整首。"""
+    if cancel.is_set() or config.refine_mode() != "auto":
+        return
+    from app import refine  # refine 依赖本模块（全局名额）
+
+    try:
+        only = None
+        if before is not None:
+            only = {b["id"] for b in store.load(sid)["bars"] if (b["id"], notes_key(b)) not in before}
+            if not only:
+                return
+        refine.refine_after(sid, cancel, only)
+    except Exception:  # 识别已经完成，精修出错不影响识别结果
+        log.exception("song=%s auto refine failed", sid)
+
+
+def _bar_keys(song: dict) -> set[tuple[str, str]]:
+    return {(b["id"], notes_key(b)) for b in song.get("bars") or []}
 
 
 def _fail_unfinished_rows(s: dict, why: str) -> None:
@@ -257,15 +284,20 @@ def ocr_disagreements(
 _system_slots = threading.BoundedSemaphore(settings.max_rows_global)
 
 
-def transcribe_queued(*args, cancel: threading.Event | None = None, **kw) -> list[dict]:
-    """排队等全局名额再识别一行；排队期间点了取消就不再识别。"""
+def run_queued(fn, cancel: threading.Event | None = None):
+    """排队等全局名额再执行 fn()（识别一行、精修一个小节）；排队期间点了取消就不再执行。"""
     while not _system_slots.acquire(timeout=0.2):
         if cancel is not None and cancel.is_set():
             raise Cancelled()
     try:
-        return transcribe_system(*args, cancel=cancel, **kw)
+        return fn()
     finally:
         _system_slots.release()
+
+
+def transcribe_queued(*args, cancel: threading.Event | None = None, **kw) -> list[dict]:
+    """排队等全局名额再识别一行；排队期间点了取消就不再识别。"""
+    return run_queued(lambda: transcribe_system(*args, cancel=cancel, **kw), cancel)
 
 
 def transcribe_system(
@@ -1034,6 +1066,7 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
 
     def run(cancel):
         meter = jobs.UsageMeter(None)
+        before = _bar_keys(store.load(sid))
         try:
             meter = jobs.UsageMeter(config.new_llm())
             reparse_system(sid, si, hint, cancel, meter)
@@ -1048,6 +1081,8 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
                 state.finish(x)
 
             meter.update(sid, failed)
+        else:
+            _auto_refine(sid, cancel, before)
 
     jobs.start(sid, "这首曲子正在识别中", begin, run)
 
@@ -1156,6 +1191,7 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
     调用方已经登记任务、把这几行标成识别中（state.begin "reparse_row"）。what：结束提示里怎么称呼这几行。"""
     meter = jobs.UsageMeter(None)
     failed: list[str] = []
+    keys = _bar_keys(store.load(sid))
 
     try:
         meter = jobs.UsageMeter(config.new_llm())
@@ -1178,6 +1214,7 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
             meter.charge(s)
 
         meter.update(sid, end)
+    _auto_refine(sid, cancel, keys)  # 只精修刚识别出的小节
 
 
 # ---------------------------------------------------------------------------

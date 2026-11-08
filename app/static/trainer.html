@@ -97,6 +97,7 @@
             <div class="grow"></div>
             <button class="btn sm" id="editModeBtn" data-ic="edit" aria-pressed="false" title="点击谱面上的音符修改弦、品和技巧">改音</button>
             <div class="seg sm" id="notationSeg" aria-label="谱面样式"><button data-v="both">五线谱 + 六线谱</button><button data-v="tab">只看六线谱</button></div>
+            <button class="btn sm" id="refineBtn" data-ic="sparkle" title="精修：每小节放大，让 AI 对照原谱逐拍核对（约 $0.06 / 小节）" hidden>精修</button>
             <button class="btn sm" id="exportBtn" data-ic="download" title="下载为 Guitar Pro 文件（.gp）">导出 GP</button>
             <span class="help-wrap">
               <button class="icon-btn sm help-btn" id="scoreHelpBtn" aria-label="谱面操作说明" aria-describedby="scoreHelp">?</button>
@@ -133,6 +134,7 @@
             <div class="bar-chords" id="barChords" hidden></div>
             <div class="tip" id="tipText"></div>
             <div class="warns" id="tipWarn" hidden></div>
+            <div class="refine-row" id="refineRow" hidden><div class="refine-diff"><span id="refineDiff"></span></div><div class="refine-acts"><button class="btn sm" id="undoRefineBtn" data-ic="back" title="恢复成精修之前的读法">撤销精修</button><span class="hint">精修之前：<span id="refinePrev"></span></span></div></div>
             <div class="review-row" id="reviewRow" hidden><button class="btn sm" id="reviewBtn" data-ic="check">确认没问题</button><span class="hint" id="reviewHint">对照原谱看过，识别是对的</span></div>
             <button class="paper" id="cropBox" title="点开看这一整行的原谱" hidden><canvas id="crop"></canvas><span class="paper-msg" id="cropMsg" hidden></span><span class="paper-cap">原谱</span></button>
             <div class="coach">

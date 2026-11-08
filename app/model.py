@@ -41,7 +41,7 @@ from app.music import (
 
 SourceType = Literal["image", "pdf", "gp", "musicxml"]
 Status = Literal["queued", "parsing", "ready", "error", "cancelled", "imported"]
-ActivityKind = Literal["parse", "reparse_row", "explain"]
+ActivityKind = Literal["parse", "reparse_row", "explain", "refine"]
 WarnCode = Literal[tuple(WARN_CODES)]  # type: ignore[valid-type]
 SCORE_SOURCES = tuple(SCORE_FILES)  # ("gp", "musicxml")
 USAGE_KEYS = ("input_tokens", "output_tokens", "cost_usd", "unpriced_tokens")
@@ -191,6 +191,7 @@ class QA(_M):
     at: str = ""
     stale: bool = False
     stale_by_edit: bool = False
+    stale_by_refine: bool = False  # 精修改了音才过时的：撤销精修时恢复
 
 
 class Orig(_M):
@@ -200,6 +201,22 @@ class Orig(_M):
     tip: str = ""
     uncertain: str = ""
     warn: list[Warn] | None = None  # 识别时留下的警告（OCR 不一致等），撤销时恢复；早先的没记
+
+
+class RefinePrev(_M):
+    """精修改动之前的内容（撤销精修时恢复）。"""
+
+    events: list[Event]
+    tip: str = ""
+    uncertain: str = ""
+    warn: list[Warn] = Field(default_factory=list)  # 识别时留下的警告（OCR 不一致等）
+
+
+class Refine(_M):
+    """精修改过这个小节：模型说的改动（diff）和改之前的内容。用户手改以后就没有了（撤销精修不再适用）。"""
+
+    diff: str = ""
+    prev: RefinePrev
 
 
 class Bar(_M):
@@ -220,6 +237,8 @@ class Bar(_M):
     reviewed_rev: int | None = None  # 早先的确认记的是 rev：rev 没变就还有效
     # 确认时看到的警告（文字）：之后冒出新的警告（比如改了拍号）要重新核对
     reviewed_warn: list[str] | None = None
+    refine: Refine | None = None  # 精修改过音（见 app/refine.py）
+    refine_key: str | None = None  # 精修核对过时音符的指纹（notes_key）：音没再变就不用再核对
     # 弹唱谱：这个小节里出现的和弦（事件的 chord）的指法，和弦名 → 1–6 弦的品位（-1 = 不弹），给谱面画和弦图
     shapes: dict[str, ChordShape] | None = None
     qa: list[QA] = Field(default_factory=list)
@@ -277,7 +296,7 @@ class Activity(_M):
 
 
 class Notice(_M):
-    kind: Literal["warn", "error"]
+    kind: Literal["warn", "error", "info"]
     msg: str
     source: str = ""  # 哪类任务留下的（同类任务再开始时清掉）
 
@@ -291,6 +310,22 @@ class Progress(_M):
 class Derived(_M):
     version: int | None = None
     alphatab: str = ""
+
+
+class Refined(_M):
+    """上一次精修整首的结果。"""
+
+    at: str = ""  # YYYY-MM-DD HH:MM
+    checked: int = 0  # 核对了几个小节
+    changed: int = 0  # 改了几个
+
+
+class RefineEstimate(_M):
+    """现在点“精修”会核对几个小节、大约花多少钱和时间（app/refine.py 的 estimate）。"""
+
+    bars: int = 0
+    cost_usd: float = 0
+    minutes: int = 0
 
 
 class Song(_M):
@@ -319,6 +354,7 @@ class Song(_M):
     tags: list[str] = Field(default_factory=list)
     track: int = 0
     derived: Derived | None = None
+    refined: Refined | None = None
 
 
 def problems(song: dict) -> list[str]:
@@ -535,7 +571,16 @@ def bump_revs(song: dict, before: tuple[str, dict[str, tuple[int, str]]]) -> Non
 
 # 只在接口返回里出现（app/views.py 算出来），不存盘
 VIEW_ONLY = frozenset(
-    {"practice", "busy", "recognizing", "can_edit_bars", "editable_meta", "is_score", "failed_rows"}
+    {
+        "practice",
+        "busy",
+        "recognizing",
+        "can_edit_bars",
+        "editable_meta",
+        "is_score",
+        "failed_rows",
+        "refine_estimate",
+    }
 )  # 早期格式的 running / error / job / kind 由 migrate 在升级时去掉
 
 
@@ -595,6 +640,7 @@ class BarView(Bar):
     reviewed_key: str | None = Field(None, exclude=True)  # 内部字段，不给前端
     reviewed_rev: int | None = Field(None, exclude=True)
     reviewed_warn: list[str] | None = Field(None, exclude=True)
+    refine_key: str | None = Field(None, exclude=True)
     locked: str | None = None  # 现在不能改的原因
     warn: list[Warn] = Field(default_factory=list)
 
@@ -630,6 +676,8 @@ class SongView(_M):
     derived: Derived | None = None
     is_score: bool = False  # Guitar Pro / MusicXML（小节来自原文件）
     failed_rows: int = 0  # 识别失败的行数
+    refined: Refined | None = None  # 上一次精修整首的结果
+    refine_estimate: RefineEstimate | None = None  # 图片曲子：现在精修的范围和预估；GP 是 null
 
 
 class LibraryPractice(_M):
@@ -663,3 +711,5 @@ class LibraryItem(_M):
     cost_estimated: bool = False
     unpriced_tokens: int = 0
     tokens: int = 0
+    refined: Refined | None = None
+    refine_estimate: RefineEstimate | None = None

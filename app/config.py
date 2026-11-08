@@ -59,11 +59,12 @@ def public_settings() -> dict:
         "model": c.get("model") or DEFAULT_MODEL,
         "effort": c.get("effort") or "high",
         "double_check": double_check_mode(c),
+        "refine": refine_mode(c),
     }
 
 
 def update_settings(api_key: str | None, clear_api_key: bool, fields: dict) -> dict:
-    """fields：这次请求里带了的 base_url / model / effort（None 当成清空）、double_check。
+    """fields：这次请求里带了的 base_url / model / effort（None 当成清空）、double_check、refine。
     只改这次带了的字段，读-改-写在锁里（store.update_config）。"""
 
     def edit(c: dict) -> None:
@@ -77,6 +78,8 @@ def update_settings(api_key: str | None, clear_api_key: bool, fields: dict) -> d
             c["double_check"] = (
                 fields["double_check"] if fields["double_check"] in DOUBLE_CHECK_MODES else "off"
             )
+        if "refine" in fields:
+            c["refine"] = fields["refine"] if fields["refine"] in REFINE_MODES else "manual"
 
     store.update_config(edit)
     return public_settings()
@@ -96,6 +99,16 @@ def double_check_mode(c: dict | None = None) -> str:
 
 def double_check() -> str:
     return double_check_mode()
+
+
+REFINE_MODES = ("manual", "auto")
+
+
+def refine_mode(c: dict | None = None) -> str:
+    """精修（逐小节放大核对，见 app/refine.py）：manual 只在用户点“精修”时做；auto 整首识别成功后自动精修整首，
+    重试失败的行、补页、单行重新识别后只精修刚识别出的小节。"""
+    v = (store.load_config() if c is None else c).get("refine")
+    return v if v in REFINE_MODES else "manual"
 
 
 def llm_config() -> LLMConfig:

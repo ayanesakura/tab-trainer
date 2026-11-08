@@ -52,7 +52,8 @@ export function stateHTML(s) {
   if (s.busy) {
     const p = s.progress || {};
     const pct = p.total ? Math.round(100 * p.done / p.total) : 6;
-    const unit = s.recognizing ? '行' : '批';
+    const kind = s.activity && s.activity.kind;
+    const unit = s.recognizing ? '行' : kind === 'refine' ? '小节' : '批';
     return `<span class="spinner"></span><span>${esc(p.stage || '排队中')}${p.total ? ` · ${esc(p.done)}/${esc(p.total)} ${unit}` : ''}</span><span class="progress" role="progressbar" aria-label="进度" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></span>`;
   }
   if (s.status === 'error') return `<span class="dot err"></span><span class="err-text">${isScore(s) ? '曲谱读取失败' : '识别失败'}${n ? `：${esc(n.msg)}` : ''}</span>`;
@@ -60,7 +61,9 @@ export function stateHTML(s) {
   const review = s.needs_review_bars || 0;
   const parts = [];
   if (review) parts.push(`<span class="badge warn" title="有 ${review} 个小节需要对照原谱核对">${review} 小节待核对</span>`);
-  if (n) parts.push(`<span class="badge ${n.kind === 'error' ? 'err' : 'warn'} notice-badge" title="${esc(n.msg)}">${esc(n.msg)}</span>`);
+  if (n) parts.push(`<span class="badge ${n.kind === 'error' ? 'err' : n.kind === 'info' ? 'ok' : 'warn'} notice-badge" title="${esc(n.msg)}">${esc(n.msg)}</span>`);
+  const r = s.refined; // 精修过整首（逐小节放大核对）
+  if (r && !(n && n.kind === 'info')) parts.push(`<span class="badge ok" title="${esc(`${r.at} 精修：检查了 ${r.checked} 个小节，改了 ${r.changed} 个`)}">已精修</span>`);
   return parts.join('');
 }
 export function barsText(s) {

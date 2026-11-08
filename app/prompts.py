@@ -199,3 +199,38 @@ NOTATION_KEY = (
     "techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, "
     "nh natural harmonic, ah artificial harmonic, th tapped harmonic (<n> = the fret tapped by the right hand), roll arpeggio, x dead note, vib vibrato, bend)"
 )
+
+
+# ---------------------------------------------------------------------------
+# 精修：逐小节放大核对（app/refine.py、Claude.verify_bar）。单独放在这里，和上面的识别提示词分开改
+# ---------------------------------------------------------------------------
+VERIFY_SCHEMA = _obj(
+    {
+        "diff": {"type": "string", "description": "in Chinese: every difference you found, or empty if none"},
+        "changed": {"type": "boolean"},
+        "events": {"type": "array", "items": EVENT_SCHEMA},
+        "uncertain": {
+            "type": "string",
+            "description": 'in Chinese, following the rules for "uncertain" above, about the bar as returned in '
+            "events: only doubts that could make the player play something wrong; empty when the notes are clear",
+        },
+    }
+)
+
+# {a} / {b}：要核对的小节在放大后的图里的左右边界（像素）
+VERIFY_TASK = (
+    "The image shows ONE bar of a guitar score, enlarged: the bar to check lies between x={a} and "
+    "x={b} pixels; the edges of the neighbouring bars are visible only for context (ties coming "
+    "in, beams). Below is the current transcription of this bar. Check it against the image beat by beat: "
+    "every fret number and its string, every onset and every duration (stems, beams, flags, dots, tuplets, "
+    "rests), parenthesized numbers (tie or ghost, see the rules), techniques. If everything matches, set "
+    "changed=false and return the events unchanged. If anything differs, set changed=true, describe each "
+    "difference in diff, and return the corrected events for the whole bar."
+)
+
+VERIFY_EVENT_KEYS = ("dur", "notes", "chord", "strum", "lyrics")
+
+
+def verify_events(events: list[dict]) -> list[dict]:
+    """发给模型核对的小节内容：只留事件里模型输出的那几个字段（和识别时模型给出的一样）。"""
+    return [{k: v for k, v in e.items() if k in VERIFY_EVENT_KEYS} for e in events]

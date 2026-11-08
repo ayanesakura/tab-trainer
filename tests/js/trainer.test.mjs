@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import { createStore, equal } from '../../app/static/js/trainer/store.js';
 import {
   deriveView, sectionsOf, stepSection, practiceText, resumeInfo, rangeLabel, loopLabel, barTags, planRange,
-  songSubtitle, explainState, needsReview, warnText, showNote, tuningInput, nameToMidi, noteMidi, beatNumber,
+  songSubtitle, explainState, needsReview, warnText, showNote, tuningInput, nameToMidi, noteMidi, beatNumber, eventsText,
 } from '../../app/static/js/trainer/view.js';
+import { refineConfirm } from '../../app/static/js/lib/refine.js';
 import { gbkFromMojibake, scoreNeedsGbk } from '../../app/static/js/score.js';
 
 const N = (string, fret, tech = [], grace = -1) => ({ string, fret, tech, grace, bend: 0 });
@@ -217,4 +218,18 @@ test('status line counts beats in the time signature denominator', () => {
   assert.equal(beatNumber(470, 8), 1);
   assert.equal(beatNumber(1920, 2), 2); // 2/2：二分音符一拍
   assert.equal(beatNumber(960), 2); // 没有拍号按四分音符
+});
+
+test('eventsText：小节的文字版（精修之前的读法）', () => {
+  assert.equal(eventsText([{ dur: '1', notes: [N(1, 0), N(2, 3, ['h'])], chord: 'Am' }, { dur: '3', notes: [] }]), '[Am] 1拍 1弦0品 2弦3品[h] | 3拍 休止');
+  assert.equal(eventsText([]), '');
+});
+
+test('refineConfirm：确认框写出要核对的小节数、预估费用和时间', () => {
+  const c = refineConfirm({ bars: 40, cost_usd: 2.2, minutes: 10 }, '曲子');
+  assert.equal(c.title, '精修“曲子”？');
+  assert.match(c.text, /40 个小节/);
+  assert.match(c.text, /约 \$2\.20，约 10 分钟/);
+  assert.equal(refineConfirm({ bars: 0, cost_usd: 0, minutes: 0 }), null);
+  assert.equal(refineConfirm(null), null);
 });

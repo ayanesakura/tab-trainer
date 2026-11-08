@@ -11,6 +11,7 @@ import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange,
 import { DERIVE_VERSION, deriveSong } from '../score.js';
 import { alphaTab, setLoop, setTempo, setPlayerHooks } from './player.js';
 import { notice } from './notices.js';
+import { refineConfirm, NO_REFINE } from '../lib/refine.js';
 
 
 // ---------------------------------------------------------------------
@@ -99,8 +100,10 @@ function closable(key) { return dismissed.has(key) ? null : () => dismissed.add(
 
 function progressText(s) {
   const a = s.activity || {}, pr = s.progress || {};
-  const n = pr.total ? `（${pr.done}/${pr.total} ${a.kind === 'explain' ? '批' : '行'}）` : '';
+  const unit = { explain: '批', refine: '小节' }[a.kind] || '行';
+  const n = pr.total ? `（${pr.done}/${pr.total} ${unit}）` : '';
   if (a.kind === 'explain') return `正在生成讲解${n}，可以照常练习。`;
+  if (a.kind === 'refine') return `正在精修：逐小节放大核对${n}，可以照常练习；改了的小节会标出来。`;
   if (a.kind === 'reparse_row') return `${esc(pr.stage || '正在重新识别')}${n}，其他小节可以照常练习。`;
   if (a.restaging) return `正在重新识别：${esc(pr.stage || '')}${n}，完成前不能改谱。`;
   return `正在识别：${esc(pr.stage || '')}${n}，已识别的小节可以先练。`;
@@ -116,6 +119,26 @@ async function retryFailed(btn, n) {
   await refresh();
 }
 
+// 精修：确认框里给出要核对的小节数、预估费用和时间（后端算好的 refine_estimate）
+async function startRefine(btn) {
+  const s = get('song'), c = refineConfirm(s && s.refine_estimate);
+  if (!c) { UI.toast(NO_REFINE, 'info', 5000); return; }
+  if (!await UI.confirm(c.text, { title: c.title, ok: c.ok })) return;
+  await withBusy(btn, async () => {
+    try { await post(songUrl('/refine')); UI.toast('已开始精修', 'info'); }
+    catch (e) { UI.toast(e.message, 'err', 5000); }
+  });
+  await refresh();
+}
+function renderRefineBtn(s) {
+  const btn = $('refineBtn');
+  btn.hidden = isScore(s) || !s.bars.length;
+  btn.disabled = !!s.busy;
+  btn.title = s.activity && s.activity.kind === 'refine' ? '正在精修'
+    : s.refined ? `上次精修：${s.refined.at}，检查了 ${s.refined.checked} 个小节，改了 ${s.refined.changed} 个`
+    : '精修：每小节放大，让 AI 对照原谱逐拍核对（约 $0.06 / 小节）';
+}
+
 async function explain(btn) {
   await withBusy(btn, async () => {
     try { await post(songUrl('/explain')); UI.toast('AI 正在写讲解', 'info'); }
@@ -129,7 +152,7 @@ function renderNotices(s) {
   const kind = running && s.activity.kind;
   notice('progress', running ? {
     kind: 'info', spinner: true, html: progressText(s),
-    actions: [{ label: kind === 'explain' ? '取消' : '取消识别', onClick: btn => withBusy(btn, async () => {
+    actions: [{ label: { explain: '取消', refine: '取消精修' }[kind] || '取消识别', onClick: btn => withBusy(btn, async () => {
       try { await post(songUrl('/cancel')); UI.toast('正在取消…', 'info'); }
       catch (e) { UI.toast(e.message, 'err'); }
       await refresh();
@@ -142,9 +165,11 @@ function renderNotices(s) {
   const scoreFail = isScore(s) && s.status === 'error';
   const failed = !running && !isScore(s) && s.failed_rows > 0 ? s.failed_rows : 0;
   const retry = failed ? [{ label: `重试失败的 ${failed} 行`, icon: 'refresh', primary: true, onClick: btn => retryFailed(btn, failed) }] : [];
+  // info：任务做完的说明（精修完成），不是警告
+  const head = scoreFail ? '曲谱读取失败：' : n && n.kind === 'error' ? '出错了：' : n && n.kind === 'info' ? '' : '注意：';
   notice('error', n ? (dismissed.has(errKey) ? null : {
-    kind: n.kind === 'error' ? 'err' : 'warn',
-    html: `${scoreFail ? '曲谱读取失败' : n.kind === 'error' ? '出错了' : '注意'}：${esc(n.msg)}`, actions: retry, onDismiss: closable(errKey),
+    kind: n.kind === 'error' ? 'err' : n.kind === 'info' ? 'ok' : 'warn',
+    html: `${head}${esc(n.msg)}`, actions: retry, onDismiss: closable(errKey),
   }) : failed ? { kind: 'warn', html: `有 ${failed} 行识别失败，这几行的小节可能缺失或不完整。`, actions: retry } : null);
 
   // 让 AI 讲解：有小节缺提示（GP 刚导入、改过音或调弦）或练习建议过时就显示；没有练习建议的提示放在练习建议页
@@ -309,7 +334,8 @@ export function initSong() {
   on(['song.bars', 'song.meta', 'song.pages', 'song.source_type', 'song.track', 'song.id'], () => set('view', deriveView(get('song'))));
   on('view', onView);
   on(['song', 'view'], () => renderHeader(get('song')));
-  on('song', s => { renderNotices(s); renderResume(s); });
+  on('song', s => { renderNotices(s); renderResume(s); renderRefineBtn(s); });
+  $('refineBtn').onclick = e => startRefine(e.currentTarget);
   on(['song.plan', 'song.status', 'song.busy', 'view'], renderPlan);
   on(['song.meta', 'song.title', 'song.editable_meta'], () => fillMeta(get('song')));
   $('metaSave').onclick = () => withBusy($('metaSave'), saveMeta);

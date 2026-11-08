@@ -280,6 +280,7 @@ def test_settings_endpoints(client, monkeypatch):
         "model": s["model"],
         "effort": "high",
         "double_check": "off",
+        "refine": "manual",
     }
     s = client.put(
         "/api/settings", json={"api_key": " sk-ant-1234567890abcdef ", "base_url": "http://gw"}

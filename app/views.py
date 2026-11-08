@@ -61,7 +61,7 @@ def bar_view(s: dict, bar: dict) -> dict:
     out["edited"] = bool(bar.get("edited"))
     out["needs_review"] = needs_review(bar)
     out["reviewed"] = has_doubts(bar) and reviewed(bar)
-    for k in ("reviewed_key", "reviewed_rev", "reviewed_warn"):
+    for k in ("reviewed_key", "reviewed_rev", "reviewed_warn", "refine_key"):
         out.pop(k, None)
     out["locked"] = state.bar_locked(s, bar)
     return out
@@ -85,8 +85,16 @@ def song_view(s: dict) -> dict:
         practice=practice.aggregate(s["id"], s),
         is_score=is_score(s),
         failed_rows=failed_rows(s),
+        refine_estimate=refine_estimate(s),
     )
     return out
+
+
+def refine_estimate(s: dict) -> dict | None:
+    """现在点“精修”会核对几个小节、预估的费用和时间（见 app/refine.py）；GP / MusicXML 是 None。"""
+    from app import refine  # refine 用到本模块的 reviewed
+
+    return refine.estimate(s)
 
 
 def failed_rows(s: dict) -> int:
@@ -119,6 +127,8 @@ def library_item(s: dict) -> dict:
         "source_type": s.get("source_type"),
         "is_score": is_score(s),
         "failed_rows": failed_rows(s),
+        "refined": s.get("refined"),
+        "refine_estimate": refine_estimate(s),
         "tags": [t for t in s.get("tags") or [] if isinstance(t, str)],
         "practice": p,
         **cost_summary(s.get("usage")),
