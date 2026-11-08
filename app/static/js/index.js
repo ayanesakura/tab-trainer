@@ -20,7 +20,9 @@ addEventListener('hashchange', route);
 
 // ---------------- 主题 ----------------
 const setThemeSeg = UI.seg($('themeSeg'), UI.getTheme(), v => UI.setTheme(v));
-document.addEventListener('themechange', e => setThemeSeg(e.detail));
+$('paletteSeg').innerHTML = UI.PALETTES.map(p => `<button data-v="${p.id}"><i class="swatch" style="background:${p.swatch}"></i>${p.name}</button>`).join('');
+const setPaletteSeg = UI.seg($('paletteSeg'), UI.getPalette(), v => UI.setPalette(v));
+document.addEventListener('themechange', e => { setThemeSeg(e.detail); setPaletteSeg(UI.getPalette()); });
 
 // ---------------- 上传 ----------------
 let picked = [];

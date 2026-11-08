@@ -39,6 +39,33 @@ export const setTheme = t => {
 applyTheme();
 darkMQ.addEventListener('change', () => { if (getTheme() === 'system') { applyTheme(); themeChanged(); } });
 
+// 配色：和亮 / 暗无关的另一个设置（记在本机），写在 <html data-palette>；CSS 变量在 ui.css 里按配色覆盖。
+// 变了同样发 themechange（谱面要按新的颜色重画）。
+const PALETTE_KEY = 'tt-palette';
+export const PALETTES = [
+  { id: 'indigo', name: '靛蓝', swatch: '#4f46e5' },
+  { id: 'walnut', name: '胡桃木', swatch: '#8a5328' },
+  { id: 'pine', name: '松绿', swatch: '#2f6a50' },
+  { id: 'cinnabar', name: '朱砂', swatch: '#a8412b' },
+];
+export const getPalette = () => {
+  let p = null;
+  try { p = localStorage.getItem(PALETTE_KEY); } catch { /* 读不了就用默认 */ }
+  return PALETTES.some(x => x.id === p) ? p : 'indigo';
+};
+const applyPalette = () => { document.documentElement.dataset.palette = getPalette(); };
+export const setPalette = p => {
+  try { localStorage.setItem(PALETTE_KEY, p); } catch { /* 只在这次打开时生效 */ }
+  applyPalette();
+  themeChanged();
+};
+applyPalette();
+// 别的标签页（比如开着的练习页）改了外观或配色：这里跟着变
+addEventListener('storage', e => {
+  if (e.key !== THEME_KEY && e.key !== PALETTE_KEY) return;
+  applyTheme(); applyPalette(); themeChanged();
+});
+
 // 顶栏的外观按钮：跟随系统 → 浅色 → 深色 → 跟随系统，图标显示当前设置（不是当前颜色），点几下都能回到“跟随系统”
 const THEME_NEXT = { system: 'light', light: 'dark', dark: 'system' };
 const THEME_NAME = { system: '跟随系统', light: '浅色', dark: '深色' };
@@ -316,6 +343,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
 export const UI = {
   $, esc, icon, hydrate, getTheme, setTheme, isDark, themeButton, initShell, toast,
+  PALETTES, getPalette, setPalette,
   layer, hasLayer, topLayer, menu, closeMenu, confirm, prompt, notice, seg, tabs, fillRange, fillAll,
 };
 export default UI;

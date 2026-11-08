@@ -119,6 +119,35 @@ def test_search_tags_menu_and_theme(server, browser):
         _api(server, f"/api/songs/{img}/tags", "PUT", b'{"tags": []}', {"Content-Type": "application/json"})
 
 
+def test_palette_setting(server, browser):
+    """设置 · 配色：和明暗无关的另一个设置，写在 <html data-palette>、记在本机，刷新后还在；每套分浅色 / 深色两组颜色。"""
+    b = browser
+    accent = "getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()"
+    b.open(server["base"] + "/")  # 先打开页面才能读写 localStorage
+    try:
+        b.js("localStorage.removeItem('tt-palette'); localStorage.setItem('tt-theme', 'light'); true")
+        b.open(server["base"] + "/#settings")
+        b.wait_for("!!document.querySelector('#paletteSeg [data-v=walnut]')")
+        assert b.js("document.documentElement.dataset.palette") == "indigo"
+        assert b.js(accent) == "#4f46e5"
+        b.js("document.querySelector('#paletteSeg [data-v=walnut]').click(); true")
+        assert b.js("localStorage.getItem('tt-palette')") == "walnut"
+        assert b.js("document.documentElement.dataset.palette") == "walnut"
+        assert b.js(accent) == "#8a5328"
+        b.js("document.querySelector('#themeSeg [data-v=dark]').click(); true")
+        assert b.js(accent) == "#d8a670"  # 深色下同一套配色换成亮一些的强调色
+        b.open(server["base"] + "/#settings")  # 刷新：首屏前就写好（theme-boot.js），分段开关也对
+        assert b.js("document.documentElement.dataset.palette") == "walnut"
+        b.wait_for(
+            "document.querySelector('#paletteSeg [data-v=walnut]').getAttribute('aria-pressed') === 'true'"
+        )
+        b.js("document.querySelector('#paletteSeg [data-v=indigo]').click(); true")
+        assert b.js(accent) != "#d8a670" and b.js("document.documentElement.dataset.palette") == "indigo"
+        assert not b.errors, b.errors
+    finally:
+        b.js("localStorage.removeItem('tt-palette'); localStorage.setItem('tt-theme', 'system'); true")
+
+
 def test_reorder_and_delete_pages(server, browser):
     from app import recognize, songs
     from tests.fakes import score_png

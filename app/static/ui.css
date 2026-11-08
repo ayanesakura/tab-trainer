@@ -1,4 +1,4 @@
-/* tab-trainer — 一个安静的界面：浅灰底、白卡片、细线分隔、靛蓝强调色，跟随系统亮/暗。
+/* tab-trainer — 一个安静的界面：浅灰底、白卡片、细线分隔、靛蓝强调色，跟随系统亮/暗；另有三套暖色“纸”配色（data-palette，见变量后面）。
    设计语言参考 magpie（github.com/yetone/magpie）：状态用圆点/色块而不是彩色边框条，
    选项用分段开关而不是原生下拉框，控件文字对比度不低于 4.5:1。
    颜色、字号、圆角、间距、阴影都用下面的变量；页面自己的 CSS（css/*.css）不写死颜色。
@@ -21,6 +21,7 @@
   --sp-4: 16px;
 
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --serif: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif; /* 只用在页面大标题上：宋体在 13–14px 太细 */
   --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ease: cubic-bezier(.22, 1, .36, 1);
 
@@ -124,6 +125,35 @@
   color-scheme: dark;
 }
 
+/* ---- 配色（data-palette）：默认靛蓝不写属性值以外的东西；暖色三套共用“纸”底（米白卡片、墨色字、暖灰线），只换强调色。
+   和亮 / 暗正交：每套都分浅色、深色两组。选择器写成 (0,3,0)，压过上面默认的浅色 / 深色。
+   每套里和强调色撞色的状态色也改开：胡桃木的“待核对”偏砖橙，松绿的“已核对 / 已精修”偏橄榄，朱砂的“出错”偏绯红。 */
+:root:is([data-palette="walnut"], [data-palette="pine"], [data-palette="cinnabar"]):not([data-theme="dark"]) {
+  --bg: #f4efe6; --card: #fffcf6; --card-2: #faf5ec; --pill: #efe7da; --pill-hover: #e7ddcc;
+  --seg-track: #e9e1d3; --seg-thumb: #fffcf6; --ctl-fg: #6b5f50;
+  --line: #e6dccb; --line-2: #eee6d8; --line-strong: #cdbfa8; --switch-off: #9a8d7b;
+  --fg: #2a231b; --fg-2: #51473b; --muted: #776a59; --faint: #c2b5a2; --placeholder: #93866f;
+  --green: #3f7a3a; --green-soft: #e6efdc; --red: #b03a2e; --red-soft: #f7e3dc; --amber: #9b5a0c; --amber-soft: #f6ead2;
+  --knob: #fffcf6; --paper-bg: var(--card); --pop-bg: rgba(255, 252, 246, .95);
+  --shadow-sm: 0 2px 8px rgba(70, 50, 20, .10); --shadow-md: 0 6px 20px rgba(70, 50, 20, .12);
+  --shadow: 0 16px 44px rgba(70, 50, 20, .14), 0 2px 8px rgba(70, 50, 20, .06), 0 0 0 .5px rgba(70, 50, 20, .1);
+  --fb-wood: #eadfca; --fb-fret: #c9b99c; --fb-dot: #dccdb2; --fb-next: #2f8f9d;
+}
+:root:is([data-palette="walnut"], [data-palette="pine"], [data-palette="cinnabar"])[data-theme="dark"] {
+  --bg: #1b1814; --card: #24201b; --card-2: #201c17; --pill: #2f2a23; --pill-hover: #3a332b;
+  --ctl-fg: #b0a492; --line: #3a332a; --line-2: #2f2a22; --line-strong: #5c5346; --switch-off: #7c7262;
+  --fg: #efe8dc; --fg-2: #c9bfae; --muted: #a39784; --faint: #5c5346; --placeholder: #857a69;
+  --green: #9fd08a; --green-soft: #26331f; --red: #f0907d; --red-soft: #45261f; --amber: #e8b45f; --amber-soft: #3d301c;
+  --knob: #efe8dc; --paper-bg: var(--card); --pop-bg: rgba(40, 35, 29, .96);
+  --fb-wood: #2c261f; --fb-next: #7fd0da;
+}
+:root[data-palette="walnut"]:not([data-theme="dark"]) { --accent: #8a5328; --accent-hover: #71431f; --accent-soft: #f2e4d3; --accent-fg: #ffffff; --amber: #b4461a; --amber-soft: #f8e4d8; }
+:root[data-palette="walnut"][data-theme="dark"] { --accent: #d8a670; --accent-hover: #e8bd8c; --accent-soft: #3a2a1c; --accent-fg: #1d130a; --amber: #f29a6c; --amber-soft: #43281c; }
+:root[data-palette="pine"]:not([data-theme="dark"]) { --accent: #2f6a50; --accent-hover: #245640; --accent-soft: #e1ece4; --accent-fg: #ffffff; --green: #5e6c0e; --green-soft: #edf0d6; }
+:root[data-palette="pine"][data-theme="dark"] { --accent: #8fc6a6; --accent-hover: #acd8be; --accent-soft: #1f3329; --accent-fg: #0d1f16; --green: #cddc7e; --green-soft: #303515; }
+:root[data-palette="cinnabar"]:not([data-theme="dark"]) { --accent: #a8412b; --accent-hover: #8c3522; --accent-soft: #f6e1d8; --accent-fg: #ffffff; --red: #a3243f; --red-soft: #f6dde3; }
+:root[data-palette="cinnabar"][data-theme="dark"] { --accent: #ee9577; --accent-hover: #f5b29a; --accent-soft: #3f2219; --accent-fg: #24100a; --red: #f08aa0; --red-soft: #45202a; }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { -webkit-text-size-adjust: 100%; }
 body { font: 400 var(--fs-2)/1.5 var(--font); color: var(--fg); background: var(--bg); -webkit-font-smoothing: antialiased; min-height: 100vh; }
@@ -166,7 +196,7 @@ code, kbd { font: var(--fs-1) var(--code); background: var(--pill); border-radiu
 @keyframes view-in { from { opacity: 0; transform: translateY(5px); } }
 @media (prefers-reduced-motion: reduce) { .view { animation: none; } }
 .head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-4); margin: var(--sp-1) 2px 14px; flex-wrap: wrap; }
-.head h1 { font-size: var(--fs-4); font-weight: 650; letter-spacing: -.01em; }
+.head h1 { font-family: var(--serif); font-size: var(--fs-4); font-weight: 700; letter-spacing: .02em; }
 .head p { color: var(--muted); margin-top: 2px; }
 .section-title { font-size: var(--fs-1); font-weight: 600; color: var(--muted); margin: 22px var(--sp-1) var(--sp-2); letter-spacing: .02em; }
 .stack > * + * { margin-top: var(--sp-3); }
