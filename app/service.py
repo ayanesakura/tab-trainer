@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import BinaryIO
 
-from app import bundles, coach, config, pages, practice, recognize, songs, store, views
+from app import bundles, coach, config, pages, practice, recognize, refine, songs, store, views
 from app.config import settings
 from app.errors import Busy, Conflict, Invalid, NotFound
 from app.jobs import jobs
@@ -107,6 +107,10 @@ def explain(sid: str) -> None:
     coach.start_explain(sid)
 
 
+def refine_song(sid: str) -> None:
+    refine.start_refine(sid)
+
+
 def reparse_row(sid: str, si: int, hint: str) -> None:
     s = store.load(sid)
     if not 0 <= si < len(s.get("systems") or []):
@@ -136,6 +140,10 @@ def edit_bar(sid: str, bar_id: str, events: list[dict], tip: str | None, rev: in
 
 def review_bar(sid: str, bar_id: str, ok: bool, rev: int | None) -> dict:
     return views.song_view(songs.review_bar(sid, bar_id, ok, rev))
+
+
+def undo_refine(sid: str, bar_id: str, rev: int | None) -> dict:
+    return views.song_view(refine.undo(sid, bar_id, rev))
 
 
 def edit_meta(sid: str, fields: dict, rev: int | None) -> dict:

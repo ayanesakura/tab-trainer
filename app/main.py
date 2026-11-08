@@ -85,7 +85,8 @@ def get_settings():
 @app.put("/api/settings")
 def put_settings(body: schemas.SettingsIn):
     fields = {
-        k: getattr(body, k) for k in body.model_fields_set & {"base_url", "model", "effort", "double_check"}
+        k: getattr(body, k)
+        for k in body.model_fields_set & {"base_url", "model", "effort", "double_check", "refine"}
     }
     return config.update_settings(body.api_key, body.clear_api_key, fields)
 
@@ -265,6 +266,13 @@ def explain(sid: str):
     return {"ok": True}
 
 
+@app.post("/api/songs/{sid}/refine")
+def refine(sid: str):
+    """精修：逐小节放大核对（慢、贵）。GP / MusicXML 曲子 400，有任务在跑 423。"""
+    service.refine_song(sid)
+    return {"ok": True}
+
+
 @app.post("/api/songs/{sid}/cancel")
 def cancel(sid: str):
     service.cancel(sid)
@@ -287,6 +295,12 @@ def put_bar(sid: str, bar_id: str, body: schemas.BarIn):
 def review_bar(sid: str, bar_id: str, body: schemas.ReviewIn):
     """待核对的小节：确认识别没问题（ok=false 撤销）。"""
     return service.review_bar(sid, bar_id, body.ok, body.rev)
+
+
+@app.put("/api/songs/{sid}/bars/{bar_id}/undo-refine")
+def undo_refine(sid: str, bar_id: str, body: schemas.RevIn):
+    """撤销这个小节的精修改动（音、提示、不确定说明恢复成精修之前的）。"""
+    return service.undo_refine(sid, bar_id, body.rev)
 
 
 @app.post("/api/songs/{sid}/bars/{bar_id}/ask")

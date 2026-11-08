@@ -35,7 +35,7 @@ def test_constants_are_unchanged():
 def test_fake_llm_implements_the_protocol():
     assert llm.LLM in FakeClaude.__mro__ and llm.LLM in llm.Claude.__mro__  # 显式实现接口
     assert isinstance(FakeClaude(None), llm.LLM)
-    for name in ("ping", "read_meta", "transcribe", "explain_bars", "coach", "practice_plan"):
+    for name in ("ping", "read_meta", "transcribe", "verify_bar", "explain_bars", "coach", "practice_plan"):
         assert callable(getattr(FakeClaude, name))
 
 

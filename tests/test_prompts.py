@@ -72,6 +72,14 @@ def _all_prompts(monkeypatch) -> dict:
             start_ts=[3, 4],
         ),
         "explain_bars": lambda: c.explain_bars(meta, bars),
+        "verify_bar": lambda: c.verify_bar(
+            Image.new("RGB", (400, 200), "white"),
+            meta,
+            (60, 340),
+            [{**bars[0]["events"][0], "chord": "Am"}] * 4,
+            previous=bars[1]["events"],
+            time_signature=[3, 4],
+        ),
         "coach": lambda: c.coach(
             meta, bars[0], [bars[1]], "怎么弹", [{"q": "前一个问题", "a": "回答"}], "练了 3 遍", img
         ),

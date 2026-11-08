@@ -3,6 +3,7 @@
 三类调用，都要求按 JSON Schema 输出（structured outputs）：
 - read_meta：读首页谱头（曲名、调弦、变调夹、拍号）
 - transcribe：识别一行（或整页）谱子里的所有小节
+- verify_bar：精修，放大一个小节对照当前读法逐拍核对（app/refine.py）
 - practice_plan：根据识别结果写分段练习建议
 """
 
@@ -36,7 +37,10 @@ from app.prompts import (
     SYSTEM,
     TRANSCRIBE_RULES,
     TRANSCRIBE_SCHEMA,
+    VERIFY_SCHEMA,
+    VERIFY_TASK,
     bar_text,
+    verify_events,
 )
 
 log = logging.getLogger("tab_trainer.llm")
@@ -160,6 +164,16 @@ class LLM(Protocol):
         labeled_strings: bool = False,
         start_ts: list[int] | None = None,
         context: str = "",
+    ) -> dict: ...
+
+    def verify_bar(
+        self,
+        img: Image.Image,
+        meta: dict,
+        span: tuple[float, float],
+        events: list[dict],
+        previous: list[dict] | None = None,
+        time_signature: list[int] | None = None,
     ) -> dict: ...
 
     def explain_bars(self, meta: dict, bars: list[dict]) -> dict: ...
@@ -422,6 +436,39 @@ class Claude(LLM):
         if hint:
             lines.append(f"The user reviewed an earlier transcription and says (in Chinese): {hint}")
         return self._call([block, {"type": "text", "text": "\n\n".join(lines)}], TRANSCRIBE_SCHEMA)
+
+    def verify_bar(
+        self,
+        img: Image.Image,
+        meta: dict,
+        span: tuple[float, float],
+        events: list[dict],
+        previous: list[dict] | None = None,
+        time_signature: list[int] | None = None,
+    ) -> dict:
+        """精修：放大一个小节（img 是它连同左右一点邻居的裁剪图，span 是它在图里的左右边界），对照当前读法逐拍核对。
+        previous：上一小节的读法（只当上下文）；time_signature：这个小节的拍号（None = 全曲拍号）。
+        返回 {diff, changed, events, uncertain}。"""
+        block, scale = _image_block(img, min_width=1600)
+        ts = time_signature or meta["time_signature"]
+        length = ts[0] * 4 / ts[1]
+        a, b = span
+        text = [
+            (
+                f"Score info: tuning (string 1 -> 6) {' '.join(meta['tuning'])}; capo {meta['capo']}. "
+                f"Time signature {ts[0]}/{ts[1]}: this bar lasts {length:g} quarter notes."
+            ),
+            VERIFY_TASK.format(a=round(a * scale), b=round(b * scale)),
+            TRANSCRIBE_RULES,
+            "Current transcription of this bar (events in time order):\n"
+            + json.dumps(verify_events(events), ensure_ascii=False),
+        ]
+        if previous is not None:
+            text.append(
+                "For context only, the previous bar was read as:\n"
+                + json.dumps(verify_events(previous), ensure_ascii=False)
+            )
+        return self._call([block, {"type": "text", "text": "\n\n".join(text)}], VERIFY_SCHEMA)
 
     def explain_bars(self, meta: dict, bars: list[dict]) -> dict:
         """给已经有精确数据的小节（GTP / MusicXML 导入）写练习提示，只发文字。"""

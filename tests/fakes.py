@@ -1,10 +1,13 @@
 """测试用的替身：不联网的模型、合成的谱子图片、GP 导入的小节数据。"""
 
 import io
+import threading
 from typing import ClassVar
 
 from app.llm import LLM
 from tests.test_layout import _score
+
+_lock = threading.Lock()
 
 
 class FakeClaude(LLM):
@@ -66,6 +69,28 @@ class FakeClaude(LLM):
                 }
             )
         return {"bars": bars}
+
+    # 精修的替身：默认什么都没改；测试换掉 verify_result（参数同 verify_bar，返回模型的回答）
+    verify_result: ClassVar = None
+
+    def verify_bar(self, img, meta, span, events, previous=None, time_signature=None):
+        FakeClaude.calls.append(
+            {
+                "verify": [e["notes"] for e in events],
+                "previous": previous is not None,
+                "size": img.size,
+                "span": span,
+                "ts": time_signature,
+            }
+        )
+        with _lock:  # 每次核对记一笔用量（测费用记到曲子上）；几个小节是并行核对的
+            u = dict(self.usage)
+            u["input_tokens"] += 1000
+            u["cost_usd"] = round(u.get("cost_usd", 0) + 0.05, 4)
+            self.usage = u
+        if FakeClaude.verify_result is not None:
+            return FakeClaude.verify_result(img, meta, span, events, previous, time_signature)
+        return {"diff": "", "changed": False, "events": events, "uncertain": ""}
 
     def explain_bars(self, meta, bars):
         FakeClaude.calls.append({"explain": [b["n"] for b in bars]})

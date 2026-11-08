@@ -4,10 +4,11 @@
 都是对内存里 song dict 的操作，由调用方放在 store.update 里执行。
 
 - status：queued / parsing（整首识别）、ready、error、cancelled、imported（GP / MusicXML 还没在浏览器里解析过）。
-- activity：None 或 {kind: parse | reparse_row | explain, restaging, systems}。
+- activity：None 或 {kind: parse | reparse_row | explain | refine, restaging, systems}。
   parse = 整首识别（restaging = 已有结果时的重新识别：新结果全部成功才替换，期间所有小节不能改）；
-  reparse_row = 识别某几行（单行重新识别、补页的新行），systems 是这几行；explain = AI 讲解（不改谱面）。
-- notice：None 或 {kind: warn | error, msg, source}。source 是留下它的任务类型；同类任务再开始时清掉，整首识别清掉所有。
+  reparse_row = 识别某几行（单行重新识别、补页的新行），systems 是这几行；explain = AI 讲解（不改谱面）；
+  refine = 精修（逐小节放大核对，见 app/refine.py）：期间照常能练、能改，写回时小节被改过的就不写。
+- notice：None 或 {kind: warn | error | info, msg, source}。source 是留下它的任务类型；同类任务再开始时清掉，整首识别清掉所有。
 """
 
 from __future__ import annotations
@@ -137,7 +138,14 @@ def recover(s: dict) -> bool:
     changed = False
     a = s.get("activity")
     kind = (a or {}).get("kind")
-    if kind == "explain":
+    if kind == "refine":
+        finish(
+            s,
+            notice=("warn", "服务重启，精修中断，已经改好的小节会保留，可以再点“精修”接着核对剩下的。"),
+            source="refine",
+        )
+        changed = True
+    elif kind == "explain":
         finish(
             s, notice=("warn", "服务重启，讲解生成中断，已完成的部分会保留，可以重新生成。"), source="explain"
         )

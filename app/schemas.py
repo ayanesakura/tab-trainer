@@ -25,6 +25,7 @@ class SettingsIn(_In):
     model: str | None = Field(None, max_length=200)
     effort: Literal["", "low", "medium", "high", "xhigh", "max"] | None = None
     double_check: Literal["off", "doubts", "all"] | None = None
+    refine: Literal["manual", "auto"] | None = None
 
 
 class DerivedInfo(_In):
@@ -97,6 +98,10 @@ class ReviewIn(_In):
     rev: int | None = None
 
 
+class RevIn(_In):
+    rev: int | None = None  # 这个小节的 rev：带上时和现在的不一致 → 409
+
+
 class ReparseIn(_In):
     hint: str = Field("", max_length=1000)
 
@@ -122,6 +127,7 @@ FIELD_NAMES = {
     "model": "模型",
     "effort": "识别精细度",
     "double_check": "双重校对",
+    "refine": "精修",
     "events": "小节内容（events）",
     "tip": "提示",
     "question": "问题",
