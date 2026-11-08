@@ -55,3 +55,73 @@ def test_only_verified_bars_are_scored(data_dir, monkeypatch):
     rep = evaluate.run(sid, LLMConfig(api_key="x"), None, 1)
     assert sorted(r["bar"] for r in rep["bars"]) == [2, 3]
     assert rep["systems"] == [0]
+
+
+def test_start_time_signature_is_the_one_in_effect_before_the_row(data_dir, monkeypatch):
+    """每行开头的拍号按前面各行最后的拍号给；这一行自己第 1 小节的变拍号不算（应用里也看不到它，模型在图上看）。"""
+    from app import music
+
+    monkeypatch.setattr(evaluate, "Claude", FakeClaude)
+    seen = {}
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        seen.setdefault(first_bar, kw.get("start_ts"))
+        return real(self, img, meta, first_bar, spans, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+
+    def change_at_row_start(s):
+        s["bars"][3]["ts_change"] = [3, 4]  # 第 2 行第 1 小节变成 3/4
+        music.apply_time_signatures(s["bars"], s["meta"])
+
+    store.update(sid, change_at_row_start)
+    seen.clear()
+    evaluate.run(sid, evaluate.LLMConfig(model="claude-opus-5-5"), [1], 1)
+    assert seen[4] is None  # 按 4/4 开头（和全曲一样，不特别告诉模型）
+
+    def change_in_row_one(s):
+        s["bars"][3].pop("ts_change")
+        s["bars"][2]["ts_change"] = [3, 4]  # 第 1 行最后一小节变成 3/4
+        music.apply_time_signatures(s["bars"], s["meta"])
+
+    store.update(sid, change_in_row_one)
+    seen.clear()
+    evaluate.run(sid, evaluate.LLMConfig(model="claude-opus-5-5"), [1], 1)
+    assert seen[4] == [3, 4]
+
+
+def test_report_records_settings_and_the_cost_the_client_measured(data_dir, monkeypatch):
+    """报告里记下双重校对、切半的设置；费用用客户端按实际回答的模型记的（服务端兜底可能换了模型），--price-as 才重算。"""
+
+    class Priced(FakeClaude):
+        def __init__(self, cfg):
+            super().__init__(cfg)
+            self.usage = {"input_tokens": 1_000_000, "output_tokens": 0, "cost_usd": 1.23}
+
+    monkeypatch.setattr(evaluate, "Claude", Priced)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    rep = evaluate.run(sid, evaluate.LLMConfig(model="claude-opus-5-5"), [0], 1, double="doubts", split=False)
+    assert rep["double_check"] == "doubts" and rep["split"] is False
+    assert rep["cost_usd"] == 1.23
+    assert "doubts" in evaluate.to_markdown(rep)
+    rep = evaluate.run(
+        sid, evaluate.LLMConfig(model="claude-opus-5-5"), [0], 1, price_model="claude-sonnet-5-5"
+    )
+    assert rep["cost_usd"] != 1.23
+
+
+def test_estimate_counts_only_scored_rows_and_extra_reads(data_dir):
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    store.update(sid, lambda s: s.update(eval_bars=[2, 3]))
+    truth = store.load(sid)
+    rows = evaluate.rows_to_eval(truth, None)
+    assert rows == [0]
+    price = (5.0, 25.0)
+    off = evaluate.estimate(truth, rows, price, "off", False)
+    both = evaluate.estimate(truth, rows, price, "all", False)
+    assert off[:2] == (1, 2) and both[0] == 2 and both[1] > off[1] and both[3] > off[3]
