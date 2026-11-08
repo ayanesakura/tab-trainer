@@ -11,7 +11,7 @@ from tests.fakes import FakeClaude
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "llm_schemas.json").read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("name", ["NOTE", "EVENT", "BAR", "TRANSCRIBE", "META", "EXPLAIN", "COACH", "PLAN"])
+@pytest.mark.parametrize("name", ["NOTE", "EVENT", "BAR", "TRANSCRIBE", "META", "EXPLAIN", "PLAN"])
 def test_llm_schemas_are_unchanged(name):
     """tests/fixtures/llm_schemas.json 是给模型的 schema 快照（最初由重构前 6957d49 的 llm.py 导出，弹唱谱加了 chord / strum / chords）；
     按 JSON 文本比较，连键的顺序都要一样。有意改 schema 时重新导出。"""
@@ -35,7 +35,17 @@ def test_constants_are_unchanged():
 def test_fake_llm_implements_the_protocol():
     assert llm.LLM in FakeClaude.__mro__ and llm.LLM in llm.Claude.__mro__  # 显式实现接口
     assert isinstance(FakeClaude(None), llm.LLM)
-    for name in ("ping", "read_meta", "transcribe", "verify_bar", "explain_bars", "coach", "practice_plan"):
+    names = (
+        "ping",
+        "read_meta",
+        "transcribe",
+        "verify_bar",
+        "explain_bars",
+        "coach",
+        "coach_stream",
+        "practice_plan",
+    )
+    for name in names:
         assert callable(getattr(FakeClaude, name))
 
 

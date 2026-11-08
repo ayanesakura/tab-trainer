@@ -257,9 +257,9 @@ def test_failed_question_still_records_its_cost(data_dir, monkeypatch, answer):
         self.usage["input_tokens"] += 1000
         if answer is None:
             raise RuntimeError("connection reset")
-        return answer
+        yield answer
 
-    monkeypatch.setattr(FakeClaude, "coach", coach_)
+    monkeypatch.setattr(FakeClaude, "coach_stream", coach_)
     with pytest.raises(errors.Upstream):
         coach.ask_bar(sid, song["bars"][0]["id"], "怎么弹")
     assert store.load(sid)["usage"]["input_tokens"] == before + 1010  # 替身一开始就带 10

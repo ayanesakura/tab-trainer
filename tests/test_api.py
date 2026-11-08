@@ -600,3 +600,123 @@ def test_bar_confirmation_survives_rerecognition_but_not_new_warnings(data_dir, 
     store.update(sid, lambda s: s.update(activity={"kind": "parse", "restaging": True, "systems": []}))
     b = c.get(f"/api/songs/{sid}").json()["bars"][5]
     assert c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True}).status_code == 423
+
+
+# ---------------------------------------------------------------------------
+# 流式问答：NDJSON，一行一个事件
+# ---------------------------------------------------------------------------
+def _ask_stream(client, sid, bar_id, question):
+    """→ (状态码, 事件列表)。"""
+    import json
+
+    r = client.post(f"/api/songs/{sid}/bars/{bar_id}/ask/stream", json={"question": question})
+    if r.status_code != 200:
+        return r.status_code, r.json()
+    assert r.headers["content-type"].startswith("application/x-ndjson")
+    return 200, [json.loads(line) for line in r.text.splitlines() if line]
+
+
+def test_ask_stream_sends_deltas_then_saves_the_answer(client, monkeypatch):
+    """回答一段段发出来（delta），最后 done 带上存好的 qa；超过 qa_keep 条只留最近的；费用记到曲子上。"""
+    from app import store
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "qa_keep", 2)
+    sid = _image_song(client)
+    bar = store.load(sid)["bars"][1]
+    before = store.load(sid)["usage"]["cost_usd"]
+    for q in ("第一个问题", "第二个问题", "这里左手怎么按？"):
+        status, events = _ask_stream(client, sid, bar["id"], q)
+    assert status == 200
+    deltas = [e for e in events if e["type"] == "delta"]
+    assert len(deltas) > 1 and "".join(e["text"] for e in deltas) == "回答：这里左手怎么按？"
+    assert [e["type"] for e in events[len(deltas) :]] == ["done"]
+    done = events[-1]
+    assert done["answer"] == "回答：这里左手怎么按？"
+    assert [x["q"] for x in done["qa"]] == ["第二个问题", "这里左手怎么按？"] and "stale" not in done["qa"][
+        -1
+    ]
+    saved = store.load(sid)
+    assert saved["bars"][1]["qa"] == done["qa"]
+    assert FakeClaude.calls[-1]["coach"] == 2 and FakeClaude.calls[-1]["history"] == 2
+    assert saved["usage"]["cost_usd"] == pytest.approx(before + 0.03)  # 每问一次 0.01，各记一次
+
+
+def test_ask_stream_errors_before_and_during_the_answer(client, monkeypatch):
+    """开始之前的错误照常是 HTTP 状态码；回答到一半出错是一行 error 事件（中文说明），不存半截回答，费用照记。"""
+    from app import llm, store
+
+    sid = _image_song(client)
+    bar_id = store.load(sid)["bars"][0]["id"]
+    assert _ask_stream(client, sid, bar_id, "   ")[0] == 400
+    status, body = _ask_stream(client, sid, "nope", "怎么弹")
+    assert status == 404 and "小节不存在" in body["detail"]
+    assert _ask_stream(client, "no-such-song", bar_id, "怎么弹")[0] == 404
+
+    def broken(self, *a, **kw):
+        yield "先这样"
+        self.usage = {**self.usage, "output_tokens": self.usage["output_tokens"] + 500}
+        raise llm._http.ReadError("connection reset")
+
+    monkeypatch.setattr(FakeClaude, "coach_stream", broken)
+    tokens = store.load(sid)["usage"]["output_tokens"]
+    status, events = _ask_stream(client, sid, bar_id, "怎么弹")
+    assert status == 200 and [e["type"] for e in events] == ["delta", "error"]
+    assert events[0]["text"] == "先这样" and "连接中断" in events[1]["detail"]
+    saved = store.load(sid)
+    assert not saved["bars"][0].get("qa") and saved["usage"]["output_tokens"] == tokens + 520
+
+    monkeypatch.setattr(config, "llm_factory", llm.Claude)  # 真正的客户端，没有 key
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    status, body = _ask_stream(client, sid, bar_id, "怎么弹")
+    assert status == 400 and "API key" in body["detail"]
+
+
+def test_ask_stream_restart_and_stale_answer(client, monkeypatch):
+    """模型服务从头再来时发 reset；回答期间这个小节改过音：存下的问答标成改谱前（stale）。"""
+    from app import store
+
+    sid = _image_song(client)
+    bar_id = store.load(sid)["bars"][0]["id"]
+
+    def edited_meanwhile(self, *a, **kw):
+        yield "半句"
+        yield None
+        store.update(sid, lambda s: s["bars"][0]["events"][0]["notes"][0].update(fret=9))
+        yield "完整的回答"
+
+    monkeypatch.setattr(FakeClaude, "coach_stream", edited_meanwhile)
+    _, events = _ask_stream(client, sid, bar_id, "怎么弹")
+    assert [e["type"] for e in events] == ["delta", "reset", "delta", "done"]
+    assert events[-1]["answer"] == "完整的回答" and events[-1]["qa"][-1]["stale"] is True
+    assert store.load(sid)["bars"][0]["qa"][-1]["a"] == "完整的回答"
+
+
+def test_ask_stream_finishes_after_the_browser_leaves(data_dir, monkeypatch):
+    """浏览器中途断开：后台线程把回答写完、存进小节，费用照记（只存完整的回答）。"""
+    import asyncio
+    import json
+    import threading
+
+    from app import coach, songs, store
+
+    monkeypatch.setattr(FakeClaude, "stream_delay", 0.05)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bar_id = store.load(sid)["bars"][0]["id"]
+    before = store.load(sid)["usage"]["cost_usd"]
+    run = coach.prepare_ask(sid, bar_id, "怎么弹")
+
+    async def first_line_then_leave():
+        events = main._ask_events(run)
+        line = await events.__anext__()
+        await events.aclose()
+        return json.loads(line)
+
+    assert asyncio.run(first_line_then_leave())["type"] == "delta"
+    for t in threading.enumerate():
+        if t.name == "ask-stream":
+            t.join(timeout=10)
+    saved = store.load(sid)
+    assert saved["bars"][0]["qa"][-1]["a"] == "回答：怎么弹"
+    assert saved["usage"]["cost_usd"] == pytest.approx(before + 0.01)

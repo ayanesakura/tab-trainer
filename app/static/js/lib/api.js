@@ -1,4 +1,5 @@
-// 和后端说话的唯一入口（ES 模块）：get / post / put / del / upload / download，出错统一抛 ApiError(detail)；
+// 和后端说话的唯一入口（ES 模块）：get / post / put / del / upload / download / postStream（NDJSON 流式），
+// 出错统一抛 ApiError(detail)；
 // withBusy(btn, fn) 给按钮加“忙”状态并防止重复提交；poll(fn, {interval, while}) 轮询，出错退避重试。
 
 export class ApiError extends Error {
@@ -41,6 +42,54 @@ async function request(method, path, body, opts) {
   return data;
 }
 
+// 出错的响应 → ApiError（读完响应体取说明）
+async function errorOf(r) {
+  const text = await r.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch { /* 不是 JSON */ }
+  return new ApiError(detailOf(data, text, r.status), r.status, data);
+}
+
+/** 流式 POST：响应是 NDJSON，一行一个 JSON 事件（见 app/main.py 的 ask_bar_stream）。中间的事件（delta / reset）
+ * 边收边交给 onEvent；最后一行 {"type":"done"} 作为结果返回，{"type":"error"} 抛 ApiError(detail)。
+ * 开始之前的错误（400 / 404 等）和 post 一样抛；没收到最后一行连接就断了，抛 ApiError（status 0）。 */
+export async function postStream(path, body, onEvent, opts) {
+  const r = await send('POST', path, body, opts);
+  if (!r.ok) throw await errorOf(r);
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = '';
+  const handle = line => {
+    if (!line.trim()) return null;
+    let ev;
+    try { ev = JSON.parse(line); } catch { throw new ApiError('服务返回的内容看不懂，请重试', r.status); }
+    if (ev.type === 'done') return ev;
+    if (ev.type === 'error') throw new ApiError(ev.detail || '请求失败', 502, ev);
+    if (onEvent) onEvent(ev);
+    return null;
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      buf += dec.decode(value, { stream: !done });
+      let k;
+      while ((k = buf.indexOf('\n')) >= 0) {
+        const end = handle(buf.slice(0, k));
+        buf = buf.slice(k + 1);
+        if (end) return end;
+      }
+      if (done) break;
+    }
+  } catch (e) {
+    if (e instanceof ApiError || e.name === 'AbortError') throw e;
+    throw new ApiError('和 tab-trainer 服务的连接断了', 0);
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  const end = handle(buf);
+  if (end) return end;
+  throw new ApiError('和 tab-trainer 服务的连接断了', 0);
+}
+
 /** 值得自动重试的错误：连不上服务（status 0），或代理 / 服务暂时不可用（502 / 503 / 504）。
  * 其他（404、曲子数据损坏的 500 等带说明的错误）重试也没用。 */
 export const transient = e => !!e && (!e.status || [502, 503, 504].includes(e.status));
@@ -64,12 +113,7 @@ export function upload(path, files, fields = {}, { field = 'files', ...opts } = 
 // 下载文件（导出曲子包等）：→ {blob, filename}，文件名取自 Content-Disposition
 export async function download(path, opts) {
   const r = await send('GET', path, undefined, opts);
-  if (!r.ok) {
-    const text = await r.text();
-    let data = null;
-    try { data = JSON.parse(text); } catch { /* 不是 JSON */ }
-    throw new ApiError(detailOf(data, text, r.status), r.status, data);
-  }
+  if (!r.ok) throw await errorOf(r);
   const cd = r.headers.get('content-disposition') || '';
   const m = cd.match(/filename\*=utf-8''([^;]+)/i) || cd.match(/filename="?([^";]+)/i);
   let filename = '';

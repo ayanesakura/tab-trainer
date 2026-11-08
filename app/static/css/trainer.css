@@ -126,6 +126,7 @@
 .qa .q .t { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
 .qa .a { white-space: pre-wrap; line-height: 1.7; color: var(--fg-2); }
 .qa.stale { opacity: .6; }
+.qa.pending .a .spinner { display: inline-block; vertical-align: -2px; margin-right: 6px; } /* 正在回答、还没收到字 */
 .qa .old { font-weight: 400; font-size: 11px; color: var(--amber); border: 1px solid currentColor; border-radius: 5px; padding: 0 4px; }
 .ask { display: flex; gap: 6px; }
 .ask .input { flex: 1; }

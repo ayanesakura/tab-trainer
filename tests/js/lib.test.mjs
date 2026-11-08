@@ -60,6 +60,41 @@ test('api：错误统一成 ApiError(detail)，非 JSON 的错误体也不崩', 
   await assert.rejects(api.get('/a'), e => e.status === 0 && /连不上/.test(e.message));
 });
 
+// 把字节按给定的切点分成几块，一块块吐出来（切在一行中间、一个汉字的 UTF-8 字节中间都要能拼回来）
+const chunked = (text, cuts, { cutOff = false } = {}) => {
+  const bytes = new TextEncoder().encode(text), parts = [];
+  let a = 0;
+  for (const b of [...cuts, bytes.length]) { parts.push(bytes.slice(a, b)); a = b; }
+  return new ReadableStream({
+    pull(c) {
+      if (parts.length) c.enqueue(parts.shift());
+      else if (cutOff) c.error(new TypeError('network error'));
+      else c.close();
+    },
+  });
+};
+
+test('api：postStream 逐行交出事件，done 作为结果，error 抛 ApiError，断流也抛', async () => {
+  const ndjson = '{"type":"delta","text":"用食指"}\n{"type":"reset"}\n{"type":"delta","text":"按 2 弦"}\n{"type":"done","answer":"按 2 弦","qa":[]}\n';
+  let seen;
+  globalThis.fetch = async (p, init) => { seen = init; return new Response(chunked(ndjson, [5, 20, 33, 40]), { status: 200 }); };
+  const events = [];
+  const done = await api.postStream('/api/x', { question: 'q' }, ev => events.push(ev));
+  assert.equal(seen.method, 'POST');
+  assert.equal(seen.body, '{"question":"q"}');
+  assert.deepEqual(events, [{ type: 'delta', text: '用食指' }, { type: 'reset' }, { type: 'delta', text: '按 2 弦' }]);
+  assert.deepEqual(done, { type: 'done', answer: '按 2 弦', qa: [] });
+
+  globalThis.fetch = async () => new Response(chunked('{"type":"delta","text":"a"}\n{"type":"error","detail":"模型服务返回错误"}\n', [3]));
+  await assert.rejects(api.postStream('/a', {}, () => {}), e => e instanceof api.ApiError && e.message === '模型服务返回错误');
+  globalThis.fetch = async () => new Response(chunked('{"type":"delta","text":"a"}\n', [], { cutOff: true }));
+  await assert.rejects(api.postStream('/a', {}, () => {}), e => e.status === 0 && /连接断了/.test(e.message));
+  globalThis.fetch = async () => new Response('{"type":"delta","text":"a"}\n');  // 正常结束但没有最后一行
+  await assert.rejects(api.postStream('/a', {}, () => {}), e => e.status === 0);
+  globalThis.fetch = reply(404, '{"detail":"小节不存在"}');
+  await assert.rejects(api.postStream('/a', {}, () => {}), e => e.status === 404 && e.message === '小节不存在');
+});
+
 test('api：upload 组装 FormData', async () => {
   let body;
   globalThis.fetch = async (p, init) => { body = init.body; return new Response('{}'); };

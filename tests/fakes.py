@@ -2,9 +2,10 @@
 
 import io
 import threading
+import time
 from typing import ClassVar
 
-from app.llm import LLM
+from app.llm import LLM, join_text
 from tests.test_layout import _score
 
 _lock = threading.Lock()
@@ -97,7 +98,13 @@ class FakeClaude(LLM):
         FakeClaude.calls.append({"explain": [b["n"] for b in bars]})
         return {"bars": [{"number": b["n"], "tip": f"讲解 {b['n']}"} for b in bars]}
 
+    # 问答的替身：回答是“回答：<问题>”，每 3 个字一段给出；stream_delay 是每段之前停的秒数（端到端测试看回答一点点出来）
+    stream_delay: ClassVar[float] = 0.0
+
     def coach(self, meta, bar, neighbours, question, history, practice="", image=None):
+        return join_text(self.coach_stream(meta, bar, neighbours, question, history, practice, image))
+
+    def coach_stream(self, meta, bar, neighbours, question, history, practice="", image=None):
         FakeClaude.calls.append(
             {
                 "coach": bar["n"],
@@ -107,7 +114,20 @@ class FakeClaude(LLM):
                 "image": image.size if image else None,
             }
         )
-        return f"回答：{question}"
+        answer = f"回答：{question}"
+
+        def chunks():
+            for k in range(0, len(answer), 3):
+                if FakeClaude.stream_delay:
+                    time.sleep(FakeClaude.stream_delay)
+                yield answer[k : k + 3]
+            with _lock:  # 一次回答记一笔用量（测费用记到曲子上）
+                u = dict(self.usage)
+                u["output_tokens"] += 100
+                u["cost_usd"] = round(u.get("cost_usd", 0) + 0.01, 4)
+                self.usage = u
+
+        return chunks()
 
     def practice_plan(self, meta, bars):
         return {"overview": "ok", "steps": [{"bars": "1-6", "title": "全曲", "advice": "慢练"}]}

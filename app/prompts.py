@@ -97,8 +97,6 @@ EXPLAIN_SCHEMA = _obj(
     {"bars": {"type": "array", "items": _obj({"number": {"type": "integer"}, "tip": {"type": "string"}})}}
 )
 
-COACH_SCHEMA = _obj({"answer": {"type": "string"}})
-
 PLAN_SCHEMA = _obj(
     {
         "overview": {"type": "string"},

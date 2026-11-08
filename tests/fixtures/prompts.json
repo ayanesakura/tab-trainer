@@ -869,18 +869,7 @@
    "<image>",
    "A guitarist is practising T (tuning string 1 -> 6: D4 A3 F#3 D3 A2 D2, capo 2, time signature 4/4) and asks about bar 3. Tablature data, each event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), a chord name in [brackets] starts that chord, 下扫/上扫 = strummed down/up, 「」 = lyric sung there, techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, nh natural harmonic, ah artificial harmonic, th tapped harmonic (<n> = the fret tapped by the right hand), roll arpeggio, x dead note, vib vibrato, bend):\n\nThis bar: 第3小节: 1拍 2弦3品[h] | 1拍 2弦3品[h] | 1拍 2弦3品[h] | 1拍 2弦3品[h]\n\nNeighbouring bars for context:\n第4小节（3/4 拍）: 3拍 休止\n\nPractice tip already shown for this bar: 慢练\n\nTheir practice log for this bar: 练了 3 遍\n\nThe image is this bar cut from the original score; the data above was transcribed from it and may contain mistakes - if the image clearly disagrees, say so.\n\nEarlier question: 前一个问题\nYour answer: 回答\n\nTheir question (in Chinese): 怎么弹\n\nAnswer in Simplified Chinese like a patient guitar teacher: concrete fingering (which left-hand finger on which string/fret, right-hand p i m a where useful), what to listen for, and a short practice routine if it helps. Refer to notes as 'N 弦 M 品'. Be concise: a few short paragraphs or a short list, no headings."
   ],
-  "schema": {
-   "type": "object",
-   "properties": {
-    "answer": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "answer"
-   ],
-   "additionalProperties": false
-  },
+  "schema": null,
   "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
   "effort": "medium",
   "max_tokens": 8000

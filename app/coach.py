@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from app import config, jobs, practice, staleness, state, store
 from app.config import settings
@@ -104,8 +105,17 @@ def _explain_chunks(sid: str, chunks: list[list[str]], cancel, claude, charge) -
 # 小节问答
 # ---------------------------------------------------------------------------
 def ask_bar(sid: str, bar_id: str, question: str) -> dict:
-    """问一个小节的练习问题（schemas.AskIn 已经去掉首尾空白、检查过长度），回答存进这个小节的 qa 里。
-    返回 {"answer", "qa"}。"""
+    """问一个小节的练习问题，等回答写完再返回 {"answer", "qa"}（练习页用的是流式的，见 prepare_ask）。"""
+    return prepare_ask(sid, bar_id, question)()
+
+
+def prepare_ask(sid: str, bar_id: str, question: str) -> Callable[..., dict]:
+    """准备问一个小节的练习问题（schemas.AskIn 已经去掉首尾空白、检查过长度）：找小节、取上下文、建模型客户端。
+    曲子 / 小节不存在（404）、没配 key（400）都在这里抛，还没发请求。
+
+    返回真正提问的 run(on_delta=None)：回答边生成边交给 on_delta（文字片段；None 表示前面的作废、从头再来，
+    见 llm.join_text），写完后存进这个小节的 qa，返回 {"answer", "qa"}。失败抛 AppError（模型和网络错误转成
+    中文说明的 Upstream）。费用只记一次：成功时随问答一起写进曲子，失败时补记。只存完整的回答。"""
     song = store.load(sid)
     bar = find_bar(song, bar_id)
     idx = song["bars"].index(bar)
@@ -114,38 +124,44 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
     if bar.get("region") and bar.get("page") is not None:
         x0, x1, y0, y1 = bar["region"]
         image = store.page_image(sid, song["pages"][bar["page"]]).crop((x0, y0, x1, y1))
+    history = [q for q in bar.get("qa") or [] if not q.get("stale")]  # 改谱之前的问答说的是旧音，不再当上下文
+    log_text = practice.coach_text(sid, song, bar_id)
     claude = config.new_llm()  # 没配 key：MissingKey，400
-    meter = jobs.UsageMeter(claude)
 
-    try:
-        answer = claude.coach(
-            song["meta"],
-            bar,
-            neighbours,
-            question,
-            [q for q in bar.get("qa") or [] if not q.get("stale")],  # 改谱之前的问答说的是旧音，不再当上下文
-            practice.coach_text(sid, song, bar_id),
-            image,
-        )
-    except AppError:
-        meter.flush(sid)  # 失败了这次请求也花了钱
-        raise
-    except Exception as e:  # noqa: BLE001 - 网络 / API 错误统一转成中文说明
-        meter.flush(sid)  # 失败了这次请求也花了钱
-        raise Upstream(friendly(e)) from None
-    if not answer.strip():
-        meter.flush(sid)  # 失败了这次请求也花了钱
-        raise Upstream("模型没有给出回答，换个问法再试一次")
-    entry = {"q": question, "a": answer.strip(), "at": now()}
+    def run(on_delta: Callable[[str | None], None] | None = None) -> dict:
+        meter = jobs.UsageMeter(claude)
+        parts: list[str] = []
+        try:
+            for t in claude.coach_stream(song["meta"], bar, neighbours, question, history, log_text, image):
+                if t is None:
+                    parts.clear()
+                else:
+                    parts.append(t)
+                if on_delta is not None:
+                    on_delta(t)
+        except AppError:
+            meter.flush(sid)  # 失败了这次请求也花了钱
+            raise
+        except Exception as e:  # noqa: BLE001 - 网络 / API 错误统一转成中文说明
+            log.warning("request_id=%s song=%s ask failed: %s", request_id_of(e), sid, e)
+            meter.flush(sid)  # 失败了这次请求也花了钱
+            raise Upstream(friendly(e)) from None
+        answer = "".join(parts).strip()
+        if not answer:
+            meter.flush(sid)  # 失败了这次请求也花了钱
+            raise Upstream("模型没有给出回答，换个问法再试一次")
+        entry = {"q": question, "a": answer, "at": now()}
 
-    def apply(s):
+        def apply(s):
+            b = next((x for x in s["bars"] if x.get("id") == bar_id), None)
+            if b is not None and not same_events(b["events"], bar["events"]):
+                entry["stale"] = True  # 等回答期间这个小节改过音：回答说的是改之前的谱
+            if b is not None:  # 等回答期间小节被重新识别掉了，就不存
+                b["qa"] = [*(b.get("qa") or []), entry][-settings.qa_keep :]
+            meter.charge(s)
+
+        s = store.update(sid, apply)
         b = next((x for x in s["bars"] if x.get("id") == bar_id), None)
-        if b is not None and not same_events(b["events"], bar["events"]):
-            entry["stale"] = True  # 等回答期间这个小节改过音：回答说的是改之前的谱
-        if b is not None:  # 等回答期间小节被重新识别掉了，就不存
-            b["qa"] = [*(b.get("qa") or []), entry][-settings.qa_keep :]
-        meter.charge(s)
+        return {"answer": entry["a"], "qa": (b or {}).get("qa", [entry])}
 
-    s = store.update(sid, apply)
-    b = next((x for x in s["bars"] if x.get("id") == bar_id), None)
-    return {"answer": entry["a"], "qa": (b or {}).get("qa", [entry])}
+    return run

@@ -252,6 +252,7 @@ uv run python -m app.evaluate eval-xxx --yes
 - `PUT /api/songs/{id}/bars/{bar_id}/review`（`{ok, rev}`）：确认待核对的小节没问题。记下当时音符的指纹，之后音变了、或冒出确认时没有的警告才要重新核对；提示变了（比如改调弦清掉了提示）不影响确认。
 - 错误统一是 `{"detail": "中文说明"}`。409 只表示“别处改过了”（Conflict：版本号对不上、没有可以取消的任务），前端据此刷新、丢掉这个小节的撤销记录；有任务在跑或这个小节正在识别、暂时不能改是 423（Busy），只提示稍后再试。
 - `GET /api/songs/{id}/practice/history` → `{sessions: [{at, a, b, bpm, seconds, loops}]}`。
+- 问 AI：`POST /api/songs/{id}/bars/{bar_id}/ask/stream`（`{question}`）回答边生成边发，响应是 NDJSON（一行一个事件）：`{"type": "delta", "text"}` 是回答的一段，`{"type": "reset"}` 表示前面的作废、从头再来（模型服务重试或换了兜底模型），最后一行是 `{"type": "done", "answer", "qa"}`（已经存进这个小节，`qa` 是它最新的问答列表）或 `{"type": "error", "detail"}`。问题不合格、曲子 / 小节不存在、没配 key 在开始之前照常返回 400 / 404。回答在服务端的单独线程里生成，浏览器中途断开也会写完、存下、记上费用；只存完整的回答。`POST .../ask` 是等回答写完才返回 `{answer, qa}` 的旧接口。
 
 前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。曲库页是 `js/index.js`（事件和 DOM）+ `js/library-view.js`（纯函数：一行曲子的 HTML、状态 / 练习 / 花费说明、筛选排序，`tests/js/library.test.mjs` 直接测）。
 
