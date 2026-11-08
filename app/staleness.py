@@ -161,6 +161,10 @@ def reconcile_bars(
         new["id"] = prev["id"]
         if prev.get("qa"):
             new["qa"] = prev["qa"]
+        # 用户的确认：内容没变（bump_revs 沿用原来的 rev）就还有效，变了自然失效
+        for k in ("reviewed_rev", "reviewed_warn"):
+            if k in prev:
+                new[k] = prev[k]
         edited = keep_edits and bool(prev.get("edited"))
         if edited and (same or one_to_one) and (not setting_changed_ or _edit_fits(prev, new, metas)):
             _keep_edit(prev, new, setting_changed_)

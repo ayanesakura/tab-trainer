@@ -30,6 +30,7 @@ from app.music import (
     normalize_meta,
     rest_bar,
     warn,
+    warn_texts,
 )
 from app.staleness import (
     DERIVE,
@@ -362,10 +363,14 @@ def review_bar(sid: str, bar_id: str, ok: bool, rev: int | None = None) -> dict:
     def apply(s):
         bar = find_bar(s, bar_id)
         check_rev(bar.get("rev"), rev)
+        if not is_score(s) and (why := state.bar_locked(s, bar)):
+            raise Busy(why)  # 正在重新识别：确认会被识别结果盖掉
         if ok:
             bar["reviewed_rev"] = int(bar.get("rev") or 0)
+            bar["reviewed_warn"] = warn_texts(bar)
         else:
             bar.pop("reviewed_rev", None)
+            bar.pop("reviewed_warn", None)
 
     return store.update(sid, apply)
 

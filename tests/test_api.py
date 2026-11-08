@@ -447,3 +447,38 @@ def test_pages_and_static_files_are_revalidated(client):
     etag = client.get("/static/js/trainer/player.js").headers["etag"]
     assert client.get("/static/js/trainer/player.js", headers={"If-None-Match": etag}).status_code == 304
     assert "cache-control" not in client.get("/api/songs").headers
+
+
+def test_bar_confirmation_survives_rerecognition_but_not_new_warnings(data_dir, sync_jobs):
+    """确认过的小节：重新识别（单行、整首）读出一样的内容，确认还在；改了拍号多出时值警告，要重新核对；
+    正在重新识别时不能确认（会被识别结果盖掉）。"""
+    from app import store
+
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    sid = c.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
+    store.update(sid, lambda s: [b.update(uncertain="看不清") for b in s["bars"][:4]])
+    bars = c.get(f"/api/songs/{sid}").json()["bars"]
+    for b in bars[:4]:
+        c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True, "rev": b["rev"]})
+
+    def reviewed():  # 重新识别后不确定说明可能没了（那就不用核对了），这里看确认本身还在不在
+        from app import views
+
+        return [views.reviewed(b) for b in store.load(sid)["bars"][:4]]
+
+    assert reviewed() == [True] * 4
+    row = bars[3]["system"]
+    assert c.post(f"/api/songs/{sid}/systems/{row}/reparse").json() == {"ok": True}
+    assert reviewed() == [True] * 4
+    assert c.post(f"/api/songs/{sid}/parse").json() == {"ok": True}
+    assert reviewed() == [True] * 4
+
+    meta_rev = c.get(f"/api/songs/{sid}").json()["meta_rev"]
+    r = c.put(f"/api/songs/{sid}/meta", json={"time_signature": [3, 4], "rev": meta_rev})
+    assert r.status_code == 200, r.text
+    b = r.json()["bars"][0]
+    assert any(w["code"] == "length" for w in b["warn"]) and b["needs_review"] and not b["reviewed"]
+
+    store.update(sid, lambda s: s.update(activity={"kind": "parse", "restaging": True, "systems": []}))
+    b = c.get(f"/api/songs/{sid}").json()["bars"][5]
+    assert c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True}).status_code == 409

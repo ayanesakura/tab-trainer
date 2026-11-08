@@ -330,6 +330,11 @@ def refresh_length_warn(bar: dict, meta: dict) -> None:
     bar["warn"] = length + keep
 
 
+def warn_texts(bar: dict) -> list[str]:
+    """小节上警告的文字（用户确认时记下来，之后多出新的警告要重新核对）。"""
+    return [str(w.get("msg") or w.get("code")) for w in bar.get("warn") or [] if isinstance(w, dict)]
+
+
 def derive_warns(bar: dict, meta: dict) -> None:
     """重算小节上按内容算出来的警告（时值、网格、弦品范围、占位），保留识别时留下的（OCR 不一致等）。"""
     kept = [as_warn(w) for w in bar.get("warn") or []]
