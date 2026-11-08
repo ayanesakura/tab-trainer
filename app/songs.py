@@ -277,6 +277,8 @@ def set_derived(
         meta = normalize_meta(raw, s.get("title", ""))
         bars = [_derived_bar(i, b or {}, meta) for i, b in enumerate(bars_raw or [])]
         old, track_n = s.get("bars") or [], int(track or 0)
+        if old and not bars:  # 和 import_failed 一样：之前解析成功过的，一次空的结果不代表谱子就是空的
+            raise Invalid("转换结果里没有小节，原来的小节保留不变")
         if old and int(s.get("track") or 0) == track_n:
             changed = setting_changed(s.get("meta") or {}, meta)
             reconcile_bars(s, old, bars, DERIVE, changed)
