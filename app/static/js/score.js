@@ -7,7 +7,8 @@
 //   - bar.shapes = { 和弦名: [1–6 弦的品位，-1 = 不弹] }：这个小节用到的和弦指法（谱面上方画和弦图）
 //   - 击弦 h / 勾弦 p / 滑音 sl 标在“目标音”上
 // alphaTab：alphaTex 里 string 1 也是最高音弦，但内部模型里 note.string 1 = 最低音弦；
-//   击弦、滑音标在“起始音”上。转换时要把这些技巧挪到同一根弦的前一个音。
+//   击弦、滑音标在“起始音”上。转换时要把这些技巧挪到同一根弦的前一个音；前一个音拆成了几段（连音线接着）时
+//   挪到最后一段上（alphaTab 把击弦 / 滑音连到起始音后面紧跟着的那个音，标在第一段就连到了它自己的延续上）。
 
 import { DIRECTIONS, GRID as GRID_TICKS, TICKS_PER_QUARTER, STRINGS, parseDur } from './vocab.js';
 
@@ -82,6 +83,24 @@ const esc = s => String(s ?? '').replace(/["\\]/g, ' ');
 // 反复 / 跳转记号（词表）：名字和 alphaTex 的 \jump 一致，下标就是 alphaTab 的 Direction 枚举值
 const DIRECTION_NAMES = DIRECTIONS;
 
+const barQ = ts => ts[0] * 4 / ts[1]; // 一小节几拍（四分音符）
+
+/**
+ * 小节里真正弹的事件：[{e, q: 时值（拍）}]。和练习页的 deriveView 一致：起拍在小节长度处或更后面的事件不弹（不写进谱子，
+ * 否则会叠到下一小节上、这一小节画得太满），最后一个音超出小节的部分截掉。写不满的小节照原样。
+ */
+function fitBar(events, len) {
+  const out = [];
+  let t = 0;
+  for (const e of events) {
+    if (t >= len - 1e-9) break;
+    const d = parseDur(e.dur);
+    out.push({ e, q: t + d > len + 1e-9 ? len - t : d });
+    t += d;
+  }
+  return out;
+}
+
 /** 小节开头的 alphaTex 元数据：拍号（和上一小节不同时）、反复开始 / 结束（一共弹几遍）、跳房子、跳转。 */
 function barMetaTex(bar, ts, prevTs) {
   const m = [];
@@ -105,11 +124,11 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
   const barTicks = bar => { const t = tsOf(bar); return Math.round(t[0] * 4 / t[1] * TICKS); };
 
   const chordTex = chordTexNames(song.bars);
-  // 第一遍：把每个音转成可挂技巧的对象，并把 h/p/sl 挪到同一根弦的前一个音（或倚音）上
+  // 第一遍：把每个音转成可挂技巧的对象，并把 h/p/sl 挪到同一根弦的前一个音（或倚音）上（记在 out 里：写在这个音的最后一段）
   const lastOnString = {};
   const bars = song.bars.map(bar => {
-    const evs = bar.events && bar.events.length ? bar.events : [{ dur: ticksToDur(barTicks(bar)), notes: [] }];
-    return evs.map(e => {
+    const evs = fitBar(bar.events && bar.events.length ? bar.events : [{ dur: ticksToDur(barTicks(bar)), notes: [] }], barQ(tsOf(bar)));
+    return evs.map(({ e, q }) => {
       const notes = (e.notes || []).filter(n => n.string >= 1 && n.string <= STRINGS).map(n => {
         const tech = new Set(n.tech || []);
         const fx = new Set();
@@ -121,11 +140,11 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
         if (tech.has('vib')) fx.add('v');
         if (n.bend > 0) fx.add(`b (0 ${Math.round(n.bend * 2)})`);
         let grace = null;
-        if (n.grace != null && n.grace >= 0) grace = { string: n.string, fret: n.grace, fx: new Set() };
+        if (n.grace != null && n.grace >= 0) grace = { string: n.string, fret: n.grace, fx: new Set(), out: new Set() };
         const origin = grace || lastOnString[n.string];
-        if (origin && (tech.has('h') || tech.has('p'))) origin.fx.add('h');
-        if (origin && tech.has('sl')) origin.fx.add('sl');
-        const note = { string: n.string, fret: n.fret, fx };
+        if (origin && (tech.has('h') || tech.has('p'))) origin.out.add('h');
+        if (origin && tech.has('sl')) origin.out.add('sl');
+        const note = { string: n.string, fret: n.fret, fx, out: new Set() };
         lastOnString[n.string] = note;
         return { note, grace };
       });
@@ -138,13 +157,14 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
       if (roll) fx.push(e.strum === 'up' ? 'au' : 'ad');
       else if (notes.length > 1 && e.strum === 'down') fx.push('bd');
       else if (notes.length > 1 && e.strum === 'up') fx.push('bu');
-      return { ticks: durToTicks(e.dur), q: parseDur(e.dur), notes, fx };
+      return { q, notes, fx };
     });
   });
 
   // 第二遍：输出文本
-  const noteTex = (n, extra) => {
-    const fx = [...n.fx, ...(extra ? [extra] : [])];
+  // 一个音的第 i 段（一共 count 段）：第一段带技巧，后面的段用连音线（t）延续、不重新拨弦；挪过来的 h / sl 写在最后一段
+  const noteTex = (n, i = 0, count = 1) => {
+    const fx = [...(i === 0 ? n.fx : ['t']), ...(i === count - 1 ? n.out : [])];
     return `${n.fret}.${n.string}${fx.length ? `{${fx.join(' ')}}` : ''}`;
   };
   const beatTex = (notesTex, unit, beatFx) => {
@@ -174,11 +194,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
       t += units.reduce((a, u) => a + u[0], 0);
       const graces = ev.notes.filter(x => x.grace).map(x => x.grace);
       if (graces.length) parts.push(beatTex(graces.map(g => noteTex(g)), [0, 16, 0, 0], ['gr']));
-      units.forEach((u, i) => {
-        // 第一段带上音符和技巧；后面的段用连音线（{t}）延续，不重新拨弦
-        const notes = i === 0 ? ev.notes.map(x => noteTex(x.note)) : ev.notes.map(x => `${x.note.fret}.${x.note.string}{t}`);
-        parts.push(beatTex(notes, u, i === 0 ? ev.fx : []));
-      });
+      units.forEach((u, i) => parts.push(beatTex(ev.notes.map(x => noteTex(x.note, i, units.length)), u, i === 0 ? ev.fx : [])));
     });
     beatMap.push(onsets);
     return barMetaTex(song.bars[bi], tsOf(song.bars[bi]), bi ? tsOf(song.bars[bi - 1]) : ts) + parts.join(' ');

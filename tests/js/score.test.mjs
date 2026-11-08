@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import * as at from '../../app/static/vendor/alphatab/alphaTab.core.min.mjs';
 import { toAlphaTex, deriveSong, splitTicks, durToTicks, ticksToDur, eventIndexAt, DERIVE_VERSION, CHORD_PAD } from '../../app/static/js/score.js';
+import { deriveView } from '../../app/static/js/trainer/view.js';
 
 const parse = tex => {
   const settings = new at.Settings();
@@ -242,13 +243,13 @@ test('chord sheets: chord names, diagrams and strums survive the round trip', ()
 
 test('chord names that differ only by case stay separate chords (Am7 / AM7, Bm / BM)', () => {
   const Am7 = [0, 1, 0, 2, 0, -1], AM7 = [0, 2, 1, 2, 0, -1], Bm = [2, 3, 4, 4, 2, -1];
-  const ev = (chord, frets) => ({ dur: '4', chord, notes: frets.map((f, i) => (f < 0 ? null : N(i + 1, f))).filter(Boolean) });
+  const ev = (chord, frets, dur = '4') => ({ dur, chord, notes: frets.map((f, i) => (f < 0 ? null : N(i + 1, f))).filter(Boolean) });
   const song = {
     meta: { tuning: ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'], capo: 0, time_signature: [4, 4] },
     bars: [
       { shapes: { Am7 }, events: [ev('Am7', Am7)] },
       { shapes: { AM7 }, events: [ev('AM7', AM7)] },
-      { shapes: { Bm }, events: [ev('Bm', Bm), ev('BM', [2, 4, 4, 4, 2, -1]), ev('Am7', Am7)] }, // BM 没有指法、只有名字
+      { shapes: { Bm }, events: [ev('Bm', Bm, '1'), ev('BM', [2, 4, 4, 4, 2, -1], '1'), ev('Am7', Am7, '2')] }, // BM 没有指法、只有名字
     ],
   };
   const { tex } = toAlphaTex(song);
@@ -287,4 +288,50 @@ test('chords and lyrics on a rest or a tied beat are kept as an event with no ne
   // 第一小节：休止上的 G 保留成空事件；最后那个没写和弦的休止照旧并进前一个音
   assert.deepEqual(show(d.bars[0]), [['2', 3, 'C', ''], ['1', 0, 'G', ''], ['1', 3, '', '']]);
   assert.deepEqual(show(d.bars[1]), [['2', 3, '', ''], ['1', 0, 'Em', '啊'], ['1', 3, '', '']]);
+});
+
+// alphaTab 把击弦 / 滑音从起始音连到它后面紧跟着的音：起始音拆成几段（连音线接着）时，标在第一段就连到了它自己的延续上，
+// 目标音丢了技巧（谱面不画、示范音也不弹）。要标在最后一段上
+test('hammer-on / slide from a note written as tied pieces still reaches the target', () => {
+  for (const [dur, tech] of [['5/2', 'h'], ['5/4', 'h'], ['5/2', 'sl'], ['5/4', 'p']]) {
+    const song = { meta: {}, bars: [{ events: [{ dur, notes: [N(1, 5)] }, { dur: '1/2', notes: [N(1, tech === 'p' ? 3 : 7, [tech])] }] }] };
+    const { tex } = toAlphaTex(song);
+    const target = deriveSong(parse(tex), 0).bars[0].events[1].notes[0];
+    assert.deepEqual(target.tech, [tech], `${dur} ${tech}: ${tex.split('\n').at(-1)}`);
+  }
+  // 跨小节：上一小节最后的音（拆成两段）击弦到下一小节的第一个音
+  const song = { meta: {}, bars: [{ events: [{ dur: '3/2', notes: [N(1, 0)] }, { dur: '5/2', notes: [N(1, 5)] }] }, { events: [{ dur: '4', notes: [N(1, 7, ['h'])] }] }] };
+  const back = deriveSong(parse(toAlphaTex(song).tex), 0);
+  assert.deepEqual(back.bars[1].events[0].notes[0].tech, ['h']);
+});
+
+// 起拍在小节长度处或更后面的事件练习页不弹（deriveView 里去掉了）：谱子里也不能写，否则叠到下一小节上、这一小节画得太满
+test('events past the bar length are not written; the last note is cut at the bar end', () => {
+  const song = {
+    meta: { time_signature: [4, 4] },
+    bars: [
+      { events: [{ dur: '2', notes: [N(1, 1)] }, { dur: '2', notes: [N(1, 2)] }, { dur: '1', notes: [N(1, 3)] }] }, // 2 + 2 + 1
+      { events: [{ dur: '3', notes: [N(1, 4)] }, { dur: '2', notes: [N(1, 5)] }, { dur: '1', notes: [N(2, 5)] }] }, // 第二个音超出小节
+      { time_signature: [6, 8], events: [{ dur: '3/2', notes: [N(1, 6)] }, { dur: '3/2', notes: [N(1, 7)] }, { dur: '1/2', notes: [N(1, 8)] }] },
+      { events: [{ dur: '4', notes: [N(2, 1)] }] },
+    ],
+  };
+  const { tex, beatMap } = toAlphaTex(song);
+  const score = parse(tex);
+  const lens = [3840, 3840, 2880, 3840];
+  score.tracks[0].staves[0].bars.forEach((bar, i) => {
+    const beats = bar.voices[0].beats, last = beats[beats.length - 1];
+    assert.equal(last.playbackStart + last.playbackDuration, lens[i], `第 ${i + 1} 小节总长不对`);
+  });
+  assert.deepEqual(beatMap, [[0, 1920], [0, 2880], [0, 1440], [0]]);
+  const back = deriveSong(score, 0).bars.map(b => b.events.map(e => [e.dur, e.notes.map(n => `${n.string}-${n.fret}`).join(' ')]));
+  assert.deepEqual(back, [[['2', '1-1'], ['2', '1-2']], [['3', '1-4'], ['1', '1-5']], [['3/2', '1-6'], ['3/2', '1-7']], [['4', '2-1']]]);
+  // 练习页的事件和 beatMap 一一对应（eventIndexAt 找的就是这些事件）
+  const v = deriveView({ ...song, id: 'x' });
+  v.bars.forEach((evs, i) => assert.equal(evs.length, beatMap[i].length, `第 ${i + 1} 小节`));
+  // 去掉的音不再当击弦的起始音：下一小节第一个音的击弦接在真正弹了的最后一个音上
+  const h = { meta: {}, bars: [{ events: [{ dur: '4', notes: [N(1, 5)] }, { dur: '1', notes: [N(1, 9)] }] }, { events: [{ dur: '4', notes: [N(1, 7, ['h'])] }] }] };
+  const hb = deriveSong(parse(toAlphaTex(h).tex), 0);
+  assert.deepEqual(hb.bars[0].events.map(e => e.notes[0].fret), [5]);
+  assert.deepEqual(hb.bars[1].events[0].notes[0].tech, ['h']);
 });
