@@ -100,6 +100,28 @@ def test_corrupt_config_is_set_aside(data_dir):
     assert store.load_config() == {"api_key": "sk-3"}
 
 
+def test_concurrent_settings_saves_do_not_lose_a_field(data_dir, monkeypatch):
+    """设置页两次保存同时到（输入框失焦自动保存 + 点按钮）：读-改-写整个在锁里，后一个看得到前一个改的字段。"""
+    import threading
+
+    from app import config
+
+    real, other = store.load_config, []
+
+    def slow_load():
+        cfg = real()
+        if not other:  # 第一次读完、还没写回时，另一个请求来改别的字段
+            other.append(threading.Thread(target=config.update_settings, args=(None, False, {"model": "m2"})))
+            other[0].start()
+            other[0].join(0.3)
+        return cfg
+
+    monkeypatch.setattr(store, "load_config", slow_load)
+    config.update_settings(None, False, {"base_url": "http://gw"})
+    other[0].join()
+    assert {k: real().get(k) for k in ("base_url", "model")} == {"base_url": "http://gw", "model": "m2"}
+
+
 def test_private_file_is_never_readable_by_others_while_written(data_dir, monkeypatch):
     """存 API key 的配置：临时文件一建出来就是 0600，不是写完内容才改权限（中间别人能读到 key）。"""
     import os

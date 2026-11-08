@@ -317,6 +317,15 @@ def save_config(cfg: dict) -> None:
         write_json(CONFIG, cfg, private=True)
 
 
+def update_config(fn: Callable[[dict], None]) -> dict:
+    """加锁读-改-写模型设置：两次保存同时到（失焦自动保存 + 点按钮）时，后一个看得到前一个改的字段。"""
+    with _lock:
+        cfg = load_config()
+        fn(cfg)
+        save_config(cfg)
+        return cfg
+
+
 _lock_file = None
 
 
