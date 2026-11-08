@@ -63,13 +63,27 @@ export function initShell() {
 // ---------------------------------------------------------------------
 // 轻提示
 // ---------------------------------------------------------------------
+// 有模态对话框开着时，对话框外面的内容被遮罩压暗、对读屏软件也不可见（inert）：提示要放进最上面那个模态对话框里，
+// 并用 popover 放进顶层（top layer），盖在对话框和遮罩上面。对话框打开 / 关上时 placeToast() 重新安放还在显示的提示。
 let toastTimer;
+const topModal = () => {
+  for (let i = stack.length - 1; i >= 0; i--) { const { el, modal } = stack[i]; if (modal && el.tagName === 'DIALOG' && el.open) return el; }
+  const open = [...document.querySelectorAll('dialog')].filter(d => d.open && d.matches(':modal'));
+  return open[open.length - 1] || null; // 不是经 layer() 打开的模态对话框
+};
+function placeToast(el = document.querySelector('.toast')) {
+  if (!el) return;
+  const host = topModal() || document.body;
+  if (el.parentNode !== host) host.appendChild(el); // 挪动会把已显示的 popover 收起，下面重新显示
+  if (el.showPopover && !el.matches(':popover-open')) { try { el.showPopover(); } catch { /* 不支持 popover 时退回普通 fixed 定位 */ } }
+}
 export function toast(msg, kind = 'ok', ms = 2200) {
   document.querySelectorAll('.toast').forEach(t => t.remove());
   const el = document.createElement('div');
   el.className = 'toast ' + kind; el.textContent = msg;
   el.setAttribute('role', kind === 'err' ? 'alert' : 'status');
-  document.body.appendChild(el);
+  el.popover = 'manual';
+  placeToast(el);
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.remove(), ms);
 }
 
@@ -92,6 +106,7 @@ export function layer(el, { onClose, modal = false, outside = true, ignore = [],
   stack.push(entry);
   if (el.tagName === 'DIALOG') {
     if (!el.open) (modal ? el.showModal() : el.show());
+    if (modal) placeToast(); // 还在显示的提示挪到新对话框里、盖在它上面
     // Esc 在模态对话框上先触发 cancel：交给栈处理（可能还要 onClose 收尾）
     entry.onCancel = e => { e.preventDefault(); entry.close('esc'); };
     entry.onNativeClose = () => entry.close('native');
@@ -112,6 +127,7 @@ function closeLayer(entry, reason = 'api') {
     const { el } = e;
     if (e.onCancel) { el.removeEventListener('cancel', e.onCancel); el.removeEventListener('close', e.onNativeClose); }
     if (el.tagName === 'DIALOG' && el.open) el.close();
+    if (el.tagName === 'DIALOG' && el.querySelector('.toast')) placeToast(); // 先挪出来（onClose 可能删掉对话框），关上后提示还在
     const focusInside = el.contains(document.activeElement) || document.activeElement === document.body || !document.activeElement;
     try { e.onClose && e.onClose(e === entry ? reason : 'parent'); } catch (err) { console.error(err); }
     if (focusInside && e.prev && e.prev.isConnected && e.prev.focus) e.prev.focus({ preventScroll: true });

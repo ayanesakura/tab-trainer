@@ -407,3 +407,32 @@ def test_retry_failed_rows_from_library_and_practice_page(server, browser, train
         assert not b.errors, b.errors
     finally:
         store.update(sid, lambda s: s.update(systems=raw["systems"]))
+
+
+def test_toast_shows_above_modal_dialog(server, browser):
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for("!!document.querySelector('.song-row')")
+    b.js(f"tt.openPages('{server['image']}').then(() => true)")
+    b.wait_for("document.getElementById('pagesDlg').open")
+    hit = """(() => { const t = document.querySelector('.toast'), r = t.getBoundingClientRect();
+      return t.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })()"""
+    parent = "document.querySelector('.toast').parentNode"
+    b.js("UI.toast('保存失败：这首曲子正在识别', 'err', 60000); true")
+    # 在对话框里（读屏软件看得到）、盖在遮罩上面（点得到 = 没被压在下面）
+    assert b.js(f"{parent}.id") == "pagesDlg"
+    assert b.js(hit) is True
+    # 再叠一个确认框：提示挪到确认框里，还在最上面；确认框关掉后回到下面的对话框
+    b.js("UI.confirm('叠一层'); true")
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    assert b.js(f"{parent}.classList.contains('dlg-msg')") is True
+    assert b.js(hit) is True
+    b.js("document.querySelector('.dlg-msg [data-cancel]').click(); true")
+    b.wait_for("!document.querySelector('.dlg-msg')")
+    assert b.js(f"{parent}.id") == "pagesDlg"
+    # 对话框关上（比如保存成功后先提示再关）：提示还在、看得见
+    b.js("document.getElementById('pagesCancel').click(); true")
+    b.wait_for("!document.getElementById('pagesDlg').open")
+    assert b.js(f"{parent} === document.body") is True
+    assert b.js(hit) is True
+    assert not b.errors, b.errors

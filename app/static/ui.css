@@ -299,7 +299,8 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
 .dlg-msg .dlg-b .input { width: 100%; }
 .dlg-f { display: flex; justify-content: flex-end; align-items: center; gap: var(--sp-2); padding: 14px 20px 16px; }
 
-.toast { position: fixed; z-index: 60; left: 50%; bottom: 22px; transform: translateX(-50%); padding: 5px var(--sp-3); border-radius: var(--r-lg); font-size: var(--fs-2); font-weight: 500;
+/* 用 popover 放进顶层：去掉浏览器给 [popover] 的默认 inset / margin / 边框 / 背景 */
+.toast { position: fixed; z-index: 60; inset: auto auto 22px 50%; margin: 0; border: 0; overflow: visible; transform: translateX(-50%); padding: 5px var(--sp-3); border-radius: var(--r-lg); font-size: var(--fs-2); font-weight: 500;
   background: color-mix(in srgb, currentColor 14%, var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 28%, transparent), var(--shadow-md);
   animation: toast-in .22s var(--ease); max-width: calc(100vw - 32px); }
 .toast.ok { color: var(--green); } .toast.err { color: var(--red); } .toast.info { color: var(--accent); }
