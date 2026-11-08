@@ -159,6 +159,33 @@ def estimate(
     return lo, hi, lo * per, hi * per
 
 
+def relayout_truth(sid: str, truth: dict) -> int:
+    """评测曲生成时存下的版面换成现在的版面检测结果（只在内存里）：版面检测改了以后，看新的行裁剪 / 小节线
+    对识别有没有帮助。一页上检测出的行数、每行的小节数都和存下的一样才换（标准答案按行、按小节对得上），
+    不一样的页保持原样。返回换了几行。"""
+    by_page: dict[int, list[int]] = {}
+    for i, s in enumerate(truth["systems"]):
+        by_page.setdefault(s["page"], []).append(i)
+    n = 0
+    for pi, idx in by_page.items():
+        new = recognize.plan_page_systems(sid, truth["pages"][pi], pi)
+        old = [truth["systems"][i] for i in idx]
+        if len(new) != len(old) or any(
+            len(a.get("spans") or []) != len(b.get("spans") or []) for a, b in zip(old, new, strict=True)
+        ):
+            log.warning("song=%s page=%d relayout: rows/bars differ, keeping the stored layout", sid, pi)
+            continue
+        for i, b in zip(idx, new, strict=True):
+            truth["systems"][i] = {
+                **truth["systems"][i],
+                "crop": b["crop"],
+                "spans": b["spans"],
+                "lines": b["lines"],
+            }
+            n += 1
+    return n
+
+
 def run(
     sid: str,
     cfg: LLMConfig,
@@ -167,10 +194,12 @@ def run(
     price_model: str = "",
     double: str = "off",
     split: bool | None = None,  # None = 和应用里一样（recognize.SPLIT_ROWS）
+    relayout: bool = False,
 ) -> dict:
     """price_model：按这个模型的价格估算费用（--price-as）；不给就用模型客户端按实际回答的模型记的钱
     （服务端兜底换了模型时也对）。"""
     truth = store.load(sid)
+    replaced = relayout_truth(sid, truth) if relayout else 0
     scored = set(truth.get("eval_bars") or [])
     sys_idx = rows_to_eval(truth, systems)
     claude = Claude(cfg)
@@ -243,6 +272,7 @@ def run(
         "effort": cfg.effort,
         "double_check": double,
         "split": recognize.SPLIT_ROWS if split is None else split,
+        "relayout_rows": replaced if relayout else None,
         "systems": sys_idx,
         "bar_count_mismatch": {
             si: [len(by_sys.get(si, [])), len(p)] for si, p, _ in results if len(p) != len(by_sys.get(si, []))
@@ -358,6 +388,11 @@ def main() -> None:
         help="太宽的行切成两半识别（recognize._should_split）；默认和应用里一样（recognize.SPLIT_ROWS）",
     )
     ap.add_argument(
+        "--relayout",
+        action="store_true",
+        help="用现在的版面检测重新切行（行数、小节数和存下的一致的页才换），看版面改动对识别的影响",
+    )
+    ap.add_argument(
         "--rescore", metavar="REPORT", help="用已有的 report.json 按当前标准答案重新计分，不调用模型"
     )
     a = ap.parse_args()
@@ -391,7 +426,7 @@ def main() -> None:
         print("这只是计划。确认要运行请加 --yes。")
         return
 
-    rep = run(a.song, cfg, systems, a.concurrency, a.price_as or "", a.double_check, a.split)
+    rep = run(a.song, cfg, systems, a.concurrency, a.price_as or "", a.double_check, a.split, a.relayout)
     model_tag = (a.model or cfg.model or "").split("/")[-1]
     out = store.DATA / "evals" / f"{time.strftime('%Y%m%d-%H%M%S')}-{a.song}-{model_tag}"
     out.mkdir(parents=True, exist_ok=True)
