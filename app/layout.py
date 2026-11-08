@@ -460,10 +460,14 @@ def detect_page(img: Image.Image) -> dict:
     systems.sort(key=lambda s_: (s_["col"], s_["tab_bottom"], s_["x0"]))
     # 找行与行的分界时只看真正的黑色印刷（谱子照片上斜着的灰色水印、灰底不算）
     ink = g < 140
-    # 纵向范围：同一栏里相邻两行之间取中点；首行向上、末行向下各留一行谱高度左右的余量
-    for i, s_ in enumerate(systems):
-        prev = systems[i - 1] if i > 0 and systems[i - 1]["col"] == s_["col"] else None
-        nxt = systems[i + 1] if i + 1 < len(systems) and systems[i + 1]["col"] == s_["col"] else None
+    # 纵向范围：同一栏里相邻两行之间取中点；首行向上、末行向下各留一行谱高度左右的余量。
+    # 同一行被空白分成的几段（Coda 前）互相不算上下相邻：各自找正上方、正下方的行
+    for s_ in systems:
+        same = [t for t in systems if t["col"] == s_["col"]]
+        above = [t for t in same if t["tab_bottom"] < s_["first_top"]]
+        below = [t for t in same if t["first_top"] > s_["tab_bottom"]]
+        prev = max(above, key=lambda t: (t["tab_bottom"], t["x0"])) if above else None
+        nxt = min(below, key=lambda t: (t["first_top"], t["x0"])) if below else None
         height = s_["tab_bottom"] - s_["first_top"]
         top = (
             _row_split(prev, s_, ink)

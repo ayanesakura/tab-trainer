@@ -475,6 +475,12 @@ def test_one_row_split_by_a_coda_gap_does_not_make_the_page_two_columns():
         (700, 400),
         (60, 650),
     ]
+    # 同一行的两段各自的纵向范围都包住整行谱线，和上下两行不重叠
+    for s in r["systems"]:
+        assert s["top"] < s["lines"][0] and s["lines"][-1] < s["bottom"]
+    a, b = r["systems"][1], r["systems"][2]
+    assert (a["top"], a["bottom"]) == (b["top"], b["bottom"])
+    assert r["systems"][0]["bottom"] <= a["top"] and a["bottom"] <= r["systems"][3]["top"]
 
 
 @pytest.mark.parametrize("offset", [0, 3, 40])
