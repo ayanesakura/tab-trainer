@@ -154,6 +154,14 @@ export function barTags(events) {
   return [...tags];
 }
 
+/** 一个小节（后端的 events）的文字版，如 “1拍 1弦0品 2弦3品[h] | 2拍 休止”：小节卡片上显示精修之前的读法 */
+export function eventsText(events) {
+  return (events || []).map(e => {
+    const notes = (e.notes || []).map(n => `${n.string}弦${n.fret}品${(n.tech || []).length ? `[${n.tech.join(',')}]` : ''}`).join(' ');
+    return `${e.chord ? `[${e.chord}] ` : ''}${e.dur}拍 ${notes || '休止'}`;
+  }).join(' | ');
+}
+
 /** 练习建议里的“第 3–5 小节” → 小节下标 {a, z}（超出范围的截掉；读不出来返回 null） */
 export function planRange(bars, n) {
   const s = String(bars ?? '').trim();

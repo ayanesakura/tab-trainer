@@ -4,6 +4,7 @@ import { UI, $, esc, icon, toast } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
 import { SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
 import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS } from '/static/js/library-view.js';
+import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
 
 UI.initShell();
 
@@ -249,7 +250,8 @@ function openMore(btn) {
   const id = btn.dataset.more, s = lastSongs.find(x => x.id === id);
   if (!s) return;
   if (s.busy) {
-    UI.menu(btn, [{ label: s.recognizing ? '取消识别' : '取消生成讲解', icon: 'x', onClick: () => cancel(id) }]);
+    const kind = s.activity && s.activity.kind;
+    UI.menu(btn, [{ label: s.recognizing ? '取消识别' : kind === 'refine' ? '取消精修' : '取消生成讲解', icon: 'x', onClick: () => cancel(id) }]);
     return;
   }
   if (s.status === 'corrupt') {
@@ -263,6 +265,7 @@ function openMore(btn) {
     image && { label: '管理原谱页面', icon: 'image', onClick: () => openPages(id) },
     image && s.failed_rows > 0 && { label: `重试失败的 ${s.failed_rows} 行`, icon: 'refresh', onClick: () => retryFailed(s) },
     image && { label: '整首重新识别', icon: 'refresh', onClick: () => reparse(s) },
+    image && s.bars > 0 && { label: s.refined ? '再精修一遍' : '精修', icon: 'sparkle', onClick: () => refineSong(s) },
     { label: '导出曲子包', icon: 'upload', onClick: () => exportSongs([id]) },
     'sep',
     { label: '删除', icon: 'trash', danger: true, onClick: () => remove(s) },
@@ -287,6 +290,12 @@ async function reparse(s) {
   const ok = await UI.confirm('会再调用一次 AI（按原谱页数计费）。\n和原来一样的小节保留提示、问答和练习记录，手改过的小节保留你的修改；识别失败或取消时原结果不变。',
     { title: `整首重新识别“${s.title}”？`, ok: '重新识别' });
   if (ok) await act(() => api.post(`/api/songs/${s.id}/parse`), '已开始重新识别', 'info');
+}
+// 精修：确认框里给出要核对的小节数、预估费用和时间（后端算好的 refine_estimate）
+async function refineSong(s) {
+  const c = refineConfirm(s.refine_estimate, s.title);
+  if (!c) { toast(NO_REFINE, 'info', 4000); return; }
+  if (await UI.confirm(c.text, { title: c.title, ok: c.ok })) await act(() => api.post(`/api/songs/${s.id}/refine`), '已开始精修', 'info');
 }
 async function retryFailed(s) {
   const ok = await UI.confirm('会再调用 AI，只重新识别失败的行；已经识别好的小节不动。', { title: `重试“${s.title}”失败的 ${s.failed_rows} 行？`, ok: '重试' });
@@ -435,6 +444,7 @@ function showSettings(c) {
   if (custom) $('modelCustom').value = c.model;
   setEffortSeg(c.effort);
   setDoubleSeg(c.double_check || 'off');
+  setRefineSeg(c.refine || 'manual');
   $('baseUrl').value = c.base_url;
 }
 // → 是否保存成功（失败时已经提示过）
@@ -448,6 +458,7 @@ const setModelSeg = UI.seg($('modelSeg'), 'claude-opus-5-5', v => {
 $('modelCustom').onchange = () => { if ($('modelCustom').value.trim()) save({ model: $('modelCustom').value.trim() }); };
 const setEffortSeg = UI.seg($('effortSeg'), 'high', v => save({ effort: v }));
 const setDoubleSeg = UI.seg($('doubleSeg'), 'off', v => save({ double_check: v }, v === 'off' ? '已关闭双重校对' : '已打开双重校对'));
+const setRefineSeg = UI.seg($('refineSeg'), 'manual', v => save({ refine: v }, v === 'auto' ? '识别完会自动精修' : '精修改成手动'));
 $('baseUrl').onchange = () => save({ base_url: $('baseUrl').value });
 $('saveKey').onclick = () => api.withBusy($('saveKey'), async () => {
   const k = $('apiKey').value.trim();

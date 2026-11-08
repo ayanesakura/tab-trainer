@@ -1,11 +1,12 @@
-// 侧栏的小节卡片：编号、技巧标签、这一小节的和弦（弹唱谱）、提示、待核对说明（可以确认没问题）、原谱截图。正在看的小节是 store 的 ui.bar。
+// 侧栏的小节卡片：编号、技巧标签、这一小节的和弦（弹唱谱）、提示、待核对说明（可以确认没问题）、精修改了什么（可以撤销）、原谱截图。
+// 正在看的小节是 store 的 ui.bar。
 // 敲节奏打开时（rhythm.on）这张卡片收起来，位置让给节奏卡片。
 
 import { get, on } from './store.js';
 import { $, UI, esc, songUrl, setButton } from './dom.js';
 import { put, withBusy } from '../lib/api.js';
 import { applySong, writeFailed } from './song.js';
-import { barTags, warnText, isScore } from './view.js';
+import { barTags, warnText, isScore, eventsText } from './view.js';
 import { images, loadImages } from './page-images.js';
 import { barChords, chordShapes, chordSVG } from './chords.js';
 
@@ -29,7 +30,30 @@ function renderCard() {
   $('tipWarn').classList.toggle('reviewed', !!sb.reviewed);
   setButton($('reviewBtn'), sb.reviewed ? `${UI.icon('x')}撤销确认` : `${UI.icon('check')}确认没问题`);
   $('reviewHint').textContent = sb.reviewed ? '已确认没问题，不再算待核对' : '对照原谱看过，识别是对的';
+  // 精修改过这个小节：模型说的改动 + 撤销（恢复精修之前的读法）
+  const rf = sb.refine;
+  $('refineRow').hidden = !rf;
+  if (rf) {
+    $('refineDiff').textContent = `精修改过：${rf.diff || '（没有说明）'}`;
+    $('refinePrev').textContent = eventsText((rf.prev && rf.prev.events) || []);
+    $('undoRefineBtn').disabled = !!sb.locked;
+    $('undoRefineBtn').title = sb.locked || '恢复成精修之前的读法';
+  }
   drawCrop();
+}
+
+async function undoRefine() {
+  const bi = get('ui.bar'), sb = (get('song').bars || [])[bi];
+  if (!sb || !sb.refine) return;
+  await withBusy($('undoRefineBtn'), async () => {
+    try {
+      applySong(await put(songUrl(`/bars/${encodeURIComponent(sb.id)}/undo-refine`), { rev: sb.rev }));
+      UI.toast(`已撤销第 ${bi + 1} 小节的精修`, 'ok');
+    } catch (e) {
+      await writeFailed(e);
+    }
+  });
+  renderCard();
 }
 
 async function toggleReview() {
@@ -65,6 +89,7 @@ function drawCrop() {
 
 export function initBarCard() {
   $('reviewBtn').onclick = toggleReview;
+  $('undoRefineBtn').onclick = undoRefine;
   on('view', v => { if (v) loadImages(v.pages); });
   document.addEventListener('tt-images', drawCrop);
   on(['ui.bar', 'view', 'song.bars', 'song.is_score'], renderCard);
