@@ -411,3 +411,50 @@ def test_narrow_first_bar_after_a_single_barline_is_kept():
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [3]
     assert abs(r["systems"][0]["bars"][0][0] - 60) <= 3
+
+
+def test_barlines_found_when_lines_have_a_faint_row_above():
+    """缩小过的截图：线距小（9 像素），每根谱线上面挨着一行浅灰的抗锯齿（不到 215、不到 200），线心落在半像素上。
+    小节线停在深色的那一行：判断两端是否连到 1 弦 / 6 弦时不能把谱线外面那行浅灰也算进去。"""
+    sp = 9
+    img = Image.new("L", (900, 200), 255)
+    d = ImageDraw.Draw(img)
+    tab_top = 80
+    for i in range(6):
+        y = tab_top + i * sp
+        d.line([(40, y - 1), (860, y - 1)], fill=210)
+        d.line([(40, y), (860, y)], fill=120)
+    for x in (40, 300, 580, 860):
+        d.line([(x, tab_top), (x, tab_top + 5 * sp)], fill=40, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3]
+
+
+@pytest.mark.parametrize("top", [0, 1])
+def test_staff_line_on_the_first_or_last_pixel_row(top):
+    """裁得很紧的截图：1 弦就在图片第一行（或 6 弦在最后一行）也不能崩。"""
+    sp = 14
+    img = Image.new("L", (900, top + 5 * sp + 1), 255)
+    d = ImageDraw.Draw(img)
+    for i in range(6):
+        d.line([(10, top + i * sp), (890, top + i * sp)], fill=120)
+    for x in (10, 450, 890):
+        d.line([(x, top), (x, top + 5 * sp)], fill=40, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2]
+
+
+def test_thick_lines_of_an_upscaled_screenshot():
+    """Retina 截图（2 倍放大、不模糊）：谱线有 3 像素粗、和相邻行合并后 4–5 行，页面又不高；
+    谱线粗细的上限要按线距算，不能按页高算。"""
+    sp = 28
+    img = Image.new("L", (1600, 600), 255)
+    d = ImageDraw.Draw(img)
+    for top in (120, 380):
+        for i in range(6):
+            y = top + i * sp
+            d.rectangle([(40, y), (1560, y + 3)], fill=150)
+        for x in (40, 800, 1560):
+            d.rectangle([(x, top), (x + 3, top + 5 * sp + 3)], fill=40)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2, 2]

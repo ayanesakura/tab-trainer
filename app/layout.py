@@ -30,7 +30,14 @@ def _staff_lines(gray: np.ndarray, thr: float | None = None) -> list[float]:
     frac = dark.sum(1) / w
     if thr is None:
         thr = max(0.35, 0.6 * float(frac.max()))
-    return [(a + b) / 2 for a, b in _runs(frac >= thr) if b - a <= max(4, h // 250)]
+    runs = _runs(frac >= thr)
+    # 谱线不能太粗（太粗的是文字、色块）。上限按线距算：和最近的相邻候选线隔开的距离的 0.35 倍；
+    # 放大过的截图（Retina 2 倍）谱线有三四个像素粗，按页高算的固定上限会把它们全丢掉。原来的上限照旧保留
+    mids = [(a + b) / 2 for a, b in runs]
+    gaps = np.diff(mids) if len(mids) > 1 else np.zeros(0)
+    near = np.minimum(np.r_[np.inf, gaps], np.r_[gaps, np.inf]) if len(mids) > 1 else np.zeros(len(mids))
+    cap = max(4, h // 250)
+    return [m for (a, b), m, gap in zip(runs, mids, near) if b - a <= max(cap, 0.35 * gap)]
 
 
 def _spacing(staff: list[float]) -> float:
@@ -188,7 +195,8 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
 def _line_cover(g: np.ndarray, lines: list[float], need: int) -> float:
     """这组线横向有多大比例的地方至少 need 根是深色的（浅灰的谱线按 215 算）。"""
     ys = [round(y) for y in lines]
-    return float((np.stack([g[max(0, y - 1) : y + 2] < 215 for y in ys]).any(1).sum(0) >= need).mean())
+    # 每根线先在自己上下各一行里合并成一行再叠起来：线贴着图片上下边时切出来只有两行，直接叠形状对不上
+    return float((np.stack([(g[max(0, y - 1) : y + 2] < 215).any(0) for y in ys]).sum(0) >= need).mean())
 
 
 def _chord_diagrams(dark: np.ndarray, tab: list[float], sp: float, x0: int, x1: int) -> bool:
@@ -345,8 +353,9 @@ def detect_page(img: Image.Image) -> dict:
             # 小节线：六线谱上下线之间（掐头去尾）几乎全暗的竖列
             y_a, y_b = int(tab[0] + sp * 0.3), int(tab[-1] - sp * 0.3)
             colfrac = dark[y_a:y_b].mean(0)
+            # 两端只量到谱线以内：线心在半像素上时（谱线外挨着一行浅灰），向内取整，不把谱线外面那行算进去
             ends = np.minimum(
-                dark[int(tab[0]) : y_a + 1].mean(0), dark[y_b : int(np.ceil(tab[-1])) + 1].mean(0)
+                dark[int(np.ceil(tab[0])) : y_a + 1].mean(0), dark[y_b : int(tab[-1]) + 1].mean(0)
             )
             runs_bl = [
                 (a, b)
