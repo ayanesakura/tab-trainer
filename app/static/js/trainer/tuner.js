@@ -1,4 +1,5 @@
 // 调弦页：调弦表（每根弦要怎么调，带“听”按钮）和麦克风调音器。音名显示用 ♯。
+// 进调弦页就自动打开麦克风，离开就关掉（没有开关按钮）。
 // 音高检测和读数稳定在 lib/pitch.js（纯计算，Node 里测）；这里只管麦克风、取样和显示。
 
 import { get, on } from './store.js';
@@ -26,6 +27,14 @@ function renderTune(v) {
 let mic = null; // 开着时 {stream, src, an, buf, eng, key, raf, last, shown}
 const MIC_BLOCKED = '麦克风只能在本机地址或 HTTPS 下使用。局域网打开时请用每根弦的“听”按钮对音。';
 const MIC_IDLE = '弹一根空弦，自动识别是哪根';
+const MIC_GESTURE = '点一下页面任意处开始调音（浏览器要先有一次点击才肯处理声音）';
+/** 打开麦克风失败时给用户看的话：没权限的要告诉他去哪里允许 */
+function micError(err) {
+  if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) return '没有麦克风权限：在浏览器地址栏左侧允许使用麦克风，然后重新打开调弦页';
+  if (err && (err.name === 'NotFoundError' || err.name === 'OverconstrainedError')) return '没找到麦克风：接上麦克风后重新打开调弦页';
+  if (err && err.name === 'NotReadableError') return '麦克风被别的程序占用了：关掉它后重新打开调弦页';
+  return '麦克风打开失败：' + (err && err.message ? err.message : err);
+}
 const FRAME_MS = 40; // 每秒算 25 次音高就够了（一次不到 1ms），指针的平滑靠 CSS 过渡
 let starting = false;
 /** 按当前调弦建音高跟踪（目标没变就沿用，不打断正在显示的读数）；缓冲长度跟着最低弦变 */
@@ -63,7 +72,7 @@ function resetDisplay() {
 function tick(now) {
   if (!mic) return;
   mic.raf = requestAnimationFrame(tick);
-  if (now - mic.last < FRAME_MS) return;
+  if (ac.state !== 'running' || now - mic.last < FRAME_MS) return; // 声音还没放行（等用户点一下）：先不算，提示别被盖掉
   mic.last = now;
   const { an, buf } = mic;
   an.getFloatTimeDomainData(buf);
@@ -71,40 +80,47 @@ function tick(now) {
   for (let i = buf.length - 1024; i < buf.length; i++) e += buf[i] * buf[i];
   show(mic.eng.process(buf, now, Math.sqrt(e / 1024)));
 }
+/** 进调弦页时打开麦克风。浏览器第一次会弹窗问权限：等用户点的时候离开了调弦页，拿到以后马上关掉 */
 async function startMic() {
   if (mic || starting) return;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('tRead').textContent = MIC_BLOCKED; return; }
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('tRead').textContent = MIC_BLOCKED; return; }
   initAudio();
   let stream;
   starting = true;
+  $('tRead').textContent = '正在打开麦克风…';
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
-  catch (err) { $('tRead').textContent = '麦克风打开失败：' + err.message; return; }
+  catch (err) { if (get('ui.view') === 'tune') $('tRead').textContent = micError(err); return; }
   finally { starting = false; }
   if (get('ui.view') !== 'tune') { stream.getTracks().forEach(t => t.stop()); return; } // 等授权的时候已经离开了调弦页
-  $('micBtn').innerHTML = '<span class="dot ok"></span>调音器已开启 · 点击关闭';
   const an = ac.createAnalyser();
   const src = ac.createMediaStreamSource(stream);
   src.connect(an);
   mic = { stream, src, an, buf: null, eng: null, key: '', raf: 0, last: -Infinity, shown: null };
   makeEngine();
   mic.raf = requestAnimationFrame(tick);
+  // 直接打开 #tune、还没在页面上点过：浏览器不让声音跑起来，分析器拿到的全是 0。提示点一下，点了再接着算
+  if (ac.state === 'running') resetDisplay();
+  else {
+    $('tRead').textContent = MIC_GESTURE;
+    const go = () => { removeEventListener('pointerdown', go, true); removeEventListener('keydown', go, true); initAudio(); if (mic) resetDisplay(); };
+    addEventListener('pointerdown', go, true); addEventListener('keydown', go, true);
+  }
 }
-/** 关掉麦克风（再点一次按钮、离开调弦页时）：不然系统的麦克风指示一直亮着，后台还在算音高 */
+/** 离开调弦页时关掉麦克风：不然系统的麦克风指示一直亮着，后台还在算音高 */
 function stopMic() {
   if (!mic) return;
   cancelAnimationFrame(mic.raf);
   mic.src.disconnect();
   mic.stream.getTracks().forEach(t => t.stop());
   mic = null;
-  $('micBtn').innerHTML = UI.icon('mic') + '开启麦克风';
   resetDisplay();
 }
 
 export function initTuner() {
-  $('micBtn').onclick = () => (mic ? stopMic() : startMic());
-  on('ui.view', v => { if (v !== 'tune') stopMic(); });
-  if (!window.isSecureContext) { $('micBtn').disabled = true; $('tRead').textContent = MIC_BLOCKED; }
+  on('ui.view', v => (v === 'tune' ? startMic() : stopMic()));
+  if (!window.isSecureContext) $('tRead').textContent = MIC_BLOCKED;
   $('tuneRows').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; initAudio(); pluck(0, +b.dataset.m, ac.currentTime + 0.02); });
   on('view', v => { if (v) renderTune(v); });
   if (get('view')) renderTune(get('view'));
+  if (get('ui.view') === 'tune') startMic(); // 直接打开的就是调弦页
 }

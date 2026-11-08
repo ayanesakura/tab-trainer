@@ -615,24 +615,33 @@ def test_song_info_form_edits_artist(server, trainer):
     assert not b.errors, b.errors
 
 
-def test_tuner_mic_stops_when_leaving_tune_page(trainer):
-    """调音器开了麦克风：离开调弦页（或再点一次按钮）就关掉，麦克风不会一直开着。"""
+def test_tuner_mic_follows_the_tune_page(trainer):
+    """进调弦页自动打开麦克风（没有开关按钮），离开就关掉，麦克风不会一直开着；再进来再打开。"""
     b = trainer()
     b.js("""(() => { window.__streams = []; const md = navigator.mediaDevices, of = md.getUserMedia.bind(md);
       md.getUserMedia = async c => { const s = await of(c); __streams.push(s); return s; }; return true; })()""")
+    assert b.js("document.getElementById('micBtn') === null")
+    assert b.js("__streams.length") == 0  # 练习页不开麦克风
     b.js("location.hash = '#tune'; true")
-    b.wait_for("tt.get('ui.view') === 'tune'")
-    b.js("document.getElementById('micBtn').click(); true")
-    b.wait_for("document.getElementById('micBtn').textContent.includes('已开启')")
+    b.wait_for("__streams.length === 1 && __streams[0].getTracks().every(t => t.readyState === 'live')")
+    b.wait_for("document.getElementById('tRead').textContent.includes('弹一根空弦')")
     b.js("location.hash = '#practice'; true")
     b.wait_for("__streams[0].getTracks().every(t => t.readyState === 'ended')")
-    assert "开启麦克风" in b.js("document.getElementById('micBtn').textContent")
-    # 再开一次，用按钮关
     b.js("location.hash = '#tune'; true")
-    b.js("document.getElementById('micBtn').click(); true")
-    b.wait_for("__streams.length === 2 && document.getElementById('micBtn').textContent.includes('已开启')")
-    b.js("document.getElementById('micBtn').click(); true")
+    b.wait_for("__streams.length === 2 && __streams[1].getTracks().every(t => t.readyState === 'live')")
+    b.js("location.hash = '#glossary'; true")
     b.wait_for("__streams[1].getTracks().every(t => t.readyState === 'ended')")
+    assert not b.errors, b.errors
+
+
+def test_tuner_explains_a_denied_mic(trainer):
+    """不给麦克风权限：调音器那里说清楚去哪里允许，调弦表的“听”照常能用。"""
+    b = trainer()
+    b.js("""(() => { navigator.mediaDevices.getUserMedia = async () => {
+        throw new DOMException('Permission denied', 'NotAllowedError'); }; return true; })()""")
+    b.js("location.hash = '#tune'; true")
+    b.wait_for("document.getElementById('tRead').textContent.includes('没有麦克风权限')")
+    assert "地址栏" in b.js("document.getElementById('tRead').textContent")
     assert not b.errors, b.errors
 
 
@@ -646,9 +655,7 @@ def test_tuner_reading_settles_on_a_steady_tone(trainer):
         o.connect(g); g.connect(d); o.start(); await c.resume();
         window.__osc = { o, g }; return d.stream; };
       return true; })()""")
-    b.js("location.hash = '#tune'; true")
-    b.wait_for("tt.get('ui.view') === 'tune'")
-    b.js("document.getElementById('micBtn').click(); true")
+    b.js("location.hash = '#tune'; true")  # 进调弦页就自动开麦克风
     read = "document.getElementById('tRead').textContent"
     b.wait_for(f"{read}.includes('5 弦') && {read}.includes('-10 音分')", timeout=10)
     seen = set()
@@ -671,7 +678,7 @@ def test_tuner_reading_settles_on_a_steady_tone(trainer):
     b.wait_for("document.getElementById('tNeedle').classList.contains('held')", timeout=3)
     b.wait_for("document.getElementById('tNote').textContent === '--'", timeout=5)
     assert "弹一根空弦" in b.js(read)
-    b.js("document.getElementById('micBtn').click(); true")
+    b.js("location.hash = '#practice'; true")
     assert not b.errors, b.errors
 
 
