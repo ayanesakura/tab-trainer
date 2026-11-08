@@ -1,5 +1,5 @@
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from app.layout import detect_page
 
@@ -496,3 +496,73 @@ def test_two_columns_slightly_offset_vertically(offset):
     assert [s["x0"] for s in systems] == [60, 60, 760, 760]
     assert [len(s["bars"]) for s in systems] == [2, 2, 2, 2]
     assert systems[0]["top"] < systems[1]["top"] and systems[2]["top"] < systems[3]["top"]
+
+
+def _digit(d, x, y, s):
+    """品格数字：中心在 (x, y)（骑在弦线上），字号和真谱子里的数字差不多（约 0.85 个线距高）。"""
+    d.text((x, y), s, fill=0, font=ImageFont.load_default(size=17), anchor="mm")
+
+
+def test_chord_stem_through_the_whole_staff_is_not_a_barline():
+    """1 弦和 6 弦上各有一个音的和弦，符干从 1 弦的数字一直连到 6 弦的数字、再往下接横梁：贯穿整个六线谱，
+    伸出谱线的部分被数字挡住（不到 0.3 个线距），以前被当成小节线（雨后初晴第 2 行）。"""
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        t = top + 110
+        _digit(d, 600, t, "7")
+        _digit(d, 600, t + 70, "0")
+        d.line([(600, t), (600, t + 69)], fill=0)  # 从 7 中间穿出来，穿过 0 的上半圈（0 中间是空的）
+        d.line([(600, t + 78), (600, t + 100)], fill=0)  # 隔着 0 再往下到横梁
+        d.line([(600, t + 100), (640, t + 100)], fill=0, width=3)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
+
+
+def test_stem_from_a_digit_on_string_one_down_past_the_staff_is_not_a_barline():
+    """符干从 1 弦上的数字出发，贯穿六线谱、伸出 6 弦将近 3 个线距去接横梁（放大 1.5 倍的 Imagine）：
+    伸出去太长、超出扫弦箭头那条规则的范围，但它的上端扎在数字里，不是小节线。"""
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        t = top + 110
+        _digit(d, 600, t, "3")
+        d.line([(600, t), (600, t + 70 + 40)], fill=0)
+        d.line([(600, t + 110), (640, t + 110)], fill=0, width=3)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
+
+
+def test_barlines_with_a_grey_edge_survive_a_2x_nearest_upscale():
+    """2 倍最近邻放大的截图：小节线一侧的灰边（抗锯齿）变成 2 像素宽，按“比竖线宽 2 像素”算会被当成扫弦箭头，
+    小节线整条丢掉。反复记号的两个点贴在细线一侧，也不是箭头。"""
+    img = Image.new("L", (600, 260), 255)
+    d = ImageDraw.Draw(img)
+    t = 80
+    for i in range(6):
+        d.line([(30, t + i * 12), (570, t + i * 12)], fill=170)
+    for x in (30, 160, 570):
+        d.line([(x, t), (x, t + 60)], fill=0)
+        for y in range(t + 2, t + 58, 6):  # 断断续续的灰边，只在一侧、一次两行
+            d.line([(x + 1, y), (x + 1, y + 1)], fill=150)
+    d.rectangle([(300, t), (302, t + 60)], fill=0)  # 反复开始记号：粗线 + 细线 + 两个点
+    d.line([(305, t), (305, t + 60)], fill=0)
+    for y in (t + 18, t + 42):
+        d.ellipse([(306, y - 2), (310, y + 2)], fill=0)
+    for x in range(60, 560, 37):
+        if all(abs(x - b) > 12 for b in (160, 300)):
+            _digit(d, x, t + 12 * (x % 6), str(x % 10))
+    big = img.resize((img.width * 2, img.height * 2), Image.NEAREST)
+    assert [len(s["bars"]) for s in detect_page(img)["systems"]] == [3]
+    assert [len(s["bars"]) for s in detect_page(big)["systems"]] == [3]
+
+
+def test_light_playback_cursor_is_not_a_barline():
+    """播放器截图里浅色的播放光标（灰度 190，刚好算进深色）贯穿整个六线谱、上下一样宽：比这一行别的小节线浅得多，不是小节线。"""
+    img = _score()
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        t = top + 110
+        d.line([(600, t), (600, t + 70)], fill=190, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3]

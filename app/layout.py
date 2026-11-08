@@ -130,35 +130,77 @@ def _group_staves(lines: list[float], h: int, w: int) -> list[list[float]]:
     return [t for t in (_trim(s) for s in staves) if len(t) in (5, 6)]
 
 
-def _overhang(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) -> float:
-    """竖线在六线谱上下各伸出去多远（线距为单位，取较长的一端）。"""
+def _overhang(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) -> tuple[float, float]:
+    """竖线在六线谱上方、下方各伸出去多远（线距为单位）。"""
     cols = dark[:, max(0, a - 1) : b + 1].any(1)
     h, gap = len(cols), max(2, round(sp * 0.15))  # 从谱线外侧一点开始量，避开谱线本身的粗细
-    out = 0
+    out = []
     for y, step in ((round(tab[0]) - gap, -1), (round(tab[-1]) + gap, 1)):
         n = 0
         while 0 <= y + step * n < h and cols[y + step * n]:
             n += 1
-        out = max(out, n)
-    return out / sp
+        out.append(n / sp)
+    return out[0], out[1]
 
 
-def _is_barline(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float, ends: np.ndarray) -> bool:
+def _is_barline(
+    dark: np.ndarray, a: int, b: int, tab: list[float], sp: float, ends: np.ndarray, colfrac: np.ndarray
+) -> bool:
     """贯穿六线谱的竖线里分出小节线：
     - 两端要连到 1 弦和 6 弦（扫弦箭头的尾巴常常到不了最下面那根线）；
     - 不能只在上下伸出去一点：扫弦箭头的箭头、尾巴会超出谱线 0.4–0.5 个线距（小节线停在谱线上，被连线、弧线碰到也只有 0.1–0.2），
-      小节线正好停在谱线上（和五线谱连通的小节线、左边的谱表括号伸得远，不受影响）。"""
+      小节线正好停在谱线上（和五线谱连通的小节线、左边的谱表括号伸得远，不受影响）；
+    - 不能是从品格数字出发、贯穿整个六线谱的符干（见 _notes_at_ends）：两端都扎在数字里（和弦的最高、最低音），
+      或者一端扎在数字里、另一端伸出谱线去接横梁（伸得远时上一条管不到）。"""
     if ends[max(0, a - 1) : b + 1].max() < 0.8:
         return False
     if _arrowhead(dark, a, b, tab, sp):
         return False
-    return not 0.3 <= _overhang(dark, a, b, tab, sp) <= 2.5
+    up, down = _overhang(dark, a, b, tab, sp)
+    top, bottom = _notes_at_ends(dark, a, b, tab, sp, colfrac)
+    # 符干伸出谱线去接横梁最多三四个线距；和上方五线谱连通的小节线、谱表括号伸得远得多，不受影响
+    if (top and (bottom or 0.3 <= down <= 4)) or (bottom and 0.3 <= up <= 4):
+        return False
+    return not 0.3 <= max(up, down) <= 2.5
+
+
+def _notes_at_ends(
+    dark: np.ndarray, a: int, b: int, tab: list[float], sp: float, colfrac: np.ndarray
+) -> tuple[bool, bool]:
+    """竖线的上端（1 弦）、下端（6 弦）是不是扎在一个品格数字里。符干从数字出发：数字骑在弦线上、符干从它中间穿出来，
+    伸出谱线的部分被数字挡住（“7” 的横只伸出去 0.26 个线距，“0” 中间是空的），靠伸出长度分不出来。
+    小节线两端停在谱线上，旁边没有东西（连线、弧线碰到也只在一侧、一两行）。
+    在弦线上下半个线距、竖线左右 0.45 个线距的小框里找竖线以外的墨迹（谱线本身那几行不算；
+    另一条贯穿的竖线和它旁边两个像素也不算：双小节线、反复记号的粗细两条线挨得很近，谱表括号末端有个钩）：
+    左右两侧都有、加起来占了 0.3 个线距以上的行，就是数字。"""
+    h, w = dark.shape
+    r = max(3, round(sp * 0.45))
+    near = range(max(0, a - r), min(w, b + r + 1))
+    through = np.flatnonzero(colfrac >= 0.5)
+    through = through[(through < a - 1) | (through > b)]
+
+    def free(x: int) -> bool:
+        return not len(through) or np.abs(through - x).min() > 2
+
+    left = [x for x in near if x < a - 1 and free(x)]
+    right = [x for x in near if x > b and free(x)]
+    if not left or not right:
+        return False, False
+    found = []
+    for y_line in (tab[0], tab[-1]):
+        y0, y1 = max(0, int(y_line - sp * 0.5)), min(h, int(y_line + sp * 0.5) + 1)
+        lines = dark[y0:y1, max(0, int(a - sp * 2)) : int(b + sp * 2)].mean(1) >= 0.5  # 谱线本身的行
+        lo, hi = dark[y0:y1][:, left].any(1) & ~lines, dark[y0:y1][:, right].any(1) & ~lines
+        found.append(bool(lo.sum() >= sp * 0.15 and hi.sum() >= sp * 0.15 and (lo | hi).sum() >= sp * 0.3))
+    return found[0], found[1]
 
 
 def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) -> bool:
     """扫弦箭头：竖线一端有个三角形的箭头（停在谱线以内、几乎不伸出去，靠伸出长度分不出来）。
-    沿着竖线逐行量它的宽度（避开谱线本身那几行）：连续 3 行以上比竖线本身宽出 2 像素以上就是箭头。
-    小节线（包括加粗的终止线）从头到尾一样宽；连线、弧线横穿过去只占一两行。"""
+    沿着竖线逐行量它向左、向右各伸出多远（避开谱线本身那几行）：连续 3 行以上两边都比竖线本身宽出 m 像素就是箭头。
+    小节线（包括加粗的终止线）从头到尾一样宽；连线、弧线横穿过去只占一两行。
+    - 两边都要宽出去：箭头是对称的三角形；反复记号的两个点贴在细线一侧，不是箭头；
+    - m 按线距算（至少 1 像素）：放大 2 倍（最近邻）的截图里，竖线一侧的灰边会变成 2 像素宽，按固定像素算会被当成箭头。"""
     c = (a + b) // 2
     w = dark.shape[1]
     lines = [round(y) for y in tab]
@@ -169,24 +211,30 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
         y0 -= 1
     while y1 < min(dark.shape[0] - 1, tab[-1] + sp * 0.8) and col[y1 + 1]:
         y1 += 1
-    widths = []
+    edges = []  # 每行（竖线所在的那段墨迹）向左、向右伸到哪；这一行竖线断开时为 None
+    near_line = max(1, round(sp * 0.12))  # 谱线本身（放大过的截图里谱线有三四行粗，和竖线交叉处的灰边也更宽）
     for y in range(y0, y1 + 1):
-        if any(abs(y - ly) <= 1 for ly in lines):
+        if any(abs(y - ly) <= near_line for ly in lines):
             continue
         row = dark[y]
         if not row[c]:
-            widths.append(0)
+            edges.append(None)
             continue
         lo = hi = c
         while lo > 0 and row[lo - 1] and c - lo < sp:
             lo -= 1
         while hi < w - 1 and row[hi + 1] and hi - c < sp:
             hi += 1
-        widths.append(hi - lo + 1)
-    stem = float(np.median([x for x in widths if x])) if any(widths) else 1.0
+        edges.append((lo, hi))
+    found = [e for e in edges if e]
+    if not found:
+        return False
+    stem_lo, stem_hi = np.median([e[0] for e in found]), np.median([e[1] for e in found])
+    m = max(1, round(sp * 0.1))
     run = 0
-    for x in widths:
-        run = run + 1 if stem + 2 <= x < sp else 0
+    for e in edges:
+        wide = e is not None and e[0] <= stem_lo - m and e[1] >= stem_hi + m and e[1] - e[0] + 1 < sp
+        run = run + 1 if wide else 0
         if run >= 3:
             return True
     return False
@@ -353,8 +401,15 @@ def _systems(g: np.ndarray, x_off: int = 0) -> list[dict]:
             runs_bl = [
                 (a, b)
                 for a, b in _runs(colfrac >= 0.93)
-                if x0 - 6 <= a <= x1 + 6 and _is_barline(dark, a, b, tab, sp, ends)
+                if x0 - 6 <= a <= x1 + 6 and _is_barline(dark, a, b, tab, sp, ends, colfrac)
             ]
+            # 同一行里比别的小节线浅得多的竖线不是小节线：播放器截图里浅蓝色的播放光标（灰度 190 左右，
+            # 刚好算进 dark）贯穿整个六线谱、上下一样宽，和小节线别的都一样。和这一行小节线灰度的中位数比
+            # （缩小过的截图里细的小节线都只有 150–190，只有左边的谱表线是黑的：和最黑的那条比会把它们全丢掉）
+            ink_of = {r: float(np.median(g[y_a:y_b, max(0, r[0] - 1) : r[1] + 1].min(1))) for r in runs_bl}
+            if len(ink_of) >= 3:
+                typical = float(np.median(list(ink_of.values())))
+                runs_bl = [r for r in runs_bl if ink_of[r] < (255 + typical) * 0.6]
             bl = [(a + b - 1) / 2 for a, b in runs_bl]
             heavy = {round((a + b - 1) / 2) for a, b in runs_bl if b - a >= max(3, sp * 0.25)}  # 加粗的线
             if len(bl) >= 8 and float(np.median(np.diff(bl))) < sp * 2:
