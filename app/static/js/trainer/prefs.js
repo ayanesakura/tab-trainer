@@ -6,6 +6,18 @@ export const PREFS_KEY = 'tt.playPrefs';
 export const PREF_DEFAULTS = { metro: true, metroVol: 70, countIn: true, demo: true, gtVol: 80, auto: false, autoEvery: 2, autoStep: 4, follow: true };
 const RANGES = { metroVol: [0, 100], gtVol: [0, 100], autoEvery: [1, 50], autoStep: [1, 40] };
 
+const NUM_RANGES = { ...RANGES, autoTarget: [20, 240] }; // 自动提速的“最高”跟着曲子走，不存，但输入框一样要管
+
+/**
+ * 输入框里的数字 → 合法的值（取整、夹到范围里），不是数字返回 null。max：再按输入框当时的上限收紧（“最高”不超过速度滑块的上限）。
+ * 浏览器不会拦住手打的负数、0 这类值：每遍提速 -4 BPM 会越练越慢
+ */
+export function clampPref(key, v, max = Infinity) {
+  const r = NUM_RANGES[key];
+  if (!r || typeof v !== 'number' || !Number.isFinite(v)) return null;
+  return Math.max(r[0], Math.min(r[1], max, Math.round(v)));
+}
+
 /** 存着的文本（可能是 null、坏 JSON、旧格式）→ 完整、合法的设置 */
 export function parsePrefs(text) {
   let raw = null;

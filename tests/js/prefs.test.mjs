@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePrefs, serializePrefs, PREF_DEFAULTS } from '../../app/static/js/trainer/prefs.js';
+import { parsePrefs, serializePrefs, PREF_DEFAULTS, clampPref } from '../../app/static/js/trainer/prefs.js';
 
 test('parsePrefs: missing / broken / old values fall back to defaults per field', () => {
   assert.deepEqual(parsePrefs(null), PREF_DEFAULTS);
@@ -20,4 +20,17 @@ test('parsePrefs: missing / broken / old values fall back to defaults per field'
 test('serializePrefs keeps only pref fields and replaces invalid ones', () => {
   const play = { ...PREF_DEFAULTS, bpm: 90, a: 3, gtVol: 12, autoEvery: 0, follow: false };
   assert.deepEqual(JSON.parse(serializePrefs(play)), { ...PREF_DEFAULTS, gtVol: 12, follow: false });
+});
+
+test('typed numbers are rounded and clamped (a negative speed-up step would slow down every loop)', () => {
+  assert.equal(clampPref('autoStep', -4), 1);
+  assert.equal(clampPref('autoStep', 0), 1);
+  assert.equal(clampPref('autoStep', 999), 40);
+  assert.equal(clampPref('autoStep', 5.6), 6);
+  assert.equal(clampPref('autoEvery', -2), 1);
+  assert.equal(clampPref('gtVol', 150), 100);
+  assert.equal(clampPref('autoTarget', 5), 20);
+  assert.equal(clampPref('autoTarget', 200, 140), 140); // 不超过输入框当时的上限
+  assert.equal(clampPref('autoStep', NaN), null);
+  assert.equal(clampPref('follow', 1), null);
 });

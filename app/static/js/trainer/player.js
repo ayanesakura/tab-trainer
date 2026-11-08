@@ -6,8 +6,8 @@ import * as alphaTab from '/static/vendor/alphatab/alphaTab.min.mjs';
 import { TICKS, CHORD_PAD, eventIndexAt, scoreNeedsGbk } from '../score.js';
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
-import { loopLabel, stepSection as stepCalc, isScore } from './view.js';
-import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs } from './prefs.js';
+import { loopLabel, stepSection as stepCalc, isScore, beatNumber } from './view.js';
+import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref } from './prefs.js';
 
 export { alphaTab };
 export const IDLE_HINT = '空格播放 · ←→ 换段 · ↑↓ 调速';
@@ -45,7 +45,14 @@ const countIn = {
   /** 按了播放：MIDI 还在重新生成时记下来、返回 true（等好了再开始） */
   queuePlay() { if (!this.reload) return false; this.reload.play = true; return true; },
   reloaded() { const r = this.reload; this.reload = null; return r; },
+  /** 预备拍里（或停下后重新生成期间）用户换了位置（点小节、换段）：之后停下 / 生成好时放回的是新位置，不是开始播放时的位置 */
+  seek(tick) { if (this.from !== null) this.from = tick; if (this.reload) this.reload.tick = tick; },
 };
+// 谱子重新加载（改音、撤销、改曲子信息、识别出新的一行……都会重新生成 alphaTex）：alphaTab 会停下播放、把位置放回 0，
+// 停下前后还会发几个往回跳的位置事件（会被 onPosition 当成“弹完一遍”：记练习、自动提速）。
+// 重新加载前记下位置和是否在播放：{tick, play}；MIDI 好了以后（midiLoaded）放回去（不在循环范围里就放到段首），
+// 原来在播放就接着播放。这期间的位置事件都不算
+let reloading = null;
 export const getApi = () => api;
 
 // 曲子相关的处理由 song.js / editor.js 注册，敲节奏由 rhythm-drill.js 注册 drill: {start, stop, loopChanged}（播放模块不反过来依赖它们）
@@ -129,14 +136,21 @@ function ensureApi() {
   api.postRenderFinished.on(() => set('ui.renderGen', (get('ui.renderGen') || 0) + 1)); // 小节位置要等所有部分都画完才有
   api.midiLoaded.on(() => { // 反复的播放时间要等 MIDI 生成后才知道
     applyAudio(); // 音轨音量跟着 MIDI 走：重新生成后再设一次
+    const back = reloading;
+    reloading = null; lastTick = -1;
     if (!nBars()) return;
     const range = applyLoopRange();
     if (range && cursorPending && !playing()) api.tickPosition = range.startTick;
     if (range) cursorPending = false;
     const r = countIn.reloaded(); // 预备拍里停下后的重新生成（见 pausePlayer）：放回原来的位置
-    if (r) { api.tickPosition = r.tick; if (r.play) startPlayer(); }
+    if (back && range) { // 谱子重新加载：放回原来的位置（落在循环范围外面就放到段首）
+      const end = range.endTick ?? Infinity;
+      api.tickPosition = back.tick >= range.startTick && back.tick < end ? back.tick : range.startTick;
+      if (back.play || (r && r.play)) startPlayer();
+    } else if (r) { api.tickPosition = r.tick; if (r.play) startPlayer(); }
   });
   api.error.on(e => {
+    reloading = null;
     const msg = e && e.message ? e.message : String(e);
     if (hooks.error) hooks.error(msg); else UI.toast('谱面出错：' + msg, 'err', 6000);
   });
@@ -147,6 +161,11 @@ function ensureApi() {
 async function loadSource(src) {
   if (!src) return;
   ensureApi();
+  if (api.score && !reloading) { // 换掉已经加载好的谱子（见 reloading）；连着重新加载两次时留着第一次记下的
+    reloading = { tick: countIn.from ?? api.tickPosition, play: playing() || !!(countIn.reload && countIn.reload.play) };
+    countIn.from = null;
+    lastTick = -1;
+  }
   if (src.kind === 'score') {
     let r;
     try { r = await fetch(`/files/${src.id}/source`); } catch { r = { ok: false, status: '连不上服务' }; }
@@ -405,7 +424,7 @@ export function setLoop(a, b, restart = true, show = true) {
   if (show) set('ui.bar', na);
   if (!range) cursorPending = true; // 谱子还没加载好：加载好以后（midiLoaded）再把光标放到段首
   if (range && api) {
-    if (playing() && restart) { api.stop(); set('play.loops', 0); startPlayer(); }
+    if (playing() && restart) { lastTick = -1; api.stop(); set('play.loops', 0); startPlayer(); } // stop() 跳回段首：不是弹完了一遍
     else if (!playing()) api.tickPosition = range.startTick;
   }
   if (get('rhythm.on') && hooks.drill) hooks.drill.loopChanged(); // 敲节奏：换成新的段（敲着的话从头再来）
@@ -420,6 +439,7 @@ export function stepSection(dir) {
 }
 
 function onPosition(tick) {
+  if (reloading) return; // 谱子重新加载中：往回跳的位置不是弹完了一遍
   // 预备拍期间位置停在开始处不动（拍子事件倒可能先来，不能拿它判断），位置往前走了才算预备拍结束
   countIn.advance(tick);
   // 只有从段尾跳回段首才算弹完一遍；重新设置循环范围、停止时也会跳回起点，那些不算（applyLoopRange 会重置 lastTick）
@@ -429,7 +449,7 @@ function onPosition(tick) {
     set('play.loops', loops); // 练习记录先按提速前的速度记下刚弹完的这一遍
     const p = get('play');
     if (p.auto) {
-      const every = Math.max(1, p.autoEvery || 1), step = p.autoStep || 0, target = p.autoTarget || p.bpm;
+      const every = Math.max(1, p.autoEvery || 1), step = Math.max(0, p.autoStep || 0), target = p.autoTarget || p.bpm;
       if (loops % every === 0 && p.bpm < target) setTempo(Math.min(target, p.bpm + step));
     }
   }
@@ -441,7 +461,7 @@ function onBeat(beat, clicked) {
   if (!v) return;
   const bi = beat.voice.bar.index, evs = v.bars[bi];
   if (!clicked) updateFollowBtn();
-  if (!clicked) setStatus(`第 ${bi + 1} 小节 · 第 ${Math.floor(beat.playbackStart / TICKS) + 1} 拍`, `第 ${get('play.loops') + 1} 遍`);
+  if (!clicked) setStatus(`第 ${bi + 1} 小节 · 第 ${beatNumber(beat.playbackStart, beat.voice.bar.masterBar.timeSignatureDenominator)} 拍`, `第 ${get('play.loops') + 1} 遍`);
   if (bi < v.bars.length && (clicked || !holds.some(f => f()))) set('ui.bar', bi);
   if (!evs || !evs.length) return;
   const cur = evs[eventIndexAt(v.beatMap[bi] || [0], beat.playbackStart)];
@@ -499,6 +519,7 @@ function seekBar(bi) {
   const t = inRange ? inRange.start : runs.length ? runs[0].start : mb.start;
   lastTick = -1; // 往回跳不能当成弹完了一遍
   api.tickPosition = t;
+  countIn.seek(t); // 预备拍里点的：之后停下时放回这里，不是开始播放的位置
 }
 
 export function exportGp() {
@@ -566,8 +587,13 @@ const remember = (k, v) => { try { localStorage.setItem(k, v); } catch { /* 只�
 function bindInputs() {
   const bind = (id, key, kind) => {
     const el = $(id);
-    const read = () => (kind === 'check' ? el.checked : +el.value);
-    el.addEventListener(kind === 'check' ? 'change' : 'input', () => set('play.' + key, read()));
+    if (kind === 'check') el.addEventListener('change', () => set('play.' + key, el.checked));
+    else {
+      // 数字：打字过程中（清空了、只打了负号、超出范围）先不改设置；输完（change：回车、离开输入框）夹到范围里并写回输入框
+      const num = () => clampPref(key, el.value === '' ? NaN : +el.value, el.max === '' ? Infinity : +el.max);
+      el.addEventListener('input', () => { const v = num(); if (v !== null && v === +el.value) set('play.' + key, v); });
+      el.addEventListener('change', () => { const v = num() ?? get('play.' + key); set('play.' + key, v); el.value = v; if (el.type === 'range') UI.fillRange(el); });
+    }
     const paint = v => { if (kind === 'check') el.checked = v; else if (+el.value !== v) el.value = v; if (el.type === 'range') UI.fillRange(el); };
     on('play.' + key, paint);
     paint(get('play.' + key));

@@ -53,6 +53,15 @@ export async function conflict(e) {
   UI.toast(e.message, 'err', 5000);
   await refresh();
 }
+/** 423：曲子有任务在跑 / 这个小节锁着（不是冲突，内容没在别处改过）：只把服务给的说明告诉用户，等一会再试 */
+export const isLocked = e => !!e && e.status === 423;
+export const lockedToast = e => UI.toast(e.message, 'info', 5000);
+/** 写接口出错的统一处理：409 → conflict（提示并刷新）；423 → 只提示；其他 → prefix + 说明 */
+export async function writeFailed(e, prefix = '') {
+  if (e.status === 409) await conflict(e);
+  else if (isLocked(e)) lockedToast(e);
+  else UI.toast(prefix + e.message, 'err', 5000);
+}
 /** 第一次加载并开始轮询：识别 / 讲解进行中每 2.5 秒取一次，出错时退避重试（不会停） */
 export function startLoading() {
   polling = true;
@@ -236,7 +245,7 @@ async function saveMeta() {
     applySong(await put(songUrl('/meta'), body));
     UI.toast('已保存');
   } catch (e) {
-    if (e.status === 409) await conflict(e); else UI.toast('保存失败：' + e.message, 'err', 5000);
+    await writeFailed(e, '保存失败：');
   }
 }
 
