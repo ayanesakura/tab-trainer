@@ -1,6 +1,9 @@
 """弹唱谱：和弦名、和弦图、扫弦在谱面上画出来，播放时按扫弦处理。"""
 
+import json
 import os
+import time
+import urllib.request
 
 import pytest
 
@@ -147,3 +150,149 @@ def test_confirming_a_doubtful_bar(server, trainer):
         assert not b.errors, b.errors
     finally:
         store.delete(sid)
+
+
+def test_gp_lyrics_on_the_practised_track_that_is_not_track_0(server, trainer):
+    """GP 文件里练的音轨不是第 0 个（前面有贝斯）：歌词按画出来的那个音轨找，下面留出地方、写一次。"""
+    from app import songs
+    from tests.e2e.conftest import gp_from_tex
+
+    tex = r"""\title "Two"
+.
+\track "Bass" { instrument 33 }
+\staff {tabs}
+\tuning (G2 D2 A1 E1)
+0.4.4 0.4.4 0.4.4 0.4.4 | 0.4.4 0.4.4 0.4.4 0.4.4
+\track "Gtr" { instrument 25 }
+\staff {score tabs}
+\tuning (E4 B3 G3 D3 A2 E2)
+0.1.4{lyrics "la"} 1.2.4{lyrics "li"} 0.3.4 2.4.4 | 0.1.4{lyrics "lo"} 1.2.4 0.3.4 2.4.4
+"""
+    sid = songs.create_song([("two.gp", gp_from_tex(tex))])
+    try:
+        b = trainer(sid)
+        assert b.js("tt.api.tracks.map(t => t.index)") == [1]
+        b.wait_for("document.querySelectorAll('#lyricLayer .lyric').length > 0", timeout=10)
+        texts = b.js("[...document.querySelectorAll('#lyricLayer .lyric')].map(e => e.textContent)")
+        assert texts == ["la", "li", "lo"]  # 五线谱 + 六线谱两行谱表，歌词也只写一次
+        assert b.js("tt.api.settings.display.systemPaddingBottom") > 10  # 下面留了写歌词的地方
+        assert not b.errors, b.errors
+    finally:
+        server["store"].delete(sid)
+
+
+def test_chords_differing_only_by_case_render_and_export_separately(server, trainer):
+    """Am7 和 AM7：谱面上各画各的和弦图，导出的 GP 里也是两个和弦、名字不带区分用的零宽空格。"""
+    am7, maj7 = [0, 1, 0, 2, 0, -1], [0, 2, 1, 2, 0, -1]
+    store, sid = server["store"], _seed()
+
+    def apply(s):
+        for i, b in enumerate(s["bars"]):
+            name, frets = ("Am7", am7) if i % 2 == 0 else ("AM7", maj7)
+            b["events"] = [
+                _strum(frets, "down", name),
+                _strum(frets, "up"),
+                _strum(frets, "down"),
+                _strum(frets, "up"),
+            ]
+            b["shapes"] = {name: frets}
+
+    store.update(sid, apply)
+    try:
+        b = trainer(sid)
+        got = b.js(
+            """tt.api.score.tracks[0].staves[0].bars.slice(0, 2).map(x => { const c = x.voices[0].beats[0].chord;
+              return [c.name.replaceAll('\\u200b', ''), [...c.strings]]; })"""
+        )
+        assert got == [["Am7", am7], ["AM7", maj7]]
+        # 侧栏小节卡片按我们的数据画：第 2 小节是 AM7 的指法
+        b.js("tt.set('ui.bar', 1)")
+        b.wait_for("(document.querySelector('#barChords .cd-name') || {}).textContent === 'AM7'")
+        exported = b.js(
+            """(async () => {
+              let blob = null; const orig = URL.createObjectURL, click = HTMLAnchorElement.prototype.click;
+              URL.createObjectURL = x => { blob = x; return 'blob:x'; }; HTMLAnchorElement.prototype.click = () => {};
+              try { tt.player.exportGp(); } finally { URL.createObjectURL = orig; HTMLAnchorElement.prototype.click = click; }
+              const at = await import('/static/vendor/alphatab/alphaTab.min.mjs');
+              const sc = at.importer.ScoreLoader.loadScoreFromBytes(new Uint8Array(await blob.arrayBuffer()), new at.Settings());
+              return sc.tracks[0].staves[0].bars.slice(0, 2).map(x => { const c = x.voices[0].beats[0].chord; return [c.name, [...c.strings]]; });
+            })()"""
+        )
+        assert exported == [["Am7", am7], ["AM7", maj7]]
+        # 导出完名字放回去：谱面上还是两个不同的和弦
+        assert b.js("tt.api.score.tracks[0].staves[0].bars[1].voices[0].beats[0].chord.name") == "AM7\u200b"
+        assert not b.errors, b.errors
+    finally:
+        store.delete(sid)
+
+
+def _open_beat(b, bi, k):
+    """\u6539\u97f3\u6a21\u5f0f\u4e0b\u70b9\u7b2c bi \u5c0f\u8282\u7b2c k \u62cd\u7684\u7a7a\u767d\u5904\uff08\u4e0d\u662f\u97f3\u7b26\uff09\uff1a\u6253\u5f00\u201c\u52a0\u97f3 / \u6539\u548c\u5f26\u201d\u7684\u9762\u677f\u3002"""
+    b.js(f"""(() => {{ tt.setEditMode(true);
+      tt.openNotePop(tt.api.score.tracks[0].staves[0].bars[{bi}].voices[0].beats[{k}], null); return true; }})()""")
+    b.wait_for("!document.getElementById('notePop').hidden && !!tt.editor.np")
+
+
+def _set_fret(b, fret):
+    b.js(f"""(() => {{ const el = document.getElementById('npFret'); el.value = {json.dumps(fret)};
+      el.dispatchEvent(new Event('input')); return true; }})()""")
+
+
+def _save_pop(b, chord=None, fret=None):
+    if chord is not None:
+        b.js(f"document.getElementById('npChord').value = {json.dumps(chord)}; true")
+    if fret is not None:
+        _set_fret(b, fret)
+    b.js("document.getElementById('npSave').click(); true")
+    b.wait_for("!tt.editor.saving && !tt.editor.np", timeout=10)
+    time.sleep(0.6)  # \u8c31\u9762\u6309\u65b0\u6570\u636e\u91cd\u753b\u5b8c
+
+
+def test_clicking_a_beat_changes_its_chord_without_adding_a_note(server, chord_song, trainer):
+    """\u70b9\u62cd\u4e0a\u7684\u7a7a\u767d\u5904\uff08\u548c\u5f26\u540d\u3001\u548c\u5f26\u56fe\u3001\u4f11\u6b62\u7b26\uff09\uff1a\u54c1\u4f4d\u7a7a\u7740\u53ea\u6539\u548c\u5f26\uff0c\u4e0d\u4f1a\u987a\u624b\u52a0\u4e00\u4e2a\u7a7a\u5f26\u97f3\uff1b\u6ee1\u516d\u6839\u5f26\u7684\u62cd\u4e5f\u80fd\u6539\u548c\u5f26\u3002"""
+    sid, store = chord_song, server["store"]
+    six = [3, 3, 0, 0, 2, 3]  # G\uff1a\u516d\u6839\u5f26\u90fd\u6709\u97f3
+
+    def apply(s):
+        s["bars"][1]["events"][0] = _strum(six, "down", "G")
+        s["bars"][2]["events"][1] = {"dur": "1", "notes": []}  # \u4f11\u6b62
+
+    store.update(sid, apply)
+    b = trainer(sid)
+    notes = "tt.get('song').bars[{}].events[{}].notes.map(n => [n.string, n.fret])"
+    before = b.js(notes.format(0, 0))
+
+    _open_beat(b, 0, 0)
+    assert b.js("document.getElementById('npFret').value") == ""
+    assert not b.js("document.getElementById('npSave').disabled")
+    assert "\u4e0d\u52a0\u97f3" in b.js("document.getElementById('npMsg').textContent")
+    _save_pop(b, chord="G")
+    b.wait_for("tt.get('song').bars[0].events[0].chord === 'G'", timeout=10)
+    assert b.js(notes.format(0, 0)) == before
+
+    # \u516d\u6839\u5f26\u90fd\u6709\u97f3\u7684\u62cd\uff1a\u54c1\u4f4d\u7a7a\u7740\u53ef\u4ee5\u4fdd\u5b58\uff0c\u53ea\u6539\u548c\u5f26
+    _open_beat(b, 1, 0)
+    assert not b.js("document.getElementById('npSave').disabled")
+    _save_pop(b, chord="G7")
+    b.wait_for("tt.get('song').bars[1].events[0].chord === 'G7'", timeout=10)
+    assert len(b.js(notes.format(1, 0))) == 6
+    # \u586b\u4e86\u54c1\u4f4d\u624d\u662f\u52a0\u97f3\uff1a\u516d\u6839\u5f26\u90fd\u6709\u97f3\u65f6\u4e0d\u80fd\u518d\u52a0
+    _open_beat(b, 1, 0)
+    _set_fret(b, "2")
+    assert b.js("document.getElementById('npSave').disabled")
+    b.js("document.getElementById('npClose').click(); true")
+
+    # \u4f11\u6b62\u7b26\uff1a\u53ea\u5199\u548c\u5f26\uff0c\u8fd8\u662f\u4f11\u6b62
+    _open_beat(b, 2, 1)
+    _save_pop(b, chord="Am")
+    b.wait_for("tt.get('song').bars[2].events[1].chord === 'Am'", timeout=10)
+    assert b.js(notes.format(2, 1)) == []
+    # \u4f11\u6b62\u7b26\u4e0a\u586b\u4e86\u54c1\u4f4d\uff1a\u52a0\u4e00\u4e2a\u97f3
+    _open_beat(b, 2, 1)
+    _save_pop(b, fret="5")
+    b.wait_for(f"{notes.format(2, 1)}.length === 1", timeout=10)
+    assert b.js(notes.format(2, 1))[0][1] == 5
+    saved = json.load(urllib.request.urlopen(f"{server['base']}/api/songs/{sid}"))["bars"]
+    assert saved[0]["events"][0]["chord"] == "G" and len(saved[0]["events"][0]["notes"]) == len(before)
+    assert saved[2]["events"][1]["chord"] == "Am"
+    assert not b.errors, b.errors

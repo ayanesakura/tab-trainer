@@ -13,14 +13,24 @@ export function chordShapes(bars) {
 /**
  * 第 bi 小节弹的和弦，按出现顺序：[{ name, carried }]。小节开头没写新和弦、但前面的小节有和弦时，
  * 先列出延续下来的那个（carried = true）。整首都没有和弦名时返回 []。
+ * 往前找延续的和弦时按跳房子（bar.endings）走：第二房子前面紧挨着弹的不是第一房子，跳过第一房子；
+ * 房子后面的小节接的是最后一个房子（往回走先碰到的那个）。过了反复开始（repeat_start）就是前面另一段，重新算。
  */
 export function barChords(bars, bi) {
   const evs = (bars[bi] && bars[bi].events) || [];
   const out = [];
   if (!(evs[0] && evs[0].chord)) {
+    const endingsOf = b => (b && b.endings && b.endings.length ? b.endings : null);
+    let want = endingsOf(bars[bi]); // 这一遍弹的是第几房子（还不知道时是 null）
     for (let i = bi - 1; i >= 0; i--) {
+      const e = endingsOf(bars[i]);
+      if (e) {
+        if (!want) want = e;
+        else if (!e.some(x => want.includes(x))) continue; // 别的房子：这一遍不弹
+      }
       const prev = [...((bars[i] && bars[i].events) || [])].reverse().find(e => e.chord);
       if (prev) { out.push({ name: prev.chord, carried: true }); break; }
+      if (bars[i] && bars[i].repeat_start) want = null;
     }
   }
   for (const e of evs) if (e.chord && (!out.length || out[out.length - 1].name !== e.chord)) out.push({ name: e.chord, carried: false });

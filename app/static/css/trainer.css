@@ -91,6 +91,7 @@
 .np-fret { width: 64px; -moz-appearance: textfield; appearance: textfield; }
 .np-fret::-webkit-inner-spin-button, .np-fret::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .np-msg { color: var(--amber); }
+.np-msg.info { color: var(--muted); }
 .np-msg:empty { display: none; }
 .np-actions { display: flex; gap: 6px; align-items: center; }
 

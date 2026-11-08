@@ -172,3 +172,39 @@ test('chord sheets: chords per bar (with the one carried in) and the diagram SVG
   assert.match(svg, />×</);
   assert.match(chordSVG('Bm7', [7, 7, 7, 9, 9, 7]), /class="cd-base">7</);
 });
+
+test('chord sheets: the carried chord follows first / second endings', async () => {
+  const { barChords } = await import('../../app/static/js/trainer/chords.js');
+  const ev = (chord) => ({ dur: '1', notes: [], ...(chord ? { chord } : {}) });
+  const carried = (bars, bi) => barChords(bars, bi).filter(c => c.carried).map(c => c.name);
+  // |: C | G（第一房子）:| （第二房子，没写和弦）| … 第二房子接在 C 后面弹，不是 G
+  const bars = [
+    { events: [ev('C')], repeat_start: true },
+    { events: [ev('G')], endings: [1], repeat_end: 2 },
+    { events: [ev()], endings: [2] },
+    { events: [ev()] },
+  ];
+  assert.deepEqual(carried(bars, 2), ['C']);
+  assert.deepEqual(carried(bars, 3), ['C']); // 房子后面接的是第二房子（它延续的 C），不是第一房子的 G
+  // 第一房子有两个小节：第二个小节延续第一房子自己的 G
+  const two = [
+    { events: [ev('C')], repeat_start: true },
+    { events: [ev('G')], endings: [1] },
+    { events: [ev()], endings: [1], repeat_end: 2 },
+    { events: [ev('D')], endings: [2] },
+    { events: [ev()] },
+  ];
+  assert.deepEqual(carried(two, 2), ['G']);
+  assert.deepEqual(carried(two, 4), ['D']);
+  // 前一段反复的房子不影响后一段：过了反复开始就重新算（后一段的第二房子接前一段最后弹的第二房子）
+  const later = [
+    { events: [ev('C')], repeat_start: true },
+    { events: [ev('F')], endings: [1], repeat_end: 2 },
+    { events: [ev('Am')], endings: [2] },
+    { events: [ev()], repeat_start: true },
+    { events: [ev('G')], endings: [1], repeat_end: 2 },
+    { events: [ev()], endings: [2] },
+  ];
+  assert.deepEqual(carried(later, 5), ['Am']);
+  assert.deepEqual(carried(later, 3), ['Am']);
+});

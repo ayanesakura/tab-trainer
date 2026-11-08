@@ -676,6 +676,30 @@ def test_metronome_only_without_the_demo_guitar(trainer):
     assert not b.errors, b.errors
 
 
+def test_note_audition_is_audible_with_the_demo_guitar_off(trainer):
+    """关掉示范音后点音符试听：playNote 走的是同一个音轨通道，试听前要把音轨音量放回来，开始播放时再按开关静音。"""
+    b = trainer()
+    b.js("""(() => { window.__log = [];
+      const vol = tt.api.changeTrackVolume.bind(tt.api), note = tt.api.playNote.bind(tt.api), play = tt.api.play.bind(tt.api);
+      tt.api.changeTrackVolume = (tracks, v) => { window.__log.push(['vol', v]); return vol(tracks, v); };
+      tt.api.playNote = n => { window.__log.push(['note']); return note(n); };
+      tt.api.play = () => { window.__log.push(['play']); return play(); };
+      tt.set('play.demo', false); return true; })()""")
+    b.js("""(() => { window.__log = [];
+      const beat = tt.api.tracks[0].staves[0].bars[0].voices[0].beats.find(x => x.notes.length);
+      tt.api.noteMouseDown.trigger(beat.notes[0]); return true; })()""")
+    log = b.js("window.__log")
+    assert log[-1] == ["note"] and log[-2][0] == "vol"
+    assert log[-2][1] == b.js("tt.state.gtVol") / 100 > 0  # 试听时音轨音量是吉他音量，不是 0
+    b.js("window.__log = []; tt.play(); true")
+    b.wait_for("window.__log.some(x => x[0] === 'play')")
+    log = b.js("window.__log")
+    k = log.index(["play"])
+    assert ["vol", 0] in log[:k]  # 开始播放前又按示范音开关静音了
+    b.js("tt.stop(); true")
+    assert not b.errors, b.errors
+
+
 def test_side_panel_ends_above_the_fretboard_dock(trainer):
     """侧栏最下面（“识别有误？”）不能被底部的指板挡住：--dock-h 要是指板的实际高度。"""
     b = trainer()

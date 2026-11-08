@@ -103,6 +103,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
   const tsOf = bar => bar.time_signature || ts; // 小节自己的拍号（中途变拍号）优先
   const barTicks = bar => { const t = tsOf(bar); return Math.round(t[0] * 4 / t[1] * TICKS); };
 
+  const chordTex = chordTexNames(song.bars);
   // 第一遍：把每个音转成可挂技巧的对象，并把 h/p/sl 挪到同一根弦的前一个音（或倚音）上
   const lastOnString = {};
   const bars = song.bars.map(bar => {
@@ -129,7 +130,7 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
       });
       const roll = notes.length > 1 && (e.notes || []).some(n => (n.tech || []).includes('roll'));
       const fx = [];
-      if (e.chord) fx.push(`ch "${esc(e.chord)}"`);
+      if (e.chord) fx.push(`ch "${chordTex.get(e.chord)}"`);
       (e.lyrics || []).forEach((l, i) => { if (l) fx.push(`lyrics ${i} "${esc(l)}"`); });
       // 扫弦：alphaTab 的 bd = 下扫（从低音弦扫到高音弦，六线谱上画 ▲）、bu = 上扫（▼）。
       // 琶音（波浪线）正好反过来：ad 画 ▲（从低音弦到高音弦，最常见的写法）、au 画 ▼
@@ -192,14 +193,33 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
     `\\staff {${staves}}`,
     `\\tuning (${tuning})`,
     meta.capo ? `\\capo ${meta.capo}` : '',
-    ...chordDefs(song.bars),
+    ...chordDefs(song.bars, chordTex),
     `\\ts (${ts[0]} ${ts[1]})`,
   ].filter(Boolean).join('\n');
   return { tex: `${head}\n${barTexts.join(' |\n')}`, beatMap };
 }
 
+// 只差大小写的和弦名（Am7 / AM7、Bm / BM）：alphaTab 按“名字转小写 + 谱表 + 音轨”给和弦编号，
+// 后定义的会盖掉先定义的，两个拍都画成同一个和弦。后出现的那个在名字后面加零宽空格，看着一样、编号不同
+export const CHORD_PAD = '\u200b';
+/** 全曲的和弦名 → 写进 alphaTex 的名字（已转义；大小写撞车的后来者加零宽空格） */
+function chordTexNames(bars) {
+  const out = new Map(), used = new Map(); // 小写名 → 已经用了几个写法
+  const add = name => {
+    if (!name || out.has(name)) return;
+    const t = esc(name), k = t.toLowerCase(), n = used.get(k) || 0;
+    used.set(k, n + 1);
+    out.set(name, t + CHORD_PAD.repeat(n));
+  };
+  for (const bar of bars) {
+    for (const name of Object.keys(bar.shapes || {})) add(name);
+    for (const e of bar.events || []) add(e.chord);
+  }
+  return out;
+}
+
 /** 全曲用到的和弦指法 → alphaTex 的和弦定义（谱面开头画和弦图；拍上的 ch "名字" 按名字找到它）。 */
-function chordDefs(bars) {
+function chordDefs(bars, texName) {
   const shapes = new Map();
   for (const bar of bars) {
     for (const [name, frets] of Object.entries(bar.shapes || {})) {
@@ -211,7 +231,7 @@ function chordDefs(bars) {
     const low = played.length ? Math.min(...played) : 1;
     const first = Math.max(...frets) > 4 && low > 1 ? low : 1; // 高把位的和弦图从最低的按弦品位画起（“3fr.”）
     const f = frets.map(x => (x < 0 ? 'x' : x)).join(' ');
-    return `\\chord ("${esc(name)}" ${f}) {firstfret ${first} showdiagram true}`;
+    return `\\chord ("${texName.get(name)}" ${f}) {firstfret ${first} showdiagram true}`;
   });
 }
 

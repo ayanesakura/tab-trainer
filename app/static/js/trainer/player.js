@@ -3,7 +3,7 @@
 // 状态都在 store 的 play 切片里（ready、playing、bpm、a..b、loops、指板的 note / next，以及节拍器、音量等设置）。
 
 import * as alphaTab from '/static/vendor/alphatab/alphaTab.min.mjs';
-import { TICKS, eventIndexAt, scoreNeedsGbk } from '../score.js';
+import { TICKS, CHORD_PAD, eventIndexAt, scoreNeedsGbk } from '../score.js';
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
 import { loopLabel, stepSection as stepCalc, isScore } from './view.js';
@@ -116,13 +116,13 @@ function ensureApi() {
     pendingBeat = { beat: b, note: null };
     setTimeout(() => {
       const c = pendingBeat; pendingBeat = null;
-      if (c.note && !playing() && get('play.ready')) api.playNote(c.note); else onBeatClick(c.beat);
+      if (c.note && !playing() && get('play.ready')) audition(c.note); else onBeatClick(c.beat);
     }, 0);
   });
   api.noteMouseDown.on(n => {
     if (get('ui.editMode') && hooks.editClick) hooks.editClick(n.beat, n);
     else if (pendingBeat) pendingBeat.note = n;
-    else if (!playing() && get('play.ready')) api.playNote(n);
+    else if (!playing() && get('play.ready')) audition(n);
   });
   api.scoreLoaded.on(onScoreLoaded);
   api.renderFinished.on(() => { if (nBars()) applyLoopRange(); });
@@ -238,6 +238,13 @@ export function applyAudio() {
   api.countInVolume = p.countIn ? 1 : 0;
 }
 
+// 点音符试听：alphaTab 的 playNote 走的是这个音轨自己的 MIDI 通道，示范音关掉时（applyAudio 把音轨音量设成 0）
+// 试听也没声音了。试听前把音轨音量放回吉他音量；开始播放时 startPlayer 再按示范音开关设回去
+function audition(note) {
+  if (!get('play.demo') && api.score) api.changeTrackVolume(api.score.tracks, get('play.gtVol') / 100);
+  api.playNote(note);
+}
+
 function findLinearRun(played, a, b) {
   const n = b - a + 1;
   for (let i = 0; i + n <= played.length; i++) {
@@ -299,7 +306,9 @@ export function barBox(bi) {
 // 歌词：alphaTab 只看六线谱时把歌词画在谱表上方（和弦图上面），看着像是上一行的；这里自己画在每行六线谱的下方，
 // 对准各拍的位置，多段歌词一段一行
 const LYRIC_LINE = 20;
-const beatsOf = score => score.tracks[0].staves[0].bars.flatMap(b => b.voices.flatMap(v => v.beats));
+// 画出来的音轨：GP 文件可能有好几个音轨，api.load(bytes, [track]) 只画练的那一个（不一定是第 0 个）
+const shownTrack = score => (api && api.score === score && api.tracks[0]) || score.tracks[(get('view.source') || {}).track || 0] || score.tracks[0];
+const beatsOf = score => shownTrack(score).staves[0].bars.flatMap(b => b.voices.flatMap(v => v.beats));
 function lyricLines(score) {
   let n = 0;
   for (const b of beatsOf(score)) if (b.lyrics) n = Math.max(n, b.lyrics.filter(Boolean).length && b.lyrics.length);
@@ -311,12 +320,14 @@ function drawLyrics() {
   layer.replaceChildren();
   const look = api && (api.boundsLookup || (api.renderer && api.renderer.boundsLookup)), surface = $('score').querySelector('.at-surface');
   if (!look || !surface || !api.score || !lyricLines(api.score)) return;
+  const seen = new Set(); // 五线谱 + 六线谱都显示时同一个拍在两行谱表里各有一份位置：歌词只写一次
   for (const sys of look.staffSystems) {
     // 一行的范围包括下面留的空（systemPaddingBottom）：歌词从这段空白的顶上开始写
     const bottom = surface.offsetTop + sys.realBounds.y + sys.realBounds.h - api.settings.display.systemPaddingBottom;
     for (const mb of sys.bars) for (const bar of mb.bars) for (const bb of bar.beats) {
       const lyr = bb.beat.lyrics;
-      if (!lyr || bb.beat.voice.index !== 0) continue;
+      if (!lyr || bb.beat.voice.index !== 0 || seen.has(bb.beat)) continue;
+      seen.add(bb.beat);
       lyr.forEach((text, k) => {
         if (!text) return;
         const el = document.createElement('span');
@@ -359,6 +370,7 @@ export function stop() {
   pausePlayer();
 }
 function startPlayer() {
+  applyAudio(); // 试听时可能临时打开了示范音的音量（见 audition）：开始播放前按开关设回去
   countIn.begin(api.tickPosition, api.countInVolume > 0);
   api.play();
 }
@@ -492,8 +504,15 @@ function seekBar(bi) {
 export function exportGp() {
   if (!api || !api.score) return;
   applyTimbre(api.score, true); // 导出原来的音色，不是练习时临时换的木吉他
+  // 和弦名去掉为了区分大小写加的零宽空格（见 score.js 的 CHORD_PAD）：GP 文件里和弦按编号引用，不会再撞车
+  const chords = api.score.tracks.flatMap(t => t.staves.flatMap(st => [...(st.chords ? st.chords.values() : [])]));
+  const names = chords.map(c => c.name);
+  chords.forEach(c => { c.name = String(c.name || '').replaceAll(CHORD_PAD, ''); });
   let bytes;
-  try { bytes = new alphaTab.exporter.Gp7Exporter().export(api.score, api.settings); } finally { applyTimbre(api.score); }
+  try { bytes = new alphaTab.exporter.Gp7Exporter().export(api.score, api.settings); } finally {
+    applyTimbre(api.score);
+    chords.forEach((c, i) => { c.name = names[i]; });
+  }
   const s = get('song'), a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
   a.download = ((s.title || (s.meta && s.meta.title) || 'tab').replace(/[\\/:*?"<>|]/g, '_')) + '.gp';
