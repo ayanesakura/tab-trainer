@@ -411,7 +411,9 @@ $('pagesSave').onclick = async () => {
 
 // ---------------- 设置 ----------------
 const PRESETS = ['claude-opus-5-5', 'claude-sonnet-5-5'];
+let settings = null; // 服务器上当前的设置（showSettings 时更新），“测试”时比较哪些改了还没保存
 function showSettings(c) {
+  settings = c;
   const hasKey = !!(c.api_key_masked || c.env_key);
   UI.notice($('keyNotice'), hasKey ? null : { kind: 'warn', html: '还没设置 API key，识别原谱前请先到 <a href="#settings">设置</a> 填写。（导入 Guitar Pro / MusicXML 不需要。）' });
   $('keyState').innerHTML = c.api_key_masked ? `已保存：<code>${esc(c.api_key_masked)}</code>`
@@ -426,8 +428,9 @@ function showSettings(c) {
   setDoubleSeg(c.double_check || 'off');
   $('baseUrl').value = c.base_url;
 }
+// → 是否保存成功（失败时已经提示过）
 async function save(body, msg = '已保存') {
-  try { showSettings(await api.put('/api/settings', body)); toast(msg); } catch (e) { toast(e.message, 'err'); }
+  try { showSettings(await api.put('/api/settings', body)); toast(msg); return true; } catch (e) { toast(e.message, 'err', 4000); return false; }
 }
 const setModelSeg = UI.seg($('modelSeg'), 'claude-opus-5-5', v => {
   $('modelCustom').hidden = v !== 'custom';
@@ -440,14 +443,27 @@ $('baseUrl').onchange = () => save({ base_url: $('baseUrl').value });
 $('saveKey').onclick = () => api.withBusy($('saveKey'), async () => {
   const k = $('apiKey').value.trim();
   if (!k) { toast('先填写 key', 'err'); $('apiKey').focus(); return; }
-  $('apiKey').value = '';
-  await save({ api_key: k }, 'API key 已保存');
+  if (await save({ api_key: k }, 'API key 已保存')) $('apiKey').value = ''; // 保存失败时留着，不用再粘贴一次
 });
 $('apiKey').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) $('saveKey').click(); };
 $('clearKey').onclick = async () => {
   if (await UI.confirm('清除后识别原谱前要重新填写。', { title: '清除已保存的 API key？', ok: '清除', danger: true })) save({ clear_api_key: true }, '已清除');
 };
+// 填了还没保存的 key、改了的 Base URL / 自定义模型名（测试测的是服务器上保存的设置）
+function unsavedSettings() {
+  const body = {}, k = $('apiKey').value.trim(), url = $('baseUrl').value, model = $('modelCustom').value.trim();
+  if (k) body.api_key = k;
+  if (settings && url.trim() !== settings.base_url) body.base_url = url;
+  if (settings && !$('modelCustom').hidden && model && model !== settings.model) body.model = model;
+  return body;
+}
 $('testBtn').onclick = () => api.withBusy($('testBtn'), async () => {
+  // 先保存还没保存的改动再测，免得刚粘贴的 key 测出来是“没有 key”；保存失败就不测了
+  const body = unsavedSettings();
+  if (Object.keys(body).length) {
+    if (!await save(body, body.api_key ? 'API key 已保存' : '已保存')) { $('testState').innerHTML = ''; return; }
+    if (body.api_key) $('apiKey').value = '';
+  }
   $('testState').innerHTML = '<span class="spinner"></span>测试中…';
   try {
     const r = await api.post('/api/settings/test');

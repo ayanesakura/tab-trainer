@@ -517,3 +517,45 @@ def test_toast_shows_above_modal_dialog(server, browser):
     assert b.js(f"{parent} === document.body") is True
     assert b.js(hit) is True
     assert not b.errors, b.errors
+
+
+SETTINGS_FAKE = """(() => { window.__calls = []; window.__putStatus = %d; const of = window.fetch;
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  window.fetch = async (u, init = {}) => {
+    const url = String(u), m = init.method || 'GET';
+    if (url.endsWith('/api/settings') && m === 'PUT') {
+      __calls.push('PUT ' + init.body);
+      if (__putStatus !== 200) return json({ detail: '保存失败（测试）' }, __putStatus);
+      return json({ api_key_masked: 'sk-ant…test', env_key: false, base_url: '', model: 'claude-opus-5-5', effort: 'high', double_check: 'off' });
+    }
+    if (url.endsWith('/api/settings/test')) { __calls.push('TEST'); return json({ ok: true }); }
+    return of(u, init);
+  }; return true; })()"""
+
+
+def test_api_key_kept_on_failed_save_and_saved_before_test(server, browser):
+    # 不调用真的模型：PUT /api/settings 和测试接口都在页面里拦下
+    b = browser
+    b._run(b._send("Page.addScriptToEvaluateOnNewDocument", source=SETTINGS_FAKE % 400))
+    b.open(server["base"] + "/#settings")
+    b.wait_for("!document.getElementById('view-settings').hidden")
+    idle = "!document.getElementById('{}').hasAttribute('aria-busy')"
+    b.js(
+        "document.getElementById('apiKey').value = 'sk-ant-typed'; document.getElementById('saveKey').click(); true"
+    )
+    b.wait_for(f"__calls.length === 1 && {idle.format('saveKey')}")
+    assert b.js("document.getElementById('apiKey').value") == "sk-ant-typed"  # 保存失败：不用再粘贴
+    # “测试”：先保存填了的 key；保存失败就不测
+    b.js("document.getElementById('testBtn').click(); true")
+    b.wait_for(f"__calls.length === 2 && {idle.format('testBtn')}")
+    assert b.js("__calls") == ['PUT {"api_key":"sk-ant-typed"}'] * 2
+    # 保存成功：先保存再测试，框清空
+    b.js("__putStatus = 200; __calls.length = 0; document.getElementById('testBtn').click(); true")
+    b.wait_for("document.getElementById('testState').textContent.includes('连接正常')")
+    assert b.js("__calls") == ['PUT {"api_key":"sk-ant-typed"}', "TEST"]
+    assert b.js("document.getElementById('apiKey').value") == ""
+    # 没有没保存的改动：直接测试
+    b.js("__calls.length = 0; document.getElementById('testBtn').click(); true")
+    b.wait_for(f"__calls.includes('TEST') && {idle.format('testBtn')}")
+    assert b.js("__calls") == ["TEST"]
+    assert not b.errors, b.errors
