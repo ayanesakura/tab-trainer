@@ -636,6 +636,45 @@ def test_tuner_mic_stops_when_leaving_tune_page(trainer):
     assert not b.errors, b.errors
 
 
+def test_tuner_reading_settles_on_a_steady_tone(trainer):
+    """调音器：麦克风换成合成的 A2 锯齿波（低 10 音分），读数稳在 5 弦 −10 音分、指针不抖；
+    调到正好 A2 显示“准了”；没声音了先保留读数，再回到待机。"""
+    b = trainer()
+    b.js("""(() => { navigator.mediaDevices.getUserMedia = async () => {
+        const c = new AudioContext(), o = c.createOscillator(), g = c.createGain(), d = c.createMediaStreamDestination();
+        o.type = 'sawtooth'; o.frequency.value = 110 * 2 ** (-10 / 1200); g.gain.value = 0.2;
+        o.connect(g); g.connect(d); o.start(); await c.resume();
+        window.__osc = { o, g }; return d.stream; };
+      return true; })()""")
+    b.js("location.hash = '#tune'; true")
+    b.wait_for("tt.get('ui.view') === 'tune'")
+    b.js("document.getElementById('micBtn').click(); true")
+    read = "document.getElementById('tRead').textContent"
+    b.wait_for(f"{read}.includes('5 弦') && {read}.includes('-10 音分')", timeout=10)
+    seen = set()
+    for _ in range(12):  # 一秒多：读数和指针位置一直不变
+        seen.add(b.js(f"[{read}, document.getElementById('tNeedle').style.left].join('|')"))
+        time.sleep(0.1)
+    assert len(seen) == 1, seen
+    text, left = seen.pop().split("|")
+    assert "目标 A2" in text and "偏低，往上调" in text and left == "40%", text
+    assert b.js("document.getElementById('tNote').textContent") == "A2"
+    assert b.js("document.getElementById('tr5').classList.contains('hit')")
+    assert not b.js("document.getElementById('tNeedle').classList.contains('ok')")
+    # 拧准了
+    b.js("__osc.o.frequency.value = 110; true")
+    b.wait_for(f"{read}.includes('，0 音分') && {read}.includes('准了')", timeout=5)
+    assert b.js("document.getElementById('tNeedle').classList.contains('ok')")
+    assert b.js("document.getElementById('tNeedle').style.left") == "50%"
+    # 没声音了：保留一会儿读数，然后回到待机
+    b.js("__osc.g.gain.value = 0; true")
+    b.wait_for("document.getElementById('tNeedle').classList.contains('held')", timeout=3)
+    b.wait_for("document.getElementById('tNote').textContent === '--'", timeout=5)
+    assert "弹一根空弦" in b.js(read)
+    b.js("document.getElementById('micBtn').click(); true")
+    assert not b.errors, b.errors
+
+
 def _viewport(b, w, h):
     b._run(
         b._send("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
