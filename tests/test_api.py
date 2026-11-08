@@ -159,6 +159,34 @@ def test_oversized_request_is_rejected_before_parsing(client, monkeypatch):
     assert r.status_code == 413
 
 
+def test_oversized_chunked_upload_is_cut_off(client, monkeypatch):
+    """reviewer 的 chunked_bypass：分块上传（没有 Content-Length）以前绕过大小检查，整个请求体先被收下来存到临时文件。
+    现在边收边数，超过上限就 413，不再往下读。"""
+    from app import store
+
+    monkeypatch.setattr(config.settings, "max_total_bytes", 1000)
+    head = b'--XYZ\r\nContent-Disposition: form-data; name="files"; filename="big.png"\r\n\r\n'
+
+    def body():
+        yield head
+        for _ in range(8):
+            yield b"\0" * (512 * 1024)
+        yield b"\r\n--XYZ--\r\n"
+
+    r = client.post(
+        "/api/songs", content=body(), headers={"content-type": "multipart/form-data; boundary=XYZ"}
+    )
+    assert r.status_code == 413 and "文件总大小超过" in r.json()["detail"]
+    assert not store.SONGS.exists() or not list(store.SONGS.iterdir())
+    # 小的分块上传照常
+    monkeypatch.setattr(config.settings, "max_total_bytes", 200 * 1024 * 1024)
+    small = head.replace(b"big.png", b"p1.png") + score_png() + b"\r\n--XYZ--\r\n"
+    r = client.post(
+        "/api/songs", content=iter([small]), headers={"content-type": "multipart/form-data; boundary=XYZ"}
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_malformed_bodies_get_a_400_with_a_chinese_reason(client):
     sid = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
     assert client.put(f"/api/songs/{sid}/derived", json={"bars": derived_bars(2)}).status_code == 200
