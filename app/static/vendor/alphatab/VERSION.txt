@@ -1,1 +1,3 @@
 alphaTab 1.9.0 (npm @coderline/alphatab), MPL-2.0. Bravura font: SIL OFL 1.1. The bundled Sonivox soundfont is not used; see ../soundfont/README.md.
+
+Local patch (tab-trainer) in alphaTab.core.min.mjs, MidiFileGenerator: a note in the middle of a legato-slide / tie chain is not re-struck, so its slide and vibrato pitch bends now go to the key of the chain's first note (the one actually sounding) and start from the pitch already reached (method ttChain, used by _generateSlide and _generateVibrato). Upstream 1.9.0 / 1.10 alpha bend the middle note's own key, so e.g. the 4→2 half of 2→4→2 was silent. Covered by tests/js/playback.test.mjs; re-apply when upgrading alphaTab.
