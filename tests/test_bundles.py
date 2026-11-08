@@ -246,6 +246,16 @@ def _v2(sid: str, **over) -> dict:
         ({"bars": [{"id": "b1", "events": [{"dur": "1/0", "notes": []}]}]}, "时值"),
         ({"bars": [{"id": "b1", "events": [{"dur": "-1", "notes": []}]}]}, "时值"),
         ({"bars": [{"id": "b1", "events": [{"dur": "abc", "notes": []}]}]}, "时值"),
+        ({"bars": [{"id": "b1", "events": [{"dur": "1e400", "notes": []}]}]}, "时值"),
+        ({"bars": [{"id": "b1", "events": [{"dur": "1e300", "notes": []}]}]}, "时值"),
+        (
+            {
+                "bars": [
+                    {"id": "b1", "events": [{"dur": "4", "notes": []}], "_orig": {"events": [{"dur": "1e9"}]}}
+                ]
+            },
+            "时值",
+        ),
         ({"meta": {**_META, "time_signature": [4, 0]}}, "time_signature"),
         ({"meta": {**_META, "time_signature": [3, 3]}}, "time_signature"),
         ({"bars": [{"id": "b1", "events": [], "time_signature": [0, 4]}]}, "time_signature"),

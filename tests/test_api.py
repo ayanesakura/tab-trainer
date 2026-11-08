@@ -122,6 +122,37 @@ def test_derived_with_absurd_numbers_is_cleaned_not_a_500(client):
         assert "repeat_end" not in song["bars"][2] and "endings" not in song["bars"][2]
 
 
+@pytest.mark.parametrize("dur", ["1e400", "1e300", "1000", "1/100000"])
+def test_absurd_durations_are_rejected_and_never_brick_the_song(client, dur):
+    """reviewer 的 huge_dur_bricks_song：时值 1e400 以前照单全收、写进 song.json，之后每次读取都 OverflowError，
+    曲子再也打不开也修不了。时值要在 1 tick（1/960 拍）到 256 拍之间：改小节 400；GP 转换的这一小节换成休止并写明原因。"""
+    img = _image_song(client)
+    bar = client.get(f"/api/songs/{img}").json()["bars"][0]
+    r = client.put(f"/api/songs/{img}/bars/{bar['id']}", json={"events": [{"dur": dur, "notes": []}]})
+    assert r.status_code == 400 and "时值" in r.json()["detail"]
+    assert client.get(f"/api/songs/{img}").json()["bars"][0]["events"] == bar["events"]
+    gp = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    r = client.put(f"/api/songs/{gp}/derived", json={"bars": [{"events": [{"dur": dur, "notes": []}]}]})
+    assert r.status_code == 200 and "无法使用" in r.json()["bars"][0]["warn"][0]["msg"]
+    assert client.get(f"/api/songs/{gp}").status_code == 200
+    assert [x["status"] for x in client.get("/api/songs").json()] == ["ready", "ready"]
+
+
+def test_a_write_that_cannot_be_read_back_is_not_saved(data_dir, monkeypatch):
+    """store.update 先算派生字段再写盘：改完的内容读不回来（算派生字段出错）就不写，原来的数据不受影响。"""
+    from app import songs, store
+
+    monkeypatch.setattr(store, "STRICT", False)  # 平时写盘前的检查只记日志
+
+    sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    songs.set_derived(sid, {}, derived_bars(1))
+    before = (store.song_dir(sid) / "song.json").read_text()
+    with pytest.raises(KeyError):  # 音符缺弦号
+        store.update(sid, lambda s: s["bars"][0].update(events=[{"dur": "4", "notes": [{"fret": 1}]}]))
+    assert (store.song_dir(sid) / "song.json").read_text() == before
+    assert store.load(sid)["bars"][0]["events"][0]["dur"] == "4"
+
+
 def test_oversized_request_is_rejected_before_parsing(client, monkeypatch):
     monkeypatch.setattr(config.settings, "max_total_bytes", 1000)
     r = client.post("/api/songs", files={"files": ("p.png", b"x" * 3_000_000)})

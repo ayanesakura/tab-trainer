@@ -170,8 +170,9 @@ def update(song_id: str, fn: Callable[[dict], None]) -> dict:
         before = model.content_snapshot(song)
         fn(song)
         model.bump_revs(song, before)
+        model.derive(song)  # 先算派生字段再写盘：改完的内容读不回来（算的时候出错）就不写，原来的数据不受影响
         save(song)
-        return model.derive(song)
+        return song
 
 
 def patch(song_id: str, **fields) -> dict:

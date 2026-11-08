@@ -141,6 +141,25 @@ def parse_dur(s) -> Fraction:
     return Fraction(str(s).strip())
 
 
+# 一个事件的时值范围（拍）：最短 1 tick（播放器的最小单位）；最长 256 拍，比最长的小节（32/1 拍 = 128 拍）还宽一倍，
+# GP 里写得比拍号长的小节也够用。没有上限的话 "1e400" 能存进去，之后每次读取算时值合计都会溢出
+MIN_DUR = Fraction(1, VOCAB["ticks_per_quarter"])
+MAX_DUR = Fraction(256)
+
+
+def dur_problem(v) -> str | None:
+    """时值有什么问题（没问题返回 None）。"""
+    try:
+        dur = parse_dur(v)
+    except (ValueError, ZeroDivisionError, TypeError, OverflowError):
+        return f"时值无法识别：{str(v)[:40]!r}"
+    if dur <= 0:
+        return f"时值必须是大于 0 的分数：{str(v)[:40]!r}"
+    if not MIN_DUR <= dur <= MAX_DUR:
+        return f"时值 {str(v)[:40]!r} 超出范围（1/{MIN_DUR.denominator}–{MAX_DUR} 拍）"
+    return None
+
+
 MAX_VERSES = 4
 
 
@@ -176,12 +195,9 @@ def clean_events(events) -> list[dict]:
     for i, e in enumerate(events, 1):
         if not isinstance(e, dict) or "dur" not in e:
             raise Invalid(f"第 {i} 个事件缺少 dur")
-        try:
-            dur = parse_dur(e["dur"])
-        except (ValueError, ZeroDivisionError, TypeError):
-            raise Invalid(f"第 {i} 个事件的时值无法识别：{e['dur']!r}") from None
-        if dur <= 0:
-            raise Invalid(f"第 {i} 个事件的时值必须大于 0：{e['dur']!r}")
+        if why := dur_problem(e["dur"]):
+            raise Invalid(f"第 {i} 个事件的{why}")
+        dur = parse_dur(e["dur"])
         notes = []
         if not isinstance(e.get("notes") or [], list):
             raise Invalid(f"第 {i} 个事件的 notes 必须是列表")
@@ -378,6 +394,14 @@ def derive_warns(bar: dict, meta: dict) -> None:
     bar["warn"] = derived + kept
 
 
+def _beats(f: Fraction) -> str:
+    """给人看的拍数。万一是没有上限的旧数据，float 会溢出：直接写分数。"""
+    try:
+        return f"{float(f):g}"
+    except OverflowError:
+        return str(f)[:40]
+
+
 def check_bar(events: list[dict], meta: dict, info: bool = True, bar: dict | None = None) -> list[dict]:
     """小节的问题（显示在练习页），[{"code", "msg"}]。info=False 时只返回需要模型返修的问题：
     时值不在播放网格上（五连音之类）只是提醒，读对了也会有，不能拿去让模型“改”。
@@ -386,7 +410,7 @@ def check_bar(events: list[dict], meta: dict, info: bool = True, bar: dict | Non
     total = sum((parse_dur(e["dur"]) for e in events), Fraction(0))
     want = bar_length(meta, bar)
     if total != want:
-        problems.append(warn("length", f"时值合计 {float(total):g} 拍，应为 {float(want):g} 拍"))
+        problems.append(warn("length", f"时值合计 {_beats(total)} 拍，应为 {_beats(want)} 拍"))
     odd = sorted({e["dur"] for e in events if (parse_dur(e["dur"]) / GRID).denominator != 1}, key=parse_dur)
     if odd and info:
         problems.append(

@@ -32,8 +32,8 @@ from app.music import (
     WARN_CODES,
     clean_time_signature,
     derive_warns,
+    dur_problem,
     events_key,
-    parse_dur,
     tuning_midi,
 )
 
@@ -110,13 +110,10 @@ class Event(_M):
     @field_validator("dur")
     @classmethod
     def _positive_fraction(cls, v: str) -> str:
-        """时值必须是大于 0 的分数（"1/0"、"-1"、"abc" 之类会让读取时的计算出错）。"""
-        try:
-            ok = parse_dur(v) > 0
-        except (ValueError, ZeroDivisionError, TypeError):
-            ok = False
-        if not ok:
-            raise ValueError(f"时值必须是大于 0 的分数：{v!r}")
+        """时值必须是范围内（见 music.MIN_DUR / MAX_DUR）大于 0 的分数（"1/0"、"-1"、"abc"、"1e400" 之类
+        会让读取时的计算出错）。"""
+        if why := dur_problem(v):
+            raise ValueError(why if "超出范围" in why else f"时值必须是大于 0 的分数：{str(v)[:40]!r}")
         return v
 
 
