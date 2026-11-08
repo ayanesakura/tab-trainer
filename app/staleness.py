@@ -170,8 +170,8 @@ def reconcile_bars(
         new["id"] = prev["id"]
         if prev.get("qa"):
             new["qa"] = prev["qa"]
-        # 用户的确认：内容没变（bump_revs 沿用原来的 rev）就还有效，变了自然失效
-        for k in ("reviewed_rev", "reviewed_warn"):
+        # 用户的确认：音没变就还有效，变了自然失效（reviewed_key 按音比；早先的 reviewed_rev 靠 bump_revs 沿用原来的 rev）
+        for k in ("reviewed_key", "reviewed_rev", "reviewed_warn"):
             if k in prev:
                 new[k] = prev[k]
         edited = keep_edits and bool(prev.get("edited"))

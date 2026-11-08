@@ -17,7 +17,7 @@ from PIL import Image, ImageOps
 from app import state, store
 from app.config import settings
 from app.errors import STALE_REV, AppError, BarNotFound, Busy, Conflict, Invalid
-from app.model import is_score, new_song, touch_bar
+from app.model import is_score, new_song, notes_key, touch_bar
 from app.music import (
     GBK_EXT,
     SCORE_FILES,
@@ -359,7 +359,8 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
 
 
 def review_bar(sid: str, bar_id: str, ok: bool, rev: int | None = None) -> dict:
-    """待核对的小节：用户看过原谱、确认识别没问题（ok=False 撤销）。记下当时的 rev，内容再变就要重新核对。
+    """待核对的小节：用户看过原谱、确认识别没问题（ok=False 撤销）。记下当时音符的指纹（views.notes_key），
+    音再变就要重新核对（提示变了不算：确认说的是识别得对不对）。
     不算改谱（不动 rev，不让提示、问答、练习建议失效）；GP 曲子的小节也能确认。"""
 
     def apply(s):
@@ -367,11 +368,12 @@ def review_bar(sid: str, bar_id: str, ok: bool, rev: int | None = None) -> dict:
         check_rev(bar.get("rev"), rev)
         if not is_score(s) and (why := state.bar_locked(s, bar)):
             raise Busy(why)  # 正在重新识别：确认会被识别结果盖掉
+        bar.pop("reviewed_rev", None)  # 早先按 rev 记的确认
         if ok:
-            bar["reviewed_rev"] = int(bar.get("rev") or 0)
+            bar["reviewed_key"] = notes_key(bar)
             bar["reviewed_warn"] = warn_texts(bar)
         else:
-            bar.pop("reviewed_rev", None)
+            bar.pop("reviewed_key", None)
             bar.pop("reviewed_warn", None)
 
     return store.update(sid, apply)

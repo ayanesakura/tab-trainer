@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import time
 from typing import Annotated, Any, ClassVar, Literal, get_args, get_origin
@@ -205,7 +206,9 @@ class Bar(_M):
     edited: bool = False  # 用户手改过（撤销回原样后变回 False）
     orig: Orig | None = Field(None, alias="_orig")
     placeholder: bool = False  # 识别失败、按整小节休止占位
-    reviewed_rev: int | None = None  # 用户点了“确认没问题”时这个小节的 rev：内容再变（rev 变了）就要重新核对
+    # 用户点了“确认没问题”时这个小节音符的指纹（notes_key）：音再变就要重新核对，提示变了不算
+    reviewed_key: str | None = None
+    reviewed_rev: int | None = None  # 早先的确认记的是 rev：rev 没变就还有效
     # 确认时看到的警告（文字）：之后冒出新的警告（比如改了拍号）要重新核对
     reviewed_warn: list[str] | None = None
     # 弹唱谱：这个小节里出现的和弦（事件的 chord）的指法，和弦名 → 1–6 弦的品位（-1 = 不弹），给谱面画和弦图
@@ -487,6 +490,11 @@ def _events_key(bar: dict) -> str:
     return events_key(bar.get("events"))  # 按内容比：空的 chord / lyrics 之类写没写不算变
 
 
+def notes_key(bar: dict) -> str:
+    """小节音符的指纹（用户确认时记下，见 Bar.reviewed_key）：按内容算，写法不同但音一样的算一样。"""
+    return hashlib.sha1(_events_key(bar).encode()).hexdigest()[:16]
+
+
 def content_snapshot(song: dict) -> tuple[str, dict[str, tuple[int, str]]]:
     """改之前的谱头和各小节内容（按 id），给 bump_revs 比较。"""
     bars = {
@@ -575,7 +583,8 @@ class BarView(Bar):
     n: int
     needs_review: bool = False  # 有警告或模型标了不确定、用户还没确认
     reviewed: bool = False  # 有警告或不确定说明，但用户已经确认没问题（内容没再变）
-    reviewed_rev: int | None = Field(None, exclude=True)  # 内部字段，不给前端
+    reviewed_key: str | None = Field(None, exclude=True)  # 内部字段，不给前端
+    reviewed_rev: int | None = Field(None, exclude=True)
     reviewed_warn: list[str] | None = Field(None, exclude=True)
     locked: str | None = None  # 现在不能改的原因
     warn: list[Warn] = Field(default_factory=list)

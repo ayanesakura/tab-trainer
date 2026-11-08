@@ -457,6 +457,40 @@ def test_confirming_a_bar_clears_needs_review_until_its_notes_change(data_dir, s
     assert b["needs_review"] and not b["reviewed"]
 
 
+def test_confirmation_is_about_the_notes_not_the_tip(data_dir, sync_jobs):
+    """reviewer 的 capo_change_unconfirms_bars_with_tips：改变调夹清掉提示会让 rev +1，以前只有带提示的小节
+    因此丢了确认。确认说的是“识别得对不对”，记下当时音符的指纹（reviewed_key），提示变了不影响；
+    早先按 rev 记的确认（reviewed_rev）在 rev 没变时照样有效。"""
+    from app import store, views
+
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    sid = c.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
+
+    def setup(s):
+        for b in s["bars"][:2]:
+            b["uncertain"] = "看不清"
+        s["bars"][0]["tip"] = "a tip"
+        s["bars"][1]["tip"] = ""
+
+    store.update(sid, setup)
+    for b in c.get(f"/api/songs/{sid}").json()["bars"][:2]:
+        c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True, "rev": b["rev"]})
+    v = c.get(f"/api/songs/{sid}").json()
+    r = c.put(f"/api/songs/{sid}/meta", json={"capo": 5, "rev": v["meta_rev"]})
+    assert [(b["reviewed"], b["needs_review"]) for b in r.json()["bars"][:2]] == [(True, False)] * 2
+    assert r.json()["bars"][0]["rev"] == v["bars"][0]["rev"] + 1  # 提示没了，rev 照样 +1（乐观锁）
+
+    def legacy(s):  # 早先的确认：只记了 rev
+        b = s["bars"][0]
+        b.pop("reviewed_key", None)
+        b["reviewed_rev"] = b["rev"]
+
+    store.update(sid, legacy)
+    assert views.reviewed(store.load(sid)["bars"][0])
+    store.update(sid, lambda s: s["bars"][0].update(rev=s["bars"][0]["rev"] + 1))
+    assert not views.reviewed(store.load(sid)["bars"][0])
+
+
 def test_double_check_setting_round_trips(client):
     from app import config, store
 

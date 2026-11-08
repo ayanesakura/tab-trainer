@@ -245,6 +245,7 @@ uv run python -m app.evaluate eval-xxx --yes
 - `GET /api/songs`：每首另有 `busy`、`recognizing`、`activity`、`notice`、`needs_review_bars`、`practice`（`null` 或 `{last_at, total_seconds, last: {a, b, bpm, a_n, b_n}}`）。
 - 整首重新识别已有结果的曲子时 `status` 不变（原来的结果照常能练），看 `recognizing` / `activity.restaging`。
 - 乐观锁按对象：`PUT /api/songs/{id}/bars/{bar_id}` 可以带 `rev` = 这个小节的 `rev`，`PUT /api/songs/{id}/meta` 可以带 `rev` = 曲子的 `meta_rev`；和当前不一致返回 409（“曲子在别处改过了，已刷新，请再改一次”），不带照旧。小节的 `rev` 只在它的内容变了时 +1（手改音符或提示、重新识别 / GP 重新转换换了内容、改调弦清掉了提示）；`meta_rev` 只在可改的谱头字段（曲名、艺人、调弦、变调夹、拍号）变了时 +1。问 AI、讲解补提示、练习记录、进度、识别别的行、改别的小节都不会让手里的版本号过期。旧数据没有的按 0 算。改 GP / MusicXML 曲子的小节返回 400。
+- `PUT /api/songs/{id}/bars/{bar_id}/review`（`{ok, rev}`）：确认待核对的小节没问题。记下当时音符的指纹，之后音变了、或冒出确认时没有的警告才要重新核对；提示变了（比如改调弦清掉了提示）不影响确认。
 - `GET /api/songs/{id}/practice/history` → `{sessions: [{at, a, b, bpm, seconds, loops}]}`。
 
 前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。曲库页是 `js/index.js`（事件和 DOM）+ `js/library-view.js`（纯函数：一行曲子的 HTML、状态 / 练习 / 花费说明、筛选排序，`tests/js/library.test.mjs` 直接测）。
