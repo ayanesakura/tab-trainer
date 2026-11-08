@@ -47,6 +47,11 @@ drop.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefau
 drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); setFiles(e.dataTransfer.files); };
+// 文件没放进上传框就松手（落在页面别处、“管理原谱页面”对话框里）：Chrome 默认会打开这个文件、离开曲库，
+// 对话框里调好没保存的页面顺序就丢了。上传框自己已经 preventDefault；别处一律拦下，光标显示“不能放”
+const dragsFiles = e => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+document.addEventListener('dragover', e => { if (!e.defaultPrevented && dragsFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'none'; } });
+document.addEventListener('drop', e => { if (dragsFiles(e)) e.preventDefault(); });
 $('clearPick').onclick = () => { setFiles([]); $('file').value = ''; drop.focus(); };
 $('uploadBtn').onclick = () => api.withBusy($('uploadBtn'), async () => {
   try {

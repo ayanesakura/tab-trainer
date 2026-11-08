@@ -456,6 +456,40 @@ def test_tag_click_filters_in_select_mode(server, browser):
         _put_json(server, f"/api/songs/{img}/tags", {"tags": []})
 
 
+def _drag_file(b, x, y, path):
+    data = {"items": [], "files": [str(path)], "dragOperationsMask": 1}
+    for t in ("dragEnter", "dragOver", "drop"):
+        b._run(b._send("Input.dispatchDragEvent", type=t, x=x, y=y, data=data))
+
+
+def test_file_dropped_outside_drop_zone_stays_in_app(server, browser, tmp_path):
+    from tests.fakes import score_png
+
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for("!!document.querySelector('.song-row')")
+    # 无头 Chrome 不会真的去打开拖进来的文件，所以看 dragover / drop 有没有被拦下（拦下了 Chrome 就不会离开曲库）
+    blocked = """(el => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'a.png', { type: 'image/png' }));
+      const ev = t => new DragEvent(t, { bubbles: true, cancelable: true, dataTransfer: dt });
+      return [!el.dispatchEvent(ev('dragover')), dt.dropEffect, !el.dispatchEvent(ev('drop'))]; })(document.querySelector('{}'))"""
+    assert b.js(blocked.replace("{}", "#songs")) == [True, "none", True]  # 落在曲子列表上：拦下，光标“不能放”
+    b.js(f"tt.openPages('{server['image']}').then(() => true)")
+    b.wait_for("document.querySelectorAll('.page-card').length === 1")
+    # “管理原谱页面”里也拦下：没保存的页面顺序不会丢
+    assert b.js(blocked.replace("{}", "#pageGrid")) == [True, "none", True]
+    b.js("document.getElementById('pagesCancel').click(); true")
+    b.wait_for("!document.getElementById('pagesDlg').open")
+    # 上传框照样能放（真的拖一个文件进去）
+    png = tmp_path / "dropped.png"
+    png.write_bytes(score_png())
+    x, y = b.js(
+        "(r => [r.x + r.width / 2, r.y + r.height / 2])(document.getElementById('drop').getBoundingClientRect())"
+    )
+    _drag_file(b, x, y, png)
+    b.wait_for("document.getElementById('picked').textContent.includes('dropped.png')", timeout=5)
+    assert not b.errors, b.errors
+
+
 def test_toast_shows_above_modal_dialog(server, browser):
     b = browser
     b.open(server["base"] + "/")
