@@ -139,14 +139,14 @@ def test_edit_note_then_undo(server, trainer):
 def test_arrow_keys_step_through_sections(trainer):
     b = trainer()
     b.js("document.activeElement.blur(); true")
-    label = "document.getElementById('loopLabel').textContent"
-    assert b.js(label) == "第 1–6 小节"
+    label = "['loopA', 'loopB'].map(id => document.getElementById(id).value).join('–')"
+    assert b.js(label) == "1–6"
     b.key("ArrowRight", vk=39)
-    assert b.js(label) == "第 1–3 小节"
+    assert b.js(label) == "1–3"
     b.key("ArrowRight", vk=39)
-    assert b.js(label) == "第 4–6 小节"
+    assert b.js(label) == "4–6"
     b.key("ArrowLeft", vk=37)
-    assert b.js(label) == "第 1–3 小节"
+    assert b.js(label) == "1–3"
     bpm = b.js("tt.state.bpm")
     b.key("ArrowUp", vk=38)
     assert b.js("tt.state.bpm") == bpm + 4
@@ -681,26 +681,45 @@ def _viewport(b, w, h):
     )
 
 
-def test_follow_scrolls_cursor_row_into_view(trainer):
-    """自动跟随（默认开）：循环跨行时，光标走到下面看不见的那一行，谱面自己滚过去；手动滚动后停几秒不抢。"""
+def test_follow_keeps_the_next_row_in_view(trainer):
+    """自动跟随（默认开）：弹着这一行时，下一行（含和弦、歌词）也要完整露出来——还在这一行就提前滚好；
+    循环段尾那一行的“下一行”是段首那一行；手动滚动后停几秒不抢。"""
     b = trainer()
     _viewport(b, 1400, 640)
     b.js(
         "document.body.style.paddingBottom = '2000px'; true"
     )  # 只有两行的曲子：页面加高，最后一行也能滚到控制条下面
     time.sleep(1)  # 窗口变了，谱面重画
-    b.wait_for("tt.followDelta(4) !== null")
-    # 这个宽度下第 1–5 小节一行、第 6 小节在下一行
-    b.js("tt.set('play.countIn', false); tt.setLoop(4, 5); tt.setTempo(240); true")
-    b.js("scrollTo(0, Math.max(0, scrollY + tt.followDelta(4))); true")  # 第 5 小节那一行刚好在控制条下面
-    time.sleep(0.3)
-    assert b.js("tt.followDelta(4)") == 0 and b.js("tt.followDelta(5)") > 0  # 第 6 小节在下一行，看不见
-    y = b.js("scrollY")
+    b.wait_for("tt.followDelta(0) !== null")
+    # 这个宽度下第 1–5 小节一行、第 6 小节在下一行；页面在最上面时第二行露不全
+    rows = "[0, 5].map(i => tt.player.rowOfBar(i))"
+    assert b.js(rows) == [0, 1]
+    b.js("scrollTo(0, 0); true")
+    time.sleep(0.2)
+    assert b.js("tt.followDelta(0)") > 0
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 5); tt.setTempo(240); true")
     b.js("tt.play(); true")
     b.wait_for("tt.state.playing")
-    b.wait_for("tt.followDelta(5) === 0", timeout=8)  # 进了下一行：自己滚过去了
-    assert b.js("scrollY") > y
+    # 还在第一行（一小节 1 秒，第一行 5 小节）就已经滚好了：两行都看得见
+    b.wait_for("scrollY > 0 && tt.followDelta(0) === 0", timeout=3)
+    assert b.js("tt.view.all[tt.state.note].bar") <= 3
+    bottom = b.js("""(() => { const r = tt.player.scoreRow(1), s = document.getElementById('score').getBoundingClientRect();
+      return s.top + r.y + r.h; })()""")
+    assert bottom <= b.js("innerHeight")
+    b.js("tt.stop(); true")
+    # 循环第 5–6 小节：在段尾那一行（第二行）时，下一行是段首那一行（第一行）。窗口高一些（两行放得下），
+    # 第二行顶在控制条下面、第一行滚出去了：全曲时第二行是最后一行，不用滚；循环时要往回滚，把第一行也露出来
+    _viewport(b, 1400, 1100)
+    time.sleep(1)
+    b.wait_for("tt.player.rowOfBar(5) === 1")
+    b.js("""(() => { const r = tt.player.scoreRow(1), s = document.getElementById('score').getBoundingClientRect();
+      const t = document.getElementById('transport'); scrollTo(0, scrollY + s.top + r.y - (parseFloat(getComputedStyle(t).top) + t.offsetHeight + 16)); return true; })()""")
+    time.sleep(0.3)
+    assert b.js("tt.followDelta(5)") == 0
+    assert b.js("tt.followDelta(5, 4, 5)") < 0
     # 手动滚轮往上翻：停几秒，不会马上又被拽回去
+    b.js("tt.play(); true")
+    b.wait_for("tt.state.playing")
     b._run(b._send("Input.dispatchMouseEvent", type="mouseWheel", x=600, y=400, deltaX=0, deltaY=-2000))
     b.wait_for("tt.follow.pausedUntil > Date.now()")
     time.sleep(0.4)
@@ -816,4 +835,22 @@ def test_clicking_a_bar_starts_playback_there_without_looping_it(trainer):
     b.js(f"tt.onBeatClick({beat.format(4)}); true")  # 范围外：改成全曲，从第 5 小节开始
     assert [b.js("tt.state.a"), b.js("tt.state.b")] == [0, 5]
     assert b.js("tt.api.tickPosition === tt.api.score.masterBars[4].start")
+    assert not b.errors, b.errors
+
+
+def test_choosing_a_section_scrolls_it_into_view(trainer):
+    """点上面的段落按钮（或 ←→、输入起止小节）选了别的段：谱面自己滚到这一段，不用手动去找。"""
+    b = trainer()
+    _viewport(b, 1400, 640)
+    b.js("document.body.style.paddingBottom = '2000px'; true")
+    time.sleep(1)
+    b.wait_for("tt.player.rowOfBar(5) === 1")
+    b.js("scrollTo(0, 0); true")
+    time.sleep(0.2)
+    b.js("""document.querySelector('#secBtns button[data-a="3"]').click(); true""")  # 第 4–6 小节：跨两行
+    b.wait_for("tt.state.a === 3 && tt.state.b === 5")
+    b.wait_for("scrollY > 0 && tt.followDelta(3, 3, 5) === 0", timeout=3)
+    bottom = b.js("""(() => { const r = tt.player.scoreRow(1), s = document.getElementById('score').getBoundingClientRect();
+      return s.top + r.y + r.h; })()""")
+    assert bottom <= b.js("innerHeight")
     assert not b.errors, b.errors

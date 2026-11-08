@@ -6,7 +6,7 @@ import * as alphaTab from '/static/vendor/alphatab/alphaTab.min.mjs';
 import { TICKS, CHORD_PAD, eventIndexAt, scoreNeedsGbk } from '../score.js';
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
-import { loopLabel, stepSection as stepCalc, isScore, beatNumber } from './view.js';
+import { parseBarInput, stepSection as stepCalc, isScore, beatNumber } from './view.js';
 import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref } from './prefs.js';
 
 export { alphaTab };
@@ -60,6 +60,10 @@ const hooks = { scoreLoaded: null, error: null, editClick: null, drill: null };
 export function setPlayerHooks(h) { Object.assign(hooks, h); }
 // 侧栏正在用的时候（小节编辑器开着、正在输入问 AI 的问题）播放光标不切换侧栏的小节，点谱面照常切换
 const holds = [];
+// 选了新的一段（段落按钮、←→、输入起止小节、继续上次、练习计划）：让 follow.js 把这一段滚到看得见的地方。
+// 拖选、点小节、后台刷新不滚：那时用户正看着这里
+let revealSeq = 0;
+export function revealLoop() { const { a, b } = get('play'); set('ui.reveal', { a, b, seq: ++revealSeq }); }
 export function holdBarWhile(fn) { holds.push(fn); }
 
 const playing = () => get('play.playing');
@@ -119,6 +123,7 @@ function ensureApi() {
   // 播放中点音符不试听，照常从这个小节开始播放
   api.beatMouseDown.on(b => {
     if (get('ui.editMode') && hooks.editClick) { hooks.editClick(b, null); return; }
+    drag = { a: b.voice.bar.index, b: b.voice.bar.index, moved: false };
     if (pendingBeat) return;
     pendingBeat = { beat: b, note: null };
     setTimeout(() => {
@@ -131,6 +136,8 @@ function ensureApi() {
     else if (pendingBeat) pendingBeat.note = n;
     else if (!playing() && get('play.ready')) audition(n);
   });
+  api.beatMouseMove.on(dragOver); // alphaTab 只在按着鼠标时发这个
+  api.beatMouseUp.on(b => { dragOver(b); endDrag(); });
   api.scoreLoaded.on(onScoreLoaded);
   api.renderFinished.on(() => { if (nBars()) applyLoopRange(); });
   api.postRenderFinished.on(() => set('ui.renderGen', (get('ui.renderGen') || 0) + 1)); // 小节位置要等所有部分都画完才有
@@ -322,6 +329,24 @@ export function barBox(bi) {
   return { x: surface.offsetLeft + r.x, y: surface.offsetTop + r.y, w: r.w, h: r.h };
 }
 
+/**
+ * 谱面上的第 i 行（相对 #score 的上下沿）：包括上面的和弦名 / 和弦图和下面留给歌词的空；
+ * 另外给出这一行的头尾小节。没画好或没有这一行时返回 null
+ */
+export function scoreRow(i) {
+  const look = api && (api.boundsLookup || (api.renderer && api.renderer.boundsLookup)), surface = $('score').querySelector('.at-surface');
+  const sys = look && surface && i >= 0 && look.staffSystems[i];
+  if (!sys || !sys.bars.length) return null;
+  const r = sys.realBounds;
+  return { i, y: surface.offsetTop + r.y, h: r.h, a: sys.bars[0].index, b: sys.bars[sys.bars.length - 1].index };
+}
+/** 第 bi 小节在第几行；没画好时返回 -1 */
+export function rowOfBar(bi) {
+  const look = api && (api.boundsLookup || (api.renderer && api.renderer.boundsLookup));
+  const mb = look && bi >= 0 && look.findMasterBarByIndex(bi);
+  return mb && mb.staffSystemBounds ? look.staffSystems.indexOf(mb.staffSystemBounds) : -1;
+}
+
 // 歌词：alphaTab 只看六线谱时把歌词画在谱表上方（和弦图上面），看着像是上一行的；这里自己画在每行六线谱的下方，
 // 对准各拍的位置，多段歌词一段一行
 const LYRIC_LINE = 20;
@@ -447,7 +472,7 @@ export function stepSection(dir) {
   if (!v) return;
   const r = stepCalc({ a, b, n: v.bars.length, shown: get('ui.bar'), secs: v.sections }, dir);
   if (!r) return;
-  if (r.msg) UI.toast(r.msg, 'info'); else setLoop(r.a, r.b);
+  if (r.msg) UI.toast(r.msg, 'info'); else { setLoop(r.a, r.b); revealLoop(); }
 }
 
 function onPosition(tick) {
@@ -504,6 +529,30 @@ function scrollToCursor() {
   const t = $('transport');
   const stuck = parseFloat(getComputedStyle(t).top) + t.offsetHeight; // 滚过去以后控制条吸顶时的下沿
   scrollTo({ top: scrollY + el.getBoundingClientRect().top - stuck - 16, behavior: 'smooth' });
+}
+
+// 按住鼠标拖过几个小节：循环这几个小节（像拖选文字，往前往后拖都行；拖回起点就是只练起点这一小节）。
+// 按下时照常（从这个小节开始播放 / 试听），拖到别的小节才算拖选，拖的过程中高亮范围、控制条上的起止小节跟着变，松开时定下。
+// 改音模式里按下是改音，不拖选
+let drag = null; // { a: 按下的小节, b: 现在拖到的小节, moved: 拖到过别的小节 }
+function dragOver(beat) {
+  if (!drag || !beat || !api) return;
+  const bi = beat.voice.bar.index;
+  if (bi >= nBars() || bi === drag.b) return;
+  drag.b = bi;
+  drag.moved = true;
+  $('score').classList.add('dragging');
+  const lo = Math.min(drag.a, bi), hi = Math.max(drag.a, bi), bars = api.tracks[0].staves[0].bars;
+  const last = bars[hi].voices[0].beats;
+  api.highlightPlaybackRange(bars[lo].voices[0].beats[0], last[last.length - 1]);
+  paintLoop({ a: lo, b: hi });
+}
+function endDrag() {
+  const d = drag;
+  drag = null;
+  if (!d || !d.moved) return;
+  $('score').classList.remove('dragging');
+  setLoop(Math.min(d.a, d.b), Math.max(d.a, d.b));
 }
 
 // 点谱面上的小节：从这个小节开始播放（不改循环范围；点到范围外面就改成全曲，好从这里一直往下放）。
@@ -571,7 +620,7 @@ function renderSections(v) {
   const add = (label, a, z, all) => {
     const btn = document.createElement('button');
     btn.textContent = label; btn.dataset.a = a; btn.dataset.z = z;
-    btn.onclick = () => setLoop(a, z);
+    btn.onclick = () => { setLoop(a, z); revealLoop(); };
     if (!all && v.review.slice(a, z + 1).some(Boolean)) { btn.classList.add('warn'); btn.title = '这段有待核对的小节'; }
     host.appendChild(btn);
   };
@@ -579,9 +628,15 @@ function renderSections(v) {
   v.sections.forEach(g => add(g.a === g.z ? `${g.a + 1}` : `${g.a + 1}–${g.z + 1}`, g.a, g.z));
   paintLoop();
 }
-function paintLoop() {
-  const { a, b } = get('play');
-  $('loopLabel').textContent = loopLabel(a, b, nBars());
+/** 控制条上的起止小节（输入框）和段落按钮；preview：拖选过程中先显示拖到的范围 */
+function paintLoop(preview) {
+  const n = nBars(), { a, b } = preview || get('play');
+  for (const [id, v] of [['loopA', a], ['loopB', b]]) {
+    const el = $(id);
+    el.disabled = !n;
+    if (document.activeElement !== el) el.value = n ? v + 1 : '';
+  }
+  if (preview) return;
   $('secBtns').querySelectorAll('button').forEach(x => {
     const on_ = +x.dataset.a === a && +x.dataset.z === b;
     x.classList.toggle('on', on_);
@@ -615,6 +670,40 @@ function bindInputs() {
   bind('follow', 'follow', 'check');
 }
 
+// 起止小节输入框：回车或离开输入框时生效，Esc 放弃，↑↓ 加减一小节（马上生效）。
+// 起点改到终点后面时终点跟过去（反过来也一样），这样先改起点再改终点不会被对调
+function bindLoopInput(id, isStart) {
+  const el = $(id);
+  const apply = bi => {
+    const { a, b } = get('play');
+    const na = isStart ? bi : Math.min(a, bi), nb = isStart ? Math.max(b, bi) : bi;
+    if (na !== a || nb !== b) { setLoop(na, nb); revealLoop(); }
+  };
+  // 点进去就全选，直接打新的数（鼠标点进来时松开鼠标会把全选取消掉：这一次的 mouseup 不让它动）
+  let justFocused = false;
+  el.addEventListener('focus', () => { el.select(); justFocused = true; });
+  el.addEventListener('mouseup', e => { if (justFocused) e.preventDefault(); justFocused = false; });
+  el.addEventListener('blur', () => { justFocused = false; });
+  el.addEventListener('change', () => {
+    const bi = parseBarInput(el.value, nBars());
+    if (bi === null) { if (el.value.trim()) UI.toast(`请输入 1–${nBars()} 之间的小节号`, 'info'); } // 清空了就是不改
+    else apply(bi);
+    el.value = get('play')[isStart ? 'a' : 'b'] + 1; // 夹到范围里、或改回原来的值
+  });
+  el.addEventListener('keydown', e => {
+    if (e.isComposing) return;
+    if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); el.value = get('play')[isStart ? 'a' : 'b'] + 1; el.blur(); }
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const cur = get('play')[isStart ? 'a' : 'b'], bi = Math.max(0, Math.min(nBars() - 1, cur + (e.key === 'ArrowUp' ? 1 : -1)));
+      apply(bi);
+      el.value = get('play')[isStart ? 'a' : 'b'] + 1;
+      el.select();
+    }
+  });
+}
+
 export function initPlayer() {
   set('play', { ...get('play'), ...SONG_DEFAULTS, ...parsePrefs(stored(PREFS_KEY)), timbre: TIMBRES[stored('tt.timbre')] ? stored('tt.timbre') : 'steel' });
   on(Object.keys(PREF_DEFAULTS).map(k => 'play.' + k), () => remember(PREFS_KEY, serializePrefs(get('play'))));
@@ -641,7 +730,7 @@ export function initPlayer() {
     if (!now && was) setStatus('已暂停', '空格继续 · ←→ 换段 · ↑↓ 调速');
   });
   on('play.ready', r => { if (!r) return; applyAudio(); if (!playing() && !get('rhythm.on')) setStatus('已停止', IDLE_HINT); });
-  on(['play.a', 'play.b'], paintLoop);
+  on(['play.a', 'play.b'], () => paintLoop());
   on('view', renderSections);
   on('view.source', loadSource);
   on('ui.renderGen', markReviewBars);
@@ -671,6 +760,8 @@ export function initPlayer() {
   $('bpmDown').onclick = () => setTempo(get('play.bpm') - 4);
   $('bpmUp').onclick = () => setTempo(get('play.bpm') + 4);
   $('loopPrev').onclick = () => stepSection(-1);
+  bindLoopInput('loopA', true); bindLoopInput('loopB', false);
+  document.addEventListener('mouseup', endDrag); // 在谱面外面松开（alphaTab 收不到）也定下范围
   $('loopNext').onclick = () => stepSection(1);
   $('followBtn').onclick = scrollToCursor;
   let followTick = 0;

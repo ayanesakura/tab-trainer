@@ -161,6 +161,24 @@ class Browser:
                 )
             )
 
+    def type_text(self, text: str):
+        """往有焦点的输入框里打字（和真的键盘输入一样会触发 input / change）。"""
+        self._run(self._send("Input.insertText", text=text))
+
+    def mouse(self, kind: str, x: float, y: float, buttons: int = 1):
+        """鼠标事件（kind：mousePressed / mouseMoved / mouseReleased），坐标是视口里的 CSS 像素，左键。"""
+        self._run(
+            self._send(
+                "Input.dispatchMouseEvent",
+                type=kind,
+                x=x,
+                y=y,
+                button="left",
+                buttons=0 if kind == "mouseReleased" else buttons,
+                clickCount=1 if kind != "mouseMoved" else 0,
+            )
+        )
+
     def screenshot(self, path: str):
         r = self._run(self._send("Page.captureScreenshot", format="png"))
         Path(path).write_bytes(base64.b64decode(r["data"]))

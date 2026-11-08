@@ -120,6 +120,12 @@ export function stepSection({ a, b, n, shown, secs }, dir) {
 export const beatNumber = (tick, den = 4) => Math.floor(tick / (TICKS * 4 / (den || 4)) + 1e-6) + 1;
 
 export const rangeLabel = (a, b, n) => (!n ? '—' : a === 0 && b === n - 1 && n > 1 ? '全曲' : a === b ? `第 ${a + 1} 小节` : `第 ${a + 1}–${b + 1} 小节`);
+/** 输入框里的小节号（从 1 数）→ 小节下标，夹到 0..n-1；不是数字返回 null。全角数字也认 */
+export function parseBarInput(text, n) {
+  const t = String(text ?? '').replace(/[０-９]/g, d => String.fromCharCode(d.charCodeAt(0) - 0xFEE0)).trim();
+  if (!/^\d+$/.test(t) || !n) return null;
+  return Math.max(0, Math.min(n - 1, parseInt(t, 10) - 1));
+}
 export const loopLabel = (a, b, n) => (!n ? '—' : a === b ? `第 ${a + 1} 小节` : `第 ${a + 1}–${b + 1} 小节`);
 
 const mins = s => (s < 60 ? '不到 1 分钟' : `${Math.round(s / 60)} 分钟`);

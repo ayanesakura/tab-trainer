@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, equal } from '../../app/static/js/trainer/store.js';
 import {
-  deriveView, sectionsOf, stepSection, practiceText, resumeInfo, rangeLabel, loopLabel, barTags, planRange,
+  deriveView, sectionsOf, stepSection, practiceText, resumeInfo, rangeLabel, loopLabel, parseBarInput, barTags, planRange,
   songSubtitle, explainState, needsReview, warnText, showNote, tuningInput, nameToMidi, noteMidi, beatNumber, eventsText,
 } from '../../app/static/js/trainer/view.js';
 import { refineConfirm, barRefineHint, rowRefineHint, refineTime, refineScopeLabel } from '../../app/static/js/lib/refine.js';
@@ -97,6 +97,16 @@ test('practice line, resume and labels', () => {
   assert.equal(rangeLabel(0, 3, 4), '全曲');
   assert.equal(loopLabel(0, 3, 4), '第 1–4 小节');
   assert.equal(loopLabel(2, 2, 4), '第 3 小节');
+});
+
+test('parseBarInput: typed bar numbers (from 1) become clamped indexes', () => {
+  assert.equal(parseBarInput('5', 86), 4);
+  assert.equal(parseBarInput(' 12 ', 86), 11);
+  assert.equal(parseBarInput('１２', 86), 11); // 中文输入法打出的全角数字
+  assert.equal(parseBarInput('0', 86), 0);
+  assert.equal(parseBarInput('200', 86), 85);
+  for (const bad of ['', 'abc', '5-8', '-3', '2.5']) assert.equal(parseBarInput(bad, 86), null);
+  assert.equal(parseBarInput('3', 0), null);
 });
 
 test('tags, plan ranges, subtitle, explain state, warnings, note names', () => {

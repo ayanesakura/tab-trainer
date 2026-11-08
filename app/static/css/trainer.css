@@ -45,6 +45,14 @@
 .bpm b { color: var(--fg); font-size: var(--fs-3); font-variant-numeric: tabular-nums; }
 #bpm { width: 120px; }
 .loop-label { font-weight: 500; font-variant-numeric: tabular-nums; min-width: 92px; text-align: center; white-space: nowrap; }
+/* 起止小节：浅底的小输入框，一看就知道能点进去改 */
+.loop-num { width: 3.2ch; padding: 1px 3px; margin: 0 2px; border: 1px solid transparent; border-radius: var(--r-sm); background: var(--pill); color: inherit;
+  font: inherit; font-variant-numeric: tabular-nums; text-align: center; box-sizing: content-box; cursor: text; }
+.loop-num:hover { background: var(--pill-hover); }
+.loop-num:focus { border-color: var(--accent); background: var(--card); outline: none; }
+.loop-num:disabled { background: transparent; cursor: default; }
+/* 在谱面上拖选小节时不要顺带选中文字 */
+#score.dragging, #score.dragging * { user-select: none; -webkit-user-select: none; cursor: col-resize; }
 #moreBtn.flag::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 2px; }
 .sections { padding-top: var(--sp-2); border-top: 1px solid var(--line-2); }
 .chips button.warn::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }

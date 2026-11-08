@@ -162,3 +162,79 @@ def test_typed_negative_speed_up_step_is_clamped(trainer):
     assert b.js("tt.state.bpm") == 200
     b.js("tt.set('play.auto', false); tt.set('play.autoStep', 4); true")
     assert not b.errors, b.errors
+
+
+def _range(b):
+    return b.js("['loopA', 'loopB'].map(id => document.getElementById(id).value).join('–')")
+
+
+def test_typing_the_loop_range(trainer):
+    """控制条上的起止小节可以直接输入：回车生效，起点改到终点后面时终点跟过去，乱打的改回原值，↑↓ 加减一小节。"""
+    b = trainer()
+    b.wait_for("tt.view && tt.view.bars.length === 6 && !document.getElementById('loopA').disabled")
+
+    def type_(el_id, text):
+        b.js(
+            f"(() => {{ const el = document.getElementById('{el_id}'); el.focus(); el.select(); return true; }})()"
+        )
+        b.type_text(text)
+        b.key("Enter", vk=13)
+        return b.js("[tt.state.a, tt.state.b]")
+
+    assert type_("loopA", "3") == [2, 5]
+    assert type_("loopB", "4") == [2, 3]
+    assert type_("loopA", "5") == [4, 4]  # 终点跟到起点
+    assert type_("loopB", "2") == [1, 1]  # 起点跟到终点
+    assert type_("loopB", "99") == [1, 5]  # 夹到最后一小节
+    assert type_("loopA", "abc") == [1, 5] and _range(b) == "2–6"  # 不是数字：不改，输入框改回去
+    assert b.js("document.activeElement.id") != "loopA"  # 回车后离开输入框，空格等快捷键照常
+    # 用鼠标点进输入框：原来的数被全选，打的字替换掉它（不是接在后面变成 "23"）
+    r = b.js(
+        "(() => { const r = document.getElementById('loopA').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()"
+    )
+    b.mouse("mousePressed", *r)
+    b.mouse("mouseReleased", *r)
+    b.type_text("3")
+    b.key("Enter", vk=13)
+    assert b.js("[tt.state.a, tt.state.b]") == [2, 5]
+    bpm = b.js("tt.state.bpm")
+    b.js("document.getElementById('loopB').focus(); true")
+    b.key("ArrowDown", vk=40)
+    assert (
+        b.js("[tt.state.a, tt.state.b]") == [2, 4] and b.js("tt.state.bpm") == bpm
+    )  # ↑↓ 在输入框里改小节，不改速度
+    assert not b.errors, b.errors
+
+
+def test_dragging_across_bars_on_the_score_selects_a_loop(trainer):
+    """在谱面上按住鼠标拖过几个小节：拖的时候控制条显示拖到的范围，松开后循环这几个小节；往回拖也行。"""
+    b = trainer()
+    b.wait_for("!!(tt.api.tracks && tt.api.boundsLookup) && tt.view && tt.view.bars.length === 6")
+
+    def at(i):  # 第 i 个小节（下标）在视口里的中心
+        return b.js(f"""(() => {{
+          const r = tt.api.boundsLookup.findMasterBarByIndex({i}).realBounds;
+          const s = document.querySelector('#score .at-surface').getBoundingClientRect();
+          return [s.left + r.x + r.w / 2, s.top + r.y + r.h / 2]; }})()""")
+
+    b.js("scrollTo(0, 0); true")
+    p1, p2, p3 = at(1), at(2), at(3)
+    b.mouse("mousePressed", *p1)
+    b.mouse("mouseMoved", *p3, buttons=1)
+    assert _range(b) == "2–4" and b.js("[tt.state.a, tt.state.b]") == [0, 5]  # 还没松开：只是预览
+    b.mouse("mouseMoved", *p2, buttons=1)
+    assert _range(b) == "2–3"
+    b.mouse("mouseReleased", *p2)
+    b.wait_for("tt.state.a === 1 && tt.state.b === 2")
+    # 往回拖：从第 4 小节拖到第 1 小节
+    p0 = at(0)
+    b.mouse("mousePressed", *p3)
+    b.mouse("mouseMoved", *p0, buttons=1)
+    b.mouse("mouseReleased", *p0)
+    b.wait_for("tt.state.a === 0 && tt.state.b === 3")
+    # 只点一下（没拖到别的小节）：不改循环范围
+    b.mouse("mousePressed", *p1)
+    b.mouse("mouseReleased", *p1)
+    time.sleep(0.2)
+    assert b.js("[tt.state.a, tt.state.b]") == [0, 3]
+    assert not b.errors, b.errors

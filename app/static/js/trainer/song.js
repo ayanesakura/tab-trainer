@@ -9,7 +9,7 @@ import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.
 import { SOURCES } from '../vocab.js';
 import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
-import { alphaTab, setLoop, setTempo, setPlayerHooks } from './player.js';
+import { alphaTab, setLoop, setTempo, setPlayerHooks, revealLoop } from './player.js';
 import { notice } from './notices.js';
 import { refineConfirm, NO_REFINE, refineScopeLabel } from '../lib/refine.js';
 
@@ -202,7 +202,7 @@ function renderResume(s) {
   resumeDone = true;
   const r = resumeInfo(s);
   if (!r) return;
-  const go = () => { setLoop(r.a, r.z); if (r.bpm) setTempo(r.bpm); notice('resume', null); };
+  const go = () => { setLoop(r.a, r.z); revealLoop(); if (r.bpm) setTempo(r.bpm); notice('resume', null); };
   if (new URLSearchParams(location.search).get('resume') === '1') {
     // 从曲库的“接着练”进来：直接接着练，地址里去掉 resume（刷新页面不会再跳）
     const u = new URL(location.href); u.searchParams.delete('resume'); history.replaceState(null, '', u);
@@ -238,7 +238,7 @@ function renderPlan() {
   }).join('');
   $('plan').innerHTML = staleNote + (p.overview ? `<div class="card pad plan-overview">${esc(p.overview)}</div>` : '') + `<div class="list">${steps}</div>`;
   if (p.stale) $('planRefresh').onclick = e => explain(e.currentTarget);
-  $('plan').querySelectorAll('button[data-a]').forEach(b => b.onclick = () => { setLoop(+b.dataset.a, +b.dataset.z); location.hash = '#practice'; });
+  $('plan').querySelectorAll('button[data-a]').forEach(b => b.onclick = () => { setLoop(+b.dataset.a, +b.dataset.z); location.hash = '#practice'; requestAnimationFrame(revealLoop); });
 }
 
 // ---------------------------------------------------------------------
