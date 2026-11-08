@@ -202,8 +202,15 @@ async function loadSongs() {
 }
 // 有曲子在后台忙（识别、讲解）就每 2.5 秒刷新；做完操作后 songsPoll.now() 立刻刷新
 const songsPoll = api.poll(loadSongs, { interval: 2500, while: songs => songs.some(s => s.busy) });
+// 没有曲子在忙时轮询就停了：从练习页按“后退”回来（Chrome 从往返缓存原样恢复页面）、
+// 在别的标签页练过再切回来，都立刻刷新一次（接着练的位置、在练习页改的曲名）
+addEventListener('pageshow', e => { if (e.persisted) songsPoll.now(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) songsPoll.now(); });
 
 $('songs').addEventListener('click', e => {
+  // 标签先处理：选择模式里点标签也是筛选（勾选会保留），不是勾选这一行
+  const tag = e.target.closest('.song-row [data-tag]');
+  if (tag) { e.stopPropagation(); lib.tag = tag.dataset.tag; renderSongs(); return; }
   if (selecting) {
     const row = e.target.closest('.row[data-pick="1"]');
     if (row) {
@@ -214,8 +221,6 @@ $('songs').addEventListener('click', e => {
     }
     return;
   }
-  const tag = e.target.closest('.song-row [data-tag]');
-  if (tag) { e.stopPropagation(); lib.tag = tag.dataset.tag; renderSongs(); return; }
   const more = e.target.closest('[data-more]');
   if (more) { e.stopPropagation(); openMore(more); return; }
   const retry = e.target.closest('[data-retry]');

@@ -409,6 +409,53 @@ def test_retry_failed_rows_from_library_and_practice_page(server, browser, train
         store.update(sid, lambda s: s.update(systems=raw["systems"]))
 
 
+def _put_json(server, path, body):
+    return _api(server, path, "PUT", json.dumps(body).encode(), {"Content-Type": "application/json"})
+
+
+def test_library_refreshes_after_back_and_on_return(server, browser):
+    # 没有曲子在忙时轮询是停的：从练习页“后退”回来（往返缓存恢复）、从别的标签页切回来，都要刷新
+    gp = server["gp"]
+    old = json.loads(_api(server, f"/api/songs/{gp}"))["title"]
+    title = f"document.querySelector('.song-row[data-id=\"{gp}\"] .title').textContent"
+    try:
+        b = browser
+        b.open(server["base"] + "/")
+        b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{gp}\"]')")
+        b.js("window.__same = 1; true")
+        b.js(f"location.href = '/trainer?id={gp}'; true")
+        b.wait_for("location.pathname === '/trainer' && document.readyState === 'complete'")
+        _put_json(server, f"/api/songs/{gp}/meta", {"title": "E2E 后退后的新名字"})  # 相当于在练习页里改了名
+        b.js("history.back(); true")
+        b.wait_for("location.pathname === '/' && document.readyState === 'complete'")
+        assert b.js("window.__same") == 1  # 确实是从往返缓存恢复的（不是重新加载）
+        b.wait_for(f"{title} === 'E2E 后退后的新名字'", timeout=5)
+        # 切到别的标签页再回来（页面没换，只有 visibilitychange）
+        _put_json(server, f"/api/songs/{gp}/meta", {"title": "E2E 切回来的新名字"})
+        b.js("document.dispatchEvent(new Event('visibilitychange')); true")
+        b.wait_for(f"{title} === 'E2E 切回来的新名字'", timeout=5)
+        assert not b.errors, b.errors
+    finally:
+        _put_json(server, f"/api/songs/{gp}/meta", {"title": old})
+
+
+def test_tag_click_filters_in_select_mode(server, browser):
+    img = server["image"]
+    _put_json(server, f"/api/songs/{img}/tags", {"tags": ["e2e-sel"]})
+    try:
+        b = browser
+        b.open(server["base"] + "/")
+        b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{img}\"] [data-tag]')")
+        b.js("document.getElementById('selectBtn').click(); true")
+        b.js(f'document.querySelector(\'.song-row[data-id="{img}"] [data-tag="e2e-sel"]\').click(); true')
+        assert b.js("[...document.querySelectorAll('.song-row')].map(r => r.dataset.id)") == [img]
+        assert b.js("document.getElementById('selectCount').textContent") == "已选 0 首"  # 点标签不勾选
+        b.js("document.getElementById('selectCancel').click(); true")
+        assert not b.errors, b.errors
+    finally:
+        _put_json(server, f"/api/songs/{img}/tags", {"tags": []})
+
+
 def test_toast_shows_above_modal_dialog(server, browser):
     b = browser
     b.open(server["base"] + "/")
