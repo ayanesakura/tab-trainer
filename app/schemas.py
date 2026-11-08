@@ -106,6 +106,15 @@ class ReparseIn(_In):
     hint: str = Field("", max_length=1000)
 
 
+class RefineIn(_In):
+    """精修的范围：都不给 = 整首；bars = 这几个小节（小节卡片上的“精修这个小节”）；system = 这一行（从 0 数）。
+    hint：用户写的“哪里不对”，核对每个小节时告诉模型。"""
+
+    bars: list[str] | None = Field(None, max_length=2000)
+    system: int | None = Field(None, ge=0)
+    hint: str = Field("", max_length=1000)
+
+
 def page_order(raw: str) -> list[str]:
     """补页 / 调页序的表单字段 order：JSON 数组，每项是已有页的文件名或 "new:k"（multipart 里没法直接用 JSON 请求体）。"""
     import json
@@ -142,6 +151,7 @@ FIELD_NAMES = {
     "capo": "变调夹",
     "time_signature": "拍号",
     "bars": "小节",
+    "system": "行",
     "track": "音轨",
 }
 

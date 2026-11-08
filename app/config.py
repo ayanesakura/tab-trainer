@@ -105,7 +105,7 @@ REFINE_MODES = ("manual", "auto")
 
 
 def refine_mode(c: dict | None = None) -> str:
-    """精修（逐小节放大核对，见 app/refine.py）：manual 只在用户点“精修”时做；auto 整首识别成功后自动精修整首，
+    """精修（逐小节放大核对，见 app/refine.py）：manual 只在用户点“精修整首”（或某个小节 / 某一行）时做；auto 整首识别成功后自动精修整首，
     重试失败的行、补页、单行重新识别后只精修刚识别出的小节。"""
     v = (store.load_config() if c is None else c).get("refine")
     return v if v in REFINE_MODES else "manual"

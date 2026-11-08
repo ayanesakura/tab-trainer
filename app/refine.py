@@ -4,14 +4,19 @@
 发给模型，让它逐拍对照；它说改了、而且改出来的音和原来不一样，就写回。用最高精细度（llm.VERIFY_EFFORT）：
 评测里错的 25 个改对了 24 个、抽查对的 208 个一个没改坏，约 $0.2 / 小节（high 档：726 个小节里错的 25 个改对 16 个）。
 
-- 核对哪些小节（pick）：只有图片 / PDF 曲子；跳过用户手改过的、确认过没问题的、识别失败按休止占位的、所在行正在识别的，
-  以及整行当一个小节的（没检测到小节线，裁不出一个小节）。核对过、音没再变的（refine_key）不再核对；
-  用户点“精修”时全都核对过了就整首重来（自动精修不重来）。
+- 范围：整首（曲库“…”菜单和练习页的“精修整首”、自动精修），或者用户在小节卡片上点的某个小节 / 某一行
+  （POST /api/songs/{id}/refine 带 {"bars": [...]} 或 {"system": 行号}，可以带 hint：用户写的“哪里不对”，告诉模型）。
+- 核对哪些小节：只有图片 / PDF 曲子；跳过识别失败按休止占位的、所在行正在识别的，以及整行当一个小节的
+  （没检测到小节线，裁不出一个小节，见 refinable）。整首（pick）：再跳过用户手改过的、确认过没问题的；核对过、
+  音没再变的（refine_key）不再核对，用户点“精修整首”时全都核对过了就整首重来（自动精修不重来）。
+  点了某个小节 / 某一行（pick_scope）：范围里的都核对，手改过、确认过、核对过的也核对（用户明确要求的，改了能撤销）。
 - 确认（CONFIRM_CHANGES）：模型提出改动时再独立核对一两遍，有两遍提出一模一样的改动才改，否则不改、标成待核对（见 verify）。
 - 写回：每个小节核对完马上写回，但只在这个小节还在、rev 没变（期间用户没改过）、仍然该核对时才写，否则悄悄跳过。
   改了的小节：提示 / 问答 / 练习建议按“音变了”处理（staleness.refine_bar），改之前的内容记在 bar["refine"]，可以撤销（undo）。
-- 任务：activity kind = refine，期间照常能练、能改；进度 {stage: 精修, done, total}；全局名额和识别共用（recognize.run_queued），
-  能取消；费用记到曲子上（jobs.UsageMeter）。整首精修完成时记下 song["refined"] = {at, checked, changed}。
+- 任务：activity kind = refine（scope = song / bars / row，row = 行号，bars = 范围里的小节 id，pending = 还没核对完的），
+  每首曲子同一时间只有一个任务（再点：423，说清楚正在做什么，见 busy_text）；期间照常能练、能改；进度 {stage: 精修, done, total}；
+  全局名额和识别共用（recognize.run_queued），能取消；费用记到曲子上（jobs.UsageMeter）。
+  整首精修完成时记下 song["refined"] = {at, checked, changed}（只精修了一部分不动它）；结束提示见 _end_notice。
 - 自动精修（设置里 refine = auto，见 config.refine_mode）：识别结束后在同一个任务里接着精修（refine_after）。
 """
 
@@ -45,36 +50,113 @@ CONFIRM_CHANGES = True
 # ---------------------------------------------------------------------------
 # 核对哪些小节
 # ---------------------------------------------------------------------------
-def eligible(s: dict, bar: dict) -> bool:
-    """这个小节现在能不能精修（见模块说明）。"""
-    if is_score(s) or bar.get("edited") or bar.get("placeholder") or views.reviewed(bar):
+def refinable(s: dict, bar: dict) -> bool:
+    """这个小节能不能单独裁出来核对（不管手改过、确认过没有）：图片 / PDF 曲子、不是识别失败按休止占位的、
+    所在行检测到了小节线（整行一个小节时裁不出来）。小节卡片上的“精修这个小节 / 这一行”按它显示。"""
+    if is_score(s) or bar.get("placeholder"):
         return False
     si, systems = bar.get("system"), s.get("systems") or []
-    if not isinstance(si, int) or not 0 <= si < len(systems) or state.row_parsing(s, si):
+    if not isinstance(si, int) or not 0 <= si < len(systems):
         return False
     return bool(systems[si].get("spans")) and bool(bar.get("region")) and bar.get("page") is not None
 
 
+def eligible(s: dict, bar: dict, explicit: bool = False) -> bool:
+    """这个小节现在能不能精修（见模块说明）。explicit：用户点了这个小节 / 这一行，手改过、确认过的也核对。"""
+    if not refinable(s, bar) or state.row_parsing(s, bar.get("system")):
+        return False
+    return explicit or not (bar.get("edited") or views.reviewed(bar))
+
+
 def pick(s: dict, only: set[str] | None = None, recheck: bool = False) -> list[str]:
-    """要核对的小节 id（按顺序）：能精修、还没核对过（或核对之后音又变了）的。only：只在这些小节里挑。
-    recheck（用户点了“精修”）：全都核对过了的话就整首重新核对一遍；自动精修不重来。"""
+    """整首要核对的小节 id（按顺序）：能精修、还没核对过（或核对之后音又变了）的。only：只在这些小节里挑。
+    recheck（用户点了“精修整首”）：全都核对过了的话就整首重新核对一遍；自动精修不重来。"""
     ok = [b for b in s.get("bars") or [] if eligible(s, b) and (only is None or b.get("id") in only)]
     fresh = [b for b in ok if b.get("refine_key") != notes_key(b)]
     return [b["id"] for b in (ok if recheck and not fresh else fresh)]
 
 
-def estimate(s: dict) -> dict | None:
-    """现在点“精修”的范围和预估：{bars, cost_usd, minutes}。GP / MusicXML 曲子是 None。
-    费用 = 小节数 × COST_PER_BAR；时间 = 按 row_concurrency 个小节并行、每次约 SECONDS_PER_BAR 秒。"""
-    if is_score(s):
-        return None
-    n = len(pick(s, recheck=True))
+def scope_ids(s: dict, bars: list[str] | None = None, system: int | None = None) -> list[str] | None:
+    """请求里的范围 → 范围里的小节 id（按曲子里的顺序）；都没给 = 整首（None）。小节 / 行不存在：Invalid。"""
+    if bars is not None and system is not None:
+        raise Invalid("小节和行只能指定一个")
+    if bars is not None:
+        if not bars:
+            raise Invalid("没有指定要精修的小节")
+        known = {b.get("id") for b in s.get("bars") or []}
+        if unknown := [x for x in bars if x not in known]:
+            raise Invalid(f"小节不存在：{unknown[0]}（可能已经重新识别过，刷新后再试）")
+        want = set(bars)
+        return [b["id"] for b in s["bars"] if b["id"] in want]
+    if system is not None:
+        if not 0 <= system < len(s.get("systems") or []):
+            raise Invalid(f"第 {system + 1} 行不存在")
+        return [b["id"] for b in s.get("bars") or [] if b.get("system") == system]
+    return None
+
+
+def pick_scope(s: dict, ids: list[str]) -> list[str]:
+    """用户点的小节 / 行里要核对的：能裁出来核对的都核对（手改过、确认过、核对过的也核对）。"""
+    want = set(ids)
+    return [b["id"] for b in s.get("bars") or [] if b.get("id") in want and eligible(s, b, explicit=True)]
+
+
+def _estimate(n: int) -> dict:
+    """核对 n 个小节的预估：费用 = n × COST_PER_BAR；时间 = 按 row_concurrency 个小节并行、每次约 SECONDS_PER_BAR 秒
+    （seconds；minutes 向上取整，至少 1 分钟）。"""
     rounds = math.ceil(n / max(1, settings.row_concurrency))
+    seconds = rounds * SECONDS_PER_BAR if n else 0
     return {
         "bars": n,
         "cost_usd": round(n * COST_PER_BAR, 2),
-        "minutes": max(1, math.ceil(rounds * SECONDS_PER_BAR / 60)) if n else 0,
+        "minutes": max(1, math.ceil(seconds / 60)) if n else 0,
+        "seconds": seconds,
     }
+
+
+def estimate(s: dict) -> dict | None:
+    """现在点“精修整首”的范围和预估：{bars, cost_usd, minutes, seconds}。GP / MusicXML 曲子是 None。"""
+    if is_score(s):
+        return None
+    return _estimate(len(pick(s, recheck=True)))
+
+
+def scope_estimates(s: dict) -> dict | None:
+    """小节卡片上“精修这个小节 / 这一行”的预估（和整首的算法一样）：{bar: 一个小节的, rows: [每一行的；裁不出小节的行是 None]}。
+    GP / MusicXML 曲子是 None。"""
+    if is_score(s):
+        return None
+    counts = [0] * len(s.get("systems") or [])
+    for b in s.get("bars") or []:
+        if refinable(s, b):
+            counts[b["system"]] += 1
+    return {"bar": _estimate(1), "rows": [_estimate(n) if n else None for n in counts]}
+
+
+def scope_label(s: dict, a: dict | None) -> str:
+    """精修任务（activity）的范围怎么说：整首 / 第 12 小节 / 第 3 行（4 个小节） / 5 个小节。"""
+    a = a or {}
+    ids = a.get("bars") or []
+    if a.get("scope") == "row" and isinstance(a.get("row"), int):
+        return f"第 {a['row'] + 1} 行（{len(ids)} 个小节）"
+    if a.get("scope") == "bars" and len(ids) == 1:
+        n = next((i for i, b in enumerate(s.get("bars") or []) if b.get("id") == ids[0]), None)
+        return f"第 {n + 1} 小节" if n is not None else "1 个小节"
+    if a.get("scope") == "bars":
+        return f"{len(ids)} 个小节"
+    return "整首"
+
+
+def busy_text(s: dict) -> str:
+    """已经有任务在跑时再点精修（423）的说明。"""
+    a = s.get("activity") or {}
+    if a.get("kind") == "refine":
+        return f"正在精修{scope_label(s, a)}，完成后再试"
+    if state.recognizing(s):
+        return "这首曲子正在识别中，完成后再精修"
+    if a.get("kind") == "explain":
+        return "正在生成讲解，完成后再精修"
+    return "这首曲子正在处理中，完成后再精修"
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +181,7 @@ def verify(
     previous: list[dict] | None,
     time_signature: list[int] | None = None,
     cancel: threading.Event | None = None,
+    hint: str = "",
 ) -> dict:
     """核对一个小节。返回 {out: 模型的回答, events: 要改成的事件（不改是 None）, status, note}：
     - status = unchanged：模型说没问题（或者改出来的格式不对、和原来一样）；
@@ -106,11 +189,11 @@ def verify(
     - confirmed：再独立核对一遍（还是对着原来的读法），提出了一模一样的改动（第二遍不一样就核对第三遍，三遍里有两遍一样才算）；
     - rejected：几遍提出的改动对不上，不改；note 是要加到这个小节“不确定”说明里的话，提醒用户对照原谱。
     改动很少（约 1/20 的小节），确认多花的钱不多，能挡掉偶尔的改坏（评测：模糊的截图上把倚音当成了十六分音符）。
-    cancel：确认的几遍之间点了取消就不再核对（Cancelled）。"""
+    cancel：确认的几遍之间点了取消就不再核对（Cancelled）。hint：用户写的“哪里不对”（每一遍都告诉模型）。"""
     img, span = crop(page, sysinfo, bar["region"])
 
     def propose() -> tuple[dict, list[dict] | None]:
-        out = claude.verify_bar(img, meta, span, bar["events"], previous, time_signature)
+        out = claude.verify_bar(img, meta, span, bar["events"], previous, time_signature, hint=hint)
         if not out.get("changed"):
             return out, None
         try:
@@ -154,25 +237,42 @@ def _agreed(runs: list[tuple[dict, list[dict] | None]]) -> tuple[dict, list[dict
 # ---------------------------------------------------------------------------
 # 任务
 # ---------------------------------------------------------------------------
-def start_refine(sid: str) -> None:
-    """用户点了“精修”：在请求里就登记任务（已有任务在跑：423），在后台核对。"""
+def start_refine(sid: str, bars: list[str] | None = None, system: int | None = None, hint: str = "") -> None:
+    """用户点了“精修整首”（bars、system 都没给），或小节卡片上的“精修这个小节”（bars）/“精修这一行”（system）：
+    在请求里就登记任务（已有任务在跑：423，说清楚在做什么），在后台核对。hint：用户写的“哪里不对”，核对时告诉模型。"""
     s = store.load(sid)
     if is_score(s):
         raise Invalid("Guitar Pro / MusicXML 曲子的小节来自原文件，不需要精修")
     if not s.get("bars"):
         raise Invalid("还没有识别出的小节，识别完成后再精修")
+    scope = scope_ids(s, bars, system)
     config.check_llm_ready()
+    kind = "song" if scope is None else "row" if system is not None else "bars"
     ids: list[str] = []
 
     def begin(x):
-        if state.recognizing(x):
-            raise Busy("这首曲子正在识别中，完成后再精修")
-        ids[:] = pick(x, recheck=True)
-        if not ids:
-            raise Invalid("没有可以精修的小节（手改过、确认过没问题的小节不再核对）")
-        _begin(x, len(ids))
+        if x.get("activity"):
+            raise Busy(busy_text(x))
+        if scope is None:
+            ids[:] = pick(x, recheck=True)
+            if not ids:
+                raise Invalid("没有可以精修的小节（手改过、确认过没问题的小节不再核对）")
+        else:
+            ids[:] = pick_scope(x, scope)
+            if not ids:
+                raise Invalid(
+                    "没有可以精修的小节（识别失败按休止占位的小节、没检测到小节线的行裁不出单个小节）"
+                )
+        _begin(x, ids, kind, system)
 
-    jobs.start(sid, "这首曲子正在处理中，完成后再精修", begin, lambda cancel: _run(sid, ids, cancel, True))
+    jobs.start(
+        sid,
+        busy_text(s),
+        begin,
+        lambda cancel: _run(
+            sid, ids, cancel, whole=scope is None, explicit=scope is not None, hint=hint.strip()
+        ),
+    )
 
 
 def refine_after(sid: str, cancel: threading.Event, only: set[str] | None = None) -> None:
@@ -185,47 +285,43 @@ def refine_after(sid: str, cancel: threading.Event, only: set[str] | None = None
     def begin(x):
         ids[:] = pick(x, only)
         if ids:
-            _begin(x, len(ids))
+            _begin(x, ids, "song" if only is None else "bars")
 
     store.update(sid, begin)
     if ids:
-        _run(sid, ids, cancel, only is None)
+        _run(sid, ids, cancel, whole=only is None)
 
 
-def _begin(s: dict, n: int) -> None:
-    state.begin(s, "refine", progress={"stage": "精修", "done": 0, "total": n})
+def _begin(s: dict, ids: list[str], scope: str, row: int | None = None) -> None:
+    state.begin(s, "refine", progress={"stage": "精修", "done": 0, "total": len(ids)})
+    s["activity"].update(scope=scope, row=row, bars=list(ids), pending=list(ids))
 
 
-def _run(sid: str, ids: list[str], cancel: threading.Event, whole: bool) -> None:
-    """跑完一次精修并收尾（结束提示、整首的结果、费用）。错误都在这里处理，不往外抛。"""
+def _run(
+    sid: str, ids: list[str], cancel: threading.Event, whole: bool, explicit: bool = False, hint: str = ""
+) -> None:
+    """跑完一次精修并收尾（结束提示、整首的结果、费用）。错误都在这里处理，不往外抛。
+    whole：整首（做完记下 song["refined"]；某个小节、某一行、自动精修刚识别出的几行不动它）；
+    explicit：用户点的小节 / 行（手改过、确认过的也写回）；hint：用户写的“哪里不对”。"""
     meter = jobs.UsageMeter(None)
     tally = {"checked": 0, "changed": 0, "doubtful": 0, "failed": 0, "error": ""}
-    done = False
+    done = cancelled = False
+    error = ""
     try:
         meter = jobs.UsageMeter(config.new_llm())
-        refine_bars(sid, ids, cancel, meter, tally)
+        refine_bars(sid, ids, cancel, meter, tally, explicit=explicit, hint=hint)
         done = True
-        msg = f"精修完成：检查了 {tally['checked']} 个小节，改了 {tally['changed']} 个"
-        if tally["changed"]:
-            msg += "（小节卡片上能看到改了什么，也能撤销）"
-        if tally["doubtful"]:
-            msg += f"；{tally['doubtful']} 个小节几次核对的结果不一致，没有改，标成了待核对"
-        if tally["failed"]:
-            msg += f"；{tally['failed']} 个小节没核对成（{tally['error']}），可以再点“精修”重试"
-        notice = ("warn" if tally["failed"] else "info", msg + "。")
     except Cancelled:
-        notice = (
-            "warn",
-            f"精修已取消：检查了 {tally['checked']} 个小节，改了 {tally['changed']} 个，改好的会保留。",
-        )
+        cancelled = True
     except Exception as e:
         rid = request_id_of(e)
         log.exception("request_id=%s song=%s refine failed", rid, sid)
-        notice = ("error", "精修失败：" + friendly(e))
+        error = friendly(e)
 
     def end(s):
         if done and whole:
             s["refined"] = {"at": now(), "checked": tally["checked"], "changed": tally["changed"]}
+        notice = _end_notice(s, tally, cancelled, error)
         other = s.get("notice") and s["notice"].get("source") != "refine"
         # 识别留下的提示（有行失败等）更要紧：不盖掉它（精修的结果在小节卡片和曲库里也看得到）
         state.finish(s, notice=None if other else notice, source="refine")
@@ -237,11 +333,58 @@ def _run(sid: str, ids: list[str], cancel: threading.Event, whole: bool) -> None
         log.warning("song=%s refine not finished: %s", sid, e)
 
 
+def _end_notice(s: dict, tally: dict, cancelled: bool, error: str) -> tuple[str, str]:
+    """结束提示（在 state.finish 之前调用，要用 activity 里的范围）。整首：检查了几个、改了几个……；
+    一个小节 / 一行：短一点（“第 12 小节精修完：改了”“第 3 行精修完：4 个小节都没问题”）。"""
+    if error:
+        return "error", "精修失败：" + error
+    checked, changed, doubtful, failed = (tally[k] for k in ("checked", "changed", "doubtful", "failed"))
+    if cancelled:
+        return "warn", f"精修已取消：检查了 {checked} 个小节，改了 {changed} 个，改好的会保留。"
+    a = s.get("activity") or {}
+    scope, label = a.get("scope"), scope_label(s, a)
+    why = f"（{tally['error']}）" if tally["error"] else ""
+    if scope == "bars" and len(a.get("bars") or []) == 1:
+        if failed:
+            return "warn", f"{label}没核对成{why}，可以再试一次。"
+        if changed:
+            return "info", f"{label}精修完：改了（小节卡片上能看到改了什么，也能撤销）。"
+        if doubtful:
+            return "info", f"{label}精修完：几次核对的结果不一致，没有改，标成了待核对。"
+        if checked:
+            return "info", f"{label}精修完：没问题。"
+        return "info", f"{label}在精修期间改过，精修的结果没有写回。"
+    if scope in ("bars", "row"):
+        name = f"第 {a['row'] + 1} 行" if scope == "row" else label
+        ok = checked and not changed and not doubtful
+        msg = f"{name}精修完：" + (
+            f"{checked} 个小节都没问题" if ok else f"检查了 {checked} 个小节，改了 {changed} 个"
+        )
+        retry = "可以再试一次"
+    else:
+        msg = f"精修完成：检查了 {checked} 个小节，改了 {changed} 个"
+        retry = "可以再点“精修整首”重试"
+    if changed:
+        msg += "（小节卡片上能看到改了什么，也能撤销）"
+    if doubtful:
+        msg += f"；{doubtful} 个小节几次核对的结果不一致，没有改，标成了待核对"
+    if failed:
+        msg += f"；{failed} 个小节没核对成{why}，{retry}"
+    return ("warn" if failed else "info"), msg + "。"
+
+
 def refine_bars(
-    sid: str, ids: list[str], cancel: threading.Event, meter: jobs.UsageMeter, tally: dict
+    sid: str,
+    ids: list[str],
+    cancel: threading.Event,
+    meter: jobs.UsageMeter,
+    tally: dict,
+    explicit: bool = False,
+    hint: str = "",
 ) -> None:
-    """并行核对 ids 里的小节（每首最多 row_concurrency 个，所有曲子共用识别的全局名额），每个核对完就写回。
-    tally 累计 checked / changed / doubtful（几遍核对对不上、标成待核对的）/ failed / error（取消时调用方照样能拿到已完成的部分）。取消：Cancelled。"""
+    """并行核对 ids 里的小节（每首最多 row_concurrency 个，所有曲子共用识别的全局名额），每个核对完就写回
+    （并从 activity.pending 里去掉）。tally 累计 checked / changed / doubtful（几遍核对对不上、标成待核对的）/ failed / error
+    （取消时调用方照样能拿到已完成的部分）。explicit、hint 见 _run。取消：Cancelled。"""
     song = store.load(sid)
     bars = song["bars"]
     index = {b["id"]: i for i, b in enumerate(bars)}
@@ -268,6 +411,7 @@ def refine_bars(
                 prev["events"] if prev else None,
                 bar.get("time_signature"),
                 cancel,
+                hint,
             )
 
         return recognize.run_queued(go, cancel)
@@ -276,13 +420,20 @@ def refine_bars(
         def apply(s):
             if s.get("progress"):
                 s["progress"]["done"] = min(s["progress"]["total"], s["progress"]["done"] + 1)
+            a = s.get("activity") or {}
+            if a.get("kind") == "refine" and bar["id"] in (a.get("pending") or []):
+                a["pending"] = [x for x in a["pending"] if x != bar["id"]]
             meter.charge(s)
             if result is None:
                 return
             out, events = result["out"], result["events"]
             cur = next((b for b in s["bars"] if b.get("id") == bar["id"]), None)
             # 核对期间这个小节被改过（rev 变了）、被重新识别掉了、或者已经不该核对（确认过、正在识别）：不写
-            if cur is None or int(cur.get("rev") or 0) != int(bar.get("rev") or 0) or not eligible(s, cur):
+            if (
+                cur is None
+                or int(cur.get("rev") or 0) != int(bar.get("rev") or 0)
+                or not eligible(s, cur, explicit)
+            ):
                 return
             tally["checked"] += 1
             if events is not None:

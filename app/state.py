@@ -141,7 +141,7 @@ def recover(s: dict) -> bool:
     if kind == "refine":
         finish(
             s,
-            notice=("warn", "服务重启，精修中断，已经改好的小节会保留，可以再点“精修”接着核对剩下的。"),
+            notice=("warn", "服务重启，精修中断，已经改好的小节会保留，可以再点“精修整首”接着核对剩下的。"),
             source="refine",
         )
         changed = True

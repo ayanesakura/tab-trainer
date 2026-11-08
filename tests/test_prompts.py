@@ -80,6 +80,13 @@ def _all_prompts(monkeypatch) -> dict:
             previous=bars[1]["events"],
             time_signature=[3, 4],
         ),
+        "verify_bar_hint": lambda: c.verify_bar(
+            Image.new("RGB", (400, 200), "white"),
+            meta,
+            (60, 340),
+            bars[0]["events"],
+            hint="第 3 拍是 2 弦 4 品",
+        ),
         "coach": lambda: c.coach(
             meta, bars[0], [bars[1]], "怎么弹", [{"q": "前一个问题", "a": "回答"}], "练了 3 遍", img
         ),

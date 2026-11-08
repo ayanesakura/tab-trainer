@@ -107,8 +107,8 @@ def explain(sid: str) -> None:
     coach.start_explain(sid)
 
 
-def refine_song(sid: str) -> None:
-    refine.start_refine(sid)
+def refine_song(sid: str, bars: list[str] | None = None, system: int | None = None, hint: str = "") -> None:
+    refine.start_refine(sid, bars, system, hint)
 
 
 def reparse_row(sid: str, si: int, hint: str) -> None:

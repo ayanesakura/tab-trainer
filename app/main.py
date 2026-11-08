@@ -267,9 +267,11 @@ def explain(sid: str):
 
 
 @app.post("/api/songs/{sid}/refine")
-def refine(sid: str):
-    """精修：逐小节放大核对（慢、贵）。GP / MusicXML 曲子 400，有任务在跑 423。"""
-    service.refine_song(sid)
+def refine(sid: str, body: schemas.RefineIn | None = None):
+    """精修：逐小节放大核对（慢、贵）。不带请求体 = 整首；{"bars": [...]} / {"system": 行号} = 这几个小节 / 这一行
+    （手改过、确认过的也核对），可以带 hint。小节 / 行不存在、GP / MusicXML 曲子 400，有任务在跑 423。"""
+    b = body or schemas.RefineIn()
+    service.refine_song(sid, b.bars, b.system, b.hint)
     return {"ok": True}
 
 

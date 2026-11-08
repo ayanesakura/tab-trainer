@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import config, jobs, main, model, recognize, refine, songs, state, store
+from app import config, jobs, main, model, recognize, refine, songs, state, store, views
 from app.model import notes_key
 from tests.fakes import FakeClaude, derived_bars, score_png
 
@@ -52,7 +52,12 @@ def test_refine_rewrites_changed_bars_and_keeps_the_old_reading(client, sync_job
     before = store.load(sid)
     monkeypatch.setattr(FakeClaude, "verify_result", change_fret(1, 7))
     est = client.get(f"/api/songs/{sid}").json()["refine_estimate"]
-    assert est == {"bars": 6, "cost_usd": 1.2, "minutes": 3}  # 6 × $0.2；4 个并行、两批，每批约 75 秒
+    assert est == {
+        "bars": 6,
+        "cost_usd": 1.2,
+        "minutes": 3,
+        "seconds": 150,
+    }  # 6 × $0.2；4 个并行、两批，每批约 75 秒
 
     assert client.post(f"/api/songs/{sid}/refine").json() == {"ok": True}
     v = client.get(f"/api/songs/{sid}").json()
@@ -108,7 +113,7 @@ def test_which_bars_are_refined(data_dir):
     assert refine.pick(s, {ids[2], ids[4]}) == [ids[4]]
     s["systems"][1]["status"] = "parsing"  # 第 2 行正在重新识别
     assert refine.pick(s) == []  # 剩下的都核对过了：自动精修不重来
-    assert refine.pick(s, recheck=True) == [ids[2]]  # 用户点“精修”：整首重来
+    assert refine.pick(s, recheck=True) == [ids[2]]  # 用户点“精修整首”：整首重来
     assert refine.pick(s, {ids[2]}) == []
     s["systems"][1]["status"] = "done"
     s["systems"][1]["spans"] = None  # 没检测到小节线：整行一个小节，裁不出来
@@ -338,3 +343,179 @@ def test_restart_marks_an_interrupted_refine(data_dir):
     s = store.load(sid)
     assert s["activity"] is None and s["progress"] is None
     assert "精修中断" in s["notice"]["msg"] and s["status"] == "ready"
+
+
+# ---------------------------------------------------------------------------
+# 精修某个小节 / 某一行（小节卡片上的按钮）
+# ---------------------------------------------------------------------------
+def test_scope_is_validated(client):
+    sid = _song()
+    url = f"/api/songs/{sid}/refine"
+    r = client.post(url, json={"bars": ["nope"]})
+    assert r.status_code == 400 and "小节不存在" in r.json()["detail"]
+    r = client.post(url, json={"system": 5})
+    assert r.status_code == 400 and "第 6 行不存在" in r.json()["detail"]
+    assert client.post(url, json={"system": -1}).status_code == 400
+    r = client.post(url, json={"bars": [], "system": 0})
+    assert r.status_code == 400 and "只能指定一个" in r.json()["detail"]
+    assert client.post(url, json={"bars": []}).status_code == 400
+    assert jobs.jobs.running(sid) is False and store.load(sid)["activity"] is None
+
+    s = store.load(sid)
+    ids = [b["id"] for b in s["bars"]]
+    assert refine.scope_ids(s) is None  # 整首
+    assert refine.scope_ids(s, [ids[4], ids[1]]) == [ids[1], ids[4]]  # 按曲子里的顺序
+    assert refine.scope_ids(s, system=1) == ids[3:]
+
+    store.update(sid, lambda x: x["bars"][1].update(placeholder=True))  # 识别失败按休止占位：裁不出来
+    r = client.post(url, json={"bars": [ids[1]]})
+    assert r.status_code == 400 and "没有可以精修的小节" in r.json()["detail"]
+    assert jobs.jobs.running(sid) is False and store.load(sid)["activity"] is None
+
+    gp = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    client.put(f"/api/songs/{gp}/derived", json={"bars": derived_bars(2)})
+    gb = client.get(f"/api/songs/{gp}").json()["bars"][0]["id"]
+    r = client.post(f"/api/songs/{gp}/refine", json={"bars": [gb]})
+    assert r.status_code == 400 and "不需要精修" in r.json()["detail"]
+
+
+def test_an_explicit_scope_checks_every_bar_in_it(client, sync_jobs, monkeypatch):
+    """点了某个小节 / 某一行：手改过、确认过、核对过的也核对；占位的照样跳过。整首精修照旧跳过它们。"""
+    sid = _song()
+    ids = [b["id"] for b in store.load(sid)["bars"]]
+    songs.edit_bar(
+        sid, ids[3], [{"dur": "4", "notes": [{"string": 1, "fret": 1}]}], None
+    )  # 手改过（改成 1 品）
+    songs.review_bar(sid, ids[4], True)  # 确认过没问题
+
+    def mark(x):
+        x["bars"][5]["refine_key"] = notes_key(x["bars"][5])  # 核对过
+        x["bars"][2]["placeholder"] = True
+
+    store.update(sid, mark)
+    s = store.load(sid)
+    assert refine.pick(s) == ids[:2]  # 整首：跳过手改过、确认过、核对过、占位的
+    assert refine.pick_scope(s, ids[3:]) == ids[3:]
+    assert refine.pick_scope(s, ids[:3]) == ids[:2]
+
+    monkeypatch.setattr(FakeClaude, "verify_result", change_fret(1, 9, "应是 9 品"))
+    assert client.post(f"/api/songs/{sid}/refine", json={"system": 1}).json() == {"ok": True}
+    assert len(_verifies()) == 5  # 3 个小节各一次，改了的 2 个再确认一次
+    v = client.get(f"/api/songs/{sid}").json()
+    b3, b4 = v["bars"][3], v["bars"][4]
+    assert (
+        b3["events"][0]["notes"][0]["fret"] == 9
+        and b3["refine"]["prev"]["events"][0]["notes"][0]["fret"] == 1
+    )
+    assert b3["edited"] is True  # 手改过的照样改了，撤销精修恢复成手改的
+    assert b4["events"][0]["notes"][0]["fret"] == 9  # 确认过的也改了
+    assert "refine" not in v["bars"][5]  # 核对过的也核对了：没问题
+    assert "refined" not in store.load(sid) and "refined" not in v  # 不是整首：不算“精修过整首”
+    assert (
+        v["notice"]["msg"]
+        == "第 2 行精修完：检查了 3 个小节，改了 2 个（小节卡片上能看到改了什么，也能撤销）。"
+    )
+    assert v["activity"] is None and not jobs.jobs.running(sid)
+
+    u = client.put(f"/api/songs/{sid}/bars/{ids[3]}/undo-refine", json={"rev": b3["rev"]}).json()["bars"][3]
+    assert u["events"][0]["notes"][0]["fret"] == 1 and u["edited"] is True
+
+
+def test_bar_scope_short_notice_and_hint(client, sync_jobs, monkeypatch):
+    """一个小节：结束提示短（“第 2 小节精修完：没问题 / 改了”）；用户写的“哪里不对”每次核对都带上。"""
+    sid = _song()
+    ids = [b["id"] for b in store.load(sid)["bars"]]
+    url = f"/api/songs/{sid}/refine"
+    client.post(url, json={"bars": [ids[1]], "hint": "  第 3 拍是 2 弦 4 品 "})
+    calls = _verifies()
+    assert len(calls) == 1 and calls[0]["hint"] == "第 3 拍是 2 弦 4 品"
+    v = client.get(f"/api/songs/{sid}").json()
+    assert v["notice"]["msg"] == "第 2 小节精修完：没问题。" and "refined" not in v
+
+    monkeypatch.setattr(FakeClaude, "verify_result", change_fret(1, 7))
+    FakeClaude.calls.clear()
+    client.post(url, json={"bars": [ids[1]], "hint": "第 1 拍不对"})  # 已经核对过：点了还是核对
+    assert [c["hint"] for c in _verifies()] == ["第 1 拍不对"] * 2  # 提出改动后再确认一遍：也带上
+    assert client.get(f"/api/songs/{sid}").json()["notice"]["msg"].startswith("第 2 小节精修完：改了")
+
+    FakeClaude.calls.clear()
+    client.post(url)  # 整首：不带说明
+    assert len(_verifies()) == 5 + 1 and all(c["hint"] == "" for c in _verifies())
+    assert store.load(sid)["refined"]["checked"] == 5  # 第 2 小节核对过、音没再变：整首时不再核对
+
+
+def test_a_second_refine_while_one_runs_is_423(client):
+    sid = _song()
+    ids = [b["id"] for b in store.load(sid)["bars"]]
+    url = f"/api/songs/{sid}/refine"
+    for scope, row, bars, msg in [
+        ("bars", None, [ids[1]], "正在精修第 2 小节，完成后再试"),
+        ("row", 1, ids[3:], "正在精修第 2 行（3 个小节），完成后再试"),
+        ("song", None, ids, "正在精修整首，完成后再试"),
+    ]:
+        store.update(sid, lambda x, a=scope, r=row, b=bars: refine._begin(x, b, a, r))
+        assert jobs.jobs.claim(sid)
+        try:
+            for body in ({"bars": [ids[0]]}, {"system": 0}, None):
+                r = client.post(url, json=body)
+                assert r.status_code == 423 and r.json()["detail"] == msg
+        finally:
+            jobs.jobs.release(sid)
+            store.update(sid, lambda x: state.finish(x))
+    store.update(sid, lambda x: state.begin(x, "reparse_row", systems=[0]))
+    assert jobs.jobs.claim(sid)
+    try:
+        r = client.post(url, json={"bars": [ids[4]]})
+        assert r.status_code == 423 and "正在识别中" in r.json()["detail"]
+    finally:
+        jobs.jobs.release(sid)
+
+
+def test_view_shows_which_bars_are_being_refined(client, sync_jobs, monkeypatch):
+    """进行中：activity 给出范围（scope / row / bars）和还没核对完的小节（pending），练习页据此显示“精修中”。"""
+    sid = _song()
+    ids = [b["id"] for b in store.load(sid)["bars"]]
+    seen = []
+    monkeypatch.setattr(config.settings, "row_concurrency", 1)
+
+    def verify(img, meta, span, events, previous, ts):
+        v = views.song_view(store.load(sid))
+        model.SongView.model_validate(v)
+        seen.append((v["activity"], v["busy"], v["progress"]["done"]))
+        return {"diff": "", "changed": False, "events": events, "uncertain": ""}
+
+    monkeypatch.setattr(FakeClaude, "verify_result", verify)
+    client.post(f"/api/songs/{sid}/refine", json={"system": 1})
+    a = seen[0][0]
+    assert a["kind"] == "refine" and a["scope"] == "row" and a["row"] == 1
+    assert a["bars"] == ids[3:] and a["pending"] == ids[3:] and seen[0][1] is True
+    assert seen[1][0]["pending"] == ids[4:] and seen[2][0]["pending"] == ids[5:]  # 核对完一个去掉一个
+    assert [x[2] for x in seen] == [0, 1, 2]
+    v = client.get(f"/api/songs/{sid}").json()
+    assert v["activity"] is None and v["notice"]["msg"] == "第 2 行精修完：3 个小节都没问题。"
+
+
+def test_view_gives_estimates_for_a_bar_and_each_row(client):
+    """小节卡片上的预估：和整首用同一套算法（$0.2 / 小节，几个小节并行，每次约 75 秒）。"""
+    sid = _song()
+    v = client.get(f"/api/songs/{sid}").json()
+    assert v["refine_scopes"] == {
+        "bar": {"bars": 1, "cost_usd": 0.2, "minutes": 2, "seconds": 75},
+        "rows": [{"bars": 3, "cost_usd": 0.6, "minutes": 2, "seconds": 75}] * 2,
+    }
+    assert all(b["refinable"] for b in v["bars"])
+
+    def no_lines(s):
+        s["systems"][1]["spans"] = None  # 第 2 行没检测到小节线：裁不出单个小节
+        s["bars"][0]["placeholder"] = True
+
+    store.update(sid, no_lines)
+    v = client.get(f"/api/songs/{sid}").json()
+    assert v["refine_scopes"]["rows"] == [{"bars": 2, "cost_usd": 0.4, "minutes": 2, "seconds": 75}, None]
+    assert [b["refinable"] for b in v["bars"]] == [False, True, True, False, False, False]
+    assert "refine_scopes" not in store.load(sid)  # 只在接口返回里
+
+    gp = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    client.put(f"/api/songs/{gp}/derived", json={"bars": derived_bars(2)})
+    g = client.get(f"/api/songs/{gp}").json()
+    assert g["refine_scopes"] is None and not any(b["refinable"] for b in g["bars"])

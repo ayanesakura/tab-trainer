@@ -293,6 +293,11 @@ class Activity(_M):
     kind: ActivityKind
     restaging: bool = False  # 整首重新识别（原来的结果在新结果全部成功前不动）
     systems: list[int] = Field(default_factory=list)  # 正在识别的行
+    # 精修（kind = refine）的范围：song = 整首；bars = 这几个小节；row = 第 row 行（从 0 数）
+    scope: Literal["song", "bars", "row"] | None = None
+    row: int | None = None
+    bars: list[str] = Field(default_factory=list)  # 要核对的小节 id
+    pending: list[str] = Field(default_factory=list)  # 其中还没核对完的（练习页在这些小节上显示“精修中”）
 
 
 class Notice(_M):
@@ -321,11 +326,19 @@ class Refined(_M):
 
 
 class RefineEstimate(_M):
-    """现在点“精修”会核对几个小节、大约花多少钱和时间（app/refine.py 的 estimate）。"""
+    """精修的范围和预估：几个小节、大约花多少钱和时间（app/refine.py 的 estimate / scope_estimates）。"""
 
     bars: int = 0
     cost_usd: float = 0
-    minutes: int = 0
+    minutes: int = 0  # 向上取整，至少 1
+    seconds: int = 0  # 按几个小节并行估的秒数（小节卡片上显示成“1–2 分钟”）
+
+
+class RefineScopes(_M):
+    """小节卡片上“精修这个小节 / 这一行”的预估：bar 是一个小节的；rows 按行，裁不出单个小节的行是 null。"""
+
+    bar: RefineEstimate
+    rows: list[RefineEstimate | None] = Field(default_factory=list)
 
 
 class Song(_M):
@@ -580,6 +593,7 @@ VIEW_ONLY = frozenset(
         "is_score",
         "failed_rows",
         "refine_estimate",
+        "refine_scopes",
     }
 )  # 早期格式的 running / error / job / kind 由 migrate 在升级时去掉
 
@@ -642,6 +656,7 @@ class BarView(Bar):
     reviewed_warn: list[str] | None = Field(None, exclude=True)
     refine_key: str | None = Field(None, exclude=True)
     locked: str | None = None  # 现在不能改的原因
+    refinable: bool = False  # 能单独裁出来精修（小节卡片上显示“精修这个小节”，见 refine.refinable）
     warn: list[Warn] = Field(default_factory=list)
 
 
@@ -677,7 +692,8 @@ class SongView(_M):
     is_score: bool = False  # Guitar Pro / MusicXML（小节来自原文件）
     failed_rows: int = 0  # 识别失败的行数
     refined: Refined | None = None  # 上一次精修整首的结果
-    refine_estimate: RefineEstimate | None = None  # 图片曲子：现在精修的范围和预估；GP 是 null
+    refine_estimate: RefineEstimate | None = None  # 图片曲子：现在精修整首的范围和预估；GP 是 null
+    refine_scopes: RefineScopes | None = None  # 图片曲子：精修一个小节 / 一行的预估；GP 是 null
 
 
 class LibraryPractice(_M):

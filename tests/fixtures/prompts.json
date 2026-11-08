@@ -726,6 +726,144 @@
   "effort": "max",
   "max_tokens": 64000
  },
+ "verify_bar_hint": {
+  "content": [
+   "<image>",
+   "Score info: tuning (string 1 -> 6) D4 A3 F#3 D3 A2 D2; capo 2. Time signature 4/4: this bar lasts 4 quarter notes.\n\nThe image shows ONE bar of a guitar score, enlarged: the bar to check lies between x=180 and x=1020 pixels; the edges of the neighbouring bars are visible only for context (ties coming in, beams). Below is the current transcription of this bar. Check it against the image beat by beat: every fret number and its string, every onset and every duration (stems, beams, flags, dots, tuplets, rests), parenthesized numbers (tie or ghost, see the rules), techniques. If everything matches, set changed=false and return the events unchanged. If anything differs, set changed=true, describe each difference in diff, and return the corrected events for the whole bar.\n\nHow to encode a bar:\n- A bar is a list of events in time order. An event is one onset: all notes that start together.\n- \"dur\" is the time from this onset to the next onset in the same bar (for the last event: to the end of the bar), in quarter notes. The durs of a bar must add up exactly to the bar length.\n- Notes that keep ringing while other notes are played do not create extra events, and a tied continuation note (a note whose fret number is not re-written, or connected by a tie) is not a new event.\n- A rest at the start of a bar or between notes is an event with an empty \"notes\" list.\n- Time signature: a bar where a new time signature is written (e.g. 3/4 or 6/8 printed after the barline) gets \"time_signature\": [3, 4] etc., and from that bar on every bar lasts the new length until the next change. Bars without a written change get []. Never change durations just to make a bar fit a time signature: if the notes clearly fill a different length, check whether a time-signature change is written.\n- string: 1 is the top line of the tab (highest pitch), 6 the bottom line. fret: exactly as written (relative to the capo; 0 = open string).\n- Fret numbers in parentheses, e.g. (7), are either tied continuations or ghost notes; decide by the tie arc:\n  - Tied continuation: a tie arc (a curve) ends at it, coming from the same fret on the same string - drawn in the tab, or in the standard notation above, where the tied-to notehead is NOT in parentheses. Tablature only re-writes a tied note at the start of a bar (tied over the barline) or at the start of a line (the arc comes in from the left edge; the previous line is not in this image); a tie inside a bar is not written in the tab at all. It is not a new onset: leave it out, and if no other note starts at that time, write an event with an empty \"notes\" list for it.\n  - Ghost note: no tie arc ends at it. It is a real, softly played note: write it as a normal note. This includes a parenthesized number in the middle of a bar, repeated parenthesized notes on the same fret (e.g. 5 (5) (5) are three onsets), and a note whose notehead in the standard notation is itself in parentheses.\n- Beamed groups do not always line up with beats. A group can contain a note that crosses the beat (e.g. eighth + sixteenth + eighth = 1 1/4 beats) and the next group then starts off the beat. Take each note's value from its own stem (one beam or flag = eighth, two = sixteenth, three = 32nd; a short beam stub belongs to the note it touches; a dot adds half) and add them up, instead of assuming every beamed group fills exactly one beat.\n\nTechniques (put them on the note that receives them):\n- \"h\": hammer-on into this note (arc + H from the previous note on the same string). \"p\": pull-off into this note.\n- \"sl\": slide into this note from the previous note on the same string; this note is not re-picked.\n- \"si\": slide in from an unspecified lower fret (a slash before the number with no starting note); the note is picked.\n- \"pm\": palm mute (P.M. line). \"x\": dead/muted note written as x (use fret 0) - but not in chord sheets, see below.\n- \"nh\": natural harmonic, written <n>; fret = the harmonic node n. A natural harmonic written with a fractional node, e.g. <21.7> or <14.7>, gets fret = the node rounded to the nearest whole number (22, 15). \"ah\": artificial harmonic (A.H., e.g. \"2<14>\"): fret = the fretted note (2), the node is 12 frets higher.\n- \"th\": tapped harmonic, labelled T.H. above the staff and written as a fretted number followed by the tapped fret in <>, e.g. \"0 <19>\" or \"5<22>\" (the left hand frets the first number, the right hand taps the fret in <>): fret = the fretted number (0, 5), tech \"th\", \"harm\" = the number in <> (19, 22; a fractional one such as <23.7> rounded to the nearest whole number, 24). Every note that is not a tapped harmonic has harm = 0.\n- \"roll\": arpeggiated chord (wavy vertical line) - put it on every note of the chord.\n- \"vib\": vibrato. \"bend\": a bend; also set \"bend\" to the size in semitones (full = 2, 1/2 = 1).\n- Circled numbers ①-⑥ next to notes (common in classical scores) are string indications - which string the note is played on - not frets and not notes. In a header, \"①=D ②=A ...\" lists the tuning of each string.\n- A small grace note before a note: set \"grace\" on the main note to the grace note's fret (and add \"h\"/\"sl\"/\"p\" if the grace connects by that technique). Otherwise grace = -1.\n\nChord sheets (accompaniment scores with chord names and chord diagrams printed above the tab, often with numbered-notation melody and lyrics below - ignore the melody and lyrics):\n- First read every chord diagram in \"chords\": frets for strings 1-6, with the \"Nfr.\" position marker added.\n- \"chord\": on the event where a chord name starts, write that name; otherwise \"\". A name is printed above (often centered over) the onset where the chord begins; when it sits between two onsets, choose the one on the stronger beat or where a new bass note / strum starts - chords rarely change half a beat late.\n- Small x marks on the tab lines are NOT dead notes here: each x means \"play this string with the current chord\" (the last chord name at or before this point, which may come from an earlier bar). Write a normal note with the fret of that string from the chord's diagram, no \"x\" technique. A fret number written on the line instead of an x is played as written (it overrides the diagram).\n- A vertical arrow drawn across the strings is a strum: one event whose notes are the strings the arrow covers, each with the fret from the current chord diagram (leave out strings the diagram marks as not played). \"strum\": \"down\" when the arrowhead points to the top line (string 1) - a downstroke that starts on the low strings; \"up\" when it points to the bottom line. Its duration comes from the stem and beams below the tab like any other note. A wavy arrow is a rolled chord: also add \"roll\" to every note.\n- A circled x (or x marks with a slash, often on several strings at once) is a percussive slap/hit: write those strings with tech \"x\" and fret 0.\n- An x on a string that the current diagram marks as not played: a single bass x in an arpeggio pattern is an alternate bass note (use the usual alternate-bass fret for that chord, e.g. string 6 fret 3 under C); x marks stacked on the lowest two strings and hit together, between chord strokes, are a slap (tech \"x\", fret 0) - especially when the score labels them 拍弦 / 打板 / 切音 anywhere (see the notes about this score).\n\nLyrics (scores for singing, usually with a numbered-notation melody line and the lyrics under it):\n- Put each syllable on the guitar event that is sounding when it is sung: use the melody's rhythm (its beat positions in the bar) to place the syllable in time, then attach it to the last guitar onset at or before that time. When several syllables fall on the same guitar event, join them in order (\"天真\").\n- \"lyrics\" holds one string per printed verse line, verse 1 first (e.g. [\"天真\", \"多浅\"] when two verses are printed one under the other); [] on events where no syllable starts, and everywhere when the score has no lyrics. Copy the characters exactly; leave out punctuation.\n\nRepeats and navigation (the app follows them during playback):\n- repeat_start / repeat_end: repeat barlines. repeat_end is the total number of times the section is played (2 for a plain :| sign).\n- endings: the numbers of the 1st/2nd-ending (volta) bracket over this bar.\n- directions, at the bar where they are written: \"segno\" (the 𝄋 sign), \"coda\" (the 𝄌 target, \"To Coda\" jumps here), \"fine\" (Fine, where the piece ends after a D.C./D.S.), \"dacapo\" (D.C.), \"dacapoalfine\" (D.C. al Fine), \"dacapoalcoda\" (D.C. al Coda), \"dalsegno\" (D.S.), \"dalsegnoalfine\", \"dalsegnoalcoda\", \"dacoda\" (the \"To Coda\" / ⊕ jump point).\n\n\"tip\": 1-4 sentences of practical Chinese guidance for this bar, naming strings and frets the way a teacher would, e.g. \"5 弦空弦 + 2 弦空弦一起弹，2 弦击弦到 2 品再勾弦回空弦（只拨一次）。第 3 拍和弦：2 弦 4 品、3 弦 2 品、4 弦 3 品；第 4 拍三连音：4 弦 3 品、3 弦空弦、2 弦空弦。\" Mention what is hard and how to practise it when it helps.\n\"uncertain\": in Chinese, only doubts that could make the player play something wrong - a note, string, fret, technique or rhythm in this bar that you could not read with confidence and that the user should check against the image (say which beat and what you chose). Leave it empty when the notes are clear, including when you only made a routine reading decision. Do not mention: ties, slurs or slaps that are clearly drawn and that you simply followed, parts of a chord diagram on strings that are not played in this bar, exactly where a chord name sits when the chord change is clear from the music, notes you played as written, a reading that follows standard notation conventions, or anything about the melody or lyrics lines.\n\nCurrent transcription of this bar (events in time order):\n[{\"dur\": \"1\", \"notes\": [{\"string\": 2, \"fret\": 3, \"tech\": [\"h\"], \"grace\": -1, \"bend\": 0}]}, {\"dur\": \"1\", \"notes\": [{\"string\": 2, \"fret\": 3, \"tech\": [\"h\"], \"grace\": -1, \"bend\": 0}]}, {\"dur\": \"1\", \"notes\": [{\"string\": 2, \"fret\": 3, \"tech\": [\"h\"], \"grace\": -1, \"bend\": 0}]}, {\"dur\": \"1\", \"notes\": [{\"string\": 2, \"fret\": 3, \"tech\": [\"h\"], \"grace\": -1, \"bend\": 0}]}]\n\nThe user reviewed this bar and says (in Chinese): 第 3 拍是 2 弦 4 品"
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "diff": {
+     "type": "string",
+     "description": "in Chinese: every difference you found, or empty if none"
+    },
+    "changed": {
+     "type": "boolean"
+    },
+    "events": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "dur": {
+        "type": "string",
+        "description": "time from this onset to the next onset (or bar end), in quarter notes, as a fraction string: \"1/4\" = 16th, \"1/2\" = 8th, \"1/3\" = 8th-note triplet, \"1/6\" = 16th sextuplet, \"3/4\" = dotted 8th, \"1\", \"3/2\", \"2\", \"4\" ..."
+       },
+       "notes": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "string": {
+           "type": "integer",
+           "enum": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+           ],
+           "description": "1 = highest (top tab line) ... 6 = lowest"
+          },
+          "fret": {
+           "type": "integer",
+           "description": "fret number exactly as written in the tab (a chord-sheet x mark: the fret of this string in the current chord diagram)"
+          },
+          "tech": {
+           "type": "array",
+           "items": {
+            "type": "string",
+            "enum": [
+             "h",
+             "p",
+             "sl",
+             "si",
+             "pm",
+             "nh",
+             "ah",
+             "th",
+             "roll",
+             "x",
+             "vib",
+             "bend"
+            ]
+           }
+          },
+          "grace": {
+           "type": "integer",
+           "description": "fret of a grace note leading into this note, -1 if none"
+          },
+          "bend": {
+           "type": "number",
+           "description": "bend amount in semitones, 0 if no bend"
+          },
+          "harm": {
+           "type": "integer",
+           "description": "for th: the tapped fret written in <> (e.g. 19 in \"0 <19>\"); 0 otherwise"
+          }
+         },
+         "required": [
+          "string",
+          "fret",
+          "tech",
+          "grace",
+          "bend",
+          "harm"
+         ],
+         "additionalProperties": false
+        },
+        "description": "empty for a rest"
+       },
+       "chord": {
+        "type": "string",
+        "description": "chord name printed above the staff where a new chord starts at this onset (e.g. \"Em\", \"Dsus2/G\"); \"\" if no new chord name starts here"
+       },
+       "lyrics": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        },
+        "description": "lyrics sung from this onset until the next onset, one string per printed verse line (verse 1 first); [] if no syllable starts here or the score has no lyrics"
+       },
+       "strum": {
+        "type": "string",
+        "enum": [
+         "",
+         "down",
+         "up"
+        ],
+        "description": "a strummed chord drawn as an arrow across the strings: \"down\" = downstroke from the low strings to the high ones (arrow pointing toward string 1, the top tab line); \"up\" = upstroke (arrow pointing toward string 6); \"\" if not strummed"
+       }
+      },
+      "required": [
+       "dur",
+       "notes",
+       "chord",
+       "lyrics",
+       "strum"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "uncertain": {
+     "type": "string",
+     "description": "in Chinese, following the rules for \"uncertain\" above, about the bar as returned in events: only doubts that could make the player play something wrong; empty when the notes are clear"
+    }
+   },
+   "required": [
+    "diff",
+    "changed",
+    "events",
+    "uncertain"
+   ],
+   "additionalProperties": false
+  },
+  "system": "You transcribe guitar sheet music images into structured data for a practice app that plays the music back, highlights fingerings on a fretboard, and loops sections. The user will practise from your transcription, so an exact reading of every fret number and rhythm matters far more than speed. Read the tablature as the source of truth for strings and frets; use the standard notation (if present) and the rhythm stems/beams to determine timing and to double-check pitches. Write all human-facing text (tip, uncertain, notes, advice) in Simplified Chinese.",
+  "effort": "max",
+  "max_tokens": 64000
+ },
  "coach": {
   "content": [
    "<image>",

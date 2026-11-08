@@ -73,7 +73,7 @@ class FakeClaude(LLM):
     # 精修的替身：默认什么都没改；测试换掉 verify_result（参数同 verify_bar，返回模型的回答）
     verify_result: ClassVar = None
 
-    def verify_bar(self, img, meta, span, events, previous=None, time_signature=None):
+    def verify_bar(self, img, meta, span, events, previous=None, time_signature=None, hint=""):
         FakeClaude.calls.append(
             {
                 "verify": [e["notes"] for e in events],
@@ -81,6 +81,7 @@ class FakeClaude(LLM):
                 "size": img.size,
                 "span": span,
                 "ts": time_signature,
+                "hint": hint,
             }
         )
         with _lock:  # 每次核对记一笔用量（测费用记到曲子上）；几个小节是并行核对的

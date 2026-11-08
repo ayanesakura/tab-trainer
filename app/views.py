@@ -64,7 +64,14 @@ def bar_view(s: dict, bar: dict) -> dict:
     for k in ("reviewed_key", "reviewed_rev", "reviewed_warn", "refine_key"):
         out.pop(k, None)
     out["locked"] = state.bar_locked(s, bar)
+    out["refinable"] = _refine().refinable(s, bar)
     return out
+
+
+def _refine():
+    from app import refine  # refine 用到本模块的 reviewed
+
+    return refine
 
 
 def song_view(s: dict) -> dict:
@@ -86,15 +93,14 @@ def song_view(s: dict) -> dict:
         is_score=is_score(s),
         failed_rows=failed_rows(s),
         refine_estimate=refine_estimate(s),
+        refine_scopes=_refine().scope_estimates(s),
     )
     return out
 
 
 def refine_estimate(s: dict) -> dict | None:
-    """现在点“精修”会核对几个小节、预估的费用和时间（见 app/refine.py）；GP / MusicXML 是 None。"""
-    from app import refine  # refine 用到本模块的 reviewed
-
-    return refine.estimate(s)
+    """现在点“精修整首”会核对几个小节、预估的费用和时间（见 app/refine.py）；GP / MusicXML 是 None。"""
+    return _refine().estimate(s)
 
 
 def failed_rows(s: dict) -> int:
