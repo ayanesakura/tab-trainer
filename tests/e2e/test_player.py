@@ -139,3 +139,26 @@ def test_status_counts_beats_in_the_time_signature(server, trainer, image_song):
     b.js("tt.stop(); true")
     assert not any("第 7 拍" in x for x in b.js("[...__st]"))
     assert not b.errors, b.errors
+
+
+def test_typed_negative_speed_up_step_is_clamped(trainer):
+    """自动提速的“每次加多少”手打成负数（浏览器不拦）：按最小值 1 算，不会越练越慢。"""
+    b = trainer()
+    b.js("""(() => { const el = document.getElementById('autoStep');
+      el.value = '-'; el.dispatchEvent(new Event('input'));  // 打字过程中：先不改设置
+      el.value = '-4'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); return true; })()""")
+    assert b.js("tt.state.autoStep") == 1 and b.js("document.getElementById('autoStep').value") == "1"
+    b.js(
+        """(() => { const el = document.getElementById('autoTarget'); el.value = '8'; el.dispatchEvent(new Event('input')); return true; })()"""
+    )
+    assert b.js("tt.state.autoTarget") != 8  # 打“80”打到一半，不先把最高速度设成 8
+    # 设置里已经是负数（比如别的路径写进来的）：播放时也不会往下调速
+    b.js(
+        "tt.set('play.countIn', false); tt.set('play.auto', true); tt.set('play.autoEvery', 1); tt.set('play.autoStep', -10);"
+        "tt.set('play.autoTarget', 240); tt.setLoop(0, 0); tt.setTempo(200); tt.play(); true"
+    )
+    b.wait_for("tt.state.loops >= 2", timeout=10)
+    b.js("tt.stop(); true")
+    assert b.js("tt.state.bpm") == 200
+    b.js("tt.set('play.auto', false); tt.set('play.autoStep', 4); true")
+    assert not b.errors, b.errors

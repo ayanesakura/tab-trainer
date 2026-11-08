@@ -7,7 +7,7 @@ import { TICKS, CHORD_PAD, eventIndexAt, scoreNeedsGbk } from '../score.js';
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
 import { loopLabel, stepSection as stepCalc, isScore, beatNumber } from './view.js';
-import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs } from './prefs.js';
+import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref } from './prefs.js';
 
 export { alphaTab };
 export const IDLE_HINT = '空格播放 · ←→ 换段 · ↑↓ 调速';
@@ -449,7 +449,7 @@ function onPosition(tick) {
     set('play.loops', loops); // 练习记录先按提速前的速度记下刚弹完的这一遍
     const p = get('play');
     if (p.auto) {
-      const every = Math.max(1, p.autoEvery || 1), step = p.autoStep || 0, target = p.autoTarget || p.bpm;
+      const every = Math.max(1, p.autoEvery || 1), step = Math.max(0, p.autoStep || 0), target = p.autoTarget || p.bpm;
       if (loops % every === 0 && p.bpm < target) setTempo(Math.min(target, p.bpm + step));
     }
   }
@@ -587,8 +587,13 @@ const remember = (k, v) => { try { localStorage.setItem(k, v); } catch { /* 只�
 function bindInputs() {
   const bind = (id, key, kind) => {
     const el = $(id);
-    const read = () => (kind === 'check' ? el.checked : +el.value);
-    el.addEventListener(kind === 'check' ? 'change' : 'input', () => set('play.' + key, read()));
+    if (kind === 'check') el.addEventListener('change', () => set('play.' + key, el.checked));
+    else {
+      // 数字：打字过程中（清空了、只打了负号、超出范围）先不改设置；输完（change：回车、离开输入框）夹到范围里并写回输入框
+      const num = () => clampPref(key, el.value === '' ? NaN : +el.value, el.max === '' ? Infinity : +el.max);
+      el.addEventListener('input', () => { const v = num(); if (v !== null && v === +el.value) set('play.' + key, v); });
+      el.addEventListener('change', () => { const v = num() ?? get('play.' + key); set('play.' + key, v); el.value = v; if (el.type === 'range') UI.fillRange(el); });
+    }
     const paint = v => { if (kind === 'check') el.checked = v; else if (+el.value !== v) el.value = v; if (el.type === 'range') UI.fillRange(el); };
     on('play.' + key, paint);
     paint(get('play.' + key));
