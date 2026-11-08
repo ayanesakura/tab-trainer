@@ -5,7 +5,8 @@
 对的 701 个一个都没改坏，约 $0.055 / 小节。
 
 - 核对哪些小节（pick）：只有图片 / PDF 曲子；跳过用户手改过的、确认过没问题的、识别失败按休止占位的、所在行正在识别的，
-  以及整行当一个小节的（没检测到小节线，裁不出一个小节）。核对过、音没再变的（refine_key）不再核对；全都核对过时整首重来。
+  以及整行当一个小节的（没检测到小节线，裁不出一个小节）。核对过、音没再变的（refine_key）不再核对；
+  用户点“精修”时全都核对过了就整首重来（自动精修不重来）。
 - 确认（CONFIRM_CHANGES）：模型提出改动时再独立核对一两遍，有两遍提出一模一样的改动才改，否则不改、标成待核对（见 verify）。
 - 写回：每个小节核对完马上写回，但只在这个小节还在、rev 没变（期间用户没改过）、仍然该核对时才写，否则悄悄跳过。
   改了的小节：提示 / 问答 / 练习建议按“音变了”处理（staleness.refine_bar），改之前的内容记在 bar["refine"]，可以撤销（undo）。
@@ -54,12 +55,12 @@ def eligible(s: dict, bar: dict) -> bool:
     return bool(systems[si].get("spans")) and bool(bar.get("region")) and bar.get("page") is not None
 
 
-def pick(s: dict, only: set[str] | None = None) -> list[str]:
+def pick(s: dict, only: set[str] | None = None, recheck: bool = False) -> list[str]:
     """要核对的小节 id（按顺序）：能精修、还没核对过（或核对之后音又变了）的。only：只在这些小节里挑。
-    整首精修（only 为 None）时如果全都核对过了，就整首重新核对一遍。"""
+    recheck（用户点了“精修”）：全都核对过了的话就整首重新核对一遍；自动精修不重来。"""
     ok = [b for b in s.get("bars") or [] if eligible(s, b) and (only is None or b.get("id") in only)]
     fresh = [b for b in ok if b.get("refine_key") != notes_key(b)]
-    return [b["id"] for b in (fresh if fresh or only is not None else ok)]
+    return [b["id"] for b in (ok if recheck and not fresh else fresh)]
 
 
 def estimate(s: dict) -> dict | None:
@@ -67,7 +68,7 @@ def estimate(s: dict) -> dict | None:
     费用 = 小节数 × COST_PER_BAR；时间 = 按 row_concurrency 个小节并行、每次约 SECONDS_PER_BAR 秒。"""
     if is_score(s):
         return None
-    n = len(pick(s))
+    n = len(pick(s, recheck=True))
     rounds = math.ceil(n / max(1, settings.row_concurrency))
     return {
         "bars": n,
@@ -166,7 +167,7 @@ def start_refine(sid: str) -> None:
     def begin(x):
         if state.recognizing(x):
             raise Busy("这首曲子正在识别中，完成后再精修")
-        ids[:] = pick(x)
+        ids[:] = pick(x, recheck=True)
         if not ids:
             raise Invalid("没有可以精修的小节（手改过、确认过没问题的小节不再核对）")
         _begin(x, len(ids))
@@ -176,7 +177,7 @@ def start_refine(sid: str) -> None:
 
 def refine_after(sid: str, cancel: threading.Event, only: set[str] | None = None) -> None:
     """自动精修：识别任务结束后在同一个任务（同一个取消信号）里接着做。only：只核对这些小节（刚识别出的）；
-    None = 整首。没有要核对的就什么都不做。"""
+    None = 整首（核对过、音没变的不再核对，全都核对过也不重来）。没有要核对的就什么都不做。"""
     if cancel.is_set() or not pick(store.load(sid), only):
         return
     ids: list[str] = []

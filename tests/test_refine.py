@@ -107,11 +107,12 @@ def test_which_bars_are_refined(data_dir):
     assert refine.pick(s) == [ids[4], ids[5]]
     assert refine.pick(s, {ids[2], ids[4]}) == [ids[4]]
     s["systems"][1]["status"] = "parsing"  # 第 2 行正在重新识别
-    assert refine.pick(s) == [ids[2]]  # 剩下的都核对过了：整首重来
-    assert refine.pick(s, {ids[2]}) == []  # 只看刚识别出的小节时不重来
+    assert refine.pick(s) == []  # 剩下的都核对过了：自动精修不重来
+    assert refine.pick(s, recheck=True) == [ids[2]]  # 用户点“精修”：整首重来
+    assert refine.pick(s, {ids[2]}) == []
     s["systems"][1]["status"] = "done"
     s["systems"][1]["spans"] = None  # 没检测到小节线：整行一个小节，裁不出来
-    assert refine.pick(s) == [ids[2]]
+    assert refine.pick(s, recheck=True) == [ids[2]]
 
     gp = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
     songs.set_derived(gp, {}, derived_bars(3))
@@ -262,7 +263,7 @@ def test_undo_refine(client, sync_jobs, monkeypatch):
     r = client.put(url, json={"rev": u["rev"]})
     assert r.status_code == 400 and "没有精修改动" in r.json()["detail"]
     s = store.load(sid)
-    assert s["bars"][1]["id"] not in refine.pick(s, {x["id"] for x in s["bars"]})  # 撤销过的不再自动核对
+    assert s["bars"][1]["id"] not in refine.pick(s)  # 撤销过的不再自动核对
 
     # 手改精修过的小节：撤销精修不再适用（会盖掉手改）
     b5 = v["bars"][4]
@@ -297,6 +298,10 @@ def test_auto_refine_after_whole_song_recognition(data_dir, sync_jobs):
     assert len(_verifies()) == 6
     assert s["status"] == "ready" and s["activity"] is None and s["refined"]["checked"] == 6
     assert s["notice"]["msg"].startswith("精修完成")
+
+    FakeClaude.calls.clear()
+    recognize.start_parse(sid)  # 整首重新识别，结果和原来一样：核对过的指纹跟着保留，不再核对
+    assert _verifies() == [] and store.load(sid)["activity"] is None
 
 
 def test_auto_refine_only_checks_the_bars_just_recognised(data_dir, sync_jobs):
