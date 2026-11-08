@@ -5,8 +5,8 @@
 2. 用 PaddleOCR 的识别模型（ONNX）读这个数，解码时只允许 0–9 和括号、x（括号、x 最后去掉，不让模型把它们硬读成数字）。
 数字落在哪根线上就是哪根弦，这是几何判断，不会像大模型那样把数字往下错一根弦。
 准确率用 scripts/ocr_bench.py 测（按评测曲存好的版面逐小节比（弦, 品），精确率 / 召回率）：
-11 首干净的评测曲合计 98.0% / 98.9%（勿听、Romance 都是 100% / 100%；只有六线谱、符干画在谱线中间的
-Mother-tab 最差，91.6% / 95.4%），8 首降质版本合计 99.1% / 98.4%。模型用 PP-OCRv5 mobile：数字和 v4 差不多
+11 首干净的评测曲合计 98.9% / 99.3%（勿听、Romance 都是 100% / 100%；只有六线谱、符干画在谱线中间的
+Mother-tab 最差，97.1% / 98.1%），8 首降质版本合计 98.9% / 98.4%（第二声部是浅灰色的 And I Love Her 只有 82.7% 召回）。模型用 PP-OCRv5 mobile：数字和 v4 差不多
 （降质版本召回率高 0.3 个百分点），括号读得准得多（见 Digit）。
 read_system(detail=True) 还报每个数字两边有没有圆括号 / 尖括号（鬼音、延续音、泛音），见 Digit。
 
@@ -169,14 +169,19 @@ def read_system(
     found = []
     for i in range(1, n):
         x, y, w, h, area = (int(v) for v in stats[i])
-        # 数字大约一个线距高；排除谱号 TAB（在第一个小节左边）、滑音斜线（又短又宽）、小节线和弧线
+        # 数字大约一个线距高；排除谱号 TAB（在第一个小节左边）、滑音斜线（又短又宽）、小节线和弧线。
+        # 宽到两个字的块要够“实”：括号、尖括号贴在数字上的（"2>"）先留下，又细又斜的滑音线不要
         if not (
-            0.5 * sp <= h <= 1.15 * sp and w <= 1.2 * sp and w <= 1.1 * h and area >= 4 and x >= spans[0][0]
+            0.5 * sp <= h <= 1.15 * sp
+            and ((w <= 1.2 * sp and w <= 1.1 * h) or (w <= 2 * h and area >= 0.28 * w * h))
+            and area >= 4
+            and x >= spans[0][0]
         ):
             continue
         k = int(np.argmin([abs(y + h / 2 - ly) for ly in lines]))
         if abs(y + h / 2 - lines[k]) <= 0.38 * sp:
-            found.append({"x": x, "y": y, "w": w, "h": h, "s": k + 1, "ids": [i]})
+            wide = w > 1.2 * sp or w > 1.1 * h
+            found.append({"x": x, "y": y, "w": w, "h": h, "s": k + 1, "ids": [i], "wide": wide})
     found.sort(key=lambda c: (c["s"], c["x"]))
 
     numbers: list[dict] = []
@@ -185,7 +190,7 @@ def read_system(
         if p and p["s"] == c["s"] and c["x"] - (p["x"] + p["w"]) <= max(2, 0.25 * sp):
             x0, y0 = min(p["x"], c["x"]), min(p["y"], c["y"])
             x1, y1 = max(p["x"] + p["w"], c["x"] + c["w"]), max(p["y"] + p["h"], c["y"] + c["h"])
-            p.update(x=x0, y=y0, w=x1 - x0, h=y1 - y0, ids=p["ids"] + c["ids"])
+            p.update(x=x0, y=y0, w=x1 - x0, h=y1 - y0, ids=p["ids"] + c["ids"], wide=p["wide"] or c["wide"])
         else:
             numbers.append(dict(c))
 
@@ -199,10 +204,16 @@ def read_system(
         with _lock:
             raw = rec.marks(glyph) if MARKS_IN_BLOCK else rec.digits(glyph)
         t = "".join(ch for ch in raw if ch.isdigit())
-        if not t:
+        # 行首谱号 TAB 的 T、B 也是宽块，会被硬读成 1、0：那一段（第一个小节开头 3 个线距内）的宽块
+        # 只在模型确实读出了括号时才要（"(2)"）
+        clef = c["x"] < spans[0][0] + 3 * sp
+        if not t or (c["wide"] and clef and not any(ch in "()<>" for ch in raw)):
             continue
         frets = [int(t)] if int(t) <= MAX_FRET else ([int(d) for d in t] if len(t) <= 3 else [])
-        if t == "1" and not _upright(mask, c, lines, sp, clean, (top, bot)):
+        nxt = numbers[k + 1] if k + 1 < len(numbers) else None
+        tens = nxt is not None and nxt["s"] == c["s"] and nxt["x"] - (c["x"] + c["w"]) <= 0.6 * sp
+        # 后面紧跟着一个数字的竖直的 1 是两位数的十位（隔得稍远、没拼成一块的 "17"），不是符干
+        if t == "1" and not _upright(mask, c, lines, sp, clean, (top, bot), tens):
             continue
         xc = c["x"] + c["w"] / 2
         for i, (a, b) in enumerate(spans):
@@ -237,10 +248,12 @@ def _pair(t: str, a: str, b: str) -> bool:
     return a in t and t.rfind(b) > t.find(a)
 
 
-def _upright(mask: np.ndarray, c: dict, lines: list[float], sp: float, clean: np.ndarray, band) -> bool:
+def _upright(
+    mask: np.ndarray, c: dict, lines: list[float], sp: float, clean: np.ndarray, band, tens: bool = False
+) -> bool:
     """读成 1 的块要真是竖着的一笔：滑音斜线、弧线的末端也常被读成 1。
     也不能是一段符干：只有六线谱的谱子（符干画在谱线中间）里，符干被弦线、数字截成一段一段，夹在两根弦线
-    之间的一段也像 1。符干的特点是上下还接着别的竖段（或被裁到弦线范围边上），而且粗细上下一样；
+    之间的一段也像 1。符干的特点是上下还接着别的竖段（或被裁到弦线范围边上、上下紧挨着别的弦上的音），而且粗细上下一样；
     印刷体的 1 顶上有向左的小钩（或底下有横），总有一头比中间宽。两条都占才当符干扔掉（模糊的小 1 没有钩）。"""
     ys, xs = np.nonzero(mask)
     half = c["h"] / 2
@@ -258,8 +271,9 @@ def _upright(mask: np.ndarray, c: dict, lines: list[float], sp: float, clean: np
         c["y"] <= band[0]
         or c["y"] + c["h"] >= band[1]
         or max(above.max(initial=0), below.max(initial=0)) >= 0.3 * sp
+        or (above.any() and below.any())  # 夹在上下两根弦的音之间：连着和弦里两个音的一段符干
     )
-    if not continues:
+    if tens or not continues:  # tens：后面紧跟着数字，是两位数的十位
         return True
     widths = np.array([np.ptp(xs[ys == y]) + 1 if (ys == y).any() else 0 for y in range(c["h"])])
     k = max(1, c["h"] // 4)
