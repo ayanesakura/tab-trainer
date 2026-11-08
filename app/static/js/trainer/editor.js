@@ -84,7 +84,7 @@ const UNDO_KEY = IS_MAC ? '⌘Z' : 'Ctrl+Z';
 // 谱面上方的操作说明：一项一个 <span>（.legend 是 flex，项与项之间有间距，项里面的文字和按键不能被拆开）
 const legend = items => items.map(x => `<span>${x}</span>`).join('');
 const LEGEND_PLAY = legend(['点小节：从这里开始播放', '<kbd>Shift</kbd> + 点：把循环扩到这个小节', '点音符：试听', '<i class="review-key"></i>待核对']);
-const LEGEND_EDIT = legend(['改音：点音符改弦、品、技巧和时值', '点休止符：加音', '<kbd>Enter</kbd> 保存', '<kbd>Esc</kbd> 关闭', `<kbd>${UNDO_KEY}</kbd> 撤销`]);
+const LEGEND_EDIT = legend(['改音：点音符改弦、品、技巧和时值', '点拍上的空白处：改和弦、填品位加音', '<kbd>Enter</kbd> 保存', '<kbd>Esc</kbd> 关闭', `<kbd>${UNDO_KEY}</kbd> 撤销`]);
 // 改音面板里的技巧（推弦不在面板里，原样保留）
 const NP_TECH = ['h', 'p', 'sl', 'si', 'pm', 'x', 'nh', 'ah', 'vib', 'roll'];
 let np = null, npLayer = null, pendingClick = null, setNpStr = null, setNpStrum = null;
@@ -124,10 +124,10 @@ export function openNotePop(beat, note) {
   const ni = note ? ev.notes.findIndex(n => n.string === STRINGS + 1 - note.string) : -1; // alphaTab 的弦号 1 = 最低音弦
   const cur = ni >= 0 ? ev.notes[ni] : null;
   if (npLayer) npLayer.close('replaced'); // 点了另一个音：换成新的
-  np = { bi, ei, ni, barId: s.bars[bi].id, rev: s.bars[bi].rev, snap: s.bars[bi].events, string: cur ? cur.string : freeString(ev, note ? STRINGS + 1 - note.string : 1), fret: cur ? cur.fret : 0, tech: new Set(cur ? cur.tech : []), dur: ev.dur, chord: ev.chord || '', strum: ev.strum || '' };
+  np = { bi, ei, ni, barId: s.bars[bi].id, rev: s.bars[bi].rev, snap: s.bars[bi].events, string: cur ? cur.string : freeString(ev, note ? STRINGS + 1 - note.string : 1), fret: cur ? cur.fret : '', tech: new Set(cur ? cur.tech : []), dur: ev.dur, chord: ev.chord || '', strum: ev.strum || '' };
   set('ui.bar', bi);
+  $('npFret').value = np.fret; // 先填好：renderNotePop 按它判断加不加音
   renderNotePop();
-  $('npFret').value = np.fret;
   $('npChord').value = np.chord;
   const card = $('scoreCard').getBoundingClientRect(), pop = $('notePop');
   pop.hidden = false;
@@ -150,13 +150,17 @@ function freeString(ev, prefer) {
   if (!used.has(prefer)) return prefer;
   return Array.from({ length: STRINGS }, (_, i) => i + 1).find(x => !used.has(x)) || prefer;
 }
+// 点在拍上（不是音符上）是“加音”：品位空着就不加音，只改这一拍的和弦、扫弦和时值（满六根弦的拍也能改和弦）
+const npAddsNote = () => !!np && (np.ni >= 0 || $('npFret').value.trim() !== '');
 function npConflict() {
+  if (!npAddsNote()) return false;
   const ev = barEvents(np.bi)[np.ei];
   return ev.notes.some((n, i) => i !== np.ni && n.string === np.string);
 }
 function renderNotePop() {
   const add = np.ni < 0;
-  $('npTitle').textContent = add ? '在这一拍加一个音' : '修改这个音';
+  $('npTitle').textContent = add ? '在这一拍加音或改和弦' : '修改这个音';
+  $('npFret').placeholder = add ? '不加音' : '';
   $('npSub').textContent = `第 ${np.bi + 1} 小节 · 第 ${np.ei + 1} 个音`;
   setNpStr(String(np.string));
   setNpStrum(np.strum);
@@ -169,16 +173,19 @@ function renderNotePop() {
   try { retimeEvent(barEvents(np.bi), np.ei, np.dur); } catch (e) { durOk = false; msg = e.message; }
   const clash = npConflict();
   if (clash) msg = `这一拍 ${np.string} 弦已经有音了`;
-  $('npMsg').textContent = msg;
+  const info = !msg && !npAddsNote(); // 不是问题，只是说明
+  $('npMsg').textContent = info ? '品位空着：不加音，只改这一拍的和弦、扫弦和时值' : msg;
+  $('npMsg').classList.toggle('info', info);
   $('npSave').disabled = clash || !durOk;
 }
 function closeNotePop() { if (npLayer) npLayer.close(); np = null; $('notePop').hidden = true; }
-const npStep = d => { if (!np) return; np.fret = Math.max(0, Math.min(30, (parseInt($('npFret').value, 10) || 0) + d)); $('npFret').value = np.fret; };
+const npStep = d => { if (!np) return; np.fret = Math.max(0, Math.min(30, (parseInt($('npFret').value, 10) || 0) + d)); $('npFret').value = np.fret; renderNotePop(); };
 
+const npError = m => { $('npMsg').textContent = m; $('npMsg').classList.remove('info'); };
 async function saveNotePop() {
   if (!np || npConflict() || barBusy(np.barId)) return;
-  const fret = parseInt($('npFret').value, 10);
-  if (!(fret >= 0 && fret <= 30)) { $('npMsg').textContent = '品位要在 0–30 之间'; return; }
+  const addNote = npAddsNote(), fret = parseInt($('npFret').value, 10);
+  if (addNote && !(fret >= 0 && fret <= 30)) { npError('品位要在 0–30 之间'); return; }
   const bar = get('song').bars[np.bi], events = structuredClone(barEvents(np.bi)), ev = events[np.ei];
   if (!bar || bar.id !== np.barId || !ev || (np.ni >= 0 && !ev.notes[np.ni])) { closeNotePop(); UI.toast('谱子刚更新过，请重新点这个音', 'info'); return; }
   const old = np.ni >= 0 ? ev.notes[np.ni] : { grace: -1, bend: 0 };
@@ -188,14 +195,14 @@ async function saveNotePop() {
   const retimed = durToTicks(np.dur) !== durToTicks(ev.dur);
   const chord = $('npChord').value.trim().slice(0, 24);
   const beatSame = chord === (ev.chord || '') && np.strum === (ev.strum || '');
-  const same = beatSame && !retimed && np.ni >= 0 && old.string === n.string && old.fret === n.fret && [...(old.tech || [])].sort().join() === [...tech].sort().join();
+  const same = beatSame && !retimed && (!addNote || np.ni >= 0 && old.string === n.string && old.fret === n.fret && [...(old.tech || [])].sort().join() === [...tech].sort().join());
   if (chord) ev.chord = chord; else delete ev.chord;
   if (np.strum) ev.strum = np.strum; else delete ev.strum;
   if (same) { closeNotePop(); return; } // 没改就不保存（保存会清掉这一小节的 AI 不确定说明）
-  if (np.ni >= 0) ev.notes[np.ni] = n; else ev.notes.push(n);
+  if (np.ni >= 0) ev.notes[np.ni] = n; else if (addNote) ev.notes.push(n);
   ev.notes.sort((a, b) => a.string - b.string);
   let out = events;
-  try { out = retimeEvent(events, np.ei, np.dur); } catch (e) { $('npMsg').textContent = e.message; return; }
+  try { out = retimeEvent(events, np.ei, np.dur); } catch (e) { npError(e.message); return; }
   const where = `第 ${np.bi + 1} 小节`, rev = np.rev;
   closeNotePop();
   await putBar(bar.id, out, rev, `已修改${where}`);
@@ -263,10 +270,10 @@ export function initEditor() {
   $('npClose').onclick = closeNotePop;
   $('npSave').onclick = saveNotePop;
   $('npDel').onclick = deleteNotePop;
-  $('npAdd').onclick = () => { const ev = barEvents(np.bi)[np.ei]; np = { ...np, ni: -1, string: freeString(ev, np.string), fret: 0, tech: new Set() }; renderNotePop(); $('npFret').value = 0; $('npFret').focus(); $('npFret').select(); };
+  $('npAdd').onclick = () => { const ev = barEvents(np.bi)[np.ei]; np = { ...np, ni: -1, string: freeString(ev, np.string), fret: 0, tech: new Set() }; $('npFret').value = 0; renderNotePop(); $('npFret').focus(); $('npFret').select(); };
   $('npFretDown').onclick = () => npStep(-1);
   $('npFretUp').onclick = () => npStep(1);
-  $('npFret').addEventListener('input', () => { if (np) np.fret = $('npFret').value === '' ? '' : parseInt($('npFret').value, 10); });
+  $('npFret').addEventListener('input', () => { if (!np) return; np.fret = $('npFret').value === '' ? '' : parseInt($('npFret').value, 10); renderNotePop(); });
   $('npDur').onclick = e => {
     const b = e.target.closest('button[data-d]'); if (!b || !np) return;
     np.dur = b.dataset.d;
