@@ -657,3 +657,49 @@ def test_light_playback_cursor_is_not_a_barline():
         d.line([(600, t), (600, t + 70)], fill=190, width=2)
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [3, 3]
+
+
+@pytest.mark.parametrize("step,pad", [(26, 3), (30, 4), (28, 4)])
+def test_row_crowded_with_digits_on_every_string_is_found(step, pad):
+    """整段写出来的和弦扫弦：六根弦上每个十六分音符都有数字，数字的白底把谱线挡掉一半（谱线只有别的行一半深），
+    数字的上下沿（两位数）在低门槛下又够得上门槛、夹在谱线之间，这一行以前找不到（Oshio 绿袖子倒数第 2 行）。"""
+    sp = 20
+    img = Image.new("L", (1200, 900), 255)
+    d = ImageDraw.Draw(img)
+    f = ImageFont.load_default(size=17)
+    for top in (100, 380, 660):
+        for i in range(6):
+            d.line([(60, top + i * sp), (1140, top + i * sp)], fill=170)
+    for x in range(78, 1130, step):
+        if min(abs(x - b) for b in (420, 780)) < sp:  # 小节线上不会有音符
+            continue
+        for i, s in enumerate(("0", "0", "12", "x", "10", "0")):
+            y = 380 + i * sp
+            if s != "x":  # alphaTab 在数字底下垫一块白底，盖住谱线（x 直接压在线上）
+                x0, _, x1, _ = d.textbbox((x, y), s, font=f, anchor="mm")
+                d.rectangle([x0 - pad, y - sp * 0.45, x1 + pad, y + sp * 0.45], fill=255)
+            d.text((x, y), s, fill=0, font=f, anchor="mm")
+    for top in (100, 380, 660):
+        for x in (60, 420, 780, 1140):
+            d.line([(x, top), (x, top + 5 * sp)], fill=40, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [3, 3, 3]
+    assert all(abs(a - b) <= 1 for a, b in zip(r["systems"][1]["lines"], range(380, 481, sp)))
+
+
+def test_tab_row_whose_string_one_is_mostly_hidden_is_not_taken_for_a_staff():
+    """一行的 1 弦被数字挡掉一大半（或缩小后淡了）：第一遍只找到下面 5 根线，被当成一组五线谱，这一行就没了。
+    后面低门槛找到的 6 根线距均匀、包含这 5 根，换成它（绿袖子缩小到 0.75 倍、Mother 第 5 页缩小后）。"""
+    sp = 20
+    img = Image.new("L", (1200, 900), 255)
+    d = ImageDraw.Draw(img)
+    for top in (100, 380, 660):
+        _draw_tab(d, top, 60, 1140, (), sp)
+    for x in range(70, 1130, 24):  # 1 弦只剩一小截一小截
+        d.rectangle([x, 377, x + 15, 383], fill=255)
+    for top in (100, 380, 660):
+        for x in (60, 600, 1140):
+            d.line([(x, top), (x, top + 5 * sp)], fill=40, width=2)
+    r = detect_page(img)
+    assert [len(s["bars"]) for s in r["systems"]] == [2, 2, 2]
+    assert r["systems"][1]["lines"][0] == 380

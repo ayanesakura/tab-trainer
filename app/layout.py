@@ -21,13 +21,28 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)))
 
 
-def _staff_lines(gray: np.ndarray, thr: float | None = None) -> list[float]:
+def _thin_only(frac: np.ndarray, sp: float) -> np.ndarray:
+    """每行的覆盖率减去它上下 0.35 个线距里的“底”（一维灰度开运算：先取窗口最小值、再取窗口最大值），
+    只留下比窗口细的线。挤满品格数字的六线谱（每根弦上每个十六分音符都有数字，如整段写出来的和弦扫弦）：
+    数字的白底把谱线挡掉一半，谱线只有其他行的一半深，低门槛下数字的上下沿（尤其两位数）又够得上门槛，
+    和谱线连成一片或夹在线之间，按原始覆盖率怎么都组不成等距的 6 根线；数字比窗口高，减掉“底”后就没了。"""
+    k = max(3, round(sp * 0.35)) | 1
+    pad = np.pad(frac, k // 2, mode="edge")
+    lo = np.lib.stride_tricks.sliding_window_view(pad, k).min(1)
+    opened = np.lib.stride_tricks.sliding_window_view(np.pad(lo, k // 2, mode="edge"), k).max(1)
+    return frac - opened
+
+
+def _staff_lines(gray: np.ndarray, thr: float | None = None, sp: float | None = None) -> list[float]:
+    """谱线的纵坐标。给了 sp（已知线距）时按 _thin_only 去掉一排排数字后再找。"""
     # 谱线常是 1 像素的浅灰细线，且可能跨在两行像素之间：放宽暗度阈值，并把相邻两行合并后再算覆盖率。
     # 缩小、模糊、JPEG 压缩过的截图里，浅灰的谱线会摊到两行像素上、每行都只有 205 左右：门槛放到 215
     dark = gray < 215
     dark = dark[:-1] | dark[1:]
     h, w = dark.shape
     frac = dark.sum(1) / w
+    if sp is not None:
+        frac = _thin_only(frac, sp)
     if thr is None:
         thr = max(0.35, 0.6 * float(frac.max()))
     runs = _runs(frac >= thr)
@@ -59,15 +74,44 @@ def _find_staves(gray: np.ndarray) -> list[list[float]]:
     # 只接受线距和已找到的谱表一致、且不与它们重叠的，避免把文字行当成谱线。
     sps = [_spacing(t) for t in staves]
     # 门槛太低时普通的短行反而会和音符连成一片，所以先 0.25 再 0.1、0.05，后一遍只补前面没找到的。
-    # 0.25 那一遍找半页宽的末行：五线谱线间挤满音符、符杠时，线和线之间的行也有 0.1 左右，0.1 的门槛会把五根线连成一片
-    for cand in [c for thr in (0.25, 0.1, 0.05) for c in _group_staves(_staff_lines(gray, thr), h, w)]:
+    # 0.25 那一遍找半页宽的末行：五线谱线间挤满音符、符杠时，线和线之间的行也有 0.1 左右，0.1 的门槛会把五根线连成一片。
+    # 0.25 之后先按六线谱的线距去掉一排排数字再找两遍（见 _thin_only）：挤满数字的那一行在 0.1 那一遍也可能凑成 6 根线，
+    # 但线的位置被数字带偏了一两个像素，量谱线覆盖率时压不到线上。这两遍只要间距均匀的 6 根
+    # （和弦图格子的横线和图片底边截断的六线谱露出的几根线也会凑成一组）
+    tab_sps = [_spacing(t) for t in staves if len(t) == 6]
+    tab_sp = float(np.median(tab_sps or sps))
+    passes = [(_staff_lines(gray, 0.25), False)]
+    passes += [(_staff_lines(gray, t, tab_sp), True) for t in (0.25, 0.1)]
+    passes += [(_staff_lines(gray, t), False) for t in (0.1, 0.05)]
+    for cand, thin in [(c, thin) for lines, thin in passes for c in _group_staves(lines, h, w)]:
         sp = _spacing(cand)
-        if not any(abs(sp - x) <= x * 0.15 for x in sps):
+        if not any(abs(sp - x) <= x * 0.15 for x in sps) or (thin and not _even(cand, tab_sp)):
             continue
-        if any(cand[0] <= t[-1] + sp and t[0] <= cand[-1] + sp for t in staves):
+        hit = [i for i, t in enumerate(staves) if cand[0] <= t[-1] + sp and t[0] <= cand[-1] + sp]
+        # 前面只凑出了其中 5 根、线距又和六线谱一样（挤满数字的那一行有一根线被数字挡得浅了一点；缩小过的截图里 1 弦淡了）：
+        # 换成间距均匀的这 6 根
+        if hit and not (
+            tab_sps and _even(cand, tab_sp) and all(_partial_tab(staves[i], cand, tab_sp) for i in hit)
+        ):
             continue
-        staves.append(cand)
+        staves = [t for i, t in enumerate(staves) if i not in hit] + [cand]
     return _drop_ledger_groups(sorted(staves, key=lambda t: t[0]))
+
+
+def _even(staff: list[float], tab_sp: float) -> bool:
+    """6 根线，每个间距都和这页的六线谱一样（差不到 12%）。"""
+    return len(staff) == 6 and all(abs(gap - tab_sp) <= tab_sp * 0.12 for gap in np.diff(staff))
+
+
+def _partial_tab(part: list[float], staff: list[float], tab_sp: float) -> bool:
+    """part 是 5 根线距和六线谱一样的线，其中至少 4 根是六线谱 staff 里的线（和 staff 里的某根线差不到 0.25 个线距）：
+    少了 1 弦或 6 弦，或者再把谱表上方一排等距的记号（指法数字、框线）当成了一根线。
+    五线谱的线距比六线谱小，不会被当成六线谱的一部分。"""
+    return (
+        len(part) == 5
+        and abs(_spacing(part) - tab_sp) <= tab_sp * 0.08
+        and sum(min(abs(y - z) for z in staff) <= tab_sp * 0.25 for y in part) >= 4
+    )
 
 
 def _drop_ledger_groups(staves: list[list[float]]) -> list[list[float]]:
