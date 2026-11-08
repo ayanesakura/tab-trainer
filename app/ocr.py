@@ -5,8 +5,9 @@
 2. 用 PaddleOCR 的识别模型（ONNX）读这个数，解码时只允许 0–9 和括号、x（括号、x 最后去掉，不让模型把它们硬读成数字）。
 数字落在哪根线上就是哪根弦，这是几何判断，不会像大模型那样把数字往下错一根弦。
 准确率用 scripts/ocr_bench.py 测（按评测曲存好的版面逐小节比（弦, 品），精确率 / 召回率）：
-11 首干净的评测曲合计 98.1% / 98.9%（勿听、Romance 都是 100% / 100%；只有六线谱、符干画在谱线中间的
-Mother-tab 最差，91.6% / 95.4%），8 首降质版本合计 99.1% / 98.1%。
+11 首干净的评测曲合计 98.0% / 98.9%（勿听、Romance 都是 100% / 100%；只有六线谱、符干画在谱线中间的
+Mother-tab 最差，91.6% / 95.4%），8 首降质版本合计 99.1% / 98.4%。模型用 PP-OCRv5 mobile：数字和 v4 差不多
+（降质版本召回率高 0.3 个百分点），括号读得准得多（见 Digit）。
 read_system(detail=True) 还报每个数字两边有没有圆括号 / 尖括号（鬼音、延续音、泛音），见 Digit。
 
 思路参考 PDF-to-GP5（MIT）的图片识别；它自己的谱线检测在我们的谱子上很不稳定，所以版面用我们自己的。
@@ -25,7 +26,7 @@ import numpy as np
 
 log = logging.getLogger("tab_trainer.ocr")
 
-MODEL = Path(__file__).parent / "models" / "ppocr_v4_rec.onnx"
+MODEL = Path(__file__).parent / "models" / "ppocr_v5_mobile_rec.onnx"
 DARK = 160  # 比这个暗的像素算笔画
 # 浅灰色的笔画（有的软件把第二声部画成灰色，截图压缩、模糊后更浅）：比这个暗、整块都没有比 DARK 暗的像素，也算笔画。
 # 只收整块都浅的，黑色数字模糊出来的灰边不会让数字变粗、粘连；0 = 不收
@@ -61,7 +62,9 @@ class Digit(NamedTuple):
     fret: int
     x: float  # 数字块中心的横坐标（裁剪图坐标）
     paren: bool = False  # 数字两边有圆括号 (n)：鬼音、小节开头的延续音
-    angle: bool = False  # 数字两边有尖括号 <n>：泛音
+    angle: bool = False  # 数字两边有尖括号 <n>：泛音（自然泛音的品、人工 / 点弦泛音的标注）
+    # 评测（scripts/ocr_bench.py --gp-truth，只算数字读到了的）：干净的谱子 paren 精确率 99.7% / 召回率 98.2%、
+    # angle 96.3% / 100%；降质的 paren 99.0% / 73.7%、angle 94.4% / 96.0%。报了基本可信，没报不代表没有
 
 
 class _Recognizer:
