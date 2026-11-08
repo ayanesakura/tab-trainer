@@ -264,9 +264,10 @@ table.tune td b { font-variant-numeric: tabular-nums; }
 .tnote { font-size: 34px; font-weight: 700; min-width: 110px; text-align: center; font-variant-numeric: tabular-nums; }
 .meter { position: relative; width: 320px; max-width: 100%; height: 28px; background: var(--pill); border-radius: 14px; overflow: hidden; }
 .meter .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: var(--green); }
-.meter .needle { position: absolute; top: 4px; bottom: 4px; width: 8px; margin-left: -4px; border-radius: 4px; background: var(--faint); left: 50%; transition: left .08s; } /* 没有信号时是灰的，不像“没调准” */
+.meter .needle { position: absolute; top: 4px; bottom: 4px; width: 8px; margin-left: -4px; border-radius: 4px; background: var(--faint); left: 50%; transition: left .16s ease-out, background-color .2s, opacity .2s; } /* 没有信号时是灰的，不像“没调准”；读数每 40ms 一次，过渡把它连成平滑的移动 */
 .meter .needle.live { background: var(--amber); }
 .meter .needle.live.ok { background: var(--green); }
+.meter .needle.held { opacity: .55; } /* 音在衰减、这一下没测到：保留刚才的读数 */
 .tread { color: var(--muted); margin-top: 6px; font-size: var(--fs-1); }
 .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px var(--sp-3); padding: 14px var(--sp-4); }
 .meta-grid label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-1); color: var(--muted); }

@@ -1,9 +1,11 @@
 // 调弦页：调弦表（每根弦要怎么调，带“听”按钮）和麦克风调音器。音名显示用 ♯。
+// 音高检测和读数稳定在 lib/pitch.js（纯计算，Node 里测）；这里只管麦克风、取样和显示。
 
 import { get, on } from './store.js';
 import { $, UI } from './dom.js';
 import { ac, initAudio, pluck } from './audio.js';
 import { mname, mtof, STD_MIDI } from './view.js';
+import { TunerEngine } from '../lib/pitch.js';
 
 let TUNE = [];
 function howTo(d) {
@@ -18,28 +20,57 @@ function renderTune(v) {
   const names = [6, 5, 4, 3, 2, 1].map(s => v.openName[s]).join('–');
   const std = TUNE.every(t => t.how === '不变');
   $('tuneTitle').textContent = `调弦：${std ? '标准调弦' : names}${v.capo ? ` · 变调夹 ${v.capo} 品` : ''}`;
+  if (mic) { makeEngine(); mic.shown = null; } // 表格重画了（高亮没了）；调弦改了还要按新的目标重新识别
 }
-function autoCorrelate(buf, sr) {
-  let n = buf.length, rms = 0;
-  for (let i = 0; i < n; i++) rms += buf[i] * buf[i];
-  if (Math.sqrt(rms / n) < 0.012) return -1;
-  let r1 = 0, r2 = n - 1; const th = 0.2;
-  for (let i = 0; i < n / 2; i++) if (Math.abs(buf[i]) < th) { r1 = i; break; }
-  for (let i = 1; i < n / 2; i++) if (Math.abs(buf[n - i]) < th) { r2 = n - i; break; }
-  buf = buf.slice(r1, r2); n = buf.length;
-  const c = new Float32Array(n);
-  for (let i = 0; i < n; i++) { let s = 0; for (let j = 0; j < n - i; j++) s += buf[j] * buf[j + i]; c[i] = s; }
-  let d = 0; while (d < n - 1 && c[d] > c[d + 1]) d++;
-  let mv = -1, mp = -1;
-  for (let i = d; i < n; i++) if (c[i] > mv) { mv = c[i]; mp = i; }
-  if (mp <= 0 || mp >= n - 1) return -1;
-  const x1 = c[mp - 1], x2 = c[mp], x3 = c[mp + 1], a = (x1 + x3 - 2 * x2) / 2, b = (x3 - x1) / 2;
-  return sr / (a ? mp - b / (2 * a) : mp);
-}
-let mic = null; // 开着时 {stream, src, timer}
+
+let mic = null; // 开着时 {stream, src, an, buf, eng, key, raf, last, shown}
 const MIC_BLOCKED = '麦克风只能在本机地址或 HTTPS 下使用。局域网打开时请用每根弦的“听”按钮对音。';
 const MIC_IDLE = '弹一根空弦，自动识别是哪根';
+const FRAME_MS = 40; // 每秒算 25 次音高就够了（一次不到 1ms），指针的平滑靠 CSS 过渡
 let starting = false;
+/** 按当前调弦建音高跟踪（目标没变就沿用，不打断正在显示的读数）；缓冲长度跟着最低弦变 */
+function makeEngine() {
+  const key = TUNE.map(t => t.m).join();
+  if (mic.eng && mic.key === key) return;
+  const eng = new TunerEngine(TUNE.map(t => ({ s: t.s, m: t.m })), ac.sampleRate);
+  if (mic.an.fftSize !== eng.bufferSize) mic.an.fftSize = eng.bufferSize;
+  mic.buf = new Float32Array(mic.an.fftSize);
+  Object.assign(mic, { eng, key });
+}
+/** 显示一帧的读数（只在变了的时候动 DOM） */
+function show(r) {
+  const key = r.live ? [r.target.s, r.cents, r.ok, r.held, r.note, r.hz.toFixed(1)].join() : '';
+  if (key === mic.shown) return;
+  mic.shown = key;
+  if (!r.live) { resetDisplay(); return; }
+  TUNE.forEach(t => $('tr' + t.s).classList.toggle('hit', t.s === r.target.s));
+  $('tNote').textContent = mname(r.note);
+  const nd = $('tNeedle');
+  nd.style.left = 50 + Math.max(-50, Math.min(50, r.cents)) + '%';
+  nd.classList.add('live');
+  nd.classList.toggle('ok', r.ok);
+  nd.classList.toggle('held', r.held); // 这一帧没测到（音在衰减）：显示的是刚才的读数
+  const tip = r.ok ? '<span class="chg-same">✓ 准了</span>' : Math.abs(r.cents) > 300 ? '差得较多' : r.cents > 0 ? '偏高，往下调' : '偏低，往上调';
+  $('tRead').innerHTML = `${r.target.s} 弦 → 目标 <b>${mname(r.target.m)}</b>　当前 ${r.hz.toFixed(1)} Hz，${r.cents > 0 ? '+' : ''}${r.cents} 音分　${tip}`;
+}
+function resetDisplay() {
+  const nd = $('tNeedle');
+  nd.classList.remove('live', 'ok', 'held'); nd.style.left = '50%';
+  $('tNote').textContent = '--';
+  $('tRead').textContent = MIC_IDLE;
+  TUNE.forEach(t => { const r = $('tr' + t.s); if (r) r.classList.remove('hit'); });
+}
+function tick(now) {
+  if (!mic) return;
+  mic.raf = requestAnimationFrame(tick);
+  if (now - mic.last < FRAME_MS) return;
+  mic.last = now;
+  const { an, buf } = mic;
+  an.getFloatTimeDomainData(buf);
+  let e = 0; // 最近 1024 个样本（约 20ms）的音量：判断是不是刚拨了弦
+  for (let i = buf.length - 1024; i < buf.length; i++) e += buf[i] * buf[i];
+  show(mic.eng.process(buf, now, Math.sqrt(e / 1024)));
+}
 async function startMic() {
   if (mic || starting) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('tRead').textContent = MIC_BLOCKED; return; }
@@ -51,41 +82,22 @@ async function startMic() {
   finally { starting = false; }
   if (get('ui.view') !== 'tune') { stream.getTracks().forEach(t => t.stop()); return; } // 等授权的时候已经离开了调弦页
   $('micBtn').innerHTML = '<span class="dot ok"></span>调音器已开启 · 点击关闭';
-  const an = ac.createAnalyser(); an.fftSize = 2048;
+  const an = ac.createAnalyser();
   const src = ac.createMediaStreamSource(stream);
   src.connect(an);
-  const buf = new Float32Array(an.fftSize), hist = [];
-  const timer = setInterval(() => {
-    an.getFloatTimeDomainData(buf);
-    const f = autoCorrelate(buf, ac.sampleRate);
-    if (f < 60 || f > 400) return;
-    hist.push(f); if (hist.length > 5) hist.shift();
-    const fm = [...hist].sort((x, y) => x - y)[Math.floor(hist.length / 2)];
-    const m = 69 + 12 * Math.log2(fm / 440);
-    let best = TUNE[0]; for (const t of TUNE) if (Math.abs(m - t.m) < Math.abs(m - best.m)) best = t;
-    const cents = Math.round((m - best.m) * 100), ok = Math.abs(cents) <= 5;
-    TUNE.forEach(t => $('tr' + t.s).classList.toggle('hit', t === best));
-    $('tNote').textContent = mname(Math.round(m));
-    $('tNeedle').style.left = (50 + Math.max(-50, Math.min(50, cents))) + '%';
-    $('tNeedle').classList.add('live');
-    $('tNeedle').classList.toggle('ok', ok);
-    $('tRead').innerHTML = `${best.s} 弦 → 目标 <b>${mname(best.m)}</b>　当前 ${fm.toFixed(1)} Hz，${cents > 0 ? '+' : ''}${cents} 音分　` +
-      (ok ? '<span class="chg-same">✓ 准了</span>' : Math.abs(cents) > 300 ? '差得较多' : cents > 0 ? '偏高，往下调' : '偏低，往上调');
-  }, 80);
-  mic = { stream, src, timer };
+  mic = { stream, src, an, buf: null, eng: null, key: '', raf: 0, last: -Infinity, shown: null };
+  makeEngine();
+  mic.raf = requestAnimationFrame(tick);
 }
-/** 关掉麦克风（再点一次按钮、离开调弦页时）：不然系统的麦克风指示一直亮着，后台每 80ms 还在算音高 */
+/** 关掉麦克风（再点一次按钮、离开调弦页时）：不然系统的麦克风指示一直亮着，后台还在算音高 */
 function stopMic() {
   if (!mic) return;
-  clearInterval(mic.timer);
+  cancelAnimationFrame(mic.raf);
   mic.src.disconnect();
   mic.stream.getTracks().forEach(t => t.stop());
   mic = null;
   $('micBtn').innerHTML = UI.icon('mic') + '开启麦克风';
-  $('tNeedle').classList.remove('live', 'ok'); $('tNeedle').style.left = '50%';
-  $('tNote').textContent = '--';
-  $('tRead').textContent = MIC_IDLE;
-  TUNE.forEach(t => { const r = $('tr' + t.s); if (r) r.classList.remove('hit'); });
+  resetDisplay();
 }
 
 export function initTuner() {
