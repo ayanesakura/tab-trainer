@@ -1302,3 +1302,56 @@ def test_doubts_mode_ignores_info_only_warnings(data_dir, monkeypatch):
     monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
     bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="doubts", split=False)
     assert reads == [1] and all(w["code"] == "off_grid" for b in bars for w in b["warn"])
+
+
+def test_failed_row_write_stops_the_other_rows_and_leaves_no_row_pending(data_dir, sync_jobs, monkeypatch):
+    """第一次识别时写回一行出错（存盘失败之类）：还没开始的行不再发请求；结束后没有行停在“等待 / 识别中”，
+    都标成失败（“重试失败的行”才找得到它们）。"""
+    monkeypatch.setattr(config.settings, "row_concurrency", 1)
+    real = recognize.apply_time_signatures
+    boom = []
+
+    def flaky(bars, meta):
+        if not boom:
+            boom.append(1)
+            raise OSError("磁盘满了")
+        return real(bars, meta)
+
+    monkeypatch.setattr(recognize, "apply_time_signatures", flaky)
+    real_queued = recognize.transcribe_queued
+
+    def queued(*a, cancel=None, **kw):
+        if a[3] == 1:  # 第二行等第一行写回（出错）之后才开始：不然要看两个线程谁快
+            cancel.wait(2)
+        return real_queued(*a, cancel=cancel, **kw)
+
+    monkeypatch.setattr(recognize, "transcribe_queued", queued)
+    sid = songs.create_song([("p1.png", score_png())])
+    assert recognize.start_parse(sid)
+    song = store.load(sid)
+    assert boom and song["status"] == "error"
+    assert [c["first_bar"] for c in FakeClaude.calls if not c["retry"]] == [1]  # 第二行没有再发请求
+    assert [x["status"] for x in song["systems"]] == ["error", "error"]
+    assert recognize.failed_rows(song) == [0, 1]
+
+
+def test_rows_locked_for_a_redo_are_released_when_the_job_fails(data_dir, sync_jobs, monkeypatch):
+    """重试失败的行之后要按新拍号重做别的行（这些行被标成识别中）：重做没跑成，它们也要标成失败，不能一直锁着。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    store.update(sid, lambda s: s["systems"][0].update(status="error", error="断了"))
+    real = recognize._recognize_rows
+    n = []
+
+    def rows(*a, **kw):
+        n.append(1)
+        if len(n) == 2:
+            raise RuntimeError("断了")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(recognize, "_recognize_rows", rows)
+    monkeypatch.setattr(recognize, "_rows_to_redo", lambda *a, **kw: [(1, [3, 4], "")])
+    recognize.start_retry_failed(sid)
+    song = store.load(sid)
+    assert song["activity"] is None
+    assert [x["status"] for x in song["systems"]] == ["done", "error"]

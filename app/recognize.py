@@ -84,7 +84,19 @@ def _begin_parse(s: dict, stage: str = "排队中") -> None:
 
 
 def _end_parse(sid: str, status: str, notice: tuple[str, str] | None) -> None:
-    store.update(sid, lambda s: state.finish(s, status=status, notice=notice, source="parse"))
+    def apply(s):
+        _fail_unfinished_rows(s, "已取消" if status == "cancelled" else "识别中断，没有识别")
+        state.finish(s, status=status, notice=notice, source="parse")
+
+    store.update(sid, apply)
+
+
+def _fail_unfinished_rows(s: dict, why: str) -> None:
+    """任务结束时还停在“等待 / 识别中”的行（没轮到、被取消、写回出错、锁着等重做的）标成失败：
+    不然它们一直锁着，“重试失败的行”也找不到。"""
+    for x in s.get("systems") or []:
+        if x.get("status") in ("parsing", "pending"):
+            x.update(status="error", error=why)
 
 
 # ---------------------------------------------------------------------------
@@ -811,7 +823,8 @@ def _recognize_rows(
         for r in rows
     ]
     errors: list[str] = []
-    with ThreadPoolExecutor(settings.row_concurrency) as pool:
+    pool = ThreadPoolExecutor(settings.row_concurrency)
+    try:
         futs = {
             pool.submit(
                 transcribe_queued,
@@ -842,6 +855,11 @@ def _recognize_rows(
             if cancel.is_set():
                 for f in futs:
                     f.cancel()  # 还没开始的行不再发请求；正在进行的请求会跑完
+    except BaseException:
+        cancel.set()  # 写回出错（存盘失败、曲子被删）：还没开始的行不再发请求，正在进行的读完这一次就停
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
     return {si: ts for si, _, ts, *_ in plan}, errors
 
 
@@ -1071,9 +1089,8 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
     finally:
 
         def end(s):
-            for si in rows:
-                if si < len(s["systems"]) and s["systems"][si].get("status") in ("parsing", "pending"):
-                    s["systems"][si].update(status="error", error="已取消" if cancel.is_set() else "没有识别")
+            # 这几行，以及按新拍号锁着等重做的行
+            _fail_unfinished_rows(s, "已取消" if cancel.is_set() else "没有识别")
             msg = f"{what}有行没识别出来（" + "；".join(failed)[:300] + "），可以点“重试失败的行”再试"
             state.finish(s, notice=("warn", msg) if failed else None, source="reparse_row")
             meter.charge(s)
