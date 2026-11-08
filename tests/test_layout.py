@@ -458,3 +458,35 @@ def test_thick_lines_of_an_upscaled_screenshot():
             d.rectangle([(x, top), (x + 3, top + 5 * sp + 3)], fill=40)
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [2, 2]
+
+
+def test_one_row_split_by_a_coda_gap_does_not_make_the_page_two_columns():
+    """只有一行在 Coda 前隔开一大段（≥4 个线距）：整页还是单栏，缩进的首行仍排在最前面。"""
+    img = Image.new("L", (1200, 1000), 255)
+    d = ImageDraw.Draw(img)
+    _draw_tab(d, 150, 200, 1140, (200, 670, 1140))  # 首行缩进
+    _draw_tab(d, 400, 60, 600, (60, 330, 600))
+    _draw_tab(d, 400, 700, 1140, (700, 920, 1140))  # 同一行的 Coda，隔开 100 像素
+    _draw_tab(d, 650, 60, 1140, (60, 600, 1140))
+    r = detect_page(img)
+    assert [(s["x0"], round(s["lines"][0])) for s in r["systems"]] == [
+        (200, 150),
+        (60, 400),
+        (700, 400),
+        (60, 650),
+    ]
+
+
+@pytest.mark.parametrize("offset", [0, 3, 40])
+def test_two_columns_slightly_offset_vertically(offset):
+    """双栏排版、右栏比左栏低几个像素到半行：两栏都要找到，先左栏再右栏。"""
+    img = Image.new("L", (1400, 1000), 255)
+    d = ImageDraw.Draw(img)
+    for top in (120, 520):
+        _draw_system(d, top, 60, 640, (60, 350, 640))
+        _draw_system(d, top + offset, 760, 1340, (760, 1050, 1340))
+    r = detect_page(img)
+    systems = r["systems"]
+    assert [s["x0"] for s in systems] == [60, 60, 760, 760]
+    assert [len(s["bars"]) for s in systems] == [2, 2, 2, 2]
+    assert systems[0]["top"] < systems[1]["top"] and systems[2]["top"] < systems[3]["top"]
