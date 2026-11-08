@@ -58,8 +58,9 @@ def _find_staves(gray: np.ndarray) -> list[list[float]]:
     # 第二遍：低门槛补找没占满页宽的短行（如一页的最后一行、双栏排版；只有一个全音符小节的末行不到页宽的十分之一）。
     # 只接受线距和已找到的谱表一致、且不与它们重叠的，避免把文字行当成谱线。
     sps = [_spacing(t) for t in staves]
-    # 门槛太低时普通的短行反而会和音符连成一片，所以先 0.1 再 0.05，后一遍只补前面没找到的
-    for cand in [c for thr in (0.1, 0.05) for c in _group_staves(_staff_lines(gray, thr), h, w)]:
+    # 门槛太低时普通的短行反而会和音符连成一片，所以先 0.25 再 0.1、0.05，后一遍只补前面没找到的。
+    # 0.25 那一遍找半页宽的末行：五线谱线间挤满音符、符杠时，线和线之间的行也有 0.1 左右，0.1 的门槛会把五根线连成一片
+    for cand in [c for thr in (0.25, 0.1, 0.05) for c in _group_staves(_staff_lines(gray, thr), h, w)]:
         sp = _spacing(cand)
         if not any(abs(sp - x) <= x * 0.15 for x in sps):
             continue
@@ -130,35 +131,77 @@ def _group_staves(lines: list[float], h: int, w: int) -> list[list[float]]:
     return [t for t in (_trim(s) for s in staves) if len(t) in (5, 6)]
 
 
-def _overhang(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) -> float:
-    """竖线在六线谱上下各伸出去多远（线距为单位，取较长的一端）。"""
+def _overhang(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) -> tuple[float, float]:
+    """竖线在六线谱上方、下方各伸出去多远（线距为单位）。"""
     cols = dark[:, max(0, a - 1) : b + 1].any(1)
     h, gap = len(cols), max(2, round(sp * 0.15))  # 从谱线外侧一点开始量，避开谱线本身的粗细
-    out = 0
+    out = []
     for y, step in ((round(tab[0]) - gap, -1), (round(tab[-1]) + gap, 1)):
         n = 0
         while 0 <= y + step * n < h and cols[y + step * n]:
             n += 1
-        out = max(out, n)
-    return out / sp
+        out.append(n / sp)
+    return out[0], out[1]
 
 
-def _is_barline(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float, ends: np.ndarray) -> bool:
+def _is_barline(
+    dark: np.ndarray, a: int, b: int, tab: list[float], sp: float, ends: np.ndarray, colfrac: np.ndarray
+) -> bool:
     """贯穿六线谱的竖线里分出小节线：
     - 两端要连到 1 弦和 6 弦（扫弦箭头的尾巴常常到不了最下面那根线）；
     - 不能只在上下伸出去一点：扫弦箭头的箭头、尾巴会超出谱线 0.4–0.5 个线距（小节线停在谱线上，被连线、弧线碰到也只有 0.1–0.2），
-      小节线正好停在谱线上（和五线谱连通的小节线、左边的谱表括号伸得远，不受影响）。"""
+      小节线正好停在谱线上（和五线谱连通的小节线、左边的谱表括号伸得远，不受影响）；
+    - 不能是从品格数字出发、贯穿整个六线谱的符干（见 _notes_at_ends）：两端都扎在数字里（和弦的最高、最低音），
+      或者一端扎在数字里、另一端伸出谱线去接横梁（伸得远时上一条管不到）。"""
     if ends[max(0, a - 1) : b + 1].max() < 0.8:
         return False
     if _arrowhead(dark, a, b, tab, sp):
         return False
-    return not 0.3 <= _overhang(dark, a, b, tab, sp) <= 2.5
+    up, down = _overhang(dark, a, b, tab, sp)
+    top, bottom = _notes_at_ends(dark, a, b, tab, sp, colfrac)
+    # 符干伸出谱线去接横梁最多三四个线距；和上方五线谱连通的小节线、谱表括号伸得远得多，不受影响
+    if (top and (bottom or 0.3 <= down <= 4)) or (bottom and 0.3 <= up <= 4):
+        return False
+    return not 0.3 <= max(up, down) <= 2.5
+
+
+def _notes_at_ends(
+    dark: np.ndarray, a: int, b: int, tab: list[float], sp: float, colfrac: np.ndarray
+) -> tuple[bool, bool]:
+    """竖线的上端（1 弦）、下端（6 弦）是不是扎在一个品格数字里。符干从数字出发：数字骑在弦线上、符干从它中间穿出来，
+    伸出谱线的部分被数字挡住（“7” 的横只伸出去 0.26 个线距，“0” 中间是空的），靠伸出长度分不出来。
+    小节线两端停在谱线上，旁边没有东西（连线、弧线碰到也只在一侧、一两行）。
+    在弦线上下半个线距、竖线左右 0.45 个线距的小框里找竖线以外的墨迹（谱线本身那几行不算；
+    另一条贯穿的竖线和它旁边两个像素也不算：双小节线、反复记号的粗细两条线挨得很近，谱表括号末端有个钩）：
+    左右两侧都有、加起来占了 0.3 个线距以上的行，就是数字。"""
+    h, w = dark.shape
+    r = max(3, round(sp * 0.45))
+    near = range(max(0, a - r), min(w, b + r + 1))
+    through = np.flatnonzero(colfrac >= 0.5)
+    through = through[(through < a - 1) | (through > b)]
+
+    def free(x: int) -> bool:
+        return not len(through) or np.abs(through - x).min() > 2
+
+    left = [x for x in near if x < a - 1 and free(x)]
+    right = [x for x in near if x > b and free(x)]
+    if not left or not right:
+        return False, False
+    found = []
+    for y_line in (tab[0], tab[-1]):
+        y0, y1 = max(0, int(y_line - sp * 0.5)), min(h, int(y_line + sp * 0.5) + 1)
+        lines = dark[y0:y1, max(0, int(a - sp * 2)) : int(b + sp * 2)].mean(1) >= 0.5  # 谱线本身的行
+        lo, hi = dark[y0:y1][:, left].any(1) & ~lines, dark[y0:y1][:, right].any(1) & ~lines
+        found.append(bool(lo.sum() >= sp * 0.15 and hi.sum() >= sp * 0.15 and (lo | hi).sum() >= sp * 0.3))
+    return found[0], found[1]
 
 
 def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) -> bool:
     """扫弦箭头：竖线一端有个三角形的箭头（停在谱线以内、几乎不伸出去，靠伸出长度分不出来）。
-    沿着竖线逐行量它的宽度（避开谱线本身那几行）：连续 3 行以上比竖线本身宽出 2 像素以上就是箭头。
-    小节线（包括加粗的终止线）从头到尾一样宽；连线、弧线横穿过去只占一两行。"""
+    沿着竖线逐行量它向左、向右各伸出多远（避开谱线本身那几行）：连续 3 行以上两边都比竖线本身宽出 m 像素就是箭头。
+    小节线（包括加粗的终止线）从头到尾一样宽；连线、弧线横穿过去只占一两行。
+    - 两边都要宽出去：箭头是对称的三角形；反复记号的两个点贴在细线一侧，不是箭头；
+    - m 按线距算（至少 1 像素）：放大 2 倍（最近邻）的截图里，竖线一侧的灰边会变成 2 像素宽，按固定像素算会被当成箭头。"""
     c = (a + b) // 2
     w = dark.shape[1]
     lines = [round(y) for y in tab]
@@ -169,25 +212,43 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
         y0 -= 1
     while y1 < min(dark.shape[0] - 1, tab[-1] + sp * 0.8) and col[y1 + 1]:
         y1 += 1
-    widths = []
+    edges = []  # 每行（竖线所在的那段墨迹）向左、向右伸到哪；这一行竖线断开时为 None
+    near_line = max(1, round(sp * 0.12))  # 谱线本身（放大过的截图里谱线有三四行粗，和竖线交叉处的灰边也更宽）
     for y in range(y0, y1 + 1):
-        if any(abs(y - ly) <= 1 for ly in lines):
+        if any(abs(y - ly) <= near_line for ly in lines):
             continue
         row = dark[y]
         if not row[c]:
-            widths.append(0)
+            edges.append(None)
             continue
         lo = hi = c
         while lo > 0 and row[lo - 1] and c - lo < sp:
             lo -= 1
         while hi < w - 1 and row[hi + 1] and hi - c < sp:
             hi += 1
-        widths.append(hi - lo + 1)
-    stem = float(np.median([x for x in widths if x])) if any(widths) else 1.0
+        edges.append((lo, hi))
+    found = [e for e in edges if e]
+    if not found:
+        return False
+    stem_lo, stem_hi = np.median([e[0] for e in found]), np.median([e[1] for e in found])
+    m = max(1, round(sp * 0.1))
     run = 0
-    for x in widths:
-        run = run + 1 if stem + 2 <= x < sp else 0
+    for e in edges:
+        wide = e is not None and e[0] <= stem_lo - m and e[1] >= stem_hi + m and e[1] - e[0] + 1 < sp
+        run = run + 1 if wide else 0
         if run >= 3:
+            return True
+    return False
+
+
+def _stray_outer_line(lines_dark: np.ndarray, ys: list[int], x0: int, x1: int) -> bool:
+    """最上面或最下面那根“线”只横贯这一段的一小部分、而且只出现在其中几处：不是六线谱。
+    图片底边截断的六线谱只露出四根线，和上方一排和弦图格子的横线（只占这一段的十分之一出头、集中在两三个和弦图那里）
+    等距时会凑成“6 根线”；缩小过的截图里也会把一段文字、横梁凑进来。缩小过的模糊截图里真谱线可能只剩一两成，
+    但断断续续地横贯整段（分成 8 截，6 截以上都有）；中间的线弱不要紧（被数字挡住、褪色）。"""
+    for y in (ys[0], ys[-1]):
+        line = lines_dark[max(0, y - 1) : y + 2, x0 : x1 + 1].any(0)
+        if line.mean() < 0.2 and sum(c.mean() > 0.05 for c in np.array_split(line, 8)) <= 5:
             return True
     return False
 
@@ -210,16 +271,72 @@ def _chord_diagrams(dark: np.ndarray, tab: list[float], sp: float, x0: int, x1: 
     return len(cols) >= 5 and float(np.median(np.diff(cols))) < sp * 1.2
 
 
-def _row_split(upper: dict, lower: dict, dark: np.ndarray | None = None) -> float:
+def _row_split(
+    upper: dict, lower: dict, dark: np.ndarray | None = None, gray: np.ndarray | None = None
+) -> float:
     """相邻两行的分界：一般取中点。两行隔得很远时（弹唱谱：上一行下面有简谱和歌词，下一行上面有和弦图），
     下一行只要它上方的和弦图那一块（找得到的话），否则只要它上方 9 个线距（和弦名、和弦图、速度记号一般都在这个
-    范围里），剩下的都归上一行——否则上一行的歌词会被拦腰切掉。"""
+    范围里），剩下的都归上一行——否则上一行的歌词会被拦腰切掉。分界横穿了墨迹时再挪到空白里（见 _clean_cut）。"""
     mid = (upper["tab_bottom"] + lower["first_top"]) / 2
-    if dark is not None:
-        top = _diagram_block_above(dark, lower, upper["tab_bottom"])
-        if top is not None:
-            return max(top, upper["tab_bottom"] + upper["sp"])
-    return max(mid, lower["first_top"] - lower["sp"] * 9)
+    y = max(mid, lower["first_top"] - lower["sp"] * 9)
+    if dark is None:
+        return y
+    top = _diagram_block_above(dark, lower, upper["tab_bottom"])
+    if top is not None:
+        return max(top, upper["tab_bottom"] + upper["sp"])
+    return _clean_cut(dark, gray, upper, lower, y) if gray is not None else y
+
+
+def _clean_cut(ink: np.ndarray, gray: np.ndarray, upper: dict, lower: dict, y: float) -> float:
+    """分界线 y 横穿了墨迹时，挪到两行之间一段空白里，不把哪一行的东西拦腰切断。
+    五线谱 + 六线谱：下一行五线谱上方的高音（加线）、向上的符干、横梁、连音记号伸得很高，上一行六线谱下面却常常
+    什么都没有，取中点会把下一行的符干、横梁切掉一截（模型看不到节奏）；弹唱谱的中点也常常落在歌词上。
+    两行之间的墨迹按连通块分：连着上一行最下面那根线的（6 弦上的数字、向下的符干横梁）归上一行，连着下一行最上面那根线的
+    （符头、符干、加线）归下一行；分界只能在前者的最低点（lo）和后者的最高点（hi）之间的空白行里：
+    - y 切到了下一行连着的东西：从 hi 往上找第一段够宽（半个线距以上）的空白（符头上方挨得很近的 T、文字一起留给下一行）；
+      切到了上一行连着的东西：从 lo 往下找；
+    - 切到的是两边都不连着的（歌词、简谱、和弦名、文字）：这一段墨迹上下两段空白里取宽的那段——歌词挨着上面的简谱、
+      和弦名挨着下面的和弦图，离另一边隔得远；但不能让下一行分到它上方 9 个线距以外的东西。
+    - 只看谱线横向范围以内、去掉左边一个线距（谱表括号弯出来的尖角会伸到分界线上）；
+    - 是否横穿墨迹按真正的黑色印刷（ink）算；空白行按浅一些的门槛（< 200）算：浅灰的和弦名、歌词也不能切，
+      有灰色水印、灰底时找不到空白行，就不动；
+    - y 所在的那一行本来就没有墨迹时不动；两行的东西上下交错、中间没有空白时也不动。"""
+    import cv2
+
+    sp = min(upper["sp"], lower["sp"])
+    x0 = int(max(0, min(upper["x0"], lower["x0"])) + sp)
+    x1 = max(upper["x1"], lower["x1"])
+    a, b = int(upper["tab_bottom"] + 0.5), int(lower["first_top"] + 0.5)
+    yi = int(y)
+    if not a < yi < b or x1 <= x0:
+        return y
+    band = ink[a : b + 1, x0 : x1 + 1]
+    if not band[yi - a].any():
+        return y
+    _, lab, stats, _ = cv2.connectedComponentsWithStats(band.astype(np.uint8), connectivity=8)
+    above, below = set(lab[:3][band[:3]].tolist()), set(lab[-3:][band[-3:]].tolist())
+    both = above & below  # 两行连在一起的（贯穿的长线）不算哪一行的
+    tops, heights = stats[:, cv2.CC_STAT_TOP], stats[:, cv2.CC_STAT_HEIGHT]
+    lo = max((int(tops[k] + heights[k] - 1) for k in above - both), default=0)
+    hi = min((int(tops[k]) for k in below - both), default=len(band) - 1)
+    blank = ~(gray[a : b + 1, x0 : x1 + 1] < 200).any(1)
+    gaps = [(s_ + lo + 1, e + lo + 1) for s_, e in _runs(blank[lo + 1 : hi])] if hi - lo > 1 else []
+    if not gaps:
+        return y
+    yb = yi - a
+    if yb >= hi or yb <= lo:
+        order = gaps[::-1] if yb >= hi else gaps
+        pick = next(
+            (g_ for g_ in order if g_[1] - g_[0] >= sp * 0.5), max(gaps, key=lambda g_: g_[1] - g_[0])
+        )
+    else:
+        up = [g_ for g_ in gaps if g_[1] <= yb]
+        down = [g_ for g_ in gaps if g_[0] > yb]
+        near = ([up[-1]] if up else []) + ([down[0]] if down else [])
+        # 下一行最多分到它上方 9 个线距（和 _row_split 一样）：简谱紧挨着下一行的和弦名、和上一行隔得远时，也还是上一行的
+        head = [g_ for g_ in near if a + g_[1] >= lower["first_top"] - lower["sp"] * 9]
+        pick = max(head or near, key=lambda g_: g_[1] - g_[0])
+    return a + (pick[0] + pick[1] - 1) / 2
 
 
 def _diagram_block_above(dark: np.ndarray, row: dict, limit: float) -> float | None:
@@ -327,12 +444,14 @@ def _systems(g: np.ndarray, x_off: int = 0) -> list[dict]:
         sp = _spacing(tab)
         # 同一行的五线谱：紧挨在六线谱上方的 5 线谱
         first = tab
-        # 同一行的五线谱：六线谱上方 12 个线距以内、横跨大半行的 5 线谱。弹唱谱上方一排和弦图的格子、
-        # 一组加线也会被当成 5 线谱，但它们只占一小部分宽度：跳过它们再往上找
+        # 同一行的五线谱：六线谱上方 16 个线距以内、横跨大半行的 5 线谱。弹唱谱上方一排和弦图的格子、
+        # 一组加线也会被当成 5 线谱，但它们只占一小部分宽度：跳过它们再往上找。
+        # （五线谱下面挂着低音的加线、六线谱上方又有 LetRing、N.H. 两排标记时，两者能隔开 12 个线距以上：
+        # 没认出来的话，这一行的五线谱会被裁进上一行，模型看不到节奏）
         tab_cover = _line_cover(g, tab, 4)
         for j in range(ti - 1, max(-1, ti - 3), -1):
             cand = staves[j]
-            if len(cand) != 5 or first[0] - cand[-1] >= sp * 12:
+            if len(cand) != 5 or first[0] - cand[-1] >= sp * 16:
                 break
             if _line_cover(g, cand, 3) >= 0.5 * tab_cover:
                 first = cand
@@ -342,6 +461,8 @@ def _systems(g: np.ndarray, x_off: int = 0) -> list[dict]:
         on = np.stack([lines_dark[max(0, y - 1) : y + 2].any(0) for y in ys]).sum(0) >= 4
         for x0, x1 in _segments(on, sp, sp * 6):
             if _chord_diagrams(dark, tab, sp, x0, x1):
+                continue
+            if _stray_outer_line(lines_dark, ys, x0, x1):
                 continue
             # 小节线：六线谱上下线之间（掐头去尾）几乎全暗的竖列
             y_a, y_b = int(tab[0] + sp * 0.3), int(tab[-1] - sp * 0.3)
@@ -353,8 +474,15 @@ def _systems(g: np.ndarray, x_off: int = 0) -> list[dict]:
             runs_bl = [
                 (a, b)
                 for a, b in _runs(colfrac >= 0.93)
-                if x0 - 6 <= a <= x1 + 6 and _is_barline(dark, a, b, tab, sp, ends)
+                if x0 - 6 <= a <= x1 + 6 and _is_barline(dark, a, b, tab, sp, ends, colfrac)
             ]
+            # 同一行里比别的小节线浅得多的竖线不是小节线：播放器截图里浅蓝色的播放光标（灰度 190 左右，
+            # 刚好算进 dark）贯穿整个六线谱、上下一样宽，和小节线别的都一样。和这一行小节线灰度的中位数比
+            # （缩小过的截图里细的小节线都只有 150–190，只有左边的谱表线是黑的：和最黑的那条比会把它们全丢掉）
+            ink_of = {r: float(np.median(g[y_a:y_b, max(0, r[0] - 1) : r[1] + 1].min(1))) for r in runs_bl}
+            if len(ink_of) >= 3:
+                typical = float(np.median(list(ink_of.values())))
+                runs_bl = [r for r in runs_bl if ink_of[r] < (255 + typical) * 0.6]
             bl = [(a + b - 1) / 2 for a, b in runs_bl]
             heavy = {round((a + b - 1) / 2) for a, b in runs_bl if b - a >= max(3, sp * 0.25)}  # 加粗的线
             if len(bl) >= 8 and float(np.median(np.diff(bl))) < sp * 2:
@@ -470,7 +598,7 @@ def detect_page(img: Image.Image) -> dict:
         nxt = min(below, key=lambda t: (t["first_top"], t["x0"])) if below else None
         height = s_["tab_bottom"] - s_["first_top"]
         top = (
-            _row_split(prev, s_, ink)
+            _row_split(prev, s_, ink, g)
             if prev
             else min(
                 s_["first_top"] - min(height * 0.6, s_["sp"] * 9),
@@ -478,7 +606,7 @@ def detect_page(img: Image.Image) -> dict:
             )
         )
         bottom = (
-            _row_split(s_, nxt, ink)
+            _row_split(s_, nxt, ink, g)
             if nxt
             else max(
                 s_["tab_bottom"] + min(height * 0.6, s_["sp"] * 6),
