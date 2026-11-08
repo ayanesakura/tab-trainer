@@ -268,4 +268,15 @@ node --test tests/js/*.test.mjs               # 只跑 JS 测试（要写成通�
 UPDATE_PROMPTS=1 uv run pytest tests/test_prompts.py   # 有意改了提示词后重新生成快照，再看 git diff 核对
 ```
 
+识别准确率评测（`app/evaluate.py`，会调用模型、产生费用，不加 `--yes` 只打印计划）：
+
+```bash
+uv run python -m app.evaluate eval-amy --yes [--systems 0,5] [--double-check doubts|all] [--split]
+uv run --with websockets python scripts/make_eval_song.py 曲子.gp5 eval-xxx        # Guitar Pro 文件 → 评测曲
+uv run --with websockets python scripts/make_chord_eval.py eval-c-xxx --seed 1 --style mixed [--degrade]  # 合成弹唱谱
+uv run python scripts/make_real_eval.py <曲子 id> eval-real-xxx [--all | --include-clean]  # 核对过的真实谱子 → 评测曲
+```
+
+真实谱子做评测曲时，默认只把点过“确认没问题”或手改过的小节当标准答案（评测也只评这些小节）；`--all` 表示整首都核对过了。
+
 上传的谱子、识别结果和配置都在 `data/` 下，不进版本库。每次写入 `song.json` / `config.json` 前，上一版会留成同名的 `.bak`；文件损坏时自动用备份，两份都坏的曲子在曲库里显示“数据损坏”，可以删除。同一个数据目录只能有一个 tab-trainer 在运行。

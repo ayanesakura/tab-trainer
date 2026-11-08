@@ -130,7 +130,14 @@ def run(
     split: bool = False,
 ) -> dict:
     truth = store.load(sid)
-    sys_idx = systems if systems is not None else list(range(len(truth["systems"])))
+    # 真实谱子做的评测曲（scripts/make_real_eval.py）：只有用户核对过的小节算标准答案，只评这些小节所在的行
+    scored = set(truth.get("eval_bars") or [])
+    if systems is not None:
+        sys_idx = systems
+    elif scored:
+        sys_idx = sorted({b["system"] for b in truth["bars"] if b["n"] in scored})
+    else:
+        sys_idx = list(range(len(truth["systems"])))
     claude = Claude(cfg)
     raw_calls: list[dict] = []  # 模型原始输出（含五线谱音名），清洗后的数据里没有，排查校验时用
     real_transcribe = claude.transcribe
@@ -173,6 +180,8 @@ def run(
             errors[si] = err
         tbars = by_sys.get(si, [])
         for k, tb in enumerate(tbars):
+            if scored and tb["n"] not in scored:
+                continue
             pb = pred_bars[k] if k < len(pred_bars) else None
             cmp = compare_bar(tb["events"], pb["events"] if pb else None)
             rows.append(

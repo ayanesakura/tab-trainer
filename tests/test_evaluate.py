@@ -40,3 +40,18 @@ def test_rescore_uses_current_truth():
     truth = {"bars": [{"n": 1, "events": [ev("4", (2, 0))]}]}
     rep = {"bars": [{"bar": 1, "pred_events": [ev("4", (2, 0))], "cmp": {}, "duration_ok": True}]}
     assert evaluate.rescore(rep, truth)["summary"]["bar_exact_rate"] == 1.0
+
+
+def test_only_verified_bars_are_scored(data_dir, monkeypatch):
+    """真实谱子做的评测曲：song["eval_bars"] 里的小节才算，只评它们所在的行。"""
+    from app import evaluate, recognize, songs, store
+    from app.llm import LLMConfig
+    from tests.fakes import FakeClaude, score_png
+
+    monkeypatch.setattr(evaluate, "Claude", FakeClaude)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    store.update(sid, lambda s: s.update(eval_bars=[2, 3]))
+    rep = evaluate.run(sid, LLMConfig(api_key="x"), None, 1)
+    assert sorted(r["bar"] for r in rep["bars"]) == [2, 3]
+    assert rep["systems"] == [0]
