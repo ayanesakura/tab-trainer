@@ -97,6 +97,14 @@ COMBOS = {
 }
 
 
+def score(x):
+    """给精修排优先级的加分：每个信号 1 分，强的再加 1 分。"""
+    return sum(
+        SIGNALS[k](x)
+        for k in ("U uncertain", "W any warn", "C any", "C strings>=2", "B sf>=1", "B sf>=3", "A staff>=1")
+    )
+
+
 def line(name, ss, f):
     fl = [x for x in ss if f(x)]
     tp = sum(not x["exact"] for x in fl)
@@ -137,6 +145,12 @@ def main():
                 continue
             print(line(name, sub, f))
         if has_b:
+            print("\n score = U + W + C(any) + C(strings>=2) + B(sf>=1) + B(sf>=3) + A：分数 >= t 的小节")
+            print(
+                "| score >= t | flagged | precision | recall (all wrong) | recall (content-wrong) |\n|---|---|---|---|---|"
+            )
+            for t in range(1, 6):
+                print(line(str(t), sub, lambda x, t=t: score(x) >= t))
             ok = [x for x in sub if x["B"] is not None]
             agree = [x for x in ok if bsum(x["B"]) == 0]
             print(
