@@ -557,6 +557,97 @@ def test_barlines_with_a_grey_edge_survive_a_2x_nearest_upscale():
     assert [len(s["bars"]) for s in detect_page(big)["systems"]] == [3]
 
 
+def test_truncated_tab_under_chord_diagrams_is_not_a_row():
+    """截图底边截断的六线谱只露出 4 根线，上方一排和弦图的格子横线正好和它等距：不能凑成一个“六线谱”行
+    （C 50 放大 1.5 倍时凑出过一个只有一个小节的假行）。"""
+    img = Image.new("L", (1200, 290), 255)
+    d = ImageDraw.Draw(img)
+    t = 220  # 1 弦；4 根线之后就到图片底边了
+    for i in range(4):
+        d.line([(40, t + i * 20), (1160, t + i * 20)], fill=120)
+    d.line([(40, t), (40, 289)], fill=0, width=2)
+    for k in range(3):  # 和弦图：6 根横线、6 根竖线，最下面一根横线在 1 弦上方一个线距
+        x = 200 + k * 400
+        for i in range(6):
+            d.line([(x, t - 20 - i * 20), (x + 70, t - 20 - i * 20)], fill=0)
+            d.line([(x + i * 14, t - 120), (x + i * 14, t - 20)], fill=0)
+    assert detect_page(img)["systems"] == []
+
+
+def _score_tab_system(d, top, x0=60, x1=1140, sp=14):
+    """五线谱（线距 10）+ 下方 110 像素处的六线谱，小节线在两端和正中。"""
+    for i in range(5):
+        d.line([(x0, top + i * 10), (x1, top + i * 10)], fill=120)
+    _draw_tab(d, top + 110, x0, x1, (x0, (x0 + x1) // 2, x1), sp)
+
+
+def test_split_keeps_the_next_rows_high_notes_and_beams():
+    """五线谱 + 六线谱：下一行五线谱上方的高音（加线上的符头）、向上的长符干和横梁伸得很高，上一行六线谱下面却什么都没有。
+    取中点会把下一行的符干、横梁切掉一截（模型说“节奏顶部被裁切”），分界要挪到上面那段空白里。"""
+    img = Image.new("L", (1200, 900), 255)
+    d = ImageDraw.Draw(img)
+    _score_tab_system(d, 120)
+    _score_tab_system(d, 520)
+    beam = 392  # 下一行的横梁：比两行谱线的中点（410）还高
+    for x in range(200, 1100, 60):
+        d.line([(x, 520), (x, beam)], fill=0)
+        d.ellipse([(x - 8, 430), (x, 437)], fill=0)  # 加线上的符头
+        d.line([(x - 12, 434), (x + 4, 434)], fill=0)
+    for x in range(200, 1100, 120):
+        d.rectangle([(x, beam), (x + 60, beam + 3)], fill=0)
+    a, b = detect_page(img)["systems"]
+    assert a["bottom"] == b["top"] and 300 < b["top"] <= beam
+
+
+def test_split_below_the_upper_rows_lyrics():
+    """弹唱谱：上一行六线谱下面是简谱和一行歌词，下一行上方只有和弦名（没有和弦图）。中点正好落在歌词上，
+    分界要挪到歌词和下一行和弦名之间那段（更宽的）空白里，歌词留在上一行。"""
+    img = Image.new("L", (1200, 600), 255)
+    d = ImageDraw.Draw(img)
+    f = ImageFont.load_default(size=13)
+    _draw_tab(d, 150, 60, 1140, (60, 600, 1140))
+    _draw_tab(d, 320, 60, 1140, (60, 600, 1140))
+    for x in range(100, 1100, 50):
+        d.text((x, 248), "5", fill=0, font=f)  # 简谱：255–264 行
+        d.text((x, 264), "ly", fill=0, font=f)  # 歌词：中点 270 落在这一行上
+        if x % 200 == 100:
+            d.text((x, 290), "Am", fill=0, font=f)  # 下一行的和弦名
+    lyrics_bottom, chord_top = (
+        d.textbbox((100, 264), "ly", font=f)[3],
+        d.textbbox((100, 290), "Am", font=f)[1],
+    )
+    a, b = detect_page(img)["systems"]
+    assert a["bottom"] == b["top"] and lyrics_bottom <= b["top"] <= chord_top
+
+
+def test_half_width_last_row_with_dense_notes_keeps_its_staff():
+    """最后一行只有半页宽，五线谱里挤满了音符（线和线之间的行也有一成多是黑的）：低门槛找谱线时五根线会连成一片，
+    这一行的五线谱找不到，分界线从五线谱中间穿过（罗曼史第 2 页最后一行）。"""
+    img = Image.new("L", (1200, 1100), 255)
+    d = ImageDraw.Draw(img)
+    _score_tab_system(d, 100, sp=20)
+    _score_tab_system(d, 470, sp=20)
+    _score_tab_system(d, 760, 60, 640, sp=20)  # 两行谱线的中点（775）落在这一行的五线谱上
+    for x in range(62, 640, 4):  # 一排排挤在一起的符干、符头
+        d.line([(x, 762), (x, 798)], fill=0)
+    systems = detect_page(img)["systems"]
+    assert len(systems) == 3 and systems[1]["bottom"] == systems[2]["top"] <= 760 - 2
+
+
+def test_staff_far_above_its_tab_still_belongs_to_the_row():
+    """五线谱下面挂着低音的加线、六线谱上方又有两排标记时，五线谱和六线谱能隔开 12 个线距以上：
+    还是同一行的五线谱，不能被裁进上一行（Mother 第 7 页最后一行）。"""
+    img = Image.new("L", (1200, 1100), 255)
+    d = ImageDraw.Draw(img)
+    _score_tab_system(d, 100)
+    staff, tab = 450, 450 + 40 + 13 * 14  # 六线谱在五线谱下面 13 个线距
+    for i in range(5):
+        d.line([(60, staff + i * 10), (1140, staff + i * 10)], fill=120)
+    _draw_tab(d, tab, 60, 1140, (60, 600, 1140))
+    a, b = detect_page(img)["systems"]
+    assert a["bottom"] == b["top"] and b["top"] <= staff - 2
+
+
 def test_light_playback_cursor_is_not_a_barline():
     """播放器截图里浅色的播放光标（灰度 190，刚好算进深色）贯穿整个六线谱、上下一样宽：比这一行别的小节线浅得多，不是小节线。"""
     img = _score()
