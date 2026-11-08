@@ -120,6 +120,17 @@ async def limit_upload_size(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def revalidate_static(request: Request, call_next):
+    """页面和前端代码每次都向服务器确认有没有更新（没变只回 304）。不加的话浏览器按“最后修改时间”自己猜能缓存多久，
+    普通刷新只重新验证 HTML，JS 模块还用旧的：改了前端，用户刷新也看不到。"""
+    response = await call_next(request)
+    path = request.url.path
+    if path in ("/", "/trainer") or path.startswith("/static/"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
+
 @app.post("/api/songs")
 def upload(files: Annotated[list[UploadFile], File()], title: Annotated[str, Form()] = ""):
     # 普通 def：FastAPI 放到线程池里跑，PDF 渲染、PNG 压缩不会卡住其他请求

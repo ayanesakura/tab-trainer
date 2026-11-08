@@ -437,3 +437,13 @@ def test_double_check_setting_round_trips(client):
     assert client.put("/api/settings", json={"double_check": "sometimes"}).status_code == 400
     store.save_config({**store.load_config(), "double_check": True})  # 旧版本存的是 true
     assert config.double_check() == "all"
+
+
+def test_pages_and_static_files_are_revalidated(client):
+    """前端代码改了，普通刷新就要拿到新的：页面和 /static 都带 no-cache（没变时浏览器拿到 304）。"""
+    for path in ("/", "/trainer", "/static/js/trainer/player.js"):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
+    etag = client.get("/static/js/trainer/player.js").headers["etag"]
+    assert client.get("/static/js/trainer/player.js", headers={"If-None-Match": etag}).status_code == 304
+    assert "cache-control" not in client.get("/api/songs").headers
