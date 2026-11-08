@@ -38,7 +38,7 @@ def test_refine_from_the_practice_page(server, trainer, monkeypatch):
     try:
         b = trainer(sid)
         b.wait_for("!document.getElementById('refineBtn').hidden")
-        assert b.js("document.getElementById('refineBtn').textContent.trim()") == "精修整首"
+        assert b.js("document.getElementById('refineBtn').textContent.trim()") == "精修"
         b.js("document.getElementById('refineBtn').click()")
         b.wait_for("!!document.querySelector('.dlg-msg[open] [data-ok]')")
         text = b.js("document.querySelector('.dlg-msg').textContent")
@@ -88,13 +88,19 @@ def test_refine_one_bar_and_one_row_from_the_bar_card(server, trainer, monkeypat
         b = trainer(sid)
         b.js("tt.set('ui.bar', 1)")
         b.wait_for("!document.getElementById('refineScope').hidden")
-        assert b.js(hint) == "这个小节约 $0.2，1–2 分钟；这一行 3 个小节，约 $0.6，1–2 分钟"
+        assert b.js(hint) == ""  # 预估只在悬停提示里
+        bar_title, row_title = (
+            "document.getElementById('refineBarBtn').title",
+            "document.getElementById('refineRowBtn').title",
+        )
+        assert b.js(bar_title) == "AI 放大核对原谱：这个小节约 $0.2，1–2 分钟"
+        assert b.js(row_title) == "AI 放大核对原谱：这一行 3 个小节，约 $0.6，1–2 分钟"
         # “识别有误？”里写了哪里不对：精修时一起告诉 AI
         b.js(
             "(i => { i.value = '第 1 拍是 7 品'; i.dispatchEvent(new Event('input')); })"
             "(document.getElementById('hintInput')); true"
         )
-        assert b.js(hint).endswith("（会带上“哪里不对”里写的说明）")
+        assert b.js(bar_title).endswith("，会带上“哪里不对”里写的说明")
         b.js("document.getElementById('refineBarBtn').click(); true")  # 不弹确认框，点了就开始
         b.wait_for("!document.getElementById('refineBusy').hidden", timeout=10)
         assert b.js("document.getElementById('refineScopeBtns').hidden") is True

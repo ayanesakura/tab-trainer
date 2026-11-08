@@ -30,8 +30,12 @@ function renderCard() {
   // 待核对的小节：看过原谱觉得没问题就点确认（之后改了音要重新核对）；确认过的可以撤销
   $('reviewRow').hidden = !(sb.needs_review || sb.reviewed);
   $('tipWarn').classList.toggle('reviewed', !!sb.reviewed);
-  setButton($('reviewBtn'), sb.reviewed ? `${UI.icon('x')}撤销确认` : `${UI.icon('check')}确认没问题`);
-  $('reviewHint').textContent = sb.reviewed ? '已确认没问题，不再算待核对' : '对照原谱看过，识别是对的';
+  // 没确认：一个“无误”按钮（说明在悬停提示里）；确认过：左边“已核对”，右边小的“撤销”
+  $('reviewRow').classList.toggle('done', !!sb.reviewed);
+  setButton($('reviewBtn'), sb.reviewed ? '撤销' : `${UI.icon('check')}无误`);
+  $('reviewBtn').classList.toggle('ghost', !!sb.reviewed);
+  $('reviewBtn').title = sb.reviewed ? '撤销确认，重新算作待核对' : '对照原谱看过，识别是对的';
+  $('reviewHint').innerHTML = sb.reviewed ? `${UI.icon('check', 13)}已核对` : '';
   // 精修改过这个小节：模型说的改动 + 撤销（恢复精修之前的读法）
   const rf = sb.refine;
   $('refineRow').hidden = !rf;
@@ -59,14 +63,13 @@ function renderRefineScope(s, sb) {
   $('refineRowBtn').hidden = !canRow;
   const why = refining ? '正在精修，完成后再试' : s.busy ? '正在处理中，完成后再试' : sb.locked || '';
   const barHint = canBar ? barRefineHint(scopes.bar) : '', rowHint = canRow ? rowRefineHint(rowEst) : '';
-  const note = $('hintInput').value.trim() ? '（会带上“哪里不对”里写的说明）' : '';
+  const note = $('hintInput').value.trim() ? '，会带上“哪里不对”里写的说明' : '';
+  // 预估费用和时间只放在悬停提示里，卡片上不再多一行字
   for (const [btn, est] of [[$('refineBarBtn'), barHint && `这个小节${barHint}`], [$('refineRowBtn'), rowHint]]) {
     btn.disabled = !!why;
-    btn.title = why || `让 AI 放大对照原谱逐拍核对：${est}。手改过、确认过的也核对，改了能撤销`;
+    btn.title = why || `AI 放大核对原谱：${est}${note}`;
   }
-  $('refineScopeHint').textContent = mine
-    ? `正在精修${refineScopeLabel(a, s.bars.map(b => b.id))}`
-    : [barHint && `这个小节${barHint}`, rowHint].filter(Boolean).join('；') + note;
+  $('refineScopeHint').textContent = mine ? `正在精修${refineScopeLabel(a, s.bars.map(b => b.id))}` : '';
 }
 
 async function refineScope(kind) {

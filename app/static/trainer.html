@@ -14,7 +14,7 @@
   <a class="icon-btn" href="/" title="返回曲库" aria-label="返回曲库" data-ic="back"></a>
   <div class="crumb">
     <div class="crumb-text">
-      <div class="crumb-line"><h1 class="t" id="songTitle">加载中…</h1><span class="badge" id="songSource" hidden></span></div>
+      <div class="crumb-line"><h1 class="t" id="songTitle">加载中…</h1></div>
       <div class="crumb-sub" id="songSub"></div>
     </div>
   </div>
@@ -54,12 +54,12 @@
               <button class="icon-btn sm" id="loopNext" data-ic="right" title="下一段（→）" aria-label="下一段"></button>
             </div>
             <div class="grp t-acts">
-              <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="把循环换成正在看的这一小节并播放">只练这一小节</button>
+              <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="把循环换成正在看的这一小节并播放">单练本小节</button>
               <button class="btn sm ghost" id="rhythmBtn" data-ic="tap" aria-pressed="false" aria-controls="rhythmCard" title="只练节奏：不拿琴，跟着示范在键盘上敲出这一段的节奏，每个音判早晚、每遍打分">敲节奏</button>
             </div>
             <div class="grp t-end">
-              <button class="btn sm ghost" id="fbBtn" data-ic="tuning" aria-pressed="true" title="显示 / 收起底部的指板">指板</button>
-              <button class="btn sm ghost" id="moreBtn" data-ic="settings" title="更多：节拍器、预备拍、示范音、音量、音色、自动提速" aria-haspopup="true" aria-expanded="false" aria-controls="morePop">更多</button>
+              <button class="icon-btn sm" id="fbBtn" data-ic="tuning" aria-pressed="true" title="显示 / 收起指板" aria-label="指板"></button>
+              <button class="icon-btn sm" id="moreBtn" data-ic="settings" title="节拍器、预备拍、示范音、音色、自动提速" aria-label="播放设置" aria-haspopup="true" aria-expanded="false" aria-controls="morePop"></button>
             </div>
           </div>
           <div class="chips sections" id="secBtns" role="group" aria-label="按原谱的行选段"></div>
@@ -69,7 +69,7 @@
               <label class="switch"><input type="checkbox" id="metro">节拍器</label>
               <input class="vol" type="range" id="metroVol" min="0" max="100" aria-label="节拍器音量">
             </div>
-            <div class="mp-row"><label class="switch"><input type="checkbox" id="countIn">预备拍（开始前先数一小节）</label></div>
+            <div class="mp-row"><label class="switch" title="开始前先数一小节"><input type="checkbox" id="countIn">预备拍</label></div>
             <div class="mp-row">
               <label class="switch" title="关掉就只有节拍器（自己弹，节拍器打拍子）"><input type="checkbox" id="demo">示范音</label>
               <input class="vol" type="range" id="gtVol" min="0" max="100" aria-label="示范音量">
@@ -79,7 +79,7 @@
               <div class="seg sm" id="timbreSeg" aria-labelledby="timbreLbl"><button data-v="steel" title="民谣吉他">钢弦</button><button data-v="nylon" title="古典吉他，更柔和">尼龙</button></div>
             </div>
             <hr>
-            <div class="mp-row"><label class="switch" title="播放时光标走到看不见的行，谱面自动滚过去；手动滚动后停几秒，不和你抢"><input type="checkbox" id="follow">自动跟随（谱面跟着光标翻）</label></div>
+            <div class="mp-row"><label class="switch" title="播放时光标走到看不见的行，谱面自动滚过去；手动滚动后停几秒，不和你抢"><input type="checkbox" id="follow">谱面跟随</label></div>
             <hr>
             <div class="mp-row"><label class="switch"><input type="checkbox" id="auto">自动提速</label></div>
             <div class="mp-row auto-row">
@@ -97,7 +97,7 @@
             <div class="grow"></div>
             <button class="btn sm" id="editModeBtn" data-ic="edit" aria-pressed="false" title="点击谱面上的音符修改弦、品和技巧">改音</button>
             <div class="seg sm" id="notationSeg" aria-label="谱面样式"><button data-v="both">五线谱 + 六线谱</button><button data-v="tab">只看六线谱</button></div>
-            <button class="btn sm" id="refineBtn" data-ic="sparkle" title="精修整首：每小节放大，让 AI 对照原谱逐拍核对（约 $0.2 / 小节）" hidden>精修整首</button>
+            <button class="btn sm" id="refineBtn" data-ic="sparkle" title="精修整首：AI 逐小节放大核对原谱（约 $0.2 / 小节）" hidden>精修</button>
             <button class="btn sm" id="exportBtn" data-ic="download" title="下载为 Guitar Pro 文件（.gp）">导出 GP</button>
             <span class="help-wrap">
               <button class="icon-btn sm help-btn" id="scoreHelpBtn" aria-label="谱面操作说明" aria-describedby="scoreHelp">?</button>
@@ -126,17 +126,15 @@
           <div class="card-h">
             <span class="card-title">第 <span id="barNo">1</span> 小节</span>
             <span class="badge warn" id="barReview" hidden>待核对</span>
-            <div class="grow"></div>
-            <span class="hint">点谱面上的小节切换</span>
           </div>
           <div class="body">
             <div class="tags" id="barTags"></div>
             <div class="bar-chords" id="barChords" hidden></div>
             <div class="tip" id="tipText"></div>
             <div class="warns" id="tipWarn" hidden></div>
-            <div class="refine-row" id="refineRow" hidden><div class="refine-diff"><span id="refineDiff"></span></div><div class="refine-acts"><button class="btn sm" id="undoRefineBtn" data-ic="back" title="恢复成精修之前的读法">撤销精修</button><span class="hint">精修之前：<span id="refinePrev"></span></span></div></div>
-            <div class="review-row" id="reviewRow" hidden><button class="btn sm" id="reviewBtn" data-ic="check">确认没问题</button><span class="hint" id="reviewHint">对照原谱看过，识别是对的</span></div>
-            <div class="refine-scope" id="refineScope" hidden><div class="refine-scope-btns" id="refineScopeBtns"><button class="btn sm" id="refineBarBtn" data-ic="sparkle">精修这个小节</button><button class="btn sm" id="refineRowBtn" data-ic="sparkle">精修这一行</button></div><span class="refine-busy" id="refineBusy" hidden><span class="spinner"></span>精修中…</span><span class="hint" id="refineScopeHint"></span></div>
+            <div class="refine-row" id="refineRow" hidden><div class="refine-diff"><span id="refineDiff"></span></div><div class="refine-acts"><button class="btn sm ghost" id="undoRefineBtn" data-ic="back" title="恢复成精修之前的读法">撤销</button><span class="hint">原来：<span id="refinePrev"></span></span></div></div>
+            <div class="bar-acts"><div class="review-row" id="reviewRow" hidden><span class="review-ok" id="reviewHint"></span><button class="btn sm" id="reviewBtn" data-ic="check" title="对照原谱看过，识别是对的">无误</button></div>
+            <div class="refine-scope" id="refineScope" hidden><div class="refine-scope-btns" id="refineScopeBtns"><button class="btn sm ghost" id="refineBarBtn" data-ic="sparkle">精修本小节</button><button class="btn sm ghost" id="refineRowBtn" data-ic="sparkle">精修本行</button></div><span class="refine-busy" id="refineBusy" hidden><span class="spinner"></span>精修中…</span><span class="hint" id="refineScopeHint"></span></div></div>
             <button class="paper" id="cropBox" title="点开看这一整行的原谱" hidden><canvas id="crop"></canvas><span class="paper-msg" id="cropMsg" hidden></span><span class="paper-cap">原谱</span></button>
             <div class="coach">
               <div class="sec-h">问 AI</div>

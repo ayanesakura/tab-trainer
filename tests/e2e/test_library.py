@@ -228,7 +228,7 @@ def test_keyboard_overlays_and_focus(server, browser):
 
 
 def test_rows_show_source_and_no_initial_tiles(server, browser):
-    # 取代 test_trainer.py 里的 test_library_lists_songs 的来源部分：来源是图标 + 说明行里的文字，不再是曲名旁的徽章
+    # 取代 test_trainer.py 里的 test_library_lists_songs 的来源部分：来源是图标 + 说明行的悬停提示，不再是曲名旁的徽章
     b = browser
     b.open(server["base"] + "/")
     b.wait_for("document.querySelectorAll('.song-row').length >= 3")
@@ -237,8 +237,8 @@ def test_rows_show_source_and_no_initial_tiles(server, browser):
     )
     assert src[server["image"]] == "来源：图片" and src[server["gp"]] == "来源：GP"
     assert b.js("document.querySelectorAll('.song-row .tile').length") == 0
-    sub = b.js(f"document.querySelector('.song-row[data-id=\"{server['gp']}\"] .sub').textContent")
-    assert sub.startswith("GP")
+    sub = b.js(f"document.querySelector('.song-row[data-id=\"{server['gp']}\"] .sub').title")
+    assert sub.startswith("来源：GP")  # 来源、添加时间、AI 花费在说明行的悬停提示里
     assert not b.errors, b.errors
 
 

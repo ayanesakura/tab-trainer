@@ -123,7 +123,7 @@ def test_bar_card_shows_the_bars_chords_and_the_editor_changes_them(server, chor
 
 
 def test_confirming_a_doubtful_bar(server, trainer):
-    """待核对的小节：卡片里点“确认没问题”，不再算待核对；可以撤销。"""
+    """待核对的小节：卡片里点“无误”，不再算待核对；可以撤销。"""
     store = server["store"]
     sid = _seed()
     store.update(sid, lambda s: s["bars"][1].update(uncertain="第 3 拍看不清"))
@@ -140,7 +140,8 @@ def test_confirming_a_doubtful_bar(server, trainer):
             "document.getElementById('barReview').hidden && tt.get('song').bars[1].reviewed", timeout=10
         )
         b.wait_for(f"{marks} === 0", timeout=5)  # 确认后谱面不重画，黄框也要去掉
-        assert "撤销确认" in b.js("document.getElementById('reviewBtn').textContent")
+        assert b.js("document.getElementById('reviewBtn').textContent") == "撤销"
+        assert b.js("document.getElementById('reviewHint').textContent") == "已核对"
         assert b.js("tt.get('view').review[1]") is False
         b.js("document.getElementById('reviewBtn').click()")
         b.wait_for(

@@ -25,7 +25,7 @@
   <!-- ============ 曲库 ============ -->
   <section class="view" id="view-library" role="tabpanel" aria-labelledby="tab-library">
     <div class="head">
-      <div><h1>曲库</h1><p>上传原谱或 Guitar Pro 文件，生成可播放、可循环的练习页。</p></div>
+      <div><h1>曲库</h1></div>
       <div class="head-actions">
         <button class="btn sm" id="importBtn" data-ic="download" title="导入曲子包（.zip），可以一次选多个">导入曲子包</button>
         <button class="btn sm" id="selectBtn" data-ic="upload" title="选择曲子打包导出（识别结果、提示、练习记录和原图都在里面）">导出…</button>
@@ -39,7 +39,7 @@
       <div>
         <div class="drop" id="drop" role="button" tabindex="0" aria-labelledby="dropT" aria-describedby="dropHint">
           <span class="big" data-ic="upload"></span>
-          <span><span class="t" id="dropT">添加曲子</span><br><span class="hint" id="dropHint">拖到这里或点击选择 · 原谱图片 / PDF 由 AI 识别，Guitar Pro / MusicXML 直接导入，曲子包（.zip）直接恢复</span></span>
+          <span><span class="t" id="dropT">添加曲子</span><br><span class="hint" id="dropHint">拖入或点击选择：原谱图片 / PDF、Guitar Pro、MusicXML、曲子包</span></span>
         </div>
         <input type="file" id="file" multiple accept="image/*,application/pdf,.gp,.gpx,.gp3,.gp4,.gp5,.musicxml,.xml,.mxl,.zip" hidden>
         <div id="pickedBox" hidden>
@@ -96,11 +96,11 @@
         <div class="ctl"><div class="seg sm" id="effortSeg" aria-labelledby="effortLbl"><button data-v="medium">medium</button><button data-v="high">high</button><button data-v="xhigh">xhigh</button><button data-v="max">max</button></div></div>
       </div>
       <div class="row">
-        <div class="who"><div class="name" id="doubleLbl">双重校对</div><div class="sub">再读一遍，两遍不一样的小节读第三遍投票；三遍都不一样的标成待核对。“有疑问的行”只重读第一遍里有警告或不确定说明的行，“每一行”全部重读。评测里提升都不大（1–2 个百分点），难的谱子上两种都接近 2 倍费用，一般不用开。</div></div>
+        <div class="who"><div class="name" id="doubleLbl">双重校对</div><div class="sub" title="两遍不一样的小节读第三遍投票，三遍都不一样的标成待核对。“有疑问的行”只重读有警告的行。评测里提升 1–2 个百分点，费用接近 2 倍。">再读一遍、投票，费用约翻倍，一般不用开。</div></div>
         <div class="ctl"><div class="seg sm" id="doubleSeg" aria-labelledby="doubleLbl"><button data-v="off">关</button><button data-v="doubts">有疑问的行</button><button data-v="all">每一行</button></div></div>
       </div>
       <div class="row">
-        <div class="who"><div class="name" id="refineLbl">精修</div><div class="sub">识别后每小节放大逐拍核对，约 $0.2/小节，一首几十分钟；改了的小节会标出来、可以撤销。“自动”在识别完成后自动精修，“手动”在练习页或“…”菜单里点“精修整首”，或在小节卡片上只精修一个小节 / 一行。</div></div>
+        <div class="who"><div class="name" id="refineLbl">精修</div><div class="sub" title="“自动”在识别完成后精修整首；“手动”在练习页、曲库“…”菜单或小节卡片上点“精修”。">识别后逐小节放大核对，约 $0.2/小节，改动可撤销。</div></div>
         <div class="ctl"><div class="seg sm" id="refineSeg" aria-labelledby="refineLbl"><button data-v="manual">手动</button><button data-v="auto">自动</button></div></div>
       </div>
       <div class="row">

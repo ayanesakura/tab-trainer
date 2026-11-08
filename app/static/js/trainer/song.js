@@ -86,9 +86,9 @@ function renderHeader(s) {
   const m = s.meta || {}, v = get('view');
   const title = s.title || m.title || '未命名';
   document.title = title + ' · 吉他谱练习器';
-  $('songTitle').textContent = title; $('songTitle').title = title; // 太长会被截断：悬停看全名
+  // 太长会被截断：悬停看全名；来源（图片 / GP …）也只放在悬停提示里，顶栏不再单独占一个标签
   const src = SOURCES[s.source_type];
-  $('songSource').hidden = !src; $('songSource').textContent = src || '';
+  $('songTitle').textContent = title; $('songTitle').title = src ? `${title}（来源：${src}）` : title;
   $('songSub').textContent = $('songSub').title = songSubtitle(s, v);
 }
 
@@ -184,7 +184,7 @@ function renderNotices(s) {
   notice('explain', showEx ? {
     kind: '',
     html: ex.fresh ? '让 AI 为每个小节写练习提示，并生成练习建议。'
-      : [ex.missing ? `${ex.missing} 个小节还没有提示` : '', ex.planStale ? '练习建议是改谱之前写的，可能已过时' : ''].filter(Boolean).join('；') + '。',
+      : [ex.missing ? `${ex.missing} 个小节还没有提示` : '', ex.planStale ? '练习建议可能已过时（谱子改过）' : ''].filter(Boolean).join('；'),
     actions: [{ label: ex.fresh ? '让 AI 讲解这首曲子' : '让 AI 补写', icon: 'sparkle', primary: true, onClick: explain }],
     onDismiss: closable(exKey),
   } : null);
@@ -192,7 +192,8 @@ function renderNotices(s) {
   // AI 读谱头时写的备注：关掉后同一段备注不再显示（备注变了才重新出现）
   const m = s.meta || {}, noteKey = 'tt.noteHidden.' + SONG_ID;
   notice('metaNote', m.notes && localStorage.getItem(noteKey) !== m.notes ? {
-    kind: '', html: `<b>AI 备注：</b>${esc(m.notes)}`, onDismiss: () => localStorage.setItem(noteKey, m.notes),
+    // 备注常常很长：默认只显示一行，点一下展开 / 收起（样式 .n-fold，点击在 initSong 里接）
+    kind: '', html: `<span class="n-fold" title="点击展开 / 收起"><b>备注</b>${esc(m.notes)}</span>`, onDismiss: () => localStorage.setItem(noteKey, m.notes),
   } : null);
 }
 
@@ -210,7 +211,7 @@ function renderResume(s) {
     return;
   }
   notice('resume', {
-    kind: 'info', html: `上次（${esc(r.at)}）练到 <b>${r.label}</b>，${r.bpm} BPM。`,
+    kind: 'info', html: `<span title="${esc(r.at)}">上次练到 <b>${r.label}</b> · ${r.bpm} BPM</span>`,
     actions: [{ label: '接着练', primary: true, onClick: go }], onDismiss: () => {},
   });
   // 开始播放了（练别的或已经接着练了）就收起这条提示，让出谱面的地方
@@ -341,6 +342,7 @@ export function initSong() {
   on(['song', 'view'], () => renderHeader(get('song')));
   on('song', s => { renderNotices(s); renderResume(s); renderRefineBtn(s); });
   $('refineBtn').onclick = e => startRefine(e.currentTarget);
+  $('notices').addEventListener('click', e => { const f = e.target.closest('.n-fold'); if (f) f.classList.toggle('open'); });
   on(['song.plan', 'song.status', 'song.busy', 'view'], renderPlan);
   on(['song.meta', 'song.title', 'song.editable_meta'], () => fillMeta(get('song')));
   $('metaSave').onclick = () => withBusy($('metaSave'), saveMeta);

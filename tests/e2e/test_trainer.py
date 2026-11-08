@@ -100,7 +100,7 @@ def test_playback_does_not_scroll_when_follow_is_off(trainer):
 
 def test_selected_bar_shows_original_image(trainer):
     b = trainer()
-    assert b.js("document.getElementById('songSource').textContent") == "图片"
+    assert "来源：图片" in b.js("document.getElementById('songTitle').title")
     b.wait_for("!!(tt.api.tracks && tt.api.tracks[0].staves[0].bars.length === 6 && tt.api.boundsLookup)")
     b.js("tt.onBeatClick(tt.api.tracks[0].staves[0].bars[1].voices[0].beats[0]); true")
     b.wait_for("!document.getElementById('cropBox').hidden")  # 点了小节，侧栏就显示这一小节的原谱截图

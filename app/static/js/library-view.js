@@ -99,9 +99,12 @@ export function rowHTML(s, { selecting = false, selected = new Set() } = {}) {
   const play = canPlay(s), href = `/trainer?id=${encodeURIComponent(s.id)}`;
   const pick = selecting && selectable(s), on = pick && selected.has(s.id);
   const src = SOURCES[s.source_type] || '';
-  const sub = [src, barsText(s), esc(s.artist), s.created && `添加于 ${esc(s.created)}`, costText(s)].filter(Boolean).join(' · ');
-  const state = stateHTML(s);
+  // 每首只占两行：曲名（+ 标签、待核对等徽章），下面一行艺人 · 小节数 · 练习进度；来源、添加时间、AI 花费放在这一行的悬停提示里
   const prac = practiceText(s);
+  const sub = [esc(s.artist), barsText(s), prac && `<span class="practice">${esc(prac)}</span>`].filter(Boolean).join(' · ');
+  const more = [src && `来源：${src}`, s.created && `添加于 ${esc(s.created)}`, costText(s).replace(/<[^>]+>/g, '')].filter(Boolean).join(' · ');
+  const state = stateHTML(s);
+  const busyish = s.busy || ['corrupt', 'error', 'cancelled'].includes(s.status); // 进度条 / 出错说明单独一行，徽章跟在曲名后面
   const range = rangeText(s), last = s.practice && s.practice.last;
   const tags = (s.tags || []).length ? `<span class="tags">${s.tags.map(t => `<button class="badge tag" data-tag="${esc(t)}" data-k="tag:${esc(t)}" title="只看“${esc(t)}”">${esc(t)}</button>`).join('')}</span>` : '';
   const title = play && !selecting ? `<a class="title" href="${href}" data-k="open" title="${esc(s.title)}">${esc(s.title)}</a>` : `<span class="title" title="${esc(s.title)}">${esc(s.title)}</span>`;
@@ -115,10 +118,9 @@ export function rowHTML(s, { selecting = false, selected = new Set() } = {}) {
   return `<div class="row song-row${play || pick ? ' click' : ''}${on ? ' on' : ''}" data-id="${esc(s.id)}" data-play="${play ? 1 : ''}" data-pick="${pick ? 1 : ''}">
     ${selecting ? `<input type="checkbox" class="pick" data-k="pick" aria-label="选择 ${esc(s.title)}" ${on ? 'checked' : ''} ${pick ? '' : 'disabled'}>` : ''}
     <span class="src-ic" title="${esc(src ? `来源：${src}` : '')}">${icon(SOURCE_ICON[s.source_type] || 'music', 18)}</span>
-    <div class="who"><div class="name">${title}${tags}</div>
-      ${state ? `<div class="state">${state}</div>` : ''}
-      ${prac ? `<div class="sub practice">${icon('clock', 12)}<span>${esc(prac)}</span></div>` : ''}
-      ${sub ? `<div class="sub">${sub}</div>` : ''}</div>
+    <div class="who"><div class="name">${title}${tags}${state && !busyish ? `<span class="badges">${state}</span>` : ''}</div>
+      ${state && busyish ? `<div class="state">${state}</div>` : ''}
+      ${sub || more ? `<div class="sub"${more ? ` title="${more}"` : ''}>${sub || more}</div>` : ''}</div>
     <div class="ctl"${selecting ? ' hidden' : ''}>${action}
       <button class="icon-btn sm" data-more="${esc(s.id)}" data-k="more" title="更多" aria-label="${esc(s.title)}：更多操作" aria-haspopup="menu">${icon('more')}</button></div>
   </div>`;

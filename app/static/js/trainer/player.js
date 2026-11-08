@@ -10,7 +10,8 @@ import { parseBarInput, stepSection as stepCalc, isScore, beatNumber } from './v
 import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref } from './prefs.js';
 
 export { alphaTab };
-export const IDLE_HINT = '空格播放 · ←→ 换段 · ↑↓ 调速';
+// 停着时第二行不写快捷键说明（空格、←→、↑↓ 写在各个按钮的悬停提示里），只在播放时显示“第几遍”
+export const IDLE_HINT = '';
 
 const AT_BASE = '/static/vendor/alphatab/';
 // 两个音色库：Sonivox 是完整的通用音色库（节拍器、GP 文件里的贝斯和鼓等都靠它）；
@@ -727,7 +728,7 @@ export function initPlayer() {
   });
   on('play.playing', (now, was) => {
     updateFollowBtn();
-    if (!now && was) setStatus('已暂停', '空格继续 · ←→ 换段 · ↑↓ 调速');
+    if (!now && was) setStatus('已暂停', IDLE_HINT);
   });
   on('play.ready', r => { if (!r) return; applyAudio(); if (!playing() && !get('rhythm.on')) setStatus('已停止', IDLE_HINT); });
   on(['play.a', 'play.b'], () => paintLoop());

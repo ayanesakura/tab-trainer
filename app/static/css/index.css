@@ -25,12 +25,11 @@
 .song-row .state { display: flex; align-items: center; gap: 6px; font-size: var(--fs-1); color: var(--muted); margin-top: 3px; min-width: 0; }
 .song-row .state .progress { width: 140px; flex: none; }
 .song-row .notice-badge { max-width: 360px; overflow: hidden; text-overflow: ellipsis; display: inline-block; line-height: 20px; }
-.song-row .practice { display: flex; align-items: center; gap: 5px; color: var(--fg-2); }
-.song-row .practice .ic { color: var(--muted); }
 .song-row .tags { display: inline-flex; gap: var(--sp-1); flex: none; }
+.song-row .badges { display: inline-flex; gap: var(--sp-1); flex: none; margin-left: 2px; }
+.song-row .who .sub { margin-top: 2px; }
 .song-row .tag { background: var(--accent-soft); color: var(--accent); cursor: pointer; height: 18px; padding: 0 6px; }
 .song-row .tag:hover { background: color-mix(in srgb, var(--accent) 22%, var(--card)); }
-.song-row .cost { font-variant-numeric: tabular-nums; }
 .song-row .pick { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex: none; margin-right: 2px; }
 .song-row.on { background: var(--accent-soft); }
 
