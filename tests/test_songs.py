@@ -122,12 +122,14 @@ def test_upload_that_fails_before_song_json_leaves_no_folder(data_dir, monkeypat
     def boom(song):
         raise OSError("磁盘满了")
 
-    monkeypatch.setattr(store, "_check", boom)
-    for upload in (("p1.png", score_png()), ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")):
-        with pytest.raises(OSError):
-            songs.create_song([upload])
-        assert list(store.SONGS.iterdir()) == []
-    monkeypatch.undo()
+    # 只撤销这一处替换（monkeypatch.undo() 会连 data_dir 一起撤销，写进真的曲库）
+    with monkeypatch.context() as m:
+        m.setattr(store, "_check", boom)
+        for upload in (("p1.png", score_png()), ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")):
+            with pytest.raises(OSError):
+                songs.create_song([upload])
+            assert list(store.SONGS.iterdir()) == []
+    assert store.SONGS.is_relative_to(data_dir)
     sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
     assert sorted(p.name for p in store.song_dir(sid).iterdir()) == ["song.json", "source.gp5"]
     assert store.load(sid)["rev"] == 1

@@ -1,3 +1,10 @@
+import os
+import tempfile
+
+# 兜底：测试进程里默认的数据目录是一个临时目录（在导入 app 之前设好）。没用 data_dir 的测试、或者把 data_dir 的
+# 替换撤销掉的测试（monkeypatch.undo()），也只会写到这里，不会写进真的曲库 data/
+os.environ["TAB_TRAINER_DATA"] = tempfile.mkdtemp(prefix="tab-trainer-test-")
+
 import pytest
 
 from app import config, jobs, recognize, store
