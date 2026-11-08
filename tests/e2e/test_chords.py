@@ -127,19 +127,23 @@ def test_confirming_a_doubtful_bar(server, trainer):
     try:
         b = trainer(sid)
         b.js("tt.set('ui.bar', 1)")
+        marks = "document.querySelectorAll('#warnLayer .warn-mark').length"
         b.wait_for(
             "!document.getElementById('reviewRow').hidden && !document.getElementById('barReview').hidden"
         )
+        b.wait_for(f"{marks} === 1", timeout=10)  # 谱面上这一小节标着黄框
         b.js("document.getElementById('reviewBtn').click()")
         b.wait_for(
             "document.getElementById('barReview').hidden && tt.get('song').bars[1].reviewed", timeout=10
         )
+        b.wait_for(f"{marks} === 0", timeout=5)  # 确认后谱面不重画，黄框也要去掉
         assert "撤销确认" in b.js("document.getElementById('reviewBtn').textContent")
         assert b.js("tt.get('view').review[1]") is False
         b.js("document.getElementById('reviewBtn').click()")
         b.wait_for(
             "!document.getElementById('barReview').hidden && !tt.get('song').bars[1].reviewed", timeout=10
         )
+        b.wait_for(f"{marks} === 1", timeout=5)  # 撤销后黄框回来
         assert not b.errors, b.errors
     finally:
         store.delete(sid)

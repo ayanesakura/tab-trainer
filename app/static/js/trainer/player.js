@@ -588,6 +588,7 @@ export function initPlayer() {
   on('view', renderSections);
   on('view.source', loadSource);
   on('ui.renderGen', markReviewBars);
+  on('view', markReviewBars); // 确认没问题只改了 review，谱面不重画：这里也要重画一次，不然黄框留着
   on('ui.renderGen', drawLyrics);
   on('ui.notation', () => { if (!api) return; api.settings.display.staveProfile = alphaTab.StaveProfile[staveProfile()]; api.updateSettings(); api.render(); });
 
