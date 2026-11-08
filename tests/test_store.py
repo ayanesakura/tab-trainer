@@ -100,6 +100,28 @@ def test_corrupt_config_is_set_aside(data_dir):
     assert store.load_config() == {"api_key": "sk-3"}
 
 
+def test_concurrent_settings_saves_do_not_lose_a_field(data_dir, monkeypatch):
+    """设置页两次保存同时到（输入框失焦自动保存 + 点按钮）：读-改-写整个在锁里，后一个看得到前一个改的字段。"""
+    import threading
+
+    from app import config
+
+    real, other = store.load_config, []
+
+    def slow_load():
+        cfg = real()
+        if not other:  # 第一次读完、还没写回时，另一个请求来改别的字段
+            other.append(threading.Thread(target=config.update_settings, args=(None, False, {"model": "m2"})))
+            other[0].start()
+            other[0].join(0.3)
+        return cfg
+
+    monkeypatch.setattr(store, "load_config", slow_load)
+    config.update_settings(None, False, {"base_url": "http://gw"})
+    other[0].join()
+    assert {k: real().get(k) for k in ("base_url", "model")} == {"base_url": "http://gw", "model": "m2"}
+
+
 def test_private_file_is_never_readable_by_others_while_written(data_dir, monkeypatch):
     """存 API key 的配置：临时文件一建出来就是 0600，不是写完内容才改权限（中间别人能读到 key）。"""
     import os
@@ -219,3 +241,14 @@ def test_job_finishing_after_delete_is_harmless(data_dir):
             break
         threading.Event().wait(0.01)
     assert not jobs.jobs.running(sid) and not done and not store.song_dir(sid).exists()
+
+
+def test_practice_record_after_a_torn_line_is_kept(data_dir):
+    """上次追加写到一半断电，practice.jsonl 末尾留下半行：下一条记录另起一行，不和半行粘在一起被一起跳过。"""
+    sid = _gp()
+    path = store.practice_path(sid)
+    path.write_text(
+        '{"at": "2026-01-01 10:00", "ids": ["a"], "loops": 1}\n{"at": "2026-01-0', encoding="utf-8"
+    )
+    store.append_practice(sid, {"at": "2026-01-02 10:00", "ids": ["b"], "loops": 2})
+    assert [r["ids"] for r in store.read_jsonl(path)] == [["a"], ["b"]]

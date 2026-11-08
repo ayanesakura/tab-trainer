@@ -43,7 +43,7 @@ async def bad_request(_request: Request, e: RequestValidationError):
 
 @app.exception_handler(AppError)
 async def app_error(_request: Request, e: AppError):
-    """业务错误（见 app/errors.py，含模型错误和数据损坏）：按类型返回 400 / 404 / 409 / 500 / 502，消息原样给前端显示。"""
+    """业务错误（见 app/errors.py，含模型错误和数据损坏）：按类型返回 400 / 404 / 409 / 423 / 500 / 502，消息原样给前端显示。"""
     return JSONResponse({"detail": str(e)}, status_code=e.status)
 
 
@@ -103,21 +103,72 @@ def list_songs():
     return service.library()
 
 
-@app.middleware("http")
-async def limit_upload_size(request: Request, call_next):
-    """表单解析之前就按 Content-Length 挡掉过大的上传（否则 Starlette 会先把整个请求收下来存到临时文件）。"""
-    path = request.url.path
+def _upload_limit(method: str, path: str) -> int | None:
+    """上传接口的请求体上限（字节，多给 1 MB 表单开销）；其他请求不限。"""
+    if method != "POST":
+        return None
     limit = {"/api/songs": settings.max_total_bytes, "/api/import": settings.max_import_bytes}.get(path)
     if path.startswith("/api/songs/") and path.endswith("/pages"):
         limit = settings.max_total_bytes
-    if request.method == "POST" and limit:
+    return limit
+
+
+class _TooLarge(Exception):
+    pass
+
+
+class LimitUploadSize:
+    """表单解析之前就挡掉过大的上传（否则 Starlette 会先把整个请求收下来存到临时文件）：
+    有 Content-Length 的直接看它；分块上传（没有 Content-Length）边收边数，超过上限就不再往下读、回 413。"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        limit = (
+            _upload_limit(scope.get("method", ""), scope.get("path", "")) if scope["type"] == "http" else None
+        )
+        if not limit:
+            return await self.app(scope, receive, send)
+        too_large = JSONResponse({"detail": f"文件总大小超过 {limit // 1024 // 1024} MB"}, 413)
+        headers = dict(scope.get("headers") or [])
         try:
-            size = int(request.headers.get("content-length") or 0)
+            size = int(headers.get(b"content-length") or 0)
         except ValueError:
             size = 0
         if size > limit + 1024 * 1024:
-            return JSONResponse({"detail": f"文件总大小超过 {limit // 1024 // 1024} MB"}, 413)
-    return await call_next(request)
+            return await too_large(scope, receive, send)
+        got, tripped, started = 0, False, False
+
+        async def counted():
+            nonlocal got, tripped
+            message = await receive()
+            if message["type"] == "http.request":
+                got += len(message.get("body") or b"")
+                if got > limit + 1024 * 1024:
+                    tripped = True
+                    raise _TooLarge  # 表单解析会把它变成 400：下面按 tripped 改成 413
+            return message
+
+        async def guarded(message):
+            nonlocal started
+            if tripped:  # 读到一半超了：应用给的（解析失败之类的）响应不要，换成 413
+                return
+            started = started or message["type"] == "http.response.start"
+            await send(message)
+
+        try:
+            await self.app(scope, counted, guarded)
+        except _TooLarge:
+            pass
+        except Exception:
+            if not tripped:
+                raise
+        if tripped and not started:
+            await too_large(scope, receive, send)
+
+
+app.add_middleware(LimitUploadSize)
 
 
 @app.middleware("http")

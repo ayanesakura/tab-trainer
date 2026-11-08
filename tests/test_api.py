@@ -61,6 +61,17 @@ def test_domain_errors_map_to_status_codes(client):
     assert client.post(f"/api/songs/{sid}/practice", json={}).status_code == 400
     assert client.post(f"/api/songs/{sid}/cancel").status_code == 409
     assert client.get("/api/songs/20260101-000000-abcdef").status_code == 404
+    # 有任务在跑（Busy）是 423，和“别处改过了”（Conflict，409）分开：前端只在 409 时当成冲突、丢掉撤销记录
+    from app import store
+
+    store.patch(img, activity={"kind": "parse", "restaging": True, "systems": []})
+    bar = client.get(f"/api/songs/{img}").json()["bars"][0]
+    r = client.put(f"/api/songs/{img}/bars/{bar['id']}", json={"events": [{"dur": "4"}], "rev": bar["rev"]})
+    assert r.status_code == 423 and "正在重新识别" in r.json()["detail"]
+    r = client.put(
+        f"/api/songs/{img}/bars/{bar['id']}", json={"events": [{"dur": "4"}], "rev": bar["rev"] + 1}
+    )
+    assert r.status_code == 409 and r.json()["detail"] == "曲子在别处改过了，已刷新，请再改一次"
 
 
 def _pdf(pages: int) -> bytes:
@@ -122,10 +133,69 @@ def test_derived_with_absurd_numbers_is_cleaned_not_a_500(client):
         assert "repeat_end" not in song["bars"][2] and "endings" not in song["bars"][2]
 
 
+@pytest.mark.parametrize("dur", ["1e400", "1e300", "1000", "1/100000"])
+def test_absurd_durations_are_rejected_and_never_brick_the_song(client, dur):
+    """reviewer 的 huge_dur_bricks_song：时值 1e400 以前照单全收、写进 song.json，之后每次读取都 OverflowError，
+    曲子再也打不开也修不了。时值要在 1 tick（1/960 拍）到 256 拍之间：改小节 400；GP 转换的这一小节换成休止并写明原因。"""
+    img = _image_song(client)
+    bar = client.get(f"/api/songs/{img}").json()["bars"][0]
+    r = client.put(f"/api/songs/{img}/bars/{bar['id']}", json={"events": [{"dur": dur, "notes": []}]})
+    assert r.status_code == 400 and "时值" in r.json()["detail"]
+    assert client.get(f"/api/songs/{img}").json()["bars"][0]["events"] == bar["events"]
+    gp = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    r = client.put(f"/api/songs/{gp}/derived", json={"bars": [{"events": [{"dur": dur, "notes": []}]}]})
+    assert r.status_code == 200 and "无法使用" in r.json()["bars"][0]["warn"][0]["msg"]
+    assert client.get(f"/api/songs/{gp}").status_code == 200
+    assert [x["status"] for x in client.get("/api/songs").json()] == ["ready", "ready"]
+
+
+def test_a_write_that_cannot_be_read_back_is_not_saved(data_dir, monkeypatch):
+    """store.update 先算派生字段再写盘：改完的内容读不回来（算派生字段出错）就不写，原来的数据不受影响。"""
+    from app import songs, store
+
+    monkeypatch.setattr(store, "STRICT", False)  # 平时写盘前的检查只记日志
+
+    sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    songs.set_derived(sid, {}, derived_bars(1))
+    before = (store.song_dir(sid) / "song.json").read_text()
+    with pytest.raises(KeyError):  # 音符缺弦号
+        store.update(sid, lambda s: s["bars"][0].update(events=[{"dur": "4", "notes": [{"fret": 1}]}]))
+    assert (store.song_dir(sid) / "song.json").read_text() == before
+    assert store.load(sid)["bars"][0]["events"][0]["dur"] == "4"
+
+
 def test_oversized_request_is_rejected_before_parsing(client, monkeypatch):
     monkeypatch.setattr(config.settings, "max_total_bytes", 1000)
     r = client.post("/api/songs", files={"files": ("p.png", b"x" * 3_000_000)})
     assert r.status_code == 413
+
+
+def test_oversized_chunked_upload_is_cut_off(client, monkeypatch):
+    """reviewer 的 chunked_bypass：分块上传（没有 Content-Length）以前绕过大小检查，整个请求体先被收下来存到临时文件。
+    现在边收边数，超过上限就 413，不再往下读。"""
+    from app import store
+
+    monkeypatch.setattr(config.settings, "max_total_bytes", 1000)
+    head = b'--XYZ\r\nContent-Disposition: form-data; name="files"; filename="big.png"\r\n\r\n'
+
+    def body():
+        yield head
+        for _ in range(8):
+            yield b"\0" * (512 * 1024)
+        yield b"\r\n--XYZ--\r\n"
+
+    r = client.post(
+        "/api/songs", content=body(), headers={"content-type": "multipart/form-data; boundary=XYZ"}
+    )
+    assert r.status_code == 413 and "文件总大小超过" in r.json()["detail"]
+    assert not store.SONGS.exists() or not list(store.SONGS.iterdir())
+    # 小的分块上传照常
+    monkeypatch.setattr(config.settings, "max_total_bytes", 200 * 1024 * 1024)
+    small = head.replace(b"big.png", b"p1.png") + score_png() + b"\r\n--XYZ--\r\n"
+    r = client.post(
+        "/api/songs", content=iter([small]), headers={"content-type": "multipart/form-data; boundary=XYZ"}
+    )
+    assert r.status_code == 200, r.text
 
 
 def test_malformed_bodies_get_a_400_with_a_chinese_reason(client):
@@ -186,6 +256,20 @@ def test_upload_decode_errors_are_400_but_other_errors_are_not(client, monkeypat
     assert not isinstance(e.value, ValueError)
 
 
+@pytest.mark.parametrize(
+    ("key", "shown"),
+    [
+        ("", ""),
+        ("abcdefghij", "已设置"),  # 太短：露几位就等于露了一大半
+        ("gw-0123456789abcdef", "…cdef"),  # 网关的短 key：只露最后 4 位
+        ("sk-ant-api03-" + "x" * 80 + "WXYZ", "sk-a…WXYZ"),
+    ],
+)
+def test_api_key_mask_shows_only_a_small_share(key, shown):
+    """reviewer：以前露前 7 位 + 后 4 位，15–20 位的网关 key 大半都看得见。"""
+    assert config.mask(key) == shown
+
+
 def test_settings_endpoints(client, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     s = client.get("/api/settings").json()
@@ -200,7 +284,7 @@ def test_settings_endpoints(client, monkeypatch):
     s = client.put(
         "/api/settings", json={"api_key": " sk-ant-1234567890abcdef ", "base_url": "http://gw"}
     ).json()
-    assert s["api_key_masked"] == "sk-ant-…cdef" and s["base_url"] == "http://gw"
+    assert s["api_key_masked"] == "…cdef" and s["base_url"] == "http://gw"
     from app import store
 
     assert store.load_config()["api_key"] == "sk-ant-1234567890abcdef"  # 去掉首尾空白，原样存
@@ -426,6 +510,40 @@ def test_confirming_a_bar_clears_needs_review_until_its_notes_change(data_dir, s
     assert b["needs_review"] and not b["reviewed"]
 
 
+def test_confirmation_is_about_the_notes_not_the_tip(data_dir, sync_jobs):
+    """reviewer 的 capo_change_unconfirms_bars_with_tips：改变调夹清掉提示会让 rev +1，以前只有带提示的小节
+    因此丢了确认。确认说的是“识别得对不对”，记下当时音符的指纹（reviewed_key），提示变了不影响；
+    早先按 rev 记的确认（reviewed_rev）在 rev 没变时照样有效。"""
+    from app import store, views
+
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    sid = c.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
+
+    def setup(s):
+        for b in s["bars"][:2]:
+            b["uncertain"] = "看不清"
+        s["bars"][0]["tip"] = "a tip"
+        s["bars"][1]["tip"] = ""
+
+    store.update(sid, setup)
+    for b in c.get(f"/api/songs/{sid}").json()["bars"][:2]:
+        c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True, "rev": b["rev"]})
+    v = c.get(f"/api/songs/{sid}").json()
+    r = c.put(f"/api/songs/{sid}/meta", json={"capo": 5, "rev": v["meta_rev"]})
+    assert [(b["reviewed"], b["needs_review"]) for b in r.json()["bars"][:2]] == [(True, False)] * 2
+    assert r.json()["bars"][0]["rev"] == v["bars"][0]["rev"] + 1  # 提示没了，rev 照样 +1（乐观锁）
+
+    def legacy(s):  # 早先的确认：只记了 rev
+        b = s["bars"][0]
+        b.pop("reviewed_key", None)
+        b["reviewed_rev"] = b["rev"]
+
+    store.update(sid, legacy)
+    assert views.reviewed(store.load(sid)["bars"][0])
+    store.update(sid, lambda s: s["bars"][0].update(rev=s["bars"][0]["rev"] + 1))
+    assert not views.reviewed(store.load(sid)["bars"][0])
+
+
 def test_double_check_setting_round_trips(client):
     from app import config, store
 
@@ -480,4 +598,4 @@ def test_bar_confirmation_survives_rerecognition_but_not_new_warnings(data_dir, 
 
     store.update(sid, lambda s: s.update(activity={"kind": "parse", "restaging": True, "systems": []}))
     b = c.get(f"/api/songs/{sid}").json()["bars"][5]
-    assert c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True}).status_code == 409
+    assert c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True}).status_code == 423

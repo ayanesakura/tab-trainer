@@ -170,8 +170,9 @@ def update(song_id: str, fn: Callable[[dict], None]) -> dict:
         before = model.content_snapshot(song)
         fn(song)
         model.bump_revs(song, before)
+        model.derive(song)  # 先算派生字段再写盘：改完的内容读不回来（算的时候出错）就不写，原来的数据不受影响
         save(song)
-        return model.derive(song)
+        return song
 
 
 def patch(song_id: str, **fields) -> dict:
@@ -251,8 +252,14 @@ def append_practice(song_id: str, record: dict) -> None:
         if not d.is_dir():
             raise NotFound()
         line = json.dumps(record, ensure_ascii=False) + "\n"
-        with open(d / PRACTICE_FILE, "a", encoding="utf-8") as f:
-            f.write(line)
+        path = d / PRACTICE_FILE
+        with open(path, "ab+") as f:
+            # 上次写到一半断电留下的半行没有换行：另起一行，免得这条和它粘在一起、读的时候一起被跳过
+            if f.seek(0, os.SEEK_END) > 0:
+                f.seek(-1, os.SEEK_END)
+                if f.read(1) != b"\n":
+                    line = "\n" + line
+            f.write(line.encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
 
@@ -308,6 +315,15 @@ def load_config() -> dict:
 def save_config(cfg: dict) -> None:
     with _lock:
         write_json(CONFIG, cfg, private=True)
+
+
+def update_config(fn: Callable[[dict], None]) -> dict:
+    """加锁读-改-写模型设置：两次保存同时到（失焦自动保存 + 点按钮）时，后一个看得到前一个改的字段。"""
+    with _lock:
+        cfg = load_config()
+        fn(cfg)
+        save_config(cfg)
+        return cfg
 
 
 _lock_file = None

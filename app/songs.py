@@ -17,7 +17,7 @@ from PIL import Image, ImageOps
 from app import state, store
 from app.config import settings
 from app.errors import STALE_REV, AppError, BarNotFound, Busy, Conflict, Invalid
-from app.model import is_score, new_song, touch_bar
+from app.model import is_score, new_song, notes_key, touch_bar
 from app.music import (
     GBK_EXT,
     SCORE_FILES,
@@ -29,6 +29,7 @@ from app.music import (
     new_bar_id,
     normalize_meta,
     rest_bar,
+    same_events,
     warn,
     warn_texts,
 )
@@ -73,24 +74,37 @@ def create_song(uploads: list[tuple[str, bytes]], title: str = "") -> str:
     if any(score_ext(n) for n, _ in uploads):
         return _create_score_song(uploads, title)
     sid = store.new_id()
-    d = store.song_dir(sid)
-    try:
-        pages = save_pages(uploads, d / "pages")
-    except BaseException:
-        shutil.rmtree(d, ignore_errors=True)
-        raise
-    if not pages:
-        shutil.rmtree(d, ignore_errors=True)
-        raise Invalid("文件里没有可用的页面")
-    song = new_song(
-        sid,
-        "pdf" if any(_is_pdf(n, data) for n, data in uploads) else "image",
-        title=title.strip(),
-        progress={"stage": "排队中", "done": 0, "total": 0},
-        pages=pages,
-    )
-    store.save(song, create=True)
+    with _staged(sid) as tmp:
+        pages = save_pages(uploads, tmp / "pages")
+        if not pages:
+            raise Invalid("文件里没有可用的页面")
+        song = new_song(
+            sid,
+            "pdf" if any(_is_pdf(n, data) for n, data in uploads) else "image",
+            title=title.strip(),
+            progress={"stage": "排队中", "done": 0, "total": 0},
+            pages=pages,
+        )
+        _write_new(tmp, song)
     return sid
+
+
+@contextmanager
+def _staged(sid: str) -> Iterator:
+    """新曲子先在临时目录里准备好（页面 / 原文件、song.json），最后改名成曲子目录：中途出错或崩溃不会留下
+    没有 song.json 的曲子目录（曲库里看不见、也不会被清理）。临时目录启动时会被清掉（store.clean_temp_dirs）。"""
+    tmp = store.staging_dir()
+    try:
+        yield tmp
+        if not store.install(tmp, sid):
+            raise RuntimeError(f"曲子目录已经存在：{sid}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _write_new(tmp, song: dict) -> None:
+    song["rev"] = int(song.get("rev") or 0) + 1  # 和 store.save 一样算一次保存
+    store.write_song(tmp, song)
 
 
 def check_upload_sizes(uploads: list[tuple[str, bytes]]) -> None:
@@ -225,19 +239,19 @@ def _create_score_song(uploads: list[tuple[str, bytes]], title: str) -> str:
             f"“{name.rsplit('/', 1)[-1]}”不是有效的 Guitar Pro / MusicXML 文件（文件内容和扩展名对不上），可能已损坏或只是改了扩展名"
         )
     sid = store.new_id()
-    d = store.song_dir(sid)
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"source{ext}").write_bytes(data)
-    stem = name.rsplit("/", 1)[-1][: -len(ext)]
-    song = new_song(
-        sid,
-        next(k for k, exts in SCORE_FILES.items() if ext in exts),
-        source=f"source{ext}",
-        title=title.strip() or stem,
-        status="imported",  # 文件在浏览器里第一次成功解析后才变成 ready（见 set_derived / import_failed）
-        track=0,
-    )
-    store.save(song, create=True)
+    with _staged(sid) as tmp:
+        (tmp / "pages").rmdir()  # GP / MusicXML 没有页面
+        (tmp / f"source{ext}").write_bytes(data)
+        stem = name.rsplit("/", 1)[-1][: -len(ext)]
+        song = new_song(
+            sid,
+            next(k for k, exts in SCORE_FILES.items() if ext in exts),
+            source=f"source{ext}",
+            title=title.strip() or stem,
+            status="imported",  # 文件在浏览器里第一次成功解析后才变成 ready（见 set_derived / import_failed）
+            track=0,
+        )
+        _write_new(tmp, song)
     return sid
 
 
@@ -276,6 +290,8 @@ def set_derived(
         meta = normalize_meta(raw, s.get("title", ""))
         bars = [_derived_bar(i, b or {}, meta) for i, b in enumerate(bars_raw or [])]
         old, track_n = s.get("bars") or [], int(track or 0)
+        if old and not bars:  # 和 import_failed 一样：之前解析成功过的，一次空的结果不代表谱子就是空的
+            raise Invalid("转换结果里没有小节，原来的小节保留不变")
         if old and int(s.get("track") or 0) == track_n:
             changed = setting_changed(s.get("meta") or {}, meta)
             reconcile_bars(s, old, bars, DERIVE, changed)
@@ -339,15 +355,16 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
         if why := state.bar_locked(s, bar):
             raise Busy(why)
         new = cleaned or rest_bar(s["meta"], bar)
-        if "_orig" in bar and new == bar["_orig"]["events"]:
-            restore_bar(bar)
+        changed = not same_events(new, bar["events"])
+        if "_orig" in bar and same_events(new, bar["_orig"]["events"]):
+            restore_bar(bar)  # 识别时留下的提示（OCR 不一致等）也恢复
             restore_plan_bar(s, bar_id)
-        elif new != bar["events"]:
-            invalidate_bar(bar)
+        elif changed:
+            invalidate_bar(bar)  # 识别时留下的提示说的是原来的音：清掉（记在 _orig 里，撤销时恢复）
             invalidate_plan(s, bar_id)
+        if changed:  # 原样保存（JSON 编辑器没改就保存）不动占位标记和提示，小节照样“待核对”
+            bar.pop("placeholder", None)  # 用户自己写的内容，不再是识别失败的占位休止
         bar["events"] = new
-        bar.pop("placeholder", None)  # 用户自己写的内容，不再是识别失败的占位休止
-        bar["warn"] = []  # 识别时留下的提示（OCR 不一致等）说的是原来的音；按内容算的读取时重算
         if tip is not None:
             if tip != bar.get("tip", ""):
                 touch_bar(bar)  # 只改了提示（音符变了的话 store.update 会自己 +1，不会重复）
@@ -357,7 +374,8 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
 
 
 def review_bar(sid: str, bar_id: str, ok: bool, rev: int | None = None) -> dict:
-    """待核对的小节：用户看过原谱、确认识别没问题（ok=False 撤销）。记下当时的 rev，内容再变就要重新核对。
+    """待核对的小节：用户看过原谱、确认识别没问题（ok=False 撤销）。记下当时音符的指纹（views.notes_key），
+    音再变就要重新核对（提示变了不算：确认说的是识别得对不对）。
     不算改谱（不动 rev，不让提示、问答、练习建议失效）；GP 曲子的小节也能确认。"""
 
     def apply(s):
@@ -365,11 +383,12 @@ def review_bar(sid: str, bar_id: str, ok: bool, rev: int | None = None) -> dict:
         check_rev(bar.get("rev"), rev)
         if not is_score(s) and (why := state.bar_locked(s, bar)):
             raise Busy(why)  # 正在重新识别：确认会被识别结果盖掉
+        bar.pop("reviewed_rev", None)  # 早先按 rev 记的确认
         if ok:
-            bar["reviewed_rev"] = int(bar.get("rev") or 0)
+            bar["reviewed_key"] = notes_key(bar)
             bar["reviewed_warn"] = warn_texts(bar)
         else:
-            bar.pop("reviewed_rev", None)
+            bar.pop("reviewed_key", None)
             bar.pop("reviewed_warn", None)
 
     return store.update(sid, apply)

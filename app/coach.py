@@ -10,6 +10,7 @@ from app.errors import AppError, Invalid, Upstream
 from app.jobs import Cancelled
 from app.llm import friendly, request_id_of
 from app.model import now
+from app.music import same_events
 from app.songs import find_bar
 
 log = logging.getLogger("tab_trainer.coach")
@@ -78,7 +79,7 @@ def _explain_chunks(sid: str, chunks: list[list[str]], cancel, claude, charge) -
             for b in s["bars"]:
                 if (
                     same_meta
-                    and seen.get(b.get("id")) == b["events"]
+                    and same_events(seen.get(b.get("id")), b["events"])
                     and b["n"] in tips
                     and not (b.get("tip") or "").strip()
                 ):
@@ -139,7 +140,7 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
 
     def apply(s):
         b = next((x for x in s["bars"] if x.get("id") == bar_id), None)
-        if b is not None and b["events"] != bar["events"]:
+        if b is not None and not same_events(b["events"], bar["events"]):
             entry["stale"] = True  # 等回答期间这个小节改过音：回答说的是改之前的谱
         if b is not None:  # 等回答期间小节被重新识别掉了，就不存
             b["qa"] = [*(b.get("qa") or []), entry][-settings.qa_keep :]

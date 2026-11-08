@@ -141,6 +141,25 @@ def parse_dur(s) -> Fraction:
     return Fraction(str(s).strip())
 
 
+# 一个事件的时值范围（拍）：最短 1 tick（播放器的最小单位）；最长 256 拍，比最长的小节（32/1 拍 = 128 拍）还宽一倍，
+# GP 里写得比拍号长的小节也够用。没有上限的话 "1e400" 能存进去，之后每次读取算时值合计都会溢出
+MIN_DUR = Fraction(1, VOCAB["ticks_per_quarter"])
+MAX_DUR = Fraction(256)
+
+
+def dur_problem(v) -> str | None:
+    """时值有什么问题（没问题返回 None）。"""
+    try:
+        dur = parse_dur(v)
+    except (ValueError, ZeroDivisionError, TypeError, OverflowError):
+        return f"时值无法识别：{str(v)[:40]!r}"
+    if dur <= 0:
+        return f"时值必须是大于 0 的分数：{str(v)[:40]!r}"
+    if not MIN_DUR <= dur <= MAX_DUR:
+        return f"时值 {str(v)[:40]!r} 超出范围（1/{MIN_DUR.denominator}–{MAX_DUR} 拍）"
+    return None
+
+
 MAX_VERSES = 4
 
 
@@ -176,12 +195,9 @@ def clean_events(events) -> list[dict]:
     for i, e in enumerate(events, 1):
         if not isinstance(e, dict) or "dur" not in e:
             raise Invalid(f"第 {i} 个事件缺少 dur")
-        try:
-            dur = parse_dur(e["dur"])
-        except (ValueError, ZeroDivisionError, TypeError):
-            raise Invalid(f"第 {i} 个事件的时值无法识别：{e['dur']!r}") from None
-        if dur <= 0:
-            raise Invalid(f"第 {i} 个事件的时值必须大于 0：{e['dur']!r}")
+        if why := dur_problem(e["dur"]):
+            raise Invalid(f"第 {i} 个事件的{why}")
+        dur = parse_dur(e["dur"])
         notes = []
         if not isinstance(e.get("notes") or [], list):
             raise Invalid(f"第 {i} 个事件的 notes 必须是列表")
@@ -219,6 +235,39 @@ def clean_events(events) -> list[dict]:
             ev["lyrics"] = lyrics
         out.append(ev)
     return out
+
+
+# 事件上可以省略的字段：空的时候 clean_events 不写
+OPTIONAL_EVENT_KEYS = ("chord", "lyrics", "strum")
+
+
+def canonical_events(events):
+    """比较“音变没变”用的统一形式（和 clean_events 的结果一样：空的 chord / lyrics / strum 不写、时值约分、
+    bend 是小数）。外来曲子包补过默认值的、旧数据里写法不规范的，内容一样就算一样。整理不了的原样返回。"""
+    try:
+        return clean_events(events)
+    except Invalid:
+        return events
+
+
+def same_events(a, b) -> bool:
+    return canonical_events(a) == canonical_events(b)
+
+
+def events_key(events) -> str:
+    """按内容的比较键（JSON 文本）。"""
+    return json.dumps(canonical_events(events), sort_keys=True, default=str)
+
+
+def drop_empty_event_keys(events) -> bool:
+    """去掉事件上空的可省略字段（原地修改），返回有没有改动。"""
+    changed = False
+    for e in events if isinstance(events, list) else ():
+        for k in OPTIONAL_EVENT_KEYS if isinstance(e, dict) else ():
+            if k in e and not e[k]:
+                del e[k]
+                changed = True
+    return changed
 
 
 # 反复和跳转记号（名字和 alphaTex 的 \jump 一致，顺序 = alphaTab 的 Direction 枚举）。播放时 alphaTab 会按它们跳转。
@@ -345,6 +394,14 @@ def derive_warns(bar: dict, meta: dict) -> None:
     bar["warn"] = derived + kept
 
 
+def _beats(f: Fraction) -> str:
+    """给人看的拍数。万一是没有上限的旧数据，float 会溢出：直接写分数。"""
+    try:
+        return f"{float(f):g}"
+    except OverflowError:
+        return str(f)[:40]
+
+
 def check_bar(events: list[dict], meta: dict, info: bool = True, bar: dict | None = None) -> list[dict]:
     """小节的问题（显示在练习页），[{"code", "msg"}]。info=False 时只返回需要模型返修的问题：
     时值不在播放网格上（五连音之类）只是提醒，读对了也会有，不能拿去让模型“改”。
@@ -353,7 +410,7 @@ def check_bar(events: list[dict], meta: dict, info: bool = True, bar: dict | Non
     total = sum((parse_dur(e["dur"]) for e in events), Fraction(0))
     want = bar_length(meta, bar)
     if total != want:
-        problems.append(warn("length", f"时值合计 {float(total):g} 拍，应为 {float(want):g} 拍"))
+        problems.append(warn("length", f"时值合计 {_beats(total)} 拍，应为 {_beats(want)} 拍"))
     odd = sorted({e["dur"] for e in events if (parse_dur(e["dur"]) / GRID).denominator != 1}, key=parse_dur)
     if odd and info:
         problems.append(

@@ -9,13 +9,15 @@ store.load 每次读取都会调用（纯函数，在内存里升级）；升级
   小节警告从一句话变成 {code, msg}；手改过的小节有显式的 edited；曲名只存 song.title；
   练习记录从 song.practice 搬到 practice.jsonl（旧的聚合结果成为第一行“种子”记录）；
   曲名 / 艺人 / 编配修复 GBK 被当成 cp1252 / Latin-1 读出来的乱码（GP 文件读出来的，以及从 GP 复制了谱头的图片曲子）。
+
+不分版本的修复：早先导入曲子包时事件里被补上的空 chord / lyrics / strum 去掉（见 _drop_empty_event_keys）。
 """
 
 from __future__ import annotations
 
 import uuid
 
-from app.music import SCORE_FILES, as_warn
+from app.music import SCORE_FILES, as_warn, drop_empty_event_keys
 from app.text import fix_meta_text, fix_mojibake
 
 SCHEMA_VERSION = 2
@@ -44,8 +46,20 @@ def migrate(song: dict, song_id: str) -> dict:
     for b in song["bars"]:
         if isinstance(b, dict):
             b.setdefault("rev", 0)
+            if _drop_empty_event_keys(b):
+                song["_migrated"] = True  # 启动时写回
     song["schema_version"] = SCHEMA_VERSION
     return song
+
+
+def _drop_empty_event_keys(b: dict) -> bool:
+    """早先导入曲子包时补默认值往事件里加了空的 chord / lyrics / strum（正常保存的事件不写这些键）：去掉，
+    和 clean_events 的结果一致。返回有没有改动。"""
+    orig = b.get("_orig")
+    changed = drop_empty_event_keys(b.get("events"))
+    if isinstance(orig, dict):
+        changed = drop_empty_event_keys(orig.get("events")) or changed
+    return changed
 
 
 def source_type_of(s: dict) -> str:

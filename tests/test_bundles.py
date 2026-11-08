@@ -8,7 +8,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bundles, main, model, practice, recognize, songs, store, views
+from app import bundles, main, model, music, practice, recognize, songs, store, views
 from app.errors import Invalid
 from tests.fakes import derived_bars, score_png
 
@@ -246,6 +246,16 @@ def _v2(sid: str, **over) -> dict:
         ({"bars": [{"id": "b1", "events": [{"dur": "1/0", "notes": []}]}]}, "时值"),
         ({"bars": [{"id": "b1", "events": [{"dur": "-1", "notes": []}]}]}, "时值"),
         ({"bars": [{"id": "b1", "events": [{"dur": "abc", "notes": []}]}]}, "时值"),
+        ({"bars": [{"id": "b1", "events": [{"dur": "1e400", "notes": []}]}]}, "时值"),
+        ({"bars": [{"id": "b1", "events": [{"dur": "1e300", "notes": []}]}]}, "时值"),
+        (
+            {
+                "bars": [
+                    {"id": "b1", "events": [{"dur": "4", "notes": []}], "_orig": {"events": [{"dur": "1e9"}]}}
+                ]
+            },
+            "时值",
+        ),
         ({"meta": {**_META, "time_signature": [4, 0]}}, "time_signature"),
         ({"meta": {**_META, "time_signature": [3, 3]}}, "time_signature"),
         ({"bars": [{"id": "b1", "events": [], "time_signature": [0, 4]}]}, "time_signature"),
@@ -443,3 +453,64 @@ def test_import_fills_in_missing_fields(client):
     assert sid in [x["id"] for x in client.get("/api/songs").json()]
     saved = json.loads((store.SONGS / sid / "song.json").read_text())
     assert saved["bars"][0]["events"][0]["notes"] == [] and "_orig" not in saved["bars"][0]
+
+
+def _roundtrip(*ids):
+    path, _ = bundles.export_bundle(list(ids))
+    _wipe()
+    with open(path, "rb") as f:
+        r = bundles.import_bundles([("x.zip", f)])
+    assert [s["id"] for s in r["imported"]] == list(ids)
+
+
+def test_import_does_not_add_empty_keys_to_events(data_dir):
+    """reviewer 的 bundle_round_trip_events：导入时补默认值不往事件里加 chord: ""、lyrics: []、strum: ""，
+    否则之后所有“音变没变”的比较都会认为变了：不改内容的保存算成改过、撤销回识别结果撤不回来。"""
+    sid = _image_song()
+    b0, b1 = store.load(sid)["bars"][:2]
+    orig = b0["events"]
+    songs.edit_bar(sid, b0["id"], [{"dur": "4", "notes": []}], None, b0["rev"])
+    _roundtrip(sid)
+    raw = json.loads((store.song_dir(sid) / "song.json").read_text())
+    for b in raw["bars"]:
+        for e in b["events"] + (b.get("_orig") or {}).get("events", []):
+            assert set(e) == {"dur", "notes"}, e
+    s = songs.edit_bar(sid, b1["id"], b1["events"], None, b1["rev"])  # 原样保存
+    assert not s["bars"][1].get("edited") and s["bars"][1]["rev"] == b1["rev"]
+    s = songs.edit_bar(sid, b0["id"], orig, None, s["bars"][0]["rev"])  # 撤销回识别结果
+    assert not s["bars"][0]["edited"] and s["bars"][0]["tip"] == "第一小节慢一点"
+
+
+def test_rederive_after_import_keeps_tips(data_dir):
+    """reviewer 的 bundle_gp_rederive：GP 曲子导出再导入后重新转换，内容没变的小节保留提示、问答和版本号。"""
+    sid = _gp_song()
+
+    def extra(s):
+        for b in s["bars"]:
+            b.update(tip="tip", qa=[{"q": "q", "a": "a", "at": ""}])
+
+    store.update(sid, extra)
+    _roundtrip(sid)
+    s = songs.set_derived(sid, {"title": "Romance"}, derived_bars(2), 0, {"version": 99})
+    assert [(b["tip"], b["qa"][0].get("stale", False), b["rev"]) for b in s["bars"]] == [
+        ("tip", False, 0)
+    ] * 2
+
+
+def test_events_compare_by_content_not_by_empty_keys(data_dir):
+    """已经导入过、事件里带着空 chord / lyrics / strum 的曲子：读取时整理掉（启动时写回），比较也按内容。"""
+    sid = _image_song()
+    path = store.song_dir(sid) / "song.json"
+    raw = json.loads(path.read_text())
+    for b in raw["bars"]:
+        for e in b["events"]:
+            e.update(chord="", lyrics=[], strum="")
+    path.write_text(json.dumps(raw, ensure_ascii=False))
+    s = store.load(sid)
+    assert all(set(e) == {"dur", "notes"} for b in s["bars"] for e in b["events"])
+    songs.recover_interrupted()
+    raw = json.loads(path.read_text())
+    assert all(set(e) == {"dur", "notes"} for b in raw["bars"] for e in b["events"])
+    a = [{"dur": "2/4", "notes": [{"string": 1, "fret": 0, "tech": [], "grace": -1, "bend": 0}], "chord": ""}]
+    b = [{"dur": "1/2", "notes": [{"string": 1, "fret": 0, "tech": [], "grace": -1, "bend": 0.0}]}]
+    assert music.same_events(a, b) and not music.same_events(a, [{"dur": "1", "notes": []}])

@@ -16,22 +16,25 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import time
-from typing import Annotated, Any, Literal, get_args, get_origin
+from typing import Annotated, Any, ClassVar, Literal, get_args, get_origin
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 from app.music import (
     DERIVED_WARNS,
     MAX_FRET,
+    OPTIONAL_EVENT_KEYS,
     SCORE_FILES,
     STRINGS,
     TECHS,
     WARN_CODES,
     clean_time_signature,
     derive_warns,
-    parse_dur,
+    dur_problem,
+    events_key,
     tuning_midi,
 )
 
@@ -79,6 +82,8 @@ class Note(_M):
 
 class Event(_M):
     model_config = ConfigDict(extra="ignore", coerce_numbers_to_str=True)
+    # 空的时候不写的字段（和 music.clean_events 一致）：with_defaults 不补，否则“音变没变”的比较会把它当成变了
+    OMIT_EMPTY: ClassVar[tuple[str, ...]] = OPTIONAL_EVENT_KEYS
     dur: str = Field(
         description="time from this onset to the next onset (or bar end), in quarter notes, "
         'as a fraction string: "1/4" = 16th, "1/2" = 8th, "1/3" = 8th-note triplet, '
@@ -106,13 +111,10 @@ class Event(_M):
     @field_validator("dur")
     @classmethod
     def _positive_fraction(cls, v: str) -> str:
-        """时值必须是大于 0 的分数（"1/0"、"-1"、"abc" 之类会让读取时的计算出错）。"""
-        try:
-            ok = parse_dur(v) > 0
-        except (ValueError, ZeroDivisionError, TypeError):
-            ok = False
-        if not ok:
-            raise ValueError(f"时值必须是大于 0 的分数：{v!r}")
+        """时值必须是范围内（见 music.MIN_DUR / MAX_DUR）大于 0 的分数（"1/0"、"-1"、"abc"、"1e400" 之类
+        会让读取时的计算出错）。"""
+        if why := dur_problem(v):
+            raise ValueError(why if "超出范围" in why else f"时值必须是大于 0 的分数：{str(v)[:40]!r}")
         return v
 
 
@@ -188,6 +190,7 @@ class Orig(_M):
     events: list[Event]
     tip: str = ""
     uncertain: str = ""
+    warn: list[Warn] | None = None  # 识别时留下的警告（OCR 不一致等），撤销时恢复；早先的没记
 
 
 class Bar(_M):
@@ -203,7 +206,9 @@ class Bar(_M):
     edited: bool = False  # 用户手改过（撤销回原样后变回 False）
     orig: Orig | None = Field(None, alias="_orig")
     placeholder: bool = False  # 识别失败、按整小节休止占位
-    reviewed_rev: int | None = None  # 用户点了“确认没问题”时这个小节的 rev：内容再变（rev 变了）就要重新核对
+    # 用户点了“确认没问题”时这个小节音符的指纹（notes_key）：音再变就要重新核对，提示变了不算
+    reviewed_key: str | None = None
+    reviewed_rev: int | None = None  # 早先的确认记的是 rev：rev 没变就还有效
     # 确认时看到的警告（文字）：之后冒出新的警告（比如改了拍号）要重新核对
     reviewed_warn: list[str] | None = None
     # 弹唱谱：这个小节里出现的和弦（事件的 chord）的指法，和弦名 → 1–6 弦的品位（-1 = 不弹），给谱面画和弦图
@@ -350,8 +355,8 @@ def _fill_defaults(raw, obj) -> None:
                 _fill_defaults(raw[key], val)
             elif name in raw:
                 _fill_defaults(raw[name], val)
-            elif val is not None:  # 可选、默认 None 的字段（_orig、plan…）不写：代码按“有没有这个键”判断
-                raw[key] = _dump(val)
+            elif val is not None and not (not val and name in getattr(obj, "OMIT_EMPTY", ())):
+                raw[key] = _dump(val)  # 可选、默认 None 的字段（_orig、plan…）不写：代码按“有没有这个键”判断
     elif isinstance(obj, list) and isinstance(raw, list):
         for r, o in zip(raw, obj, strict=False):
             _fill_defaults(r, o)
@@ -482,7 +487,12 @@ def _meta_key(song: dict) -> str:
 
 
 def _events_key(bar: dict) -> str:
-    return json.dumps(bar.get("events"), sort_keys=True, default=str)
+    return events_key(bar.get("events"))  # 按内容比：空的 chord / lyrics 之类写没写不算变
+
+
+def notes_key(bar: dict) -> str:
+    """小节音符的指纹（用户确认时记下，见 Bar.reviewed_key）：按内容算，写法不同但音一样的算一样。"""
+    return hashlib.sha1(_events_key(bar).encode()).hexdigest()[:16]
 
 
 def content_snapshot(song: dict) -> tuple[str, dict[str, tuple[int, str]]]:
@@ -573,7 +583,8 @@ class BarView(Bar):
     n: int
     needs_review: bool = False  # 有警告或模型标了不确定、用户还没确认
     reviewed: bool = False  # 有警告或不确定说明，但用户已经确认没问题（内容没再变）
-    reviewed_rev: int | None = Field(None, exclude=True)  # 内部字段，不给前端
+    reviewed_key: str | None = Field(None, exclude=True)  # 内部字段，不给前端
+    reviewed_rev: int | None = Field(None, exclude=True)
     reviewed_warn: list[str] | None = Field(None, exclude=True)
     locked: str | None = None  # 现在不能改的原因
     warn: list[Warn] = Field(default_factory=list)

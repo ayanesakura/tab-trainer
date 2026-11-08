@@ -115,6 +115,36 @@ def test_import_lifecycle(data_dir):
         songs.import_failed(songs.create_song([("p1.png", score_png())]), "x")
 
 
+def test_upload_that_fails_before_song_json_leaves_no_folder(data_dir, monkeypatch):
+    """新建曲子时先在临时目录里准备好页面 / 原文件和 song.json，再改名成曲子目录：中途出错（或崩溃）
+    不会留下没有 song.json、曲库里看不见也永远不会被清理的曲子目录。"""
+
+    def boom(song):
+        raise OSError("磁盘满了")
+
+    monkeypatch.setattr(store, "_check", boom)
+    for upload in (("p1.png", score_png()), ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")):
+        with pytest.raises(OSError):
+            songs.create_song([upload])
+        assert list(store.SONGS.iterdir()) == []
+    monkeypatch.undo()
+    sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    assert sorted(p.name for p in store.song_dir(sid).iterdir()) == ["song.json", "source.gp5"]
+    assert store.load(sid)["rev"] == 1
+
+
+def test_empty_rederive_does_not_wipe_the_bars(data_dir):
+    """reviewer 的 derived_empty_bars_wipes：已经有小节的曲子收到 0 个小节的转换结果，以前直接变成 0 小节的 ready，
+    提示、问答、练习建议全没了。和 import_failed 一样：之前解析成功过的，不认这样的结果。"""
+    sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    songs.set_derived(sid, {}, derived_bars(4))
+    store.update(sid, lambda s: s["bars"][0].update(tip="hello"))
+    with pytest.raises(errors.Invalid, match="没有小节"):
+        songs.set_derived(sid, {}, [])
+    s = store.load(sid)
+    assert len(s["bars"]) == 4 and s["bars"][0]["tip"] == "hello" and s["status"] == "ready"
+
+
 def test_set_derived_keeps_repeats(data_dir):
     sid = songs.create_song([("曲子.gp", b"\x18FICHIER GUITAR PRO v5.10")])
     bars = derived_bars(2)

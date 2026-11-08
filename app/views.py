@@ -13,7 +13,7 @@ from app import practice, state, store
 from app.errors import CorruptSong, NotFound
 from app.jobs import jobs
 from app.llm import DEFAULT_MODEL, price_of
-from app.model import is_score
+from app.model import is_score, notes_key
 from app.music import warn_texts
 
 log = logging.getLogger("tab_trainer.views")
@@ -37,9 +37,13 @@ def has_doubts(bar: dict) -> bool:
 
 
 def reviewed(bar: dict) -> bool:
-    """用户看过、点了“确认没问题”，而且之后内容没再变过、也没冒出确认时没有的警告（比如改了拍号后时值对不上）。
-    reviewed_warn 为空（None）是早先的确认，只看 rev。"""
-    if bar.get("reviewed_rev") is None or bar.get("reviewed_rev") != int(bar.get("rev") or 0):
+    """用户看过、点了“确认没问题”，而且之后音没再变过（提示变了不算）、也没冒出确认时没有的警告
+    （比如改了拍号后时值对不上）。早先的确认只记了 rev（reviewed_rev）：rev 没变就有效；
+    reviewed_warn 为空（None）的只看音 / rev。"""
+    if bar.get("reviewed_key") is not None:
+        if bar["reviewed_key"] != notes_key(bar):
+            return False
+    elif bar.get("reviewed_rev") is None or bar.get("reviewed_rev") != int(bar.get("rev") or 0):
         return False
     seen = bar.get("reviewed_warn")
     return seen is None or set(warn_texts(bar)) <= set(seen)
@@ -57,8 +61,8 @@ def bar_view(s: dict, bar: dict) -> dict:
     out["edited"] = bool(bar.get("edited"))
     out["needs_review"] = needs_review(bar)
     out["reviewed"] = has_doubts(bar) and reviewed(bar)
-    out.pop("reviewed_rev", None)
-    out.pop("reviewed_warn", None)
+    for k in ("reviewed_key", "reviewed_rev", "reviewed_warn"):
+        out.pop(k, None)
     out["locked"] = state.bar_locked(s, bar)
     return out
 
