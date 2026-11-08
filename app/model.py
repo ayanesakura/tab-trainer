@@ -18,19 +18,21 @@ from __future__ import annotations
 import copy
 import json
 import time
-from typing import Annotated, Any, Literal, get_args, get_origin
+from typing import Annotated, Any, ClassVar, Literal, get_args, get_origin
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 from app.music import (
     DERIVED_WARNS,
     MAX_FRET,
+    OPTIONAL_EVENT_KEYS,
     SCORE_FILES,
     STRINGS,
     TECHS,
     WARN_CODES,
     clean_time_signature,
     derive_warns,
+    events_key,
     parse_dur,
     tuning_midi,
 )
@@ -79,6 +81,8 @@ class Note(_M):
 
 class Event(_M):
     model_config = ConfigDict(extra="ignore", coerce_numbers_to_str=True)
+    # 空的时候不写的字段（和 music.clean_events 一致）：with_defaults 不补，否则“音变没变”的比较会把它当成变了
+    OMIT_EMPTY: ClassVar[tuple[str, ...]] = OPTIONAL_EVENT_KEYS
     dur: str = Field(
         description="time from this onset to the next onset (or bar end), in quarter notes, "
         'as a fraction string: "1/4" = 16th, "1/2" = 8th, "1/3" = 8th-note triplet, '
@@ -350,8 +354,8 @@ def _fill_defaults(raw, obj) -> None:
                 _fill_defaults(raw[key], val)
             elif name in raw:
                 _fill_defaults(raw[name], val)
-            elif val is not None:  # 可选、默认 None 的字段（_orig、plan…）不写：代码按“有没有这个键”判断
-                raw[key] = _dump(val)
+            elif val is not None and not (not val and name in getattr(obj, "OMIT_EMPTY", ())):
+                raw[key] = _dump(val)  # 可选、默认 None 的字段（_orig、plan…）不写：代码按“有没有这个键”判断
     elif isinstance(obj, list) and isinstance(raw, list):
         for r, o in zip(raw, obj, strict=False):
             _fill_defaults(r, o)
@@ -482,7 +486,7 @@ def _meta_key(song: dict) -> str:
 
 
 def _events_key(bar: dict) -> str:
-    return json.dumps(bar.get("events"), sort_keys=True, default=str)
+    return events_key(bar.get("events"))  # 按内容比：空的 chord / lyrics 之类写没写不算变
 
 
 def content_snapshot(song: dict) -> tuple[str, dict[str, tuple[int, str]]]:

@@ -29,6 +29,7 @@ from app.music import (
     new_bar_id,
     normalize_meta,
     rest_bar,
+    same_events,
     warn,
     warn_texts,
 )
@@ -339,10 +340,10 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
         if why := state.bar_locked(s, bar):
             raise Busy(why)
         new = cleaned or rest_bar(s["meta"], bar)
-        if "_orig" in bar and new == bar["_orig"]["events"]:
+        if "_orig" in bar and same_events(new, bar["_orig"]["events"]):
             restore_bar(bar)
             restore_plan_bar(s, bar_id)
-        elif new != bar["events"]:
+        elif not same_events(new, bar["events"]):
             invalidate_bar(bar)
             invalidate_plan(s, bar_id)
         bar["events"] = new

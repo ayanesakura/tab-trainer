@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 
 from app.model import touch_bar
-from app.music import bar_length
+from app.music import bar_length, canonical_events, same_events
 
 # 影响音的设定：这些变了，所有小节的提示都按旧设定写的。曲名、艺人、备注之类不算（派生的 meta.title 跟着曲名变）
 SETTING_KEYS = ("tuning_midi", "capo", "time_signature")
@@ -74,7 +74,7 @@ def store_plan(s: dict, plan: dict | None, seen: dict, meta: dict) -> None:
     """写回后台生成的练习建议。seen / meta 是生成时用的小节音符（按 id）和曲子设定：
     生成期间谱子被改过的话，新计划一出来就是过时的，照样保存但标成过时（改回原样还能撤销）。"""
     if plan:
-        changed = sorted(b["id"] for b in s["bars"] if seen.get(b["id"]) != b["events"])
+        changed = sorted(b["id"] for b in s["bars"] if not same_events(seen.get(b["id"]), b["events"]))
         meta_changed = setting_changed(meta or {}, s["meta"] or {})  # 只看影响音的设定，改曲名不算
         if changed or meta_changed:
             plan.update(changed_bars=changed, stale_all=meta_changed, stale=True)
@@ -139,7 +139,7 @@ def reconcile_bars(
     keep_edits = policy.keep_edits
 
     def key(events, b):
-        return json.dumps([events, b.get(policy.ts_field)], sort_keys=True)
+        return json.dumps([canonical_events(events), b.get(policy.ts_field)], sort_keys=True)
 
     def old_key(b):
         orig = b.get("_orig") if keep_edits and b.get("edited") else None
@@ -196,7 +196,7 @@ def _edit_fits(prev: dict, new: dict, metas: tuple[dict, dict] | None) -> bool:
 def _keep_edit(prev: dict, new: dict, setting_changed_: bool = False) -> None:
     """重新识别后保留用户手改的音：识别结果放进 _orig，改回去时还能恢复。
     setting_changed_：原来的提示是按旧设定写的，不再沿用（新识别结果自己的提示是按新设定写的，照常留着）。"""
-    if prev["events"] == new["events"]:  # 新识别的正好就是用户改成的样子
+    if same_events(prev["events"], new["events"]):  # 新识别的正好就是用户改成的样子
         if not setting_changed_:
             new["tip"] = prev.get("tip") or new.get("tip", "")
         return

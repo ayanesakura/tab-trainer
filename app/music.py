@@ -221,6 +221,39 @@ def clean_events(events) -> list[dict]:
     return out
 
 
+# 事件上可以省略的字段：空的时候 clean_events 不写
+OPTIONAL_EVENT_KEYS = ("chord", "lyrics", "strum")
+
+
+def canonical_events(events):
+    """比较“音变没变”用的统一形式（和 clean_events 的结果一样：空的 chord / lyrics / strum 不写、时值约分、
+    bend 是小数）。外来曲子包补过默认值的、旧数据里写法不规范的，内容一样就算一样。整理不了的原样返回。"""
+    try:
+        return clean_events(events)
+    except Invalid:
+        return events
+
+
+def same_events(a, b) -> bool:
+    return canonical_events(a) == canonical_events(b)
+
+
+def events_key(events) -> str:
+    """按内容的比较键（JSON 文本）。"""
+    return json.dumps(canonical_events(events), sort_keys=True, default=str)
+
+
+def drop_empty_event_keys(events) -> bool:
+    """去掉事件上空的可省略字段（原地修改），返回有没有改动。"""
+    changed = False
+    for e in events if isinstance(events, list) else ():
+        for k in OPTIONAL_EVENT_KEYS if isinstance(e, dict) else ():
+            if k in e and not e[k]:
+                del e[k]
+                changed = True
+    return changed
+
+
 # 反复和跳转记号（名字和 alphaTex 的 \jump 一致，顺序 = alphaTab 的 Direction 枚举）。播放时 alphaTab 会按它们跳转。
 DIRECTIONS = tuple(d["code"] for d in VOCAB["directions"])
 # 模型提示词里允许的子集（llm.py 的 schema 用），按 prompt_order 排（和以前写死的顺序一致，schema 逐字不变）
