@@ -161,7 +161,9 @@ def ocr_disagreements(
     - 死音（谱上写 x）OCR 不读，不比较；倚音的小数字 OCR 会读到，算进去；
     - 人工泛音旁边标的“品位 + 12”（如 2<14>）OCR 会多读一个 14，允许；
     - 整行一致率不到一半，或 OCR 只读对了 AI 写的音的不到 60%：多半是 OCR 在这种排版上读不准，整行都不判断。
-    tied_in：图上第一个小节之前每根弦最后一个音的品位（一行切成两半时，右半开头的延续音接的是左半的音）。
+    tied_in：图上第一个小节之前每根弦最后一个音的品位（右半行接左半的音、一行接上一行的音；{} = 前面没有音）。
+    None = 不知道（各行并行识别，上一行还没结果）：第一个小节 AI 这边没有对不上的音时，OCR 多读的音每根弦
+    放过一个（可能是接上一行的延续音），和后面小节的规则一样。
     """
     pairs = []
     ai_total = 0  # 整行 AI 写的音（不含闷音）
@@ -170,6 +172,7 @@ def ocr_disagreements(
     )  # 每根弦上最后一个音的品位（判断跨小节线、写成括号的延续音）
     for i, (bar, seen) in enumerate(zip(bars, ocr_bars, strict=False)):
         tied_ok = set(last_fret.items())
+        unknown_tie = i == 0 and tied_in is None
         ai: Counter = Counter()
         harmonic_marks: Counter = Counter()
         for e in bar["events"]:
@@ -194,9 +197,13 @@ def ocr_disagreements(
         # 连音线跨过小节线延续的音，谱上常写成“(5)”，OCR 会读到，但它不是新起拍：上一小节这根弦的最后一个音
         # 就是这个品位、而且 AI 这边没有对不上的音（读错弦是两边各多一个，延续音只是 OCR 多一个），就不算多出来的
         if not (ai - got):
+            loose: set[int] = set()  # 不知道上一行时，已经放过一个的弦
             for key, k in list((got - ai).items()):
                 if key in tied_ok:
                     got[key] -= k
+                elif unknown_tie and key[0] not in loose:
+                    got[key] -= 1
+                    loose.add(key[0])
             got += Counter()  # 去掉计数为 0 的
         if got:
             pairs.append((i, ai, got))
@@ -247,13 +254,13 @@ def transcribe_system(
 ) -> list[dict]:
     """识别一行。double_check：off / doubts（第一遍有警告或“不确定”才再读）/ all，见 config.double_check_mode；
     None = 按设置。split：一行太宽时切成左右两半分别识别（None = 按 SPLIT_ROWS，见 _should_split）。
-    context：程序给模型的补充说明（不是用户的话）；tied_in：见 ocr_disagreements（右半行用）。"""
+    context：程序给模型的补充说明（不是用户的话）；tied_in：见 ocr_disagreements（见 _tied_in）。"""
     if double_check is None:
         double_check = config.double_check()
     sysinfo = song["systems"][si]
     if (SPLIT_ROWS if split is None else split) and _should_split(sysinfo):
         return _transcribe_halves(
-            claude, sid, song, si, first_bar, hint, cancel, start_ts, double_check, context
+            claude, sid, song, si, first_bar, hint, cancel, start_ts, double_check, context, tied_in
         )
     page = song["pages"][sysinfo["page"]]
     x0, x1, y0, y1 = sysinfo["crop"]
@@ -327,6 +334,8 @@ def transcribe_system(
             bars.append(bar)
         if (
             not cur_ts
+            and len(bars)
+            >= 2  # 只有 1 个小节（短的末行、1 小节的半行）看不出“整行一样长”，按普通的时值问题返修
             and len(lengths) == len(bars)
             and len(set(lengths)) == 1
             and lengths[0] != bar_length(meta)
@@ -365,6 +374,10 @@ def transcribe_system(
                 bars[i]["_ocr"] = (only_ocr, only_ai)
         return raw, bars, issues
 
+    def rank(bars, issues) -> tuple[bool, int]:
+        # 小节数对的优先（小节数不对时 OCR 不比，问题数显得少），再看问题少的
+        return (bool(spans) and len(bars) != len(spans), len(issues))
+
     def read_once() -> tuple[list[dict], list]:
         """读一遍这一行：有问题返修一次；返修后小节数还不对就从头再读一次。"""
         raw, bars, issues = run()
@@ -378,7 +391,7 @@ def transcribe_system(
             except Exception as e:  # noqa: BLE001 - 返修出错（过载、断线）：用第一次的结果，警告照常标在小节上
                 log.warning("request_id=%s song=%s system=%d retry failed: %s", request_id_of(e), sid, si, e)
             else:
-                if len(issues2) <= len(issues):
+                if rank(bars2, issues2) <= rank(bars, issues):
                     bars, issues = bars2, issues2
         if spans and len(bars) != len(spans):
             # 返修后小节数还是不对（模型漏了 / 合并了整小节，比读错一个音严重得多）：不带上次的结果重新读一遍，取问题少的
@@ -395,12 +408,17 @@ def transcribe_system(
             except Exception as e:  # noqa: BLE001 - 重读出错：用前面的结果
                 log.warning("request_id=%s song=%s system=%d reread failed: %s", request_id_of(e), sid, si, e)
             else:
-                if len(bars3) == len(spans) or len(issues3) < len(issues):
+                if rank(bars3, issues3) < rank(bars, issues):
                     bars, issues = bars3, issues3
         return bars, issues
 
     bars, _ = read_once()
-    doubtful = any(b.get("warn") or b.get("_ocr") or str(b.get("uncertain") or "").strip() for b in bars)
+    doubtful = any(
+        any(w.get("code") not in _INFO_ONLY for w in b.get("warn") or [])
+        or b.get("_ocr")
+        or str(b.get("uncertain") or "").strip()
+        for b in bars
+    )
     if (
         spans
         and len(bars) == len(spans)
@@ -457,6 +475,7 @@ def _transcribe_halves(
     start_ts: list[int] | None,
     double_check: str,
     context: str = "",
+    tied_in: dict[int, int] | None = None,
 ) -> list[dict]:
     """把一行切成左右两半，先识别左半，再带上左半结束时的拍号和和弦识别右半（右半开头延续的和弦，
     图上可能看不到它的和弦图）。图小了一半，能放大得更多，密集的符杠、小数字更容易看清。"""
@@ -489,6 +508,7 @@ def _transcribe_halves(
         double_check,
         split=False,
         context=context,
+        tied_in=tied_in,
     )
     meta = song["meta"]
     ts = start_ts or meta["time_signature"]
@@ -525,6 +545,15 @@ def _transcribe_halves(
     return left + right
 
 
+def _tied_in(song: dict, si: int) -> dict[int, int] | None:
+    """第 si 行开头之前每根弦最后一个音的品位（给 OCR 校对认行首的延续音）：第一行前面没有音；
+    上一行还没有结果（各行并行识别）时不知道，返回 None。"""
+    if si == 0:
+        return {}
+    prev = [b for b in song.get("bars") or [] if b.get("system") == si - 1]
+    return _last_frets(prev) if prev else None
+
+
 def _last_frets(bars: list[dict]) -> dict[int, int]:
     """每根弦上最后一个音的品位（闷音不算）。"""
     out: dict[int, int] = {}
@@ -548,6 +577,8 @@ def _bar_key(bar: dict) -> tuple:
     return (*out, t)
 
 
+# 只是提醒、读对了也会有的警告（五连音之类不在播放网格上）：doubts 模式不为它再读一遍
+_INFO_ONLY = frozenset({"off_grid"})
 # 读错的明显迹象：两遍读法不一样又没有多数时，选没有这些警告的那遍
 _BAD_READ = frozenset({"length", "placeholder", "empty", "string_range", "ocr_mismatch"})
 
@@ -770,7 +801,13 @@ def _recognize_rows(
     on_row(行号, 小节 | None, 错误说明 | None)。返回 (每行识别时用的开头拍号, 失败的说明)。"""
     meta_ts = song["meta"]["time_signature"]
     plan = [
-        (r[0], first_bar_of(song, r[0]), r[1] or _row_start_ts(song["bars"], song["meta"], r[0]), *r[2:3])
+        (
+            r[0],
+            first_bar_of(song, r[0]),
+            r[1] or _row_start_ts(song["bars"], song["meta"], r[0]),
+            _tied_in(song, r[0]),
+            *r[2:3],
+        )
         for r in rows
     ]
     errors: list[str] = []
@@ -786,8 +823,9 @@ def _recognize_rows(
                 cancel=cancel,
                 start_ts=ts if ts != meta_ts else None,  # 和全曲拍号一样就不用特别告诉模型
                 context=note[0] if note else "",  # 程序给的说明（和弦图读法），不是用户写的提示
+                tied_in=tied,
             ): si
-            for si, first, ts, *note in plan
+            for si, first, ts, tied, *note in plan
         }
         for fut in as_completed(futs):
             si = futs[fut]
@@ -953,7 +991,17 @@ def reparse_system(
     song = store.load(sid)
     start_ts = _row_start_ts(song["bars"], song["meta"], si)  # 前面各行写的变拍号，这一行的图上看不到
     first = first_bar_of(song, si)
-    bars = transcribe_queued(meter.claude, sid, song, si, first, hint=hint, cancel=cancel, start_ts=start_ts)
+    bars = transcribe_queued(
+        meter.claude,
+        sid,
+        song,
+        si,
+        first,
+        hint=hint,
+        cancel=cancel,
+        start_ts=start_ts,
+        tied_in=_tied_in(song, si),
+    )
 
     def apply(s):
         others = {b["id"]: b.get("time_signature") for b in s["bars"] if b["system"] != si}

@@ -1093,7 +1093,7 @@ def test_ocr_tie_from_the_left_half_is_not_a_disagreement():
     """右半行开头写成括号的延续音（接左半最后的 2 弦 5 品）：OCR 读到、AI 不写，不算不一致。"""
     bars = [{"events": [{"dur": "1", "notes": [{"string": 1, "fret": 3, "tech": []}]}]}]
     seen = [[(1, 3), (2, 5)]]
-    assert recognize.ocr_disagreements(bars, seen) != {}
+    assert recognize.ocr_disagreements(bars, seen, tied_in={}) != {}
     assert recognize.ocr_disagreements(bars, seen, tied_in={2: 5}) == {}
     left = [
         {
@@ -1150,3 +1150,112 @@ def test_chord_diagram_majority_goes_to_the_model_as_context_not_as_the_users_hi
         FakeClaude(None), sid, song, [(0, None, note)], threading.Event(), lambda *a: None
     )
     assert seen and all(h == "" and note in c for h, c in seen)
+
+
+def _planned_song():
+    sid = songs.create_song([("p1.png", score_png())])
+    song = store.load(sid)
+    song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+    song["systems"] = recognize.plan_systems(sid, song)
+    return sid, song
+
+
+def _note(s, f):
+    return {"string": s, "fret": f, "tech": [], "grace": -1, "bend": 0}
+
+
+def _bars(first_bar, n, durs, fret=0):
+    return {
+        "bars": [
+            {
+                "number": first_bar + i,
+                "events": [{"dur": d, "notes": [_note(1, fret + i)]} for d in durs(i)],
+                "tip": "",
+                "uncertain": "",
+            }
+            for i in range(n)
+        ]
+    }
+
+
+def test_ocr_tie_at_the_start_of_a_row_is_not_a_disagreement():
+    """行首写成括号的延续音（接上一行最后的音）：上一行的音已知时按它判断；
+    不知道（各行并行识别）时，第一个小节 AI 这边没有对不上的音，OCR 多读的音不算不一致（和后面小节同一个规则）。"""
+    bars = [{"events": [{"dur": "1", "notes": [{"string": 1, "fret": 3, "tech": []}]}]}]
+    seen = [[(1, 3), (2, 5)]]
+    assert recognize.ocr_disagreements(bars, seen) == {}  # 不知道上一行
+    assert recognize.ocr_disagreements(bars, seen, tied_in={2: 5}) == {}
+    assert recognize.ocr_disagreements(bars, seen, tied_in={}) != {}  # 第一行：前面没有音
+    assert recognize.ocr_disagreements(bars, seen, tied_in={2: 7}) != {}
+    # AI 这边也有对不上的音（1 弦 3 品其实在 2 弦）：照样报
+    chord = [{"events": [{"dur": "1", "notes": [_note(1, 3), _note(3, 2), _note(4, 2), _note(5, 0)]}]}]
+    out = recognize.ocr_disagreements(chord, [[(2, 3), (3, 2), (4, 2), (5, 0), (2, 5)]])
+    assert dict(out[0][0]) == {(2, 3): 1, (2, 5): 1}
+
+
+def test_row_recognition_passes_the_previous_rows_last_notes_for_ocr(data_dir, monkeypatch):
+    """前一行已经有结果时（单行重新识别、补页、重试），把它最后的音告诉 OCR 校对；第一行前面什么都没有。"""
+    seen = []
+    monkeypatch.setattr(
+        recognize, "transcribe_queued", lambda *a, **kw: seen.append((a[3], kw.get("tied_in"))) or []
+    )
+    sid, song = _planned_song()
+    song["bars"] = [
+        {"system": 0, "events": [{"dur": "1", "notes": [_note(2, 5), _note(3, 7)]}]},
+        {"system": 0, "events": [{"dur": "1", "notes": [_note(2, 8)]}]},
+    ]
+    recognize._recognize_rows(
+        FakeClaude(None), sid, song, [(0, None), (1, None)], threading.Event(), lambda *a: None
+    )
+    assert sorted(seen, key=lambda x: x[0]) == [(0, {}), (1, {2: 8, 3: 7})]
+
+
+def test_single_bar_row_with_wrong_length_gets_the_normal_length_problem(data_dir, monkeypatch):
+    """只有 1 个小节的行（短的末行、1 小节的右半行）时值不对：按普通的时值问题返修，
+    不能说“整行每个小节都一样长、可能前面变了拍号”（模型会写个错的拍号，带到后面所有行）。"""
+    sid, song = _planned_song()
+    song["systems"][0]["spans"] = song["systems"][0]["spans"][:1]
+    problems = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        if kw.get("problems"):
+            problems.append(kw["problems"])
+        return _bars(first_bar, len(spans), lambda i: ["3"])
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="off", split=False)
+    assert problems and all("变了拍号" not in p for p in problems[0])
+    assert any("时值合计 3 拍" in p for p in problems[0])
+
+
+def test_retry_with_the_wrong_bar_count_does_not_replace_a_right_count_read(data_dir, monkeypatch):
+    """第一遍小节数对、有两个时值问题；返修少了一个小节（OCR 不比，问题反而少）：小节数对的优先。
+    之后重读又出错时，也不能留下小节数不对的结果。"""
+    sid, song = _planned_song()
+    reads = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, previous=None, **kw):
+        reads.append(previous is not None)
+        if len(reads) == 3:
+            raise RuntimeError("断了")
+        if previous is None:  # 第一遍：前两个小节少一拍
+            return _bars(first_bar, len(spans), lambda i: ["1"] * (3 if i < 2 else 4))
+        return _bars(first_bar, len(spans) - 1, lambda i: ["1"] * 4)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="off", split=False)
+    assert len(bars) == 3
+
+
+def test_doubts_mode_ignores_info_only_warnings(data_dir, monkeypatch):
+    """doubts：五连音之类“不在播放网格上”的提醒读对了也会有，不算疑问，不为它再读一遍。"""
+    sid, song = _planned_song()
+    reads = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        reads.append(first_bar)
+        return _bars(first_bar, len(spans), lambda i: ["1/5"] * 5 + ["3"])
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="doubts", split=False)
+    assert reads == [1] and all(w["code"] == "off_grid" for b in bars for w in b["warn"])
