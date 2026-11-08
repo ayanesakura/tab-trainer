@@ -140,3 +140,42 @@ def test_estimate_counts_only_scored_rows_and_extra_reads(data_dir):
     off = evaluate.estimate(truth, rows, price, "off", False)
     both = evaluate.estimate(truth, rows, price, "all", False)
     assert off[:2] == (1, 2) and both[0] == 2 and both[1] > off[1] and both[3] > off[3]
+
+
+def test_refine_pass_reports_before_and_after(data_dir, monkeypatch):
+    """--refine：识别完对每个小节做一遍精修，报告精修前后两份结果、改对 / 改坏几个和精修的费用；不加时报告不变。"""
+    monkeypatch.setattr(evaluate, "Claude", FakeClaude)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+
+    def wrong(s):  # 标准答案：第 2 小节是 7 品（替身模型识别成 1 品）
+        b = s["bars"][1]
+        b["events"] = [{**e, "notes": [{**n, "fret": 7} for n in e["notes"]]} for e in b["events"]]
+
+    store.update(sid, wrong)
+
+    def verify(img, meta, span, events, previous, ts):
+        fret = events[0]["notes"][0]["fret"]
+        if fret not in (0, 1):
+            return {"diff": "", "changed": False, "events": events, "uncertain": ""}
+        new = 7 if fret == 1 else 3  # 第 2 小节改对了；第 1 小节（本来是对的）改坏了
+        fixed = [{**e, "notes": [{**n, "fret": new} for n in e["notes"]]} for e in events]
+        return {"diff": "改了", "changed": True, "events": fixed, "uncertain": ""}
+
+    monkeypatch.setattr(FakeClaude, "verify_result", verify)
+    rep = evaluate.run(sid, evaluate.LLMConfig(model="claude-opus-5-5"), [0], 1)
+    assert "refine" not in rep and "summary_refined" not in rep  # 默认不精修，报告格式不变
+    assert not [c for c in FakeClaude.calls if "verify" in c]
+
+    rep = evaluate.run(sid, evaluate.LLMConfig(model="claude-opus-5-5"), [0], 2, refine_pass=True)
+    rf = rep["refine"]
+    assert rep["summary"]["bar_exact_rate"] == round(2 / 3, 4)  # 精修之前
+    assert rf["bar_exact_before"] == round(2 / 3, 4) and rf["bar_exact_after"] == round(2 / 3, 4)
+    assert rf["fixed"] == 1 and rf["broke"] == 1 and rf["changed"] == 2 and rf["bars_checked"] == 3
+    assert rf["cost_usd"] == 0.15  # 替身每次核对 $0.05，和识别的费用分开记
+    assert rep["summary_refined"]["bars"] == 3
+    row = next(r for r in rep["bars"] if r["bar"] == 2)
+    assert row["refine_changed"] and row["cmp_refined"]["exact"] and not row["cmp"]["exact"]
+    md = evaluate.to_markdown(rep)
+    assert "## 精修" in md and "改对 1 个，改坏 1 个" in md
+    assert evaluate.refine_bars_to_check(store.load(sid), [0]) == 3

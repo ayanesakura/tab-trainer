@@ -4,6 +4,7 @@
   uv run python -m app.evaluate example-wuting            # 只打印计划和预估费用，不调用模型
   uv run python -m app.evaluate example-wuting --yes      # 真正运行（会产生 API 费用）
   uv run python -m app.evaluate example-wuting --yes --systems 0,5 --model claude-sonnet-5-5
+  uv run python -m app.evaluate example-wuting --yes --refine   # 识别完再精修（逐小节放大核对），报告精修前后两份结果
 
 标准答案的调弦 / 变调夹 / 拍号直接沿用，只评测“逐行识别”这一步。
 结果写到 data/evals/<时间>-<曲子>/：report.json（全部数据）和 report.md（摘要 + 错得最多的小节）。
@@ -20,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from pathlib import Path
 
-from app import config, recognize, store
+from app import config, recognize, refine, store
 from app.errors import NotFound
 from app.llm import Claude, LLMConfig, friendly, price_of
 from app.music import warn_code_of
@@ -167,9 +168,10 @@ def run(
     price_model: str = "",
     double: str = "off",
     split: bool | None = None,  # None = 和应用里一样（recognize.SPLIT_ROWS）
+    refine_pass: bool = False,
 ) -> dict:
     """price_model：按这个模型的价格估算费用（--price-as）；不给就用模型客户端按实际回答的模型记的钱
-    （服务端兜底换了模型时也对）。"""
+    （服务端兜底换了模型时也对）。refine_pass：识别完再对要评分的小节做一遍精修（见 run_refine），报告里加上精修后的结果。"""
     truth = store.load(sid)
     scored = set(truth.get("eval_bars") or [])
     sys_idx = rows_to_eval(truth, systems)
@@ -214,6 +216,11 @@ def run(
     with ThreadPoolExecutor(concurrency) as pool:
         results = list(pool.map(one, sys_idx))
 
+    refined: dict[tuple[int, int], dict] = {}
+    refine_rep = None
+    if refine_pass:
+        refined, refine_rep = run_refine(sid, truth, results, scored, concurrency, cfg, price_model)
+
     rows, errors = [], {}
     for si, pred_bars, err in results:
         if err:
@@ -224,19 +231,47 @@ def run(
                 continue
             pb = pred_bars[k] if k < len(pred_bars) else None
             cmp = compare_bar(tb["events"], pb["events"] if pb else None)
-            rows.append(
-                {
-                    "bar": tb["n"],
-                    "system": si,
-                    "cmp": cmp,
-                    "duration_ok": duration_ok(pb),
-                    "pred_events": pb["events"] if pb else None,
-                    "pred_uncertain": pb.get("uncertain", "") if pb else "",
-                    "pred_warn": pb.get("warn", []) if pb else [],
-                }
-            )
+            row = {
+                "bar": tb["n"],
+                "system": si,
+                "cmp": cmp,
+                "duration_ok": duration_ok(pb),
+                "pred_events": pb["events"] if pb else None,
+                "pred_uncertain": pb.get("uncertain", "") if pb else "",
+                "pred_warn": pb.get("warn", []) if pb else [],
+            }
+            if refine_pass:
+                r = refined.get((si, k))
+                after = r["events"] if r and r["events"] is not None else row["pred_events"]
+                row.update(
+                    refined_events=after,
+                    cmp_refined=compare_bar(tb["events"], after) if pb else cmp,
+                    refine_checked=r is not None and not r["error"],
+                    refine_changed=bool(r and r["events"] is not None),
+                    refine_diff=(r or {}).get("diff", ""),
+                    refine_error=(r or {}).get("error", ""),
+                )
+            rows.append(row)
     usage = claude.usage
     price = price_of(price_model) if price_model else None
+    extra = {}
+    if refine_rep is not None:
+        before = sum(r["cmp"]["exact"] for r in rows)
+        after = sum(r["cmp_refined"]["exact"] for r in rows)
+        n = len(rows)
+        extra = {
+            "summary_refined": summarize([{**r, "cmp": r["cmp_refined"]} for r in rows]),
+            "refine": {
+                **refine_rep,
+                "bars_checked": sum(r["refine_checked"] for r in rows),
+                "changed": sum(r["refine_changed"] for r in rows),
+                "fixed": sum(1 for r in rows if not r["cmp"]["exact"] and r["cmp_refined"]["exact"]),
+                "broke": sum(1 for r in rows if r["cmp"]["exact"] and not r["cmp_refined"]["exact"]),
+                "errors": sum(1 for r in rows if r["refine_error"]),
+                "bar_exact_before": round(before / n, 4) if n else 0.0,
+                "bar_exact_after": round(after / n, 4) if n else 0.0,
+            },
+        }
     return {
         "song": sid,
         "model": cfg.model,
@@ -261,7 +296,77 @@ def run(
         "seconds": round(time.time() - started, 1),
         "bars": rows,
         "raw_calls": raw_calls,
+        **extra,
     }
+
+
+def run_refine(
+    sid: str,
+    truth: dict,
+    results: list[tuple[int, list[dict], str | None]],
+    scored: set[int],
+    concurrency: int,
+    cfg: LLMConfig,
+    price_model: str = "",
+) -> tuple[dict[tuple[int, int], dict], dict]:
+    """对识别结果做一遍精修（和应用里一样：app/refine.verify，按识别出的小节位置裁图，上一小节的识别结果当上下文）。
+    只核对要评分的小节（有 eval_bars 时）；用单独的模型客户端，费用分开记。
+    返回 ({(行号, 行内序号): {events（没改是 None）, diff, error}}, {cost_usd, usage, seconds})。"""
+    claude = Claude(cfg)
+    meta = truth["meta"]
+    by_sys: dict[int, list[dict]] = {}
+    for b in truth["bars"]:
+        by_sys.setdefault(b["system"], []).append(b)
+    preds = {si: bars for si, bars, _ in results}
+    pages: dict[int, object] = {}
+    jobs = []
+    for si, bars, _ in results:
+        sysinfo = truth["systems"][si] if si < len(truth["systems"]) else None
+        if not sysinfo or not sysinfo.get("spans"):
+            continue  # 整行一个小节（没检测到小节线）：裁不出单个小节，应用里也不精修
+        # 每个小节的拍号：这一行开头的（同 start_ts），走过识别结果里写的变拍号
+        cur = start_ts(truth, si) or meta["time_signature"]
+        for k, b in enumerate(bars):
+            cur = b.get("ts_change") or cur
+            tb = by_sys.get(si, [])[k] if k < len(by_sys.get(si, [])) else None
+            if tb is None or (scored and tb["n"] not in scored) or b.get("placeholder"):
+                continue
+            prev = bars[k - 1] if k else (preds.get(si - 1) or [None])[-1]
+            ts = cur if cur != meta["time_signature"] else None
+            jobs.append((si, k, b, prev, ts))
+            pages.setdefault(sysinfo["page"], None)
+    for pi in pages:
+        pages[pi] = store.page_image(sid, truth["pages"][pi])
+
+    def one(job):
+        si, k, b, prev, ts = job
+        sysinfo = truth["systems"][si]
+        try:
+            out, events = refine.verify(
+                claude, pages[sysinfo["page"]], sysinfo, b, meta, prev["events"] if prev else None, ts
+            )
+        except Exception as e:  # noqa: BLE001 - 一个小节失败照样出报告
+            return (si, k), {"events": None, "diff": "", "error": friendly(e)}
+        return (si, k), {"events": events, "diff": str(out.get("diff") or ""), "error": ""}
+
+    started = time.time()
+    with ThreadPoolExecutor(concurrency) as pool:
+        out = dict(pool.map(one, jobs))
+    usage = claude.usage
+    price = price_of(price_model) if price_model else None
+    cost = (
+        usage["input_tokens"] / 1e6 * price[0] + usage["output_tokens"] / 1e6 * price[1]
+        if price
+        else usage.get("cost_usd", 0)
+    )
+    return out, {"usage": usage, "cost_usd": round(cost, 4), "seconds": round(time.time() - started, 1)}
+
+
+def refine_bars_to_check(truth: dict, sys_idx: list[int]) -> int:
+    """--refine 要核对的小节数（预估用）：评测的行里要评分的小节，整行一个小节的行不算。"""
+    scored = set(truth.get("eval_bars") or [])
+    rows = {si for si in sys_idx if si < len(truth["systems"]) and truth["systems"][si].get("spans")}
+    return sum(1 for b in truth["bars"] if b["system"] in rows and (not scored or b["n"] in scored))
 
 
 DURATION_CODES = frozenset({"length", "placeholder"})  # 时值合计不对、整小节没识别出来（按休止占位）
@@ -322,6 +427,23 @@ def to_markdown(rep: dict, worst: int = 12) -> str:
         lines.append(f"- 小节数不一致的行（标准答案, 识别结果）：{rep['bar_count_mismatch']}")
     if rep["errors"]:
         lines.append(f"- 识别失败的行：{rep['errors']}")
+    rf = rep.get("refine")
+    if rf:
+        sr = rep["summary_refined"]
+        lines += [
+            "",
+            "## 精修（逐小节放大核对）",
+            "",
+            f"- 小节完全一致：{rf['bar_exact_before']:.1%} → {rf['bar_exact_after']:.1%}"
+            f"（核对 {rf['bars_checked']} 个，改了 {rf['changed']} 个：改对 {rf['fixed']} 个，改坏 {rf['broke']} 个"
+            + (f"，{rf['errors']} 个核对失败" if rf["errors"] else "")
+            + "）",
+            (
+                f"- 音符 F1：{s['notes']['f1']:.1%} → {sr['notes']['f1']:.1%}；"
+                f"节奏 F1：{s['rhythm']['f1']:.1%} → {sr['rhythm']['f1']:.1%}"
+            ),
+            f"- 精修费用约 ${rf['cost_usd']}，用时 {rf['seconds']} 秒",
+        ]
     bad = sorted(rep["bars"], key=lambda r: len(r["cmp"]["missing"]) + len(r["cmp"]["extra"]), reverse=True)
     bad = [r for r in bad if r["cmp"]["missing"] or r["cmp"]["extra"]][:worst]
     if bad:
@@ -358,6 +480,11 @@ def main() -> None:
         help="太宽的行切成两半识别（recognize._should_split）；默认和应用里一样（recognize.SPLIT_ROWS）",
     )
     ap.add_argument(
+        "--refine",
+        action="store_true",
+        help="识别完再精修（逐小节放大核对，见 app/refine.py），报告精修前后两份结果（另加约 $0.055 / 小节）",
+    )
+    ap.add_argument(
         "--rescore", metavar="REPORT", help="用已有的 report.json 按当前标准答案重新计分，不调用模型"
     )
     a = ap.parse_args()
@@ -387,11 +514,14 @@ def main() -> None:
         f"双重校对 {a.double_check}，切半 {recognize.SPLIT_ROWS if a.split is None else a.split}"
     )
     print(f"将调用模型 {lo}–{hi} 次（有问题的行会返修、重读），预估费用 {est}")
+    if a.refine:
+        n = refine_bars_to_check(truth, sys_idx)
+        print(f"精修：再核对约 {n} 个小节，每个一次调用，另加约 ${n * refine.COST_PER_BAR:.2f}")
     if not a.yes:
         print("这只是计划。确认要运行请加 --yes。")
         return
 
-    rep = run(a.song, cfg, systems, a.concurrency, a.price_as or "", a.double_check, a.split)
+    rep = run(a.song, cfg, systems, a.concurrency, a.price_as or "", a.double_check, a.split, a.refine)
     model_tag = (a.model or cfg.model or "").split("/")[-1]
     out = store.DATA / "evals" / f"{time.strftime('%Y%m%d-%H%M%S')}-{a.song}-{model_tag}"
     out.mkdir(parents=True, exist_ok=True)
