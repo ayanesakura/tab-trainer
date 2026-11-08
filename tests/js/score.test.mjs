@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import * as at from '../../app/static/vendor/alphatab/alphaTab.core.min.mjs';
-import { toAlphaTex, deriveSong, splitTicks, durToTicks, ticksToDur, eventIndexAt, DERIVE_VERSION } from '../../app/static/js/score.js';
+import { toAlphaTex, deriveSong, splitTicks, durToTicks, ticksToDur, eventIndexAt, DERIVE_VERSION, CHORD_PAD } from '../../app/static/js/score.js';
 
 const parse = tex => {
   const settings = new at.Settings();
@@ -238,6 +238,31 @@ test('chord sheets: chord names, diagrams and strums survive the round trip', ()
   assert.equal(back.bars[1].events[0].strum, undefined); // 单音不算扫弦
   assert.deepEqual(back.bars[1].events.map(e => e.lyrics), [['天真', '多浅'], ['', '薄']]);
   assert.equal(back.bars[0].events[0].lyrics, undefined);
+});
+
+test('chord names that differ only by case stay separate chords (Am7 / AM7, Bm / BM)', () => {
+  const Am7 = [0, 1, 0, 2, 0, -1], AM7 = [0, 2, 1, 2, 0, -1], Bm = [2, 3, 4, 4, 2, -1];
+  const ev = (chord, frets) => ({ dur: '4', chord, notes: frets.map((f, i) => (f < 0 ? null : N(i + 1, f))).filter(Boolean) });
+  const song = {
+    meta: { tuning: ['E4', 'B3', 'G3', 'D3', 'A2', 'E2'], capo: 0, time_signature: [4, 4] },
+    bars: [
+      { shapes: { Am7 }, events: [ev('Am7', Am7)] },
+      { shapes: { AM7 }, events: [ev('AM7', AM7)] },
+      { shapes: { Bm }, events: [ev('Bm', Bm), ev('BM', [2, 4, 4, 4, 2, -1]), ev('Am7', Am7)] }, // BM 没有指法、只有名字
+    ],
+  };
+  const { tex } = toAlphaTex(song);
+  const staff = parse(tex).tracks[0].staves[0];
+  const got = staff.bars.flatMap(b => b.voices[0].beats.filter(x => x.chord)).map(x => [x.chord.name.replaceAll(CHORD_PAD, ''), [...x.chord.strings]]);
+  assert.deepEqual(got.map(g => g[0]), ['Am7', 'AM7', 'Bm', 'BM', 'Am7']);
+  assert.deepEqual(got[0][1], Am7);
+  assert.deepEqual(got[1][1], AM7);
+  assert.deepEqual(got[2][1], Bm);
+  assert.deepEqual(got[4][1], Am7);
+  assert.equal(new Set([...staff.chords.keys()]).size, 4);
+  // 第一次出现的写法原样保留，后来者只多了看不见的零宽空格
+  assert.equal(staff.bars[0].voices[0].beats[0].chord.name, 'Am7');
+  assert.equal(staff.bars[1].voices[0].beats[0].chord.name, 'AM7' + CHORD_PAD);
 });
 
 test('rolled chords keep their direction (wavy arrow toward string 1 = low to high)', () => {

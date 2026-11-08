@@ -3,7 +3,7 @@
 // 状态都在 store 的 play 切片里（ready、playing、bpm、a..b、loops、指板的 note / next，以及节拍器、音量等设置）。
 
 import * as alphaTab from '/static/vendor/alphatab/alphaTab.min.mjs';
-import { TICKS, eventIndexAt, scoreNeedsGbk } from '../score.js';
+import { TICKS, CHORD_PAD, eventIndexAt, scoreNeedsGbk } from '../score.js';
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
 import { loopLabel, stepSection as stepCalc, isScore } from './view.js';
@@ -496,8 +496,15 @@ function seekBar(bi) {
 export function exportGp() {
   if (!api || !api.score) return;
   applyTimbre(api.score, true); // 导出原来的音色，不是练习时临时换的木吉他
+  // 和弦名去掉为了区分大小写加的零宽空格（见 score.js 的 CHORD_PAD）：GP 文件里和弦按编号引用，不会再撞车
+  const chords = api.score.tracks.flatMap(t => t.staves.flatMap(st => [...(st.chords ? st.chords.values() : [])]));
+  const names = chords.map(c => c.name);
+  chords.forEach(c => { c.name = String(c.name || '').replaceAll(CHORD_PAD, ''); });
   let bytes;
-  try { bytes = new alphaTab.exporter.Gp7Exporter().export(api.score, api.settings); } finally { applyTimbre(api.score); }
+  try { bytes = new alphaTab.exporter.Gp7Exporter().export(api.score, api.settings); } finally {
+    applyTimbre(api.score);
+    chords.forEach((c, i) => { c.name = names[i]; });
+  }
   const s = get('song'), a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
   a.download = ((s.title || (s.meta && s.meta.title) || 'tab').replace(/[\\/:*?"<>|]/g, '_')) + '.gp';

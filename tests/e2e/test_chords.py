@@ -176,3 +176,48 @@ def test_gp_lyrics_on_the_practised_track_that_is_not_track_0(server, trainer):
         assert not b.errors, b.errors
     finally:
         server["store"].delete(sid)
+
+
+def test_chords_differing_only_by_case_render_and_export_separately(server, trainer):
+    """Am7 和 AM7：谱面上各画各的和弦图，导出的 GP 里也是两个和弦、名字不带区分用的零宽空格。"""
+    am7, maj7 = [0, 1, 0, 2, 0, -1], [0, 2, 1, 2, 0, -1]
+    store, sid = server["store"], _seed()
+
+    def apply(s):
+        for i, b in enumerate(s["bars"]):
+            name, frets = ("Am7", am7) if i % 2 == 0 else ("AM7", maj7)
+            b["events"] = [
+                _strum(frets, "down", name),
+                _strum(frets, "up"),
+                _strum(frets, "down"),
+                _strum(frets, "up"),
+            ]
+            b["shapes"] = {name: frets}
+
+    store.update(sid, apply)
+    try:
+        b = trainer(sid)
+        got = b.js(
+            """tt.api.score.tracks[0].staves[0].bars.slice(0, 2).map(x => { const c = x.voices[0].beats[0].chord;
+              return [c.name.replaceAll('\\u200b', ''), [...c.strings]]; })"""
+        )
+        assert got == [["Am7", am7], ["AM7", maj7]]
+        # 侧栏小节卡片按我们的数据画：第 2 小节是 AM7 的指法
+        b.js("tt.set('ui.bar', 1)")
+        b.wait_for("(document.querySelector('#barChords .cd-name') || {}).textContent === 'AM7'")
+        exported = b.js(
+            """(async () => {
+              let blob = null; const orig = URL.createObjectURL, click = HTMLAnchorElement.prototype.click;
+              URL.createObjectURL = x => { blob = x; return 'blob:x'; }; HTMLAnchorElement.prototype.click = () => {};
+              try { tt.player.exportGp(); } finally { URL.createObjectURL = orig; HTMLAnchorElement.prototype.click = click; }
+              const at = await import('/static/vendor/alphatab/alphaTab.min.mjs');
+              const sc = at.importer.ScoreLoader.loadScoreFromBytes(new Uint8Array(await blob.arrayBuffer()), new at.Settings());
+              return sc.tracks[0].staves[0].bars.slice(0, 2).map(x => { const c = x.voices[0].beats[0].chord; return [c.name, [...c.strings]]; });
+            })()"""
+        )
+        assert exported == [["Am7", am7], ["AM7", maj7]]
+        # 导出完名字放回去：谱面上还是两个不同的和弦
+        assert b.js("tt.api.score.tracks[0].staves[0].bars[1].voices[0].beats[0].chord.name") == "AM7\u200b"
+        assert not b.errors, b.errors
+    finally:
+        store.delete(sid)
