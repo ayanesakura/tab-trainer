@@ -10,7 +10,7 @@
   （没检测到小节线，裁不出一个小节，见 refinable）。整首（pick）：再跳过用户手改过的、确认过没问题的；核对过、
   音没再变的（refine_key）不再核对，用户点“精修整首”时全都核对过了就整首重来（自动精修不重来）。
   点了某个小节 / 某一行（pick_scope）：范围里的都核对，手改过、确认过、核对过的也核对（用户明确要求的，改了能撤销）。
-- 确认（CONFIRM_CHANGES）：模型提出改动时再独立核对一两遍，有两遍提出一模一样的改动才改，否则不改、标成待核对（见 verify）。
+- 确认（CONFIRM_CHANGES）：模型提出改动时再独立核对，最多 MAX_READS 遍里有两遍提出一模一样的改动才改，否则不改、标成待核对（见 verify）。
 - 写回：每个小节核对完马上写回，但只在这个小节还在、rev 没变（期间用户没改过）、仍然该核对时才写，否则悄悄跳过。
   改了的小节：提示 / 问答 / 练习建议按“音变了”处理（staleness.refine_bar），改之前的内容记在 bar["refine"]，可以撤销（undo）。
 - 任务：activity kind = refine（scope = song / bars / row，row = 行号，bars = 范围里的小节 id，pending = 还没核对完的），
@@ -43,8 +43,11 @@ log = logging.getLogger("tab_trainer.refine")
 PAD = 0.15  # 裁剪时小节左右各多带它宽度的 15%
 COST_PER_BAR = 0.20  # 评测里的平均费用（美元 / 小节，Opus、最高精细度，见 llm.VERIFY_EFFORT）：确认框里的预估
 SECONDS_PER_BAR = 75  # 一次核对大约多久（几个小节并行）：确认框里的“约 N 分钟”
-# 模型提出改动时再独立核对一两遍，有两遍提出一模一样的改动才改（见 verify）
+# 模型提出改动时再独立核对几遍，有两遍提出一模一样的改动才改（见 verify）
 CONFIRM_CHANGES = True
+# 一个小节最多核对几遍（含第一遍）。探查（每个小节核对 5 遍）：模型提出的改动每次都一模一样、而且都对，
+# 分歧只在“提出改动”和“说没问题”之间（如 改 / 没问题 / 没问题 / 改 / 改）：只核对三遍会把对的改动放弃掉
+MAX_READS = 5
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +189,8 @@ def verify(
     """核对一个小节。返回 {out: 模型的回答, events: 要改成的事件（不改是 None）, status, note}：
     - status = unchanged：模型说没问题（或者改出来的格式不对、和原来一样）；
     - accepted：模型提出了改动、不做确认（CONFIRM_CHANGES 关着）直接采用；
-    - confirmed：再独立核对一遍（还是对着原来的读法），提出了一模一样的改动（第二遍不一样就核对第三遍，三遍里有两遍一样才算）；
-    - rejected：几遍提出的改动对不上，不改；note 是要加到这个小节“不确定”说明里的话，提醒用户对照原谱。
+    - confirmed：再独立核对（还是对着原来的读法），有两遍提出了一模一样的改动（最多核对 MAX_READS 遍，够了就停）；
+    - rejected：核对 MAX_READS 遍都没有两遍一样的改动，不改；note 是要加到这个小节“不确定”说明里的话，提醒用户对照原谱。
     改动很少（约 1/20 的小节），确认多花的钱不多，能挡掉偶尔的改坏（评测：模糊的截图上把倚音当成了十六分音符）。
     cancel：确认的几遍之间点了取消就不再核对（Cancelled）。hint：用户写的“哪里不对”（每一遍都告诉模型）。"""
     img, span = crop(page, sysinfo, bar["region"])
@@ -211,7 +214,7 @@ def verify(
     if not CONFIRM_CHANGES:
         return {"out": first[0], "events": first[1], "status": "accepted", "note": ""}
     runs = [first]
-    for _ in range(2):
+    while len(runs) < MAX_READS:
         if cancel is not None and cancel.is_set():
             raise Cancelled()
         runs.append(propose())

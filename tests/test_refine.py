@@ -191,9 +191,11 @@ def test_cancel_stops_the_remaining_bars(client, sync_jobs, monkeypatch):
 
 
 def test_a_change_is_only_made_when_two_reads_agree(client, sync_jobs, monkeypatch):
-    """模型提出改动时再独立核对：两遍提出一模一样的改动才改；三遍都对不上就不改，标成待核对。"""
+    """模型提出改动时再独立核对：两遍提出一模一样的改动才改（中间几遍说没问题也不要紧，最多核对 MAX_READS 遍）；
+    都对不上就不改，标成待核对。"""
     sid = _song()
-    proposals = {1: iter([7, 8, None]), 2: iter([5, None, 5])}  # 1 品的小节三遍都不一样；2 品的第一、三遍一样
+    # 1 品的小节五遍里没有两遍一样的改动；2 品的第一、四遍一样（中间两遍说没问题：探查里真实出现过的顺序）
+    proposals = {1: iter([7, 8, None]), 2: iter([5, None, None, 5])}
 
     def verify(img, meta, span, events, previous, ts):
         fret = events[0]["notes"][0]["fret"]
@@ -214,10 +216,10 @@ def test_a_change_is_only_made_when_two_reads_agree(client, sync_jobs, monkeypat
     assert v["bars"][1]["needs_review"] is True  # 标成待核对
     assert (
         b2["events"][0]["notes"][0]["fret"] == 5 and b2["refine"]["diff"] == "应是 5 品"
-    )  # 第三遍和第一遍一样
+    )  # 第四遍和第一遍一样
     assert (
-        len([c for c in _verifies() if c["verify"][0][0]["fret"] == 1]) == 4
-    )  # 第 2 行的 1 品小节：一遍就说没问题
+        len([c for c in _verifies() if c["verify"][0][0]["fret"] == 1]) == refine.MAX_READS + 1
+    )  # 1 品的小节核对满 MAX_READS 遍；第 2 行的 1 品小节一遍就说没问题
     assert "1 个小节几次核对的结果不一致" in s["notice"]["msg"]
 
     monkeypatch.setattr(refine, "CONFIRM_CHANGES", False)  # 关掉确认：第一遍提出的改动直接采用
