@@ -118,6 +118,9 @@ def test_replacing_every_recognized_page_runs_full_recognition_without_stuck_row
         (["nope.png"], 0, "不认识"),
         (["p1.png", "new:3"], 1, "对不上"),
         (["p1.png"], 1, "没有放进页序"),
+        (["p1.png", "new:0", "new:00"], 1, "重复"),  # 同一个新文件写成两样，以前会放进去两次、识别两遍
+        (["p1.png", "new:x"], 1, "对不上"),
+        (["p1.png", "new:+0"], 1, "对不上"),
     ],
 )
 def test_bad_orders_are_rejected(data_dir, order, n_up, match):
@@ -322,3 +325,23 @@ def test_retrying_the_first_row_fixes_a_misread_header_time_signature(data_dir, 
     assert [x["status"] for x in s["systems"]] == ["done", "done"] and s["activity"] is None
     assert (1, [4, 4]) in starts and any(f > 1 and ts == [3, 4] for f, ts in starts)  # 第二行按 3/4 重做了
     assert not any(b["warn"] for b in s["bars"])
+
+
+def test_deleting_the_page_with_the_failed_rows_settles_the_song(data_dir, sync_jobs):
+    """reviewer 的 delete_failed_page_leaves_stale_notice：删掉识别失败的行所在的页后，剩下的行都识别好了，
+    “有行没识别出来”的提示和 error 状态以前还留着（重试又说没有失败的行）。"""
+    from app import state
+
+    sid, song = _two_page_song()
+
+    def fail_p2(s):
+        for x in s["systems"]:
+            if x["page"] == 1:
+                x.update(status="error", error="boom")
+        s["bars"] = [b for b in s["bars"] if s["systems"][b["system"]]["page"] == 0]
+        state.finish(s, status="error", notice=("warn", "有行没识别出来"), source="parse")
+
+    store.update(sid, fail_p2)
+    song = pages.arrange_pages(sid, ["p1.png"], [])
+    v = views.song_view(song)
+    assert v["status"] == "ready" and v["notice"] is None and v["failed_rows"] == 0

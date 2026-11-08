@@ -92,6 +92,7 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
                 apply_time_signatures(bars, s["meta"])
             if renumbered or pending:  # 小节号变了或多了小节，练习建议里的小节号对不上
                 staleness.invalidate_plan(s)
+            state.settle(s)  # 删掉的是识别失败的行所在的页：剩下的都成功了，曲子算识别完成
             if pending and bars:
                 state.begin(
                     s,
@@ -115,20 +116,22 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
 
 
 def _check_order(order: list[str], files: list[str], n_uploads: int) -> set[int]:
-    """检查页序，返回其中新上传文件的序号。"""
+    """检查页序，返回其中新上传文件的序号。"new:k" 的 k 按数值比（"new:0" 和 "new:00" 是同一个文件）。"""
     if not order:
         raise Invalid("至少要留一页")
-    if len(set(order)) != len(order):
-        raise Invalid("页序里有重复的页")
-    new_ix = set()
+    new_ix, seen = set(), set()
     for x in order:
         if x.startswith("new:"):
             k = x[4:]
-            if not k.isdigit() or int(k) >= n_uploads:
+            if not (k.isascii() and k.isdigit()) or int(k) >= n_uploads:
                 raise Invalid("页序里的新文件对不上上传的文件")
+            x = f"new:{int(k)}"
             new_ix.add(int(k))
         elif x not in files:
             raise Invalid("页序里有不认识的页（可能页面已经被改过，刷新后再试）")
+        if x in seen:
+            raise Invalid("页序里有重复的页")
+        seen.add(x)
     if len(new_ix) != n_uploads:
         raise Invalid("有上传的文件没有放进页序")
     return new_ix
