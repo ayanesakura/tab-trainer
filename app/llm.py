@@ -1,10 +1,11 @@
 """调用 Claude 识别谱子（客户端：请求、流式重试、用量和费用、错误说明）。提示词和 JSON Schema 在 app/prompts.py。
 
-三类调用，都要求按 JSON Schema 输出（structured outputs）：
+这几类调用要求按 JSON Schema 输出（structured outputs）：
 - read_meta：读首页谱头（曲名、调弦、变调夹、拍号）
 - transcribe：识别一行（或整页）谱子里的所有小节
 - verify_bar：精修，放大一个小节对照当前读法逐拍核对（app/refine.py）
-- practice_plan：根据识别结果写分段练习建议
+- explain_bars / practice_plan：给小节写练习提示、根据识别结果写分段练习建议
+小节问答（coach_stream / coach）要的是纯文字：边生成边给出片段，练习页上的回答一点点出来。
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -29,7 +31,6 @@ except ImportError:  # pragma: no cover
 
 from app.errors import Invalid, Upstream
 from app.prompts import (
-    COACH_SCHEMA,
     EXPLAIN_SCHEMA,
     META_SCHEMA,
     NOTATION_KEY,
@@ -190,7 +191,29 @@ class LLM(Protocol):
         image: Image.Image | None = None,
     ) -> str: ...
 
+    def coach_stream(
+        self,
+        meta: dict,
+        bar: dict,
+        neighbours: list[dict],
+        question: str,
+        history: list[dict],
+        practice: str = "",
+        image: Image.Image | None = None,
+    ) -> Iterator[str | None]: ...
+
     def practice_plan(self, meta: dict, bars: list[dict]) -> dict: ...
+
+
+def join_text(chunks: Iterable[str | None]) -> str:
+    """把 coach_stream 给出的片段拼成完整的回答（None：前面的作废，从头再拼）。"""
+    parts: list[str] = []
+    for t in chunks:
+        if t is None:
+            parts.clear()
+        else:
+            parts.append(t)
+    return "".join(parts)
 
 
 REASON_MAX = 200
@@ -259,50 +282,150 @@ class Claude(LLM):
         self.use_fallbacks = True
         self.usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "unpriced_tokens": 0}
 
-    def _call(self, content: list, schema: dict, effort: str | None = None, max_tokens: int = 32000) -> dict:
-        kwargs = {
+    def _kwargs(self, content: list, schema: dict | None, effort: str | None, max_tokens: int) -> dict:
+        """请求参数。schema 为 None 时不要求 JSON，模型直接写文字（流式问答）。"""
+        output_config: dict = {"effort": effort or self.cfg.effort}
+        if schema is not None:
+            output_config["format"] = {"type": "json_schema", "schema": schema}
+        return {
             "model": self.cfg.model or DEFAULT_MODEL,
             "max_tokens": max_tokens,
             "system": SYSTEM,
             "messages": [{"role": "user", "content": content}],
-            "output_config": {
-                "effort": effort or self.cfg.effort,
-                "format": {"type": "json_schema", "schema": schema},
-            },
+            "output_config": output_config,
         }
-        used_fallbacks = self.use_fallbacks
-        try:
-            msg = self._stream(kwargs, fallbacks=used_fallbacks)
-        except anthropic.BadRequestError as e:
-            # 代理或旧模型可能不认识 fallbacks 参数：去掉后重试一次（看的是这次请求自己有没有带）
-            if used_fallbacks and "fallback" in str(e).lower():
-                log.warning("request_id=%s fallbacks rejected, retrying without: %s", request_id_of(e), e)
-                with self._lock:
-                    self.use_fallbacks = False
-                msg = self._stream(kwargs, fallbacks=False)
-            else:
-                raise
-        rid = getattr(msg, "_request_id", None) or "none"
-        self._local.request_id = rid
+
+    def _drop_fallbacks(self, e: anthropic.BadRequestError, used_fallbacks: bool) -> bool:
+        """代理或旧模型可能不认识 fallbacks 参数：这次请求带了、报错说的又是它，就关掉兜底，
+        返回 True 让调用方不带它重试一次（看的是这次请求自己有没有带）。"""
+        if not (used_fallbacks and "fallback" in str(e).lower()):
+            return False
+        log.warning("request_id=%s fallbacks rejected, retrying without: %s", request_id_of(e), e)
         with self._lock:
-            tin, tout = msg.usage.input_tokens or 0, msg.usage.output_tokens or 0
+            self.use_fallbacks = False
+        return True
+
+    def _record_usage(self, msg, model: str) -> None:
+        """把一次请求用掉的 token / 费用加到 usage 上（msg 为 None：什么都没收到，不记）。"""
+        usage = getattr(msg, "usage", None)
+        if usage is None:
+            return
+        with self._lock:
+            tin, tout = usage.input_tokens or 0, usage.output_tokens or 0
             self.usage["input_tokens"] += tin
             self.usage["output_tokens"] += tout
-            model = getattr(msg, "model", None)
-            price = price_of(model if isinstance(model, str) and model else kwargs["model"])
+            served = getattr(msg, "model", None)
+            price = price_of(served if isinstance(served, str) and served else model)
             if price:
                 self.usage["cost_usd"] += (tin * price[0] + tout * price[1]) / 1e6
             else:  # 价格表里没有的模型（自定义）：只记 token
                 self.usage["unpriced_tokens"] += tin + tout
+
+    def _finish(self, msg) -> str:
+        """请求结束：记下请求 ID；被拒绝、被截断都算失败。返回请求 ID。"""
+        rid = getattr(msg, "_request_id", None) or "none"
+        self._local.request_id = rid
         if msg.stop_reason == "refusal":
             raise LLMError(f"模型拒绝了这次请求（request_id={rid}）", rid)
         if msg.stop_reason == "max_tokens":
             raise LLMError(f"输出超出长度上限，被截断（request_id={rid}）", rid)
+        return rid
+
+    def _call(self, content: list, schema: dict, effort: str | None = None, max_tokens: int = 32000) -> dict:
+        kwargs = self._kwargs(content, schema, effort, max_tokens)
+        used_fallbacks = self.use_fallbacks
+        try:
+            msg = self._stream(kwargs, fallbacks=used_fallbacks)
+        except anthropic.BadRequestError as e:
+            if not self._drop_fallbacks(e, used_fallbacks):
+                raise
+            msg = self._stream(kwargs, fallbacks=False)
+        self._record_usage(msg, kwargs["model"])
+        rid = self._finish(msg)
         text = next((b.text for b in msg.content if b.type == "text"), "")
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
             raise LLMError(f"模型返回的不是合法 JSON（request_id={rid}）：{e}", rid) from e
+
+    def _stream_call(
+        self, content: list, effort: str | None = None, max_tokens: int = 32000
+    ) -> Iterator[str | None]:
+        """纯文字输出的流式请求，边收边给出文字片段；None 表示前面给出的都作废、从头再来（回复到一半的临时错误
+        重试了，或者服务端换了兜底模型重新回答）。兜底参数、重试、用量和费用、拒绝 / 截断的处理和 _call 一样；
+        拼起来是空的也算失败。片段都给完、检查也通过，生成器才正常结束。"""
+        kwargs = self._kwargs(content, None, effort, max_tokens)
+        used_fallbacks = self.use_fallbacks
+        parts: list[str] = []
+        try:
+            msg = yield from self._relay(self._text_stream(kwargs, used_fallbacks), parts)
+        except anthropic.BadRequestError as e:  # 建立连接时就报错：还没有给出任何片段
+            if not self._drop_fallbacks(e, used_fallbacks):
+                raise
+            msg = yield from self._relay(self._text_stream(kwargs, False), parts)
+        rid = self._finish(msg)
+        if not "".join(parts).strip():
+            raise LLMError(f"模型没有给出回答，换个问法再试一次（request_id={rid}）", rid)
+
+    @staticmethod
+    def _relay(chunks, parts: list[str]):
+        """原样往外给片段，同时把拼起来的回答记在 parts 里；返回 chunks 的返回值（最后的完整消息）。
+        调用方不再往下读时也关掉 chunks（它在 finally 里记已经花掉的用量）。"""
+        try:
+            while True:
+                try:
+                    t = next(chunks)
+                except StopIteration as stop:
+                    return stop.value
+                if t is None:
+                    parts.clear()
+                else:
+                    parts.append(t)
+                yield t
+        finally:
+            chunks.close()
+
+    def _text_stream(self, kwargs: dict, fallbacks: bool):
+        """_stream 的纯文字版：回复到一半的临时错误同样再试两次，重试前给出 None（已经给出的片段作废）。
+        生成器，返回值是最后的完整消息。"""
+        for attempt in range(STREAM_RETRIES + 1):
+            try:
+                return (yield from self._text_once(kwargs, fallbacks))
+            except (anthropic.APIStatusError, anthropic.APIConnectionError, _http.TransportError) as e:
+                if attempt == STREAM_RETRIES or not _transient(e):
+                    raise
+                log.warning(
+                    "request_id=%s transient error mid-stream, retry %d: %s", request_id_of(e), attempt + 1, e
+                )
+                time.sleep(STREAM_RETRY_WAIT * (attempt + 1))
+                yield None
+        raise AssertionError("unreachable")
+
+    def _text_once(self, kwargs: dict, fallbacks: bool):
+        """一次流式请求，边收边给出文字片段，返回最后的完整消息。用量在这里记：正常结束按最后的消息；
+        中途出错、调用方不再往下读（生成器被关掉）时按已经收到的部分——服务端照样算钱。"""
+        if fallbacks:
+            manager = self.client.beta.messages.stream(**kwargs, betas=[FALLBACK_BETA], fallbacks="default")
+        else:
+            manager = self.client.messages.stream(**kwargs)
+        with manager as s:
+            msg = None
+            try:
+                for ev in s:
+                    if ev.type == "content_block_start" and ev.content_block.type == "fallback":
+                        yield None  # 前一个模型拒绝了，兜底模型从头回答：前面写的不算
+                    elif ev.type == "content_block_delta" and ev.delta.type == "text_delta":
+                        yield ev.delta.text
+                msg = s.get_final_message()
+            finally:
+                if msg is None:
+                    try:
+                        partial = s.current_message_snapshot
+                    except AssertionError:  # 连 message_start 都没收到
+                        partial = None
+                    self._record_usage(partial, kwargs["model"])
+        self._record_usage(msg, kwargs["model"])
+        return msg
 
     @property
     def last_request_id(self) -> str:
@@ -515,7 +638,21 @@ class Claude(LLM):
         practice: str = "",
         image: Image.Image | None = None,
     ) -> str:
-        """针对一个小节回答练习问题（指法、技巧、怎么练）。"""
+        """针对一个小节回答练习问题，等整个回答写完再返回（流式的见 coach_stream）。"""
+        return join_text(self.coach_stream(meta, bar, neighbours, question, history, practice, image))
+
+    def coach_stream(
+        self,
+        meta: dict,
+        bar: dict,
+        neighbours: list[dict],
+        question: str,
+        history: list[dict],
+        practice: str = "",
+        image: Image.Image | None = None,
+    ) -> Iterator[str | None]:
+        """针对一个小节回答练习问题（指法、技巧、怎么练）：模型直接写文字，边生成边给出片段。
+        None 表示前面给出的片段作废、从头再来（见 _stream_call），拼法见 join_text。"""
         parts = [
             f"A guitarist is practising {meta.get('title') or 'a piece'} (tuning string 1 -> 6: {' '.join(meta['tuning'])}, "
             f"capo {meta['capo']}, time signature {meta['time_signature'][0]}/{meta['time_signature'][1]}) and asks about "
@@ -545,7 +682,7 @@ class Claude(LLM):
         if image is not None:
             content.append(_image_block(image, min_width=900)[0])
         content.append({"type": "text", "text": "\n\n".join(p for p in parts if p)})
-        return self._call(content, COACH_SCHEMA, effort="medium", max_tokens=8000).get("answer", "")
+        return self._stream_call(content, effort="medium", max_tokens=8000)
 
     def practice_plan(self, meta: dict, bars: list[dict]) -> dict:
         summary = [

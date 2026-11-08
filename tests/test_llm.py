@@ -144,3 +144,173 @@ def test_transient_mid_stream_errors_are_retried(monkeypatch):
     with pytest.raises(anthropic.APIStatusError):
         c._call([], {})
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# 流式问答（纯文字）：用假的 SSE 回复测
+# ---------------------------------------------------------------------------
+def _sse(*events) -> bytes:
+    import json
+
+    return b"".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events)
+
+
+def _reply(texts, stop="end_turn", tin=5, tout=7, model="claude-opus-5-5", fallback_at=None):
+    """一个完整的流式回复：每段文字一个 text_delta；fallback_at=k：第 k 段之前插一个兜底模型接手的块。"""
+    ev = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "m",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": tin, "output_tokens": 1},
+            },
+        }
+    ]
+    idx = 0
+    ev.append({"type": "content_block_start", "index": idx, "content_block": {"type": "text", "text": ""}})
+    for k, t in enumerate(texts):
+        if k == fallback_at:
+            ev.append({"type": "content_block_stop", "index": idx})
+            block = {
+                "type": "fallback",
+                "from": {"model": model},
+                "to": {"model": "claude-sonnet-5-5"},
+                "trigger": {"type": "refusal", "category": None},
+            }
+            ev.append({"type": "content_block_start", "index": idx + 1, "content_block": block})
+            ev.append({"type": "content_block_stop", "index": idx + 1})
+            idx += 2
+            ev.append(
+                {"type": "content_block_start", "index": idx, "content_block": {"type": "text", "text": ""}}
+            )
+        ev.append({"type": "content_block_delta", "index": idx, "delta": {"type": "text_delta", "text": t}})
+    ev.append({"type": "content_block_stop", "index": idx})
+    ev.append(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop, "stop_sequence": None},
+            "usage": {"output_tokens": tout},
+        }
+    )
+    ev.append({"type": "message_stop"})
+    return _sse(*ev)
+
+
+def _sse_response(body):
+    from app.llm import _http
+
+    stream = _http.ByteStream(body) if isinstance(body, bytes) else body
+    return _http.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
+
+
+def _mock_client(c, handler):
+    import anthropic
+
+    from app.llm import _http
+
+    c.client = anthropic.Anthropic(
+        api_key="sk-fake",
+        base_url="http://mock",
+        max_retries=0,
+        http_client=_http.Client(transport=_http.MockTransport(handler)),
+    )
+
+
+META = {"title": "T", "tuning": ["E4", "B3", "G3", "D3", "A2", "E2"], "capo": 0, "time_signature": [4, 4]}
+BAR = {"n": 1, "events": [], "tip": ""}
+
+
+def test_coach_stream_yields_text_and_counts_usage():
+    """问答要纯文字（不带 JSON schema），边收边给出片段；用量按最后的消息记，非流式的 coach 拼出同样的回答。"""
+    import json
+
+    sent = []
+
+    def handler(req):
+        sent.append(json.loads(req.content))
+        return _sse_response(_reply(["用食指", "按 2 弦"]))
+
+    c = Claude(LLMConfig(api_key="sk-test"))
+    c.use_fallbacks = False
+    _mock_client(c, handler)
+    assert list(c.coach_stream(META, BAR, [], "怎么弹", [])) == ["用食指", "按 2 弦"]
+    assert sent[0]["output_config"] == {"effort": "medium"} and sent[0]["max_tokens"] == 8000  # 没有 format
+    assert c.usage["input_tokens"] == 5 and c.usage["output_tokens"] == 7
+    assert c.usage["cost_usd"] == pytest.approx((5 * 4 + 7 * 20) / 1e6)
+    assert c.coach(META, BAR, [], "怎么弹", []) == "用食指按 2 弦"
+
+
+def test_coach_stream_restarts_when_a_fallback_model_takes_over():
+    """服务端换兜底模型从头回答：给出 None（前面的作废），费用按实际回答的模型算。"""
+    from app.llm import join_text
+
+    def handler(req):
+        assert "server-side-fallback" in req.headers.get("anthropic-beta", "")
+        return _sse_response(_reply(["半句", "完整的回答"], fallback_at=1))
+
+    c = Claude(LLMConfig(api_key="sk-test"))
+    _mock_client(c, handler)
+    got = list(c.coach_stream(META, BAR, [], "怎么弹", []))
+    assert got == ["半句", None, "完整的回答"] and join_text(got) == "完整的回答"
+    assert c.usage["cost_usd"] == pytest.approx((5 * 2 + 7 * 10) / 1e6)  # Sonnet 的价格
+
+
+@pytest.mark.parametrize(
+    ("texts", "stop", "word"),
+    [(["不"], "refusal", "拒绝"), (["很长"], "max_tokens", "截断"), (["  "], "end_turn", "没有给出回答")],
+)
+def test_coach_stream_failures_match_the_json_calls(texts, stop, word):
+    """拒绝、截断、空回答都是 LLMError（片段可能已经给出去了），用量照记。"""
+    c = Claude(LLMConfig(api_key="sk-test"))
+    c.use_fallbacks = False
+    _mock_client(c, lambda req: _sse_response(_reply(texts, stop=stop)))
+    with pytest.raises(LLMError, match=word):
+        list(c.coach_stream(META, BAR, [], "怎么弹", []))
+    assert c.usage["output_tokens"] == 7
+
+
+def test_coach_stream_drops_unknown_fallbacks_and_retries_transient_errors(monkeypatch):
+    """网关不认识 fallbacks 参数：不带它重来；回复到一半断线：重试，重试前给出 None。"""
+    from app import llm
+    from app.llm import _http
+
+    monkeypatch.setattr(llm, "STREAM_RETRY_WAIT", 0)
+    calls = []
+
+    class Broken(_http.SyncByteStream):
+        def __iter__(self):
+            yield _reply(["前半"]).split(b"event: content_block_stop")[0]
+            raise _http.RemoteProtocolError("peer closed connection")
+
+    def handler(req):
+        calls.append(req)
+        if len(calls) == 1:
+            err = {
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "unknown field fallbacks"},
+            }
+            return _http.Response(400, json=err)
+        return _sse_response(Broken() if len(calls) == 2 else _reply(["完整"]))
+
+    c = Claude(LLMConfig(api_key="sk-test"))
+    _mock_client(c, handler)
+    assert list(c.coach_stream(META, BAR, [], "怎么弹", [])) == ["前半", None, "完整"]
+    assert not c.use_fallbacks and "fallback" not in calls[2].headers.get("anthropic-beta", "")
+    assert c.usage["input_tokens"] == 10  # 断掉的那次也收到了 message_start：它的输入 token 也记上
+
+
+def test_coach_stream_closed_early_still_counts_usage():
+    """调用方中途不读了（生成器被关掉）：已经收到的部分照记用量。"""
+    c = Claude(LLMConfig(api_key="sk-test"))
+    c.use_fallbacks = False
+    _mock_client(c, lambda req: _sse_response(_reply(["一", "二", "三"])))
+    g = c.coach_stream(META, BAR, [], "怎么弹", [])
+    assert next(g) == "一"
+    g.close()
+    assert c.usage["input_tokens"] == 5 and c.usage["cost_usd"] > 0

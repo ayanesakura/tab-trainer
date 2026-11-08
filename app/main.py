@@ -6,23 +6,28 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import logging
 import os
 import secrets
+import threading
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from app import auth, config, schemas, service, store
 from app.config import settings
 from app.errors import AppError
 
 STATIC = store.ROOT / "app" / "static"
+log = logging.getLogger("tab_trainer.main")
 
 
 @asynccontextmanager
@@ -308,6 +313,50 @@ def undo_refine(sid: str, bar_id: str, body: schemas.RevIn):
 @app.post("/api/songs/{sid}/bars/{bar_id}/ask")
 def ask_bar(sid: str, bar_id: str, body: schemas.AskIn):
     return service.ask_bar(sid, bar_id, body.question)
+
+
+@app.post("/api/songs/{sid}/bars/{bar_id}/ask/stream")
+async def ask_bar_stream(sid: str, bar_id: str, body: schemas.AskIn):
+    """问 AI，回答边生成边发回来（练习页用这个）。响应是 NDJSON，一行一个事件：
+    {"type": "delta", "text"} 回答的一段；{"type": "reset"} 前面的作废、从头再来（模型服务重试 / 换了兜底模型）；
+    最后一行是 {"type": "done", "answer", "qa"}（已经存进小节）或 {"type": "error", "detail"}（中文说明）。
+    问题不合格、曲子 / 小节不存在、没配 key 在开始之前就按原来的 400 / 404 返回。"""
+    run = await run_in_threadpool(service.prepare_ask, sid, bar_id, body.question)  # 读曲子、裁小节图
+    return StreamingResponse(
+        _ask_events(run),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},  # 中间的代理不要攒着整段再发
+    )
+
+
+async def _ask_events(run):
+    """在单独的线程里跑问答（SDK 的流式请求是阻塞的，不能占着事件循环），片段经队列转成 NDJSON 一行行发出去。
+    线程不跟着请求走：浏览器中途断开（关页面、刷新）时回答照样写完、存进小节，费用照记；这边只是不再往外发。"""
+    loop = asyncio.get_running_loop()
+    events: asyncio.Queue[dict] = asyncio.Queue()
+
+    def put(ev: dict) -> None:
+        try:
+            loop.call_soon_threadsafe(events.put_nowait, ev)
+        except RuntimeError:  # 事件循环已经关了（服务在退出）：没人收了
+            pass
+
+    def work() -> None:
+        try:
+            r = run(lambda t: put({"type": "reset"} if t is None else {"type": "delta", "text": t}))
+            put({"type": "done", **r})
+        except AppError as e:
+            put({"type": "error", "detail": str(e)})
+        except Exception as e:  # 存盘失败之类：也给前端一句话，不让它一直等
+            log.exception("song ask stream failed")
+            put({"type": "error", "detail": f"提问失败：{type(e).__name__}: {e}"})
+
+    threading.Thread(target=work, name="ask-stream", daemon=True).start()
+    while True:
+        ev = await events.get()
+        yield (json.dumps(ev, ensure_ascii=False) + "\n").encode()
+        if ev["type"] in ("done", "error"):
+            return
 
 
 @app.post("/api/songs/{sid}/practice")

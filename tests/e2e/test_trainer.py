@@ -301,7 +301,7 @@ def test_background_writes_do_not_cause_false_conflicts(server, trainer):
         # 模拟问 AI：后端存了一次（写 qa，顶层 rev 变了），前端把返回的 qa 并进 store
         store.update(sid, lambda s: s["bars"][0].update(qa=[{"q": "Q", "a": "A", "at": "now"}]))
         b.js("""(() => { const of = window.fetch; window.fetch = (u, init) => String(u).includes('/ask')
-          ? Promise.resolve(new Response(JSON.stringify({answer: 'A', qa: [{q: 'Q', a: 'A', at: 'now'}]}), {status: 200, headers: {'Content-Type': 'application/json'}}))
+          ? Promise.resolve(new Response(JSON.stringify({type: 'done', answer: 'A', qa: [{q: 'Q', a: 'A', at: 'now'}]}) + '\\n', {status: 200, headers: {'Content-Type': 'application/x-ndjson'}}))
           : of(u, init); return true; })()""")
         b.js(
             "tt.set('ui.bar', 0); document.getElementById('askInput').value = 'Q'; document.getElementById('askBtn').click(); true"
@@ -369,6 +369,61 @@ def test_song_updates_keep_paused_position(trainer):
     time.sleep(0.3)
     assert b.js("tt.api.tickPosition") == t1
     assert b.js("[tt.state.a, tt.state.b]") == [1, 4]
+    assert not b.errors, b.errors
+
+
+def test_ask_ai_answer_streams_in(server, trainer, monkeypatch):
+    """问 AI：回答一段段出现在问答列表里（真服务 + 替身模型，每段之间停一会儿），按钮显示“回答中…”；
+    中途换到别的小节，按钮禁用并说明在等哪一小节；回答完存进问的那个小节，列表里是存好的问答。"""
+    from app import config
+    from tests.fakes import FakeClaude
+
+    monkeypatch.setattr(config, "llm_factory", FakeClaude)
+    monkeypatch.setattr(FakeClaude, "stream_delay", 0.5)
+    sid, store = server["image"], server["store"]
+    raw = store.load(sid)["bars"]
+    answer = "回答：这里左手怎么按呢"  # 替身每 3 个字一段：4 段
+    b = trainer()
+    try:
+        b.js(
+            "tt.set('ui.bar', 2); document.getElementById('askInput').value = '这里左手怎么按呢'; "
+            "document.getElementById('askBtn').click(); true"
+        )
+        pending = "(document.querySelector('#qaList .qa.pending .a') || {}).textContent || ''"
+        b.wait_for(f"{pending}.startsWith('回答：')")
+        assert b.js(pending) != answer  # 还没收完就已经显示出来了
+        assert "回答中" in b.js("document.getElementById('askBtn').textContent")
+        assert b.js("document.getElementById('askInput').value") == ""
+        b.js("tt.set('ui.bar', 0); true")  # 换到别的小节：不显示别处的回答，按钮等着
+        assert b.js("!document.querySelector('#qaList .qa.pending')")
+        assert b.js("document.getElementById('askBtn').disabled")
+        assert "第 3 小节" in b.js("document.getElementById('askBtn').title")
+        b.js("tt.set('ui.bar', 2); true")
+        b.wait_for(f"{pending}.length > 3")
+        b.wait_for("(tt.song.bars[2].qa || []).length === 1", timeout=20)
+        saved = store.load(sid)["bars"][2]["qa"]
+        assert saved[0]["a"] == answer and b.js("tt.song.bars[2].qa") == saved
+        assert b.js("!document.querySelector('#qaList .qa.pending')")
+        assert b.js("[...document.querySelectorAll('#qaList .qa .a')].map(x => x.textContent)") == [answer]
+        assert b.js("document.getElementById('askBtn').disabled") is False
+        assert not b.errors, b.errors
+    finally:
+        store.update(sid, lambda s: s.update(bars=raw))
+
+
+def test_ask_ai_error_mid_answer_restores_the_question(trainer):
+    """回答到一半出错：提示错误，半截回答不留，问题放回输入框。"""
+    b = trainer()
+    b.js("""(() => { const of = window.fetch; window.fetch = (u, init) => String(u).includes('/ask/stream')
+      ? Promise.resolve(new Response('{"type":"delta","text":"先用"}\\n{"type":"error","detail":"和模型服务的连接中断了"}\\n', {status: 200}))
+      : of(u, init); return true; })()""")
+    b.js(
+        "tt.set('ui.bar', 1); document.getElementById('askInput').value = '怎么练'; document.getElementById('askBtn').click(); true"
+    )
+    b.wait_for("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('连接中断'))")
+    assert b.js("document.getElementById('askInput').value") == "怎么练"
+    assert b.js("!document.querySelector('#qaList .qa.pending') && !(tt.song.bars[1].qa || []).length")
+    assert b.js("document.getElementById('askBtn').disabled") is False
     assert not b.errors, b.errors
 
 

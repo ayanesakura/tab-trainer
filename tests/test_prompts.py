@@ -28,7 +28,12 @@ def _capture(monkeypatch) -> list[dict]:
         )
         return {"bars": [], "answer": "好", "title": "ok"}
 
+    def fake_stream(self, content, effort=None, max_tokens=32000):  # 纯文字输出（问答）：schema 记成 None
+        fake_call(self, content, None, effort, max_tokens)
+        yield "好"
+
     monkeypatch.setattr(Claude, "_call", fake_call)
+    monkeypatch.setattr(Claude, "_stream_call", fake_stream)
     return calls
 
 

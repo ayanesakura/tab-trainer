@@ -166,5 +166,10 @@ def ask_bar(sid: str, bar_id: str, question: str) -> dict:
     return coach.ask_bar(sid, bar_id, question)
 
 
+def prepare_ask(sid: str, bar_id: str, question: str):
+    """流式问答：先检查（404 / 400 在这里抛），返回 run(on_delta) → {"answer", "qa"}（见 coach.prepare_ask）。"""
+    return coach.prepare_ask(sid, bar_id, question)
+
+
 def record_practice(sid: str, bar_ids: list[str], loops: int, bpm: float, seconds: float) -> dict:
     return practice.record(sid, bar_ids, loops, bpm, seconds)
