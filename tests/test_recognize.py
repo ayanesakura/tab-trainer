@@ -1355,3 +1355,33 @@ def test_rows_locked_for_a_redo_are_released_when_the_job_fails(data_dir, sync_j
     song = store.load(sid)
     assert song["activity"] is None
     assert [x["status"] for x in song["systems"]] == ["done", "error"]
+
+
+def test_failed_rerecognition_keeps_the_previous_failed_status(data_dir, sync_jobs, monkeypatch):
+    """原来有行失败（曲子是“识别失败”）时整首重新识别又失败：状态照旧是失败（不能变成“可练习”），提示说明还有失败的行。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+
+    def broken(s):
+        s["systems"][1].update(status="error", error="断了")
+        s["status"] = "error"
+
+    store.update(sid, broken)
+    monkeypatch.setattr(FakeClaude, "read_meta", lambda self, page: 1 / 0)
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    assert after["status"] == "error" and after["activity"] is None
+    assert "原来的结果保留不变" in after["notice"]["msg"] and "重试失败的行" in after["notice"]["msg"]
+    assert recognize.failed_rows(after) == [1]
+
+
+def test_error_after_the_new_result_is_swapped_in_does_not_claim_the_old_one_was_kept(
+    data_dir, sync_jobs, monkeypatch
+):
+    """重新识别的新结果已经换上之后才出错（收尾时存盘失败之类）：不能说“原来的结果保留不变”。"""
+    sid, _ = _parsed_song_with_user_data()
+    monkeypatch.setattr(recognize.staleness, "store_plan", lambda *a, **kw: 1 / 0)
+    assert recognize.start_parse(sid)
+    after = store.load(sid)
+    assert after["activity"] is None and after["status"] == "ready"
+    assert "原来的结果保留不变" not in after["notice"]["msg"]

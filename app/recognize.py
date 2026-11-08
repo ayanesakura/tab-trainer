@@ -58,6 +58,9 @@ def start_parse(sid: str, cancel: threading.Event | None = None) -> bool:
                 _end_parse(sid, "cancelled", ("warn", "识别已取消，已完成的行会保留。"))
         except RestageFailed as e:
             _end_restage(sid, f"重新识别没有全部成功（{e}）")
+        except Swapped as e:
+            log.exception("song=%s parse failed after the new result was saved", sid)
+            _end_parse(sid, "error", ("error", str(e)))
         except Exception as e:
             rid = request_id_of(e)
             log.exception("request_id=%s song=%s parse failed", rid, sid)
@@ -86,6 +89,16 @@ def _begin_parse(s: dict, stage: str = "排队中") -> None:
 def _end_parse(sid: str, status: str, notice: tuple[str, str] | None) -> None:
     def apply(s):
         _fail_unfinished_rows(s, "已取消" if status == "cancelled" else "识别中断，没有识别")
+        systems = s.get("systems") or []
+        if status == "error" and notice and s.get("bars") and all(x.get("status") == "done" for x in systems):
+            # 每一行都识别完、写好了，出错在最后（生成练习建议、收尾存盘；重新识别时新结果已经换上）：不算识别失败
+            state.finish(
+                s,
+                status="ready",
+                notice=("warn", "识别结果已保存，但收尾时出错：" + notice[1]),
+                source="parse",
+            )
+            return
         state.finish(s, status=status, notice=notice, source="parse")
 
     store.update(sid, apply)
@@ -768,8 +781,20 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, meter: jobs.Usage
         if dropped and dropped[0]:
             note = f"重新识别完成；有 {dropped[0]} 个手改过的小节和新结果对不上，改动没有保留。"
 
+    try:
+        _finish_parse(sid, claude, meter, len(systems), restage, "；".join(errors) or note)
+    except Exception as e:
+        if restage:  # 新结果已经换上了，原来的结果不在了
+            raise Swapped(friendly(e)) from e
+        raise
+
+
+def _finish_parse(
+    sid: str, claude: LLM, meter: jobs.UsageMeter, n: int, restage: bool, msg: str | None
+) -> None:
+    """所有行都识别完、写好之后：生成练习建议，标成完成。"""
     song = store.load(sid)
-    store.patch(sid, progress={"stage": "生成练习建议", "done": len(systems), "total": len(systems)})
+    store.patch(sid, progress={"stage": "生成练习建议", "done": n, "total": n})
     seen = {b["id"]: b["events"] for b in song["bars"]}
     try:
         plan = claude.practice_plan(song["meta"], song["bars"])
@@ -781,7 +806,6 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, meter: jobs.Usage
         if plan or not restage:  # 重新识别后生成建议失败：留着原来的建议（已标成过时）
             staleness.store_plan(s, plan, seen, meta)
         meter.charge(s)
-        msg = "；".join(errors) or note
         state.finish(s, status="ready", notice=("warn", msg) if msg else None, source="parse")
 
     meter.update(sid, finish)
@@ -954,13 +978,21 @@ class RestageFailed(Exception):
     """重新识别没有全部成功：不替换原来的结果。"""
 
 
+class Swapped(Exception):
+    """重新识别的新结果已经换上之后（生成练习建议、收尾时）出的错：原来的结果已经不在了，不能说“保留不变”。"""
+
+
 def _end_restage(sid: str, why: str) -> bool:
-    """重新识别没完成（失败 / 取消）：原来的结果没动过，恢复成可练习的状态。不是重新识别时返回 False。"""
+    """重新识别没完成（失败 / 取消）：原来的结果没动过，状态也照旧（原来有行失败的还是失败，
+    全部行都成功的是可练习）。不是重新识别（或新结果已经换上）时返回 False。"""
     done = []
 
     def apply(s):
         if state.restaging(s):
-            state.finish(s, status="ready", notice=("warn", f"{why}，原来的结果保留不变。"), source="parse")
+            msg = f"{why}，原来的结果保留不变。"
+            if failed_rows(s):
+                msg += f"原来有 {len(failed_rows(s))} 行没识别出来，可以点“重试失败的行”再试。"
+            state.finish(s, notice=("warn", msg), source="parse")  # 不给 status：照旧（见 state._settle）
             done.append(True)
 
     store.update(sid, apply)
