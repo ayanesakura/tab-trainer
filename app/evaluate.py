@@ -127,7 +127,7 @@ def run(
     concurrency: int,
     price_model: str = "",
     double: str = "off",
-    split: bool = False,
+    split: bool | None = None,  # None = 和应用里一样（recognize.SPLIT_ROWS）
 ) -> dict:
     truth = store.load(sid)
     # 真实谱子做的评测曲（scripts/make_real_eval.py）：只有用户核对过的小节算标准答案，只评这些小节所在的行
@@ -307,7 +307,12 @@ def main() -> None:
         default="off",
         help="双重校对：doubts 只重读第一遍有疑问的行，all 每行都重读；两遍不一致的小节读第三遍投票",
     )
-    ap.add_argument("--split", action="store_true", help="太宽的行切成两半识别（recognize._should_split）")
+    ap.add_argument(
+        "--split",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="太宽的行切成两半识别（recognize._should_split）；默认和应用里一样（recognize.SPLIT_ROWS）",
+    )
     ap.add_argument(
         "--rescore", metavar="REPORT", help="用已有的 report.json 按当前标准答案重新计分，不调用模型"
     )

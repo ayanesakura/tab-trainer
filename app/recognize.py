@@ -150,7 +150,10 @@ def _note_names(bag) -> str:
 
 
 def ocr_disagreements(
-    bars: list[dict], ocr_bars: list[list[tuple[int, int]]], chord_sheet: bool = False
+    bars: list[dict],
+    ocr_bars: list[list[tuple[int, int]]],
+    chord_sheet: bool = False,
+    tied_in: dict[int, int] | None = None,
 ) -> dict[int, tuple]:
     """逐小节比较 AI 结果和本机数字识别读到的（弦, 品）。返回 {小节序号: (只有 OCR 读到的, 只有 AI 写了的)}。
 
@@ -158,10 +161,13 @@ def ocr_disagreements(
     - 死音（谱上写 x）OCR 不读，不比较；倚音的小数字 OCR 会读到，算进去；
     - 人工泛音旁边标的“品位 + 12”（如 2<14>）OCR 会多读一个 14，允许；
     - 整行一致率不到一半，或 OCR 只读对了 AI 写的音的不到 60%：多半是 OCR 在这种排版上读不准，整行都不判断。
+    tied_in：图上第一个小节之前每根弦最后一个音的品位（一行切成两半时，右半开头的延续音接的是左半的音）。
     """
     pairs = []
     ai_total = 0  # 整行 AI 写的音（不含闷音）
-    last_fret: dict[int, int] = {}  # 每根弦上最后一个音的品位（判断跨小节线、写成括号的延续音）
+    last_fret: dict[int, int] = dict(
+        tied_in or {}
+    )  # 每根弦上最后一个音的品位（判断跨小节线、写成括号的延续音）
     for i, (bar, seen) in enumerate(zip(bars, ocr_bars, strict=False)):
         tied_ok = set(last_fret.items())
         ai: Counter = Counter()
@@ -237,14 +243,18 @@ def transcribe_system(
     double_check: str | None = None,
     split: bool | None = None,
     context: str = "",
+    tied_in: dict[int, int] | None = None,
 ) -> list[dict]:
     """识别一行。double_check：off / doubts（第一遍有警告或“不确定”才再读）/ all，见 config.double_check_mode；
-    None = 按设置。split：一行太宽时切成左右两半分别识别（None = 按 SPLIT_ROWS，见 _should_split）。"""
+    None = 按设置。split：一行太宽时切成左右两半分别识别（None = 按 SPLIT_ROWS，见 _should_split）。
+    context：程序给模型的补充说明（不是用户的话）；tied_in：见 ocr_disagreements（右半行用）。"""
     if double_check is None:
         double_check = config.double_check()
     sysinfo = song["systems"][si]
     if (SPLIT_ROWS if split is None else split) and _should_split(sysinfo):
-        return _transcribe_halves(claude, sid, song, si, first_bar, hint, cancel, start_ts, double_check)
+        return _transcribe_halves(
+            claude, sid, song, si, first_bar, hint, cancel, start_ts, double_check, context
+        )
     page = song["pages"][sysinfo["page"]]
     x0, x1, y0, y1 = sysinfo["crop"]
     img = store.page_image(sid, page).crop((x0, y0, x1, y1))
@@ -333,7 +343,8 @@ def transcribe_system(
         if spans and len(bars) != len(spans):
             issues.append(("other", f"应有 {len(spans)} 个小节，返回了 {len(bars)} 个"))
         elif ocr_bars:
-            for i, (only_ocr, only_ai) in ocr_disagreements(bars, ocr_bars, chord_sheet=bool(shapes)).items():
+            found = ocr_disagreements(bars, ocr_bars, chord_sheet=bool(shapes), tied_in=tied_in)
+            for i, (only_ocr, only_ai) in found.items():
                 if shapes:
                     only_ai = []
                     if not only_ocr:
@@ -389,7 +400,7 @@ def transcribe_system(
         return bars, issues
 
     bars, _ = read_once()
-    doubtful = any(b.get("warn") or str(b.get("uncertain") or "").strip() for b in bars)
+    doubtful = any(b.get("warn") or b.get("_ocr") or str(b.get("uncertain") or "").strip() for b in bars)
     if (
         spans
         and len(bars) == len(spans)
@@ -445,6 +456,7 @@ def _transcribe_halves(
     cancel: threading.Event | None,
     start_ts: list[int] | None,
     double_check: str,
+    context: str = "",
 ) -> list[dict]:
     """把一行切成左右两半，先识别左半，再带上左半结束时的拍号和和弦识别右半（右半开头延续的和弦，
     图上可能看不到它的和弦图）。图小了一半，能放大得更多，密集的符杠、小数字更容易看清。"""
@@ -466,23 +478,33 @@ def _transcribe_halves(
         return {**song, "systems": systems}
 
     left = transcribe_system(
-        claude, sid, sub(halves[0]), si, first_bar, hint, cancel, start_ts, double_check, split=False
+        claude,
+        sid,
+        sub(halves[0]),
+        si,
+        first_bar,
+        hint,
+        cancel,
+        start_ts,
+        double_check,
+        split=False,
+        context=context,
     )
     meta = song["meta"]
     ts = start_ts or meta["time_signature"]
     for b in left:
         ts = b.get("ts_change") or ts
-    context = []
+    notes = [context] if context else []
     chord = next((e["chord"] for b in reversed(left) for e in reversed(b["events"]) if e.get("chord")), None)
     if chord:
         shapes = {k_: v for b in left for k_, v in (b.get("shapes") or {}).items()}
         frets = f" (diagram frets for strings 1-6: {shapes[chord]})" if chord in shapes else ""
-        context.append(
+        notes.append(
             f"This image is the right half of a line. The chord still sounding at its left edge is {chord}{frets}: "
             "x marks before the first chord name in this image belong to it. Return only the bars listed above."
         )
     else:
-        context.append(
+        notes.append(
             "This image is the right half of a line; the left half was read separately. "
             "Return only the bars listed above."
         )
@@ -497,13 +519,25 @@ def _transcribe_halves(
         ts if ts != meta["time_signature"] else None,
         double_check,
         split=False,
-        context=" ".join(context),
+        context=" ".join(notes),
+        tied_in=_last_frets(left),
     )
     return left + right
 
 
+def _last_frets(bars: list[dict]) -> dict[int, int]:
+    """每根弦上最后一个音的品位（闷音不算）。"""
+    out: dict[int, int] = {}
+    for b in bars:
+        for e in b["events"]:
+            for n in e["notes"]:
+                if "x" not in n["tech"]:
+                    out[n["string"]] = n["fret"]
+    return out
+
+
 def _bar_key(bar: dict) -> tuple:
-    """比较两遍识别是否一致：每个起拍的时间、弦、品和技巧。"""
+    """比较两遍识别是否一致：每个起拍的时间、弦、品和技巧，以及小节总长（最后一个音的时值不同也算不一样）。"""
     t, out = Fraction(0), []
     for e in bar["events"]:
         if e["notes"]:
@@ -511,7 +545,15 @@ def _bar_key(bar: dict) -> tuple:
                 (t, tuple(sorted((n["string"], n["fret"], tuple(sorted(n["tech"]))) for n in e["notes"])))
             )
         t += parse_dur(e["dur"])
-    return tuple(out)
+    return (*out, t)
+
+
+# 读错的明显迹象：两遍读法不一样又没有多数时，选没有这些警告的那遍
+_BAD_READ = frozenset({"length", "placeholder", "empty", "string_range", "ocr_mismatch"})
+
+
+def _bad_signs(bar: dict) -> int:
+    return sum(1 for w in bar.get("warn") or [] if w.get("code") in _BAD_READ) + bool(bar.get("_ocr"))
 
 
 def _double_check(first: list[dict], read_once, n: int, sid: str, si: int) -> list[dict]:
@@ -544,11 +586,13 @@ def _double_check(first: list[dict], read_once, n: int, sid: str, si: int) -> li
         if k3 is not None and k3 == _bar_key(second[i]):
             out[i] = second[i]
         elif k3 is None or k3 != _bar_key(first[i]):
-            note = "三次识别这个小节结果都不一样，请对照原谱核对。"
-            out[i] = {
-                **first[i],
-                "uncertain": " ".join(x for x in (first[i].get("uncertain", ""), note) if x),
-            }
+            # 没有多数：用明显问题少的那遍（一样多时用第一遍），标上“不确定”
+            pick = second[i] if _bad_signs(second[i]) < _bad_signs(first[i]) else first[i]
+            if k3 is None:
+                note = "两次识别这个小节结果不一样（第三次没读出来），请对照原谱核对。"
+            else:
+                note = "三次识别这个小节结果都不一样，请对照原谱核对。"
+            out[i] = {**pick, "uncertain": " ".join(x for x in (pick.get("uncertain", ""), note) if x)}
     return out
 
 
@@ -721,7 +765,7 @@ def _recognize_rows(
     cancel: threading.Event,
     on_row,
 ) -> tuple[dict[int, list[int]], list[str]]:
-    """并行识别 rows：(行号, 这一行开头的拍号；None = 按 song 里前面各行写的变拍号推算[, 给模型的提示])。
+    """并行识别 rows：(行号, 这一行开头的拍号；None = 按 song 里前面各行写的变拍号推算[, 程序给模型的补充说明（context）])。
     起始小节号和拍号在提交前按 song 算好。每行结束（成功、失败、取消）都在调用线程里调用
     on_row(行号, 小节 | None, 错误说明 | None)。返回 (每行识别时用的开头拍号, 失败的说明)。"""
     meta_ts = song["meta"]["time_signature"]
@@ -739,11 +783,11 @@ def _recognize_rows(
                 song,
                 si,
                 first,
-                hint[0] if hint else "",
                 cancel=cancel,
                 start_ts=ts if ts != meta_ts else None,  # 和全曲拍号一样就不用特别告诉模型
+                context=note[0] if note else "",  # 程序给的说明（和弦图读法），不是用户写的提示
             ): si
-            for si, first, ts, *hint in plan
+            for si, first, ts, *note in plan
         }
         for fut in as_completed(futs):
             si = futs[fut]
@@ -944,10 +988,21 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
 
     try:
         meter = jobs.UsageMeter(config.new_llm())
-        used, errs = _recognize_rows(
-            meter.claude, sid, store.load(sid), [(si, None) for si in rows], cancel, on_row
-        )
+        before = store.load(sid)
+        used, errs = _recognize_rows(meter.claude, sid, before, [(si, None) for si in rows], cancel, on_row)
         failed += errs
+        if 0 in rows and not cancel.is_set():
+            # 重试的是第一行：它第 1 小节写的拍号可能说明谱头的拍号读错了（同整首识别，见 _fix_header_time_signature）。
+            # 改了全曲拍号的话，之前按旧拍号识别的其他行也要按新拍号重做
+            fixed = []
+            store.update(sid, lambda s: fixed.append(_fix_header_time_signature(s, s.get("meta_user") or {})))
+            if fixed[0]:
+                old = {
+                    si: _row_start_ts(before["bars"], before["meta"], si)
+                    for si in range(len(before["systems"]))
+                    if si not in used
+                }
+                used = {**old, **used, 0: store.load(sid)["meta"]["time_signature"]}
         # 新页上前面的行写了变拍号、后面的行并行识别时看不到：按实际的起始拍号再识别一次
         song = store.load(sid)
         redo: list[tuple[int, list[int], str]] = []

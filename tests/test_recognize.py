@@ -2,6 +2,7 @@
 
 import itertools
 import threading
+from collections import Counter
 
 import pytest
 
@@ -1065,3 +1066,87 @@ def test_split_row_reads_halves_and_carries_the_chord_into_the_right_half(data_d
     assert "Em" in right[2] and "[0, 0, 0, 2, 2, 0]" in right[2]
     assert all(w < full_width * 0.75 for *_, w in calls)
     assert [b["region"][0] for b in bars] == sorted(b["region"][0] for b in bars)
+
+
+def test_double_check_without_a_majority_prefers_the_read_without_a_length_error():
+    """两遍只差最后一个音的时值也算不一样；第三遍没读出来、没有多数时，用没有时值错误的那遍，说明写“两次”。"""
+    meta = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+
+    def bar(last):
+        events = [{"dur": d, "notes": [{"string": 1, "fret": 0, "tech": []}]} for d in ("1", "1", "1", last)]
+        return {"events": events, "uncertain": "", "warn": music.check_bar(events, meta)}
+
+    reads = iter([([bar("1")], []), RuntimeError("断了")])
+
+    def read_once():
+        r = next(reads)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    out = recognize._double_check([bar("1/2")], read_once, 1, "sid", 0)
+    assert out[0]["events"][-1]["dur"] == "1" and not out[0]["warn"]
+    assert "两次识别" in out[0]["uncertain"]
+
+
+def test_ocr_tie_from_the_left_half_is_not_a_disagreement():
+    """右半行开头写成括号的延续音（接左半最后的 2 弦 5 品）：OCR 读到、AI 不写，不算不一致。"""
+    bars = [{"events": [{"dur": "1", "notes": [{"string": 1, "fret": 3, "tech": []}]}]}]
+    seen = [[(1, 3), (2, 5)]]
+    assert recognize.ocr_disagreements(bars, seen) != {}
+    assert recognize.ocr_disagreements(bars, seen, tied_in={2: 5}) == {}
+    left = [
+        {
+            "events": [
+                {
+                    "dur": "1",
+                    "notes": [{"string": 2, "fret": 5, "tech": []}, {"string": 3, "fret": 9, "tech": ["x"]}],
+                }
+            ]
+        }
+    ]
+    assert recognize._last_frets(left) == {2: 5}
+
+
+def test_doubts_mode_rereads_rows_whose_only_doubt_is_an_ocr_mismatch(data_dir, monkeypatch):
+    """doubts：返修后剩下的疑问只有 OCR 不一致（警告要到最后才加上），也算有疑问、要再读一遍。"""
+    real = FakeClaude.transcribe
+    reads = []
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        if kw.get("previous") is None:
+            reads.append(first_bar)
+        return real(self, img, meta, first_bar, spans, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    monkeypatch.setattr(recognize, "OCR_CHECK", True)
+    monkeypatch.setattr(recognize.ocr, "read_system", lambda img, lines, spans: [[(1, 1)] for _ in spans])
+    monkeypatch.setattr(
+        recognize, "ocr_disagreements", lambda bars, *a, **kw: {0: (Counter({(1, 1): 1}), Counter())}
+    )
+    sid = songs.create_song([("p1.png", score_png())])
+    song = store.load(sid)
+    song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+    song["systems"] = recognize.plan_systems(sid, song)
+    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="doubts", split=False)
+    assert reads == [1, 1] and bars[0]["warn"][-1]["code"] == "ocr_mismatch"
+
+
+def test_chord_diagram_majority_goes_to_the_model_as_context_not_as_the_users_hint(data_dir, monkeypatch):
+    seen = []
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        seen.append((kw.get("hint", ""), kw.get("context", "")))
+        return real(self, img, meta, first_bar, spans, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    song = store.load(sid)
+    song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
+    song["systems"] = recognize.plan_systems(sid, song)
+    note = "The chord diagrams below were read the same way in the other lines"
+    recognize._recognize_rows(
+        FakeClaude(None), sid, song, [(0, None, note)], threading.Event(), lambda *a: None
+    )
+    assert seen and all(h == "" and note in c for h, c in seen)

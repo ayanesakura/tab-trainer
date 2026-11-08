@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import errors, jobs, main, pages, practice, recognize, songs, store, views
+from app import errors, jobs, main, music, pages, practice, recognize, songs, store, views
 from tests.fakes import FakeClaude, derived_bars, score_png
 
 
@@ -279,3 +279,46 @@ def test_retry_failed_rejects_gp_songs(data_dir):
     gp = songs.create_song([("x.gp", b"\x18FICHIER GUITAR PRO v5.10")])
     with pytest.raises(errors.Invalid):
         recognize.start_retry_failed(gp)
+
+
+def test_retrying_the_first_row_fixes_a_misread_header_time_signature(data_dir, sync_jobs, monkeypatch):
+    """谱头的 3/4 读成了 4/4、第一行第一次识别失败：重试第一行时它第 1 小节写着 3/4，全曲改成 3/4，
+    之前按 4/4 识别的第二行按 3/4 重做。"""
+    monkeypatch.setattr(
+        FakeClaude,
+        "read_meta",
+        lambda self, page: {
+            "title": "",
+            "tuning": music.STANDARD,
+            "capo": 0,
+            "time_signature": [4, 4],
+            "tempo": 0,
+        },
+    )
+    real = FakeClaude.transcribe
+    broken = {"on": True}
+    starts = []
+
+    def transcribe(self, img, meta, first_bar, *a, **kw):
+        if first_bar == 1 and broken["on"]:
+            raise RuntimeError("网络断了")
+        starts.append((first_bar, kw.get("start_ts") or meta["time_signature"]))
+        out = real(self, img, meta, first_bar, *a, **kw)
+        for b in out["bars"]:
+            b["events"] = b["events"][:3]
+        if first_bar == 1:
+            out["bars"][0]["time_signature"] = [3, 4]
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    assert store.load(sid)["meta"]["time_signature"] == [4, 4]
+    broken["on"] = False
+    starts.clear()
+    recognize.start_retry_failed(sid)
+    s = store.load(sid)
+    assert s["meta"]["time_signature"] == [3, 4] and "ts_change" not in s["bars"][0]
+    assert [x["status"] for x in s["systems"]] == ["done", "done"] and s["activity"] is None
+    assert (1, [4, 4]) in starts and any(f > 1 and ts == [3, 4] for f, ts in starts)  # 第二行按 3/4 重做了
+    assert not any(b["warn"] for b in s["bars"])

@@ -272,7 +272,7 @@ UPDATE_PROMPTS=1 uv run pytest tests/test_prompts.py   # 有意改了提示词�
 识别准确率评测（`app/evaluate.py`，会调用模型、产生费用，不加 `--yes` 只打印计划）：
 
 ```bash
-uv run python -m app.evaluate eval-amy --yes [--systems 0,5] [--double-check doubts|all] [--split]
+uv run python -m app.evaluate eval-amy --yes [--systems 0,5] [--double-check doubts|all] [--no-split]
 uv run --with websockets python scripts/make_eval_song.py 曲子.gp5 eval-xxx        # Guitar Pro 文件 → 评测曲
 uv run --with websockets python scripts/make_chord_eval.py eval-c-xxx --seed 1 --style mixed [--degrade]  # 合成弹唱谱
 uv run python scripts/make_real_eval.py <曲子 id> eval-real-xxx [--all | --include-clean]  # 核对过的真实谱子 → 评测曲
