@@ -26,6 +26,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 from app.music import (
     DERIVED_WARNS,
     MAX_FRET,
+    MAX_TAP_FRET,
     OPTIONAL_EVENT_KEYS,
     SCORE_FILES,
     STRINGS,
@@ -63,6 +64,8 @@ class _M(BaseModel):
 # 音符和事件（同时生成模型输出的 schema，见 llm_schema）
 # ---------------------------------------------------------------------------
 class Note(_M):
+    # 空的时候不写的字段（和 music.clean_events 一致）：harm 只有点弦泛音才有，with_defaults 不给别的音补 0
+    OMIT_EMPTY: ClassVar[tuple[str, ...]] = ("harm",)
     string: int = Field(
         ge=1,
         le=STRINGS,
@@ -78,6 +81,12 @@ class Note(_M):
     tech: list[str] = Field(default_factory=list, json_schema_extra={"llm_items_enum": TECHS})
     grace: int = Field(-1, description="fret of a grace note leading into this note, -1 if none")
     bend: float = Field(0, description="bend amount in semitones, 0 if no bend")
+    harm: int = Field(
+        0,
+        ge=0,
+        le=MAX_TAP_FRET,
+        description='for th: the tapped fret written in <> (e.g. 19 in "0 <19>"); 0 otherwise',
+    )
 
 
 class Event(_M):

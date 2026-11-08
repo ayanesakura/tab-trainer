@@ -220,3 +220,28 @@ def test_typing_a_question_keeps_the_bar_while_playing(trainer):
     b.wait_for("tt.get('ui.bar') > 0", timeout=8)  # 不在输入了就照常跟着播放
     b.js("tt.stop(); true")
     assert not b.errors, b.errors
+
+
+def test_note_popup_sets_a_tapped_harmonic_with_its_tapped_fret(server, trainer, image_song):
+    """改音面板选“点弦泛音”：出现“点弦”一栏，先填高 12 品，可以改；保存后音符带 th 和 harm，取消 th 后 harm 也去掉。"""
+    sid, _ = image_song
+    b = trainer()
+    _open_note(b, 1, 0, 0)
+    assert b.js("document.getElementById('npHarmRow').hidden")
+    b.js("document.querySelector('#npTech button[data-t=th]').click(); true")
+    assert not b.js("document.getElementById('npHarmRow').hidden")
+    assert b.js("document.getElementById('npHarm').value") == "12"
+    b.js("document.getElementById('npHarm').value = '19'; document.getElementById('npSave').click(); true")
+    b.wait_for("!tt.editor.saving && !tt.editor.np")
+    note = _song(server, sid)["bars"][1]["events"][0]["notes"][0]
+    assert (note["fret"], note["tech"], note["harm"]) == (0, ["th"], 19)
+    time.sleep(0.6)  # 谱面按新数据重画完
+    _open_note(b, 1, 0)
+    assert b.js("document.getElementById('npHarm').value") == "19"
+    b.js("document.querySelector('#npTech button[data-t=ah]').click(); true")  # 换成人工泛音：点弦泛音取消
+    assert b.js("document.getElementById('npHarmRow').hidden")
+    b.js("document.getElementById('npSave').click(); true")
+    b.wait_for("!tt.editor.saving && !tt.editor.np")
+    note = _song(server, sid)["bars"][1]["events"][0]["notes"][0]
+    assert note["tech"] == ["ah"] and "harm" not in note
+    assert not b.errors, b.errors

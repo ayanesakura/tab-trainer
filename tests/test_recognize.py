@@ -1447,3 +1447,15 @@ def test_retrying_a_row_that_now_changes_the_time_signature_redoes_the_rows_afte
     assert (4, [3, 4]) in starts  # 第二行按 3/4 重做
     assert [b.get("time_signature") for b in s["bars"]] == [None] + [[3, 4]] * 5
     assert all(not b["warn"] for b in s["bars"]) and all(x["status"] == "done" for x in s["systems"])
+
+
+def test_tapped_harmonic_marks_are_not_ocr_disagreements_and_the_tap_is_part_of_the_bar_key():
+    """点弦泛音 "5 <22>"：OCR 会把 <> 里的 22 也读成一个数字，不算 AI 漏了音；两遍识别点的品不同算不一致。"""
+
+    def bar(harm):
+        return {"events": [{"dur": "4", "notes": [{"string": 3, "fret": 5, "tech": ["th"], "harm": harm}]}]}
+
+    seen = [[(3, 5), (3, 22)]]
+    assert recognize.ocr_disagreements([bar(22)], seen, tied_in={}) == {}
+    assert recognize.ocr_disagreements([bar(17)], seen, tied_in={}) != {}
+    assert recognize._bar_key(bar(22)) != recognize._bar_key(bar(17))

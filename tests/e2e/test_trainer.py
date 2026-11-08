@@ -164,8 +164,8 @@ def test_tuner_and_glossary_demos_play(trainer):
     b.js("location.hash = '#glossary'; true")
     b.wait_for("!document.getElementById('view-glossary').hidden")
     demos = b.js("[...document.querySelectorAll('button.demo')].map(x => x.dataset.demo)")
-    assert len(demos) == 10
-    for d in demos:  # 每个示范都点一遍：闷音、滑音、击勾弦、两种泛音、倚音各条发声路径都会走到
+    assert len(demos) == 11 and "th" in demos
+    for d in demos:  # 每个示范都点一遍：闷音、滑音、击勾弦、三种泛音、倚音各条发声路径都会走到
         b.js(f"document.querySelector('button.demo[data-demo={d}]').click(); true")
     time.sleep(0.3)
     assert b.js("tt.ac.state") == "running"

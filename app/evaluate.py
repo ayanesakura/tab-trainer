@@ -42,7 +42,8 @@ def _onsets(events: list[dict]):
 
 def bar_sets(events: list[dict]) -> dict[str, set]:
     """把一个小节拆成可比较的集合：起拍位置（不含休止）、(起拍, 弦, 品)、(起拍, 弦, 技巧)，
-    以及弹唱谱的 (起拍, 和弦名)、(起拍, 扫弦方向)、(起拍, 第 1 段歌词)。"""
+    以及弹唱谱的 (起拍, 和弦名)、(起拍, 扫弦方向)、(起拍, 第 1 段歌词)。
+    点弦泛音的技巧连同右手点的品一起比（"th<19>"）：点错了位置算技巧错，品（左手按的）照常比。"""
     onsets, notes, techs, chords, strums, lyrics = set(), set(), set(), set(), set(), set()
     for t, e in _onsets(events):
         if e["notes"]:
@@ -50,7 +51,7 @@ def bar_sets(events: list[dict]) -> dict[str, set]:
         for n in e["notes"]:
             notes.add((t, n["string"], n["fret"]))
             for k in n.get("tech", []):
-                techs.add((t, n["string"], k))
+                techs.add((t, n["string"], f"th<{n.get('harm', 0)}>" if k == "th" else k))
         if e.get("chord"):
             chords.add((t, e["chord"]))
         if e.get("strum"):

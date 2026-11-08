@@ -142,6 +142,7 @@ Techniques (put them on the note that receives them):
 - "si": slide in from an unspecified lower fret (a slash before the number with no starting note); the note is picked.
 - "pm": palm mute (P.M. line). "x": dead/muted note written as x (use fret 0) - but not in chord sheets, see below.
 - "nh": natural harmonic, written <n>; fret = the harmonic node n. A natural harmonic written with a fractional node, e.g. <21.7> or <14.7>, gets fret = the node rounded to the nearest whole number (22, 15). "ah": artificial harmonic (A.H., e.g. "2<14>"): fret = the fretted note (2), the node is 12 frets higher.
+- "th": tapped harmonic, labelled T.H. above the staff and written as a fretted number followed by the tapped fret in <>, e.g. "0 <19>" or "5<22>" (the left hand frets the first number, the right hand taps the fret in <>): fret = the fretted number (0, 5), tech "th", "harm" = the number in <> (19, 22; a fractional one such as <23.7> rounded to the nearest whole number, 24). Every note that is not a tapped harmonic has harm = 0.
 - "roll": arpeggiated chord (wavy vertical line) - put it on every note of the chord.
 - "vib": vibrato. "bend": a bend; also set "bend" to the size in semitones (full = 2, 1/2 = 1).
 - Circled numbers ①-⑥ next to notes (common in classical scores) are string indications - which string the note is played on - not frets and not notes. In a header, "①=D ②=A ..." lists the tuning of each string.
@@ -180,6 +181,8 @@ def _note_text(n: dict) -> str:
     s = f"{n['string']}弦{n['fret']}品"
     if n.get("grace", -1) >= 0:
         s = f"(倚音{n['grace']}品)" + s
+    if n.get("harm"):  # 点弦泛音：右手点的品，和谱上一样写在 <> 里
+        s += f"<{n['harm']}>"
     return s + (f"[{','.join(n['tech'])}]" if n.get("tech") else "")
 
 
@@ -194,5 +197,5 @@ NOTATION_KEY = (
     "each event is '<duration in quarter notes> <notes>', notes as '<string>弦<fret>品' (string 1 = highest), "
     "a chord name in [brackets] starts that chord, 下扫/上扫 = strummed down/up, 「」 = lyric sung there, "
     "techniques in brackets (h hammer-on, p pull-off, sl slide from the previous note, si slide in, pm palm mute, "
-    "nh natural harmonic, ah artificial harmonic, roll arpeggio, x dead note, vib vibrato, bend)"
+    "nh natural harmonic, ah artificial harmonic, th tapped harmonic (<n> = the fret tapped by the right hand), roll arpeggio, x dead note, vib vibrato, bend)"
 )

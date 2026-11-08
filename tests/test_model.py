@@ -95,3 +95,19 @@ def test_legacy_cost_stays_estimated_after_a_new_call():
     model.add_usage(s, {"input_tokens": 100, "output_tokens": 10, "cost_usd": 0.01})
     after = views.cost_summary(s["usage"])
     assert after["cost_estimated"] and after["cost_usd"] == pytest.approx(before["cost_usd"] + 0.01, abs=1e-3)
+
+
+def test_harm_is_only_on_tapped_harmonics():
+    """Note.harm（点弦泛音点的品）：曲子包导入补默认值时不给别的音补 0（存盘的数据不变），超出范围的拒收。"""
+    import pydantic
+
+    note = {"string": 1, "fret": 0, "tech": []}
+    ev = model.Event.model_validate(
+        {"dur": "1", "notes": [note, {**note, "string": 2, "tech": ["th"], "harm": 19}]}
+    )
+    raw = {"dur": "1", "notes": [dict(note), {**note, "string": 2, "tech": ["th"], "harm": 19}]}
+    model._fill_defaults(raw, ev)
+    assert "harm" not in raw["notes"][0] and raw["notes"][1]["harm"] == 19
+    assert raw["notes"][0]["grace"] == -1  # 别的默认值照常补
+    with pytest.raises(pydantic.ValidationError):
+        model.Note.model_validate({**note, "tech": ["th"], "harm": 37})

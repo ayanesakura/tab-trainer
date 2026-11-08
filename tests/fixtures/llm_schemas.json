@@ -30,6 +30,7 @@
       "pm",
       "nh",
       "ah",
+      "th",
       "roll",
       "x",
       "vib",
@@ -44,6 +45,10 @@
    "bend": {
     "type": "number",
     "description": "bend amount in semitones, 0 if no bend"
+   },
+   "harm": {
+    "type": "integer",
+    "description": "for th: the tapped fret written in <> (e.g. 19 in \"0 <19>\"); 0 otherwise"
    }
   },
   "required": [
@@ -51,7 +56,8 @@
    "fret",
    "tech",
    "grace",
-   "bend"
+   "bend",
+   "harm"
   ],
   "additionalProperties": false
  },
@@ -95,6 +101,7 @@
          "pm",
          "nh",
          "ah",
+         "th",
          "roll",
          "x",
          "vib",
@@ -109,6 +116,10 @@
       "bend": {
        "type": "number",
        "description": "bend amount in semitones, 0 if no bend"
+      },
+      "harm": {
+       "type": "integer",
+       "description": "for th: the tapped fret written in <> (e.g. 19 in \"0 <19>\"); 0 otherwise"
       }
      },
      "required": [
@@ -116,7 +127,8 @@
       "fret",
       "tech",
       "grace",
-      "bend"
+      "bend",
+      "harm"
      ],
      "additionalProperties": false
     },
@@ -207,6 +219,7 @@
             "pm",
             "nh",
             "ah",
+            "th",
             "roll",
             "x",
             "vib",
@@ -221,6 +234,10 @@
          "bend": {
           "type": "number",
           "description": "bend amount in semitones, 0 if no bend"
+         },
+         "harm": {
+          "type": "integer",
+          "description": "for th: the tapped fret written in <> (e.g. 19 in \"0 <19>\"); 0 otherwise"
          }
         },
         "required": [
@@ -228,7 +245,8 @@
          "fret",
          "tech",
          "grace",
-         "bend"
+         "bend",
+         "harm"
         ],
         "additionalProperties": false
        },
@@ -381,6 +399,7 @@
                "pm",
                "nh",
                "ah",
+               "th",
                "roll",
                "x",
                "vib",
@@ -395,6 +414,10 @@
             "bend": {
              "type": "number",
              "description": "bend amount in semitones, 0 if no bend"
+            },
+            "harm": {
+             "type": "integer",
+             "description": "for th: the tapped fret written in <> (e.g. 19 in \"0 <19>\"); 0 otherwise"
             }
            },
            "required": [
@@ -402,7 +425,8 @@
             "fret",
             "tech",
             "grace",
-            "bend"
+            "bend",
+            "harm"
            ],
            "additionalProperties": false
           },
@@ -672,6 +696,7 @@
   "pm",
   "nh",
   "ah",
+  "th",
   "roll",
   "x",
   "vib",

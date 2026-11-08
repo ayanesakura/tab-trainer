@@ -19,6 +19,8 @@ VOCAB = json.loads((Path(__file__).parent / "static" / "js" / "vocab.json").read
 INSTRUMENT = VOCAB["instrument"]
 STRINGS: int = INSTRUMENT["strings"]
 MAX_FRET: int = INSTRUMENT["max_fret_written"]  # 数据里接受的最高品（泛音节点、加长指板）
+# 点弦泛音（th）右手点的品：可以比指板还高（按 7 品、点 12 品之外的 19 品、26 品，点在音孔上方）
+MAX_TAP_FRET: int = INSTRUMENT["max_tap_fret"]
 # 演奏技巧代号（模型输出的 schema、前端和 alphaTex 转换都用这一套）
 TECHS = [t["code"] for t in VOCAB["techs"]]
 STANDARD = list(INSTRUMENT["standard_tuning"])
@@ -207,6 +209,7 @@ def clean_events(events) -> list[dict]:
                 grace = int(n.get("grace", -1))
                 bend = float(n.get("bend", 0) or 0)
                 tech = [t for t in (n.get("tech") or []) if t in TECHS]
+                harm = int(n.get("harm") or 0) if "th" in tech else 0
             except (KeyError, TypeError, ValueError, AttributeError, OverflowError):  # 1e400 → inf
                 raise Invalid(f"第 {i} 个事件里有音符格式不对（需要 string、fret）") from None
             if not 1 <= st <= STRINGS:
@@ -215,15 +218,24 @@ def clean_events(events) -> list[dict]:
                 raise Invalid(f"第 {i} 个事件：品数 {fr} 超出 0–{MAX_FRET}")
             if not math.isfinite(bend) or not 0 <= bend <= 4:
                 raise Invalid(f"第 {i} 个事件：推弦幅度 {bend} 不合理（0–4 个半音）")
-            notes.append(
-                {
-                    "string": st,
-                    "fret": fr,
-                    "tech": tech,
-                    "grace": grace if 0 <= grace <= MAX_FRET else -1,
-                    "bend": bend,
-                }
-            )
+            if "th" in tech:
+                # 点弦泛音：fret = 左手按的品（谱上的第一个数），harm = 右手点的品（<> 里的数）。
+                # 没写（模型给 0）按最常见的点法：高 12 品
+                harm = harm or min(fr + 12, MAX_TAP_FRET)
+                if not fr < harm <= MAX_TAP_FRET:
+                    raise Invalid(
+                        f"第 {i} 个事件：点弦泛音点在 {harm} 品不合理（要比按的品高，最多 {MAX_TAP_FRET} 品）"
+                    )
+            note = {
+                "string": st,
+                "fret": fr,
+                "tech": tech,
+                "grace": grace if 0 <= grace <= MAX_FRET else -1,
+                "bend": bend,
+            }
+            if harm:  # 只有点弦泛音才有这个键：别的音一个字节都不变（不然每个小节的 rev 都会变）
+                note["harm"] = harm
+            notes.append(note)
         ev = {"dur": str(dur), "notes": notes}
         chord = str(e.get("chord") or "").strip()[:24]
         if chord:
@@ -243,7 +255,7 @@ OPTIONAL_EVENT_KEYS = ("chord", "lyrics", "strum")
 
 def canonical_events(events):
     """比较“音变没变”用的统一形式（和 clean_events 的结果一样：空的 chord / lyrics / strum 不写、时值约分、
-    bend 是小数）。外来曲子包补过默认值的、旧数据里写法不规范的，内容一样就算一样。整理不了的原样返回。"""
+    bend 是小数、不是点弦泛音的音没有 harm）。外来曲子包补过默认值的、旧数据里写法不规范的，内容一样就算一样。整理不了的原样返回。"""
     try:
         return clean_events(events)
     except Invalid:

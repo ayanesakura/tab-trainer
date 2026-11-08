@@ -1,7 +1,7 @@
 // 练习页的纯函数：曲子数据 → 播放和显示要用的结构，段落、换段、练习记录文案等。
 // 不碰 DOM、不读 store，Node 测试直接导入（tests/js/trainer.test.mjs）。
 
-import { toAlphaTex, durToTicks, TICKS } from '../score.js';
+import { toAlphaTex, durToTicks, tapOffset, TICKS } from '../score.js';
 import { STRINGS, STANDARD, TECH_NAME, WARN_CODES, parseDur } from '../vocab.js';
 
 export const NN = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
@@ -19,7 +19,8 @@ export function nameToMidi(name) {
   return NOTE_PC[m[1]] + ({ '#': 1, '♯': 1, b: -1, '♭': -1 }[m[2]] || 0) + (+m[3] + 1) * 12;
 }
 export const STD_MIDI = STANDARD.map(nameToMidi); // 标准调弦，1 弦 → 6 弦
-const HARM = { 12: 12, 24: 24, 7: 19, 19: 19, 5: 24, 4: 28, 9: 28, 16: 28, 3: 31, 2: 36 }; // 自然泛音品位 → 比空弦高几个半音
+// 泛音点（自然泛音的品位、点弦泛音比按的品高几品）→ 高几个半音；和 alphaTab 播放时的音高一致
+const HARM = { 12: 12, 24: 24, 7: 19, 19: 19, 5: 24, 4: 28, 9: 28, 16: 28, 3: 31, 2: 36, 17: 36, 22: 36 };
 
 /** GP / MusicXML 导入的曲子（小节来自原文件，谱面直接用原文件渲染） */
 export const isScore = s => !!(s && s.is_score); // GP / MusicXML：后端给的（SongView.is_score），前端不再按来源推断
@@ -37,7 +38,7 @@ export function sectionsOf(bars) {
 
 /**
  * 曲子（后端的 SongView）→ 练习页要用的结构。纯函数，结果放在 store 的 view 里。
- * bars：每小节的事件 {t, d, notes: [{s, f, tech: Set, grace, bend}], tech: Set, bar, idx}；all：全曲展平；
+ * bars：每小节的事件 {t, d, notes: [{s, f, tech: Set, grace, bend, harm}], tech: Set, bar, idx}；all：全曲展平；
  * open / openName / capo：空弦音高和音名；barLens：每小节几拍（四分音符）；regions：原谱上的位置；
  * beatMap：每小节每个事件起拍的 tick；source：谱面从哪来（GP 原文件的音轨，或我们生成的 alphaTex）。
  */
@@ -56,7 +57,7 @@ export function deriveView(song) {
     return evs.map(e => {
       const notes = (e.notes || [])
         .filter(n => n.string >= 1 && n.string <= STRINGS && Number.isFinite(n.fret)) // 非法弦号会让音高变成 NaN，播放卡死
-        .map(n => ({ s: n.string, f: n.fret, tech: new Set(n.tech || []), grace: n.grace >= 0 ? n.grace : null, bend: Number.isFinite(n.bend) ? n.bend : 0 }));
+        .map(n => ({ s: n.string, f: n.fret, tech: new Set(n.tech || []), grace: n.grace >= 0 ? n.grace : null, bend: Number.isFinite(n.bend) ? n.bend : 0, harm: n.harm || 0 }));
       const tech = new Set(); notes.forEach(n => n.tech.forEach(k => tech.add(k)));
       const d = parseDur(e.dur), r = { t, d, notes, tech, bar: bi, idx: 0 };
       t += d;
@@ -85,9 +86,10 @@ export function deriveView(song) {
   };
 }
 
-/** 一个音的 MIDI 音高（含变调夹；泛音按泛音点算） */
+/** 一个音的 MIDI 音高（含变调夹；泛音按泛音点算，点弦泛音按点的品比按的品高几品算） */
 export function noteMidi(n, v) {
   if (n.tech.has('nh')) return v.open[n.s] + v.capo + (HARM[n.f] ?? 12);
+  if (n.tech.has('th')) return v.open[n.s] + v.capo + n.f + (HARM[tapOffset(n.f, n.harm)] ?? 12);
   return v.open[n.s] + v.capo + n.f + (n.tech.has('ah') ? 12 : 0);
 }
 
