@@ -151,6 +151,63 @@ def test_quick_second_edit_waits_for_the_first_save(server, trainer, image_song)
     assert not b.errors, b.errors
 
 
+def _toast(text):
+    return f"[...document.querySelectorAll('.toast')].some(t => t.textContent.includes({json.dumps(text)}))"
+
+
+def test_undo_for_a_bar_that_no_longer_exists_is_dropped(server, trainer, image_song):
+    """撤销的小节已经不在了（这一行重新识别过，小节换了 id）：这条撤销记录作废，不挡着别的小节的撤销。"""
+    sid, store = image_song
+    orig = _song(server, sid)["bars"][2]["events"]
+    b = trainer()
+    _edit_fret(b, 2, 7)
+    _edit_fret(b, 3, 7)
+    assert b.js("tt.editor.undoBars") == ["bar3", "bar4"]
+    store.update(sid, lambda s: s["bars"][3].update(id="bar4-new"))
+    b.js("tt.refresh().then(() => true)")
+    b.wait_for("tt.song.bars[3].id === 'bar4-new'")
+    _undo(b)
+    b.wait_for(_toast("撤销不了"))
+    assert b.js("tt.editor.undoBars") == ["bar3"]
+    _undo(b)  # 别的小节照常撤销
+    assert b.js("tt.editor.undo") == 0
+    assert _song(server, sid)["bars"][2]["events"] == orig
+    assert not b.errors, b.errors
+
+
+def test_bar_locked_423_keeps_undo_history(server, trainer, image_song):
+    """423（有任务在跑 / 小节锁着）不是冲突：只提示服务的说明，不刷新、不作废撤销记录，过后还能撤销。409 照旧按冲突处理。"""
+    sid, _ = image_song
+    orig = _song(server, sid)["bars"][2]["events"]
+    b = trainer()
+    _edit_fret(b, 2, 7)
+    b.js("""(() => { const of = window.fetch; window.__lock = 0; window.fetch = async (u, init) => {
+      if (window.__lock && init && init.method === 'PUT' && String(u).includes('/bars/'))
+        return new Response(JSON.stringify({ detail: window.__lock === 423 ? '这一行正在重新识别，稍后再改' : '曲子在别处改过了' }),
+          { status: window.__lock, headers: { 'Content-Type': 'application/json' } });
+      return of(u, init); }; return true; })()""")
+    b.js("window.__lock = 423; true")
+    _undo(b)
+    b.wait_for(_toast("正在重新识别，稍后再改"))
+    assert b.js("tt.editor.undoBars") == ["bar3"]  # 撤销记录放回去了
+    _edit_fret(b, 2, 9)  # 锁着时改音：没存上，原来的撤销记录也还在
+    assert b.js("tt.editor.undoBars") == ["bar3"]
+    assert _song(server, sid)["bars"][2]["events"][0]["notes"][0]["fret"] == 7
+    assert not b.js(CONFLICT)
+    b.js("window.__lock = 0; true")
+    _undo(b)
+    assert b.js("tt.editor.undo") == 0
+    assert _song(server, sid)["bars"][2]["events"] == orig
+    # 409：仍是冲突（刷新、这个小节的撤销记录作废）
+    _edit_fret(b, 2, 7)
+    b.js("window.__lock = 409; true")
+    _undo(b)
+    b.wait_for(CONFLICT)
+    assert b.js("tt.editor.undo") == 0
+    b.js("window.__lock = 0; true")
+    assert not b.errors, b.errors
+
+
 def test_typing_a_question_keeps_the_bar_while_playing(trainer):
     """播放中在“问 AI”里打字：侧栏停在正在看的小节，问题不会挂到光标后来走到的小节上。"""
     b = trainer()

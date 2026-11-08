@@ -4,7 +4,7 @@
 import { get, on } from './store.js';
 import { $, UI, esc, songUrl, setButton } from './dom.js';
 import { put, withBusy } from '../lib/api.js';
-import { applySong, conflict } from './song.js';
+import { applySong, writeFailed } from './song.js';
 import { barTags, warnText, isScore } from './view.js';
 import { images, loadImages } from './page-images.js';
 import { barChords, chordShapes, chordSVG } from './chords.js';
@@ -40,8 +40,7 @@ async function toggleReview() {
       applySong(await put(songUrl(`/bars/${encodeURIComponent(sb.id)}/review`), { ok: !sb.reviewed, rev: sb.rev }));
       UI.toast(sb.reviewed ? `已撤销第 ${bi + 1} 小节的确认` : `第 ${bi + 1} 小节已确认`, 'ok');
     } catch (e) {
-      if (e.status === 409) await conflict(e);
-      else UI.toast(e.message, 'err', 5000);
+      await writeFailed(e);
     }
   });
   renderCard(); // withBusy 结束时把按钮还原成点之前的样子：按新状态重画一次

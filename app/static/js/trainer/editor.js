@@ -6,7 +6,7 @@ import { put, post, withBusy } from '../lib/api.js';
 import { DUR_CHOICES, durToTicks, eventIndexAt, retimeEvent } from '../score.js';
 import { TECH_NAME, STRINGS } from '../vocab.js';
 import { stop, setPlayerHooks, holdBarWhile } from './player.js';
-import { refresh, applySong, conflict } from './song.js';
+import { refresh, applySong, conflict, isLocked, lockedToast } from './song.js';
 
 // ---------------------------------------------------------------------
 // 修改小节（JSON）、重新识别这一行
@@ -40,7 +40,10 @@ export const undoStack = []; // {barId, events: 改之前的内容, n, rev: 这�
 export let saving = 0; // 进行中的保存：这期间不能撤销，否则可能撤销错步骤
 const savingBars = new Set(); // 正在保存的小节：同一小节一次只发一个保存（否则第二个带的是旧 rev）
 const barBusy = barId => { if (!savingBars.has(barId)) return false; UI.toast('这个小节正在保存，稍等一下再改', 'info'); return true; };
-/** → 'ok' | 'conflict'（别处改过这个小节，已刷新）| 'error' | 'busy'（这个小节还在保存上一次的修改） */
+/**
+ * → 'ok' | 'conflict'（别处改过这个小节，已刷新）| 'gone'（小节已经不在了，已刷新）| 'locked'（423：有任务在跑 / 小节锁着）
+ *   | 'error' | 'busy'（这个小节还在保存上一次的修改）
+ */
 async function putBar(barId, events, rev, msg, isUndo = false) {
   if (barBusy(barId)) return 'busy';
   const s = get('song'), before = s.bars.find(b => b.id === barId);
@@ -62,6 +65,14 @@ async function putBar(barId, events, rev, msg, isUndo = false) {
       await conflict(e);
       return 'conflict';
     }
+    if (isLocked(e)) { lockedToast(e); return 'locked'; } // 不是冲突：撤销记录都留着，等一会再试
+    if (e.status === 404) {
+      // 小节不在了（比如这一行重新识别过，小节换了新的 id）：它的撤销记录都撤销不了，作废（不然一直挡在撤销栈顶上）
+      for (let i = undoStack.length - 1; i >= 0; i--) if (undoStack[i].barId === barId) undoStack.splice(i, 1);
+      UI.toast(isUndo ? '这个小节已经不在了（可能重新识别过这一行），这一步撤销不了' : e.message, 'err', 5000);
+      await refresh();
+      return 'gone';
+    }
     UI.toast(e.message || '保存失败', 'err', 4000);
     return 'error';
   } finally { saving--; savingBars.delete(barId); }
@@ -73,7 +84,8 @@ async function undoEdit() {
   const u = undoStack.pop();
   if (!u) { UI.toast('没有可以撤销的修改', 'info'); return; }
   const r = await putBar(u.barId, u.events, u.rev, `已撤销第 ${u.n} 小节的修改`, true);
-  if (r === 'error' || r === 'busy') undoStack.push(u); // 撤销失败：记录放回去（冲突时这个小节的记录已作废）
+  // 撤销失败：记录放回去，下次再试（冲突、小节不在了时，这个小节的记录已作废）
+  if (r === 'error' || r === 'busy' || r === 'locked') undoStack.push(u);
 }
 
 // ---------------------------------------------------------------------
@@ -236,7 +248,7 @@ export function initEditor() {
     let events;
     try { events = JSON.parse($('edText').value); } catch (e) { UI.toast('JSON 格式不对：' + e.message, 'err', 4000); return; }
     const r = await putBar(editorBarId, events, editorRev, '已保存');
-    if (r === 'ok') closeEditor();
+    if (r === 'ok' || r === 'gone') closeEditor();
     else if (r === 'conflict') { // 别处改过：换成刷新后的内容和版本，不然之后每次保存都是 409
       const bar = get('song').bars.find(b => b.id === editorBarId);
       if (bar) fillEditor(bar); else closeEditor();
