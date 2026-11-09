@@ -55,7 +55,9 @@ test('今日清单的一行：说明、链接、转义', () => {
   assert.match(html, /href="\/trainer\?id=a1&resume=1&from=today"/);
   assert.match(html, /btn sm act primary/);
   assert.match(html, /title="磕绊 · 杂音 · 72 BPM"/);
-  assert.deepEqual(itemNotes(item({ kind: 'new', study: st({ state: 'new' }) })), ['还没开始']);
+  assert.deepEqual(itemNotes(item({ kind: 'new', study: st({ state: 'new' }) })), ['第一次练']);
+  // 今天已经在谱子上练过了：不再说“第一次练”
+  assert.deepEqual(itemNotes(item({ kind: 'new', study: st({ state: 'new' }), today_seconds: 60 })), ['今天已练 1 分钟']);
   // 不能练（还在识别）：没有链接
   assert.doesNotMatch(queueRowHTML(item({ playable: false })), /<a /);
   // 曲名、艺人都转义
@@ -78,8 +80,15 @@ test('计划的一行：位置、上下移动按钮到头不可用', () => {
   assert.match(last, /plan-row paused/);
   assert.match(last, /data-mv="1"[^>]*disabled/);
   assert.equal(planNext(st({ state: 'learning', rated_today: 2 })), '明天继续');
-  assert.equal(planNext(st({ due_in: 0 })), '今天');
+  assert.equal(planNext(st({ due_in: 0 }), { today: true }), '今天复习');
   assert.equal(planNext(st({ due_in: 4 })), '4 天后复习');
+  // 新曲：轮到今天的写“今天开始”，没轮到的才是“排队中”；到期复习超出每天上限的顺延
+  assert.equal(planNext(st({ state: 'new' }), { today: true }), '今天开始');
+  assert.equal(planNext(st({ state: 'new' })), '排队中');
+  assert.equal(planNext(st({ due_in: -1 }), { today: true }), '今天复习');
+  assert.equal(planNext(st({ due_in: -1 })), '已到期，明天再排');
+  assert.equal(planNext(st({ due_in: 0, rated_today: 3 })), '今天复习过了');
+  assert.match(planRowHTML({ id: 'n', title: 'N', study: st({ state: 'new' }) }, 0, 1, { today: true }), /今天开始/);
 });
 
 test('进度环：达到目标变色，超出不画满两圈', () => {

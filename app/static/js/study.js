@@ -46,6 +46,7 @@ function render() {
   $('studyDate').textContent = dayLabel(t.day);
   renderHero(t);
   renderQueue(t);
+  if (S.loaded) paintPlan(); // 计划行的“今天开始 / 排队中”跟着清单变
   renderCalendar();
   syncSettings(t.settings);
 }
@@ -77,7 +78,10 @@ function emptyHTML(kind, title, hint, action = '') {
 }
 function renderQueue(t) {
   const q = t.queue || [], done = t.done || [], c = t.counts || {};
-  const aside = c.in_plan ? [c.learning && `在学 ${c.learning}`, c.review_due && `到期 ${c.review_due}`, c.new && `排队 ${c.new}`].filter(Boolean).join(' · ') : '';
+  // 右上角是清单以外的：到期但超出每天上限、顺延的复习，还在排队、没轮到今天的新曲
+  const kinds = k => q.filter(x => x.kind === k).length;
+  const later = Math.max(0, (c.review_due || 0) - kinds('review')), waiting = Math.max(0, (c.new || 0) - kinds('new'));
+  const aside = [later && `${later} 首复习顺延`, waiting && `${waiting} 首新曲排队`].filter(Boolean).join(' · ');
   setHTML($('queueAside'), esc(aside));
   let html;
   if (!c.in_plan) {
@@ -161,12 +165,17 @@ $('dayCard').addEventListener('click', async e => {
 const planSongs = () => S.songs.filter(s => s.study).sort((a, b) => a.study.order - b.study.order || String(a.study.added).localeCompare(String(b.study.added)));
 export function renderPlan(songs) {
   S.songs = songs || [];
+  S.loaded = true;
+  paintPlan();
+}
+function paintPlan() {
   const list = planSongs(), n = list.length;
   const paused = list.filter(s => s.study.paused).length;
-  setHTML($('planAside'), n ? esc(`${n} 首${paused ? ` · 暂停 ${paused}` : ''}`) : '');
+  setHTML($('planAside'), n ? esc(`共 ${n} 首，按顺序学${paused ? ` · 暂停 ${paused}` : ''}`) : '');
   if (!n) { setHTML($('plan'), '<div class="empty-state"><b>还没有曲子</b>在曲库里把想练的曲子加进来，按顺序一首首学。</div>'); return; }
   const shown = S.planOpen || n <= PLAN_FOLD + 1 ? list : list.slice(0, PLAN_FOLD);
-  let html = shown.map((s, i) => planRowHTML(s, i, n)).join('');
+  const inToday = new Set(((S.today && S.today.queue) || []).map(x => x.id));
+  let html = shown.map((s, i) => planRowHTML(s, i, n, { today: inToday.has(s.id) })).join('');
   if (n > PLAN_FOLD + 1) html += `<div class="plan-more"><button class="btn ghost sm" data-fold>${S.planOpen ? `${icon('up', 12)}收起` : `${icon('down', 12)}展开全部 ${n} 首`}</button></div>`;
   setHTML($('plan'), html);
 }
@@ -177,14 +186,14 @@ async function move(id, dir) {
   // 先在本地换好顺序（按钮跟着走，连点几下不卡），再告诉后端
   const order = new Map(ids.map((x, k) => [x, k]));
   S.songs = S.songs.map(s => (s.study && order.has(s.id) ? { ...s, study: { ...s.study, order: order.get(s.id) } } : s));
-  renderPlan(S.songs);
+  paintPlan();
   const btn = $('plan').querySelector(`.plan-row[data-id="${CSS.escape(id)}"] [data-mv="${dir}"]`);
   (btn && !btn.disabled ? btn : $('plan').querySelector(`.plan-row[data-id="${CSS.escape(id)}"] [data-plan-more]`))?.focus({ preventScroll: true });
   try { await api.put('/api/study/order', { ids }); } catch (e) { toast(e.message, 'err', 4000); }
   changed();
 }
 $('plan').addEventListener('click', e => {
-  if (e.target.closest('[data-fold]')) { S.planOpen = !S.planOpen; renderPlan(S.songs); return; }
+  if (e.target.closest('[data-fold]')) { S.planOpen = !S.planOpen; paintPlan(); return; }
   const row = e.target.closest('.plan-row');
   if (!row) return;
   const mv = e.target.closest('[data-mv]');

@@ -105,7 +105,7 @@ export function itemNotes(it) {
   const st = it.study || {}, out = [];
   if (it.kind === 'review' && st.due_in != null && st.due_in < 0) out.push(dueText(st.due_in));
   if (st.last) out.push(`上次${ratingName(st.last.rating)}`);
-  else if (it.kind === 'new') out.push('还没开始');
+  else if (it.kind === 'new' && !(it.today_seconds >= 30)) out.push('第一次练');
   if (it.today_seconds >= 30) out.push(`今天已练 ${fmtMin(it.today_seconds / 60)}`);
   return out;
 }
@@ -141,17 +141,20 @@ export function doneRowHTML(it) {
 }
 
 // ---------------- 计划（全部曲目，可调顺序） ----------------
-export function planNext(st) {
+/** 计划里一首的“下一步”。today：这首在今天的清单里（新曲轮到了、到期的复习排进来了） */
+export function planNext(st, { today = false } = {}) {
   if (!st) return '';
   if (st.paused) return '已暂停';
-  if (st.state === 'new') return '排队中';
+  if (st.state === 'new') return today ? '今天开始' : '排队中';
   if (st.state === 'learning') return st.rated_today ? '明天继续' : '今天练';
-  return dueText(st.due_in) + (st.due_in != null && st.due_in <= 0 ? '' : '复习');
+  const n = st.due_in;
+  if (n != null && n <= 0) return st.rated_today ? '今天复习过了' : today ? '今天复习' : '已到期，明天再排';
+  return `${dueText(n)}复习`;
 }
-/** 计划里的一首：i 是位置（从 0 数），n 是总数（上下移动按钮到头时不可用） */
-export function planRowHTML(s, i, n) {
+/** 计划里的一首：i 是位置（从 0 数），n 是总数（上下移动按钮到头时不可用），today：在今天的清单里 */
+export function planRowHTML(s, i, n, { today = false } = {}) {
   const st = s.study || {}, k = st.paused ? { label: '暂停', cls: 'muted', tip: '暂停的曲子不会排进今日清单' } : KINDS[st.state] || KINDS.new;
-  const meta = [s.artist, planNext(st), st.reps ? `打分 ${st.reps} 次` : ''].filter(Boolean).map(esc).join(' · ');
+  const meta = [s.artist, planNext(st, { today }), st.reps ? `打分 ${st.reps} 次` : ''].filter(Boolean).map(esc).join(' · ');
   const btn = (dir, ic, label, off) => `<button class="icon-btn sm" data-mv="${dir}" data-k="mv${dir}" title="${label}" aria-label="${label}"${off ? ' disabled' : ''}>${icon(ic, 14)}</button>`;
   return `<div class="row plan-row${st.paused ? ' paused' : ''}" data-id="${esc(s.id)}">
     <span class="ord">${i + 1}</span>
