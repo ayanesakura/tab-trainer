@@ -682,6 +682,64 @@ def test_tuner_reading_settles_on_a_steady_tone(trainer):
     assert not b.errors, b.errors
 
 
+_FAKE_MIC = """(() => { window.__streams = [];
+  navigator.mediaDevices.getUserMedia = async () => {
+    const c = new AudioContext(), o = c.createOscillator(), d = c.createMediaStreamDestination();
+    o.frequency.value = 110; o.connect(d); o.start(); await c.resume(); __streams.push(d.stream); return d.stream; };
+  return true; })()"""
+_LIVE = "__streams.at(-1).getTracks().every(t => t.readyState === 'live')"
+_ENDED = "__streams.at(-1).getTracks().every(t => t.readyState === 'ended')"
+
+
+def test_tuner_opened_directly_before_the_song_loads(server, browser):
+    """直接打开（刷新）#tune、曲子还没加载完就开了麦克风：先按标准调弦识别，不能出错卡在“正在打开麦克风…”；
+    曲子到了换成它的调弦，照样有读数。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id={server['image']}")
+    b._run(
+        b._send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            source=_FAKE_MIC
+            + """; (() => { const of = window.fetch.bind(window);  // 曲子等测试放行（__go）才到
+              const gate = new Promise(r => { window.__go = r; });
+              window.fetch = (u, i) => String(u).includes('/api/songs/') ? gate.then(() => of(u, i)) : of(u, i); })();""",
+        )
+    )
+    b._run(b._send("Page.navigate", url=f"{server['base']}/trainer?id={server['image']}&direct=1#tune"))
+    read = "document.getElementById('tRead').textContent"
+    b.wait_for(f"location.search.includes('direct') && window.__streams && __streams.length === 1 && {_LIVE}")
+    b.wait_for(f"{read}.includes('5 弦')", timeout=5)  # 曲子还没到：按标准调弦识别出 5 弦 A2
+    assert b.js("!tt.view")
+    b.js("__go(); true")
+    b.wait_for("!!tt.view && !!document.getElementById('tr5')")
+    b.wait_for(f"{read}.includes('5 弦 → 目标 A2')", timeout=5)  # 曲子到了：还在读
+    assert b.js("document.getElementById('tr5').classList.contains('hit')")
+    b.js("location.hash = '#practice'; true")
+    b.wait_for(_ENDED)
+    assert not b.errors, b.errors
+
+
+def test_tuner_mic_stops_while_the_page_is_hidden(trainer):
+    """切到别的标签页 / 最小化时关掉麦克风，回来还在调弦页就重新打开；关页面（pagehide）也关掉。"""
+    b = trainer()
+    b.js(_FAKE_MIC)
+    hide = """(h => { Object.defineProperty(document, 'hidden', {configurable: true, get: () => h});
+      document.dispatchEvent(new Event('visibilitychange')); return true; })"""
+    b.js("location.hash = '#tune'; true")
+    b.wait_for(f"__streams.length === 1 && {_LIVE}")
+    b.js(f"{hide}(true)")
+    b.wait_for(_ENDED)
+    b.js("location.hash = '#practice'; location.hash = '#tune'; true")  # 在后台切过来也不开
+    time.sleep(0.5)
+    assert b.js("__streams.length") == 1
+    b.js(f"{hide}(false)")
+    b.wait_for(f"__streams.length === 2 && {_LIVE}")
+    b.wait_for("document.getElementById('tRead').textContent.includes('5 弦')", timeout=5)
+    b.js("dispatchEvent(new PageTransitionEvent('pagehide')); true")
+    b.wait_for(_ENDED)
+    assert not b.errors, b.errors
+
+
 def _viewport(b, w, h):
     b._run(
         b._send("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)

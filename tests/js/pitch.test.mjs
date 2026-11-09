@@ -239,3 +239,11 @@ test('ftoc / ctof 互逆', () => {
   assert.equal(ftoc(440), 6900);
   assert.ok(Math.abs(ctof(ftoc(82.4069)) - 82.4069) < 1e-9);
 });
+
+test('TunerEngine：没有目标音时直接报错，不会算出 fftSize = 2 这样的缓冲长度', () => {
+  assert.throws(() => new TunerEngine([], 48000), RangeError);
+  for (const sr of [44100, 48000]) {
+    const n = new TunerEngine(targets(STD), sr).bufferSize;
+    assert.ok(n >= 32 && n <= 32768 && (n & (n - 1)) === 0, String(n)); // AnalyserNode.fftSize 的范围
+  }
+});
