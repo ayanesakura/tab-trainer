@@ -1,6 +1,8 @@
 """曲库页：曲子包导出 / 导入、搜索和标签、菜单、外观、管理原谱页面、键盘和浮层。"""
 
+import contextlib
 import json
+import urllib.error
 import urllib.request
 
 import pytest
@@ -623,3 +625,63 @@ def test_library_works_when_site_storage_is_blocked(server, browser):
     b.js("document.querySelector('#sortSeg [data-v=title]').click(); true")
     assert b.js("document.querySelector('#sortSeg [data-v=title]').getAttribute('aria-pressed')") == "true"
     assert not b.errors, b.errors
+
+
+def test_library_pages(server, browser):
+    # 曲子多了分页（每页 20 首）：翻页、焦点、换搜索词回到第一页、刷新 / 后退还在原来那一页、删到最后一页没了时退回前一页
+    from app import songs
+    from tests.e2e.conftest import _gp_bytes
+
+    gp = _gp_bytes()
+    ids = [songs.create_song([("p.gp", gp)], title=f"E2E 翻页 {i:02d}") for i in range(1, 22)]
+    rows = "[...document.querySelectorAll('#songs .song-row')]"
+    names = f"{rows}.map(r => r.querySelector('.title').textContent)"
+    try:
+        b = browser
+        b.open(server["base"] + "/")
+        b.wait_for("!document.getElementById('pager').hidden")
+        b.js("document.querySelector('#sortSeg [data-v=\"title\"]').click(); true")  # 按曲名排，顺序确定
+        total = b.js("document.querySelector('#pager .range').textContent").split("/ ")[1].split(" ")[0]
+        assert int(total) >= 23
+        assert b.js(f"{rows}.length") == 20
+        assert b.js("document.querySelector('#pager [data-page=\"prev\"]').disabled")
+        first = b.js(names)
+        # 下一页：最后一页“下一页”不可用，焦点落到当前页码上
+        b.js(
+            "document.querySelector('#pager [data-page=\"next\"]').focus(); document.querySelector('#pager [data-page=\"next\"]').click(); true"
+        )
+        assert b.js("document.querySelector('#pager [aria-current]').textContent") == "2"
+        second = b.js(names)
+        assert len(second) == int(total) - 20 and not set(first) & set(second)
+        assert b.js("document.activeElement.getAttribute('aria-current')") == "page"
+        # 刷新后还在第 2 页（记在 history.state 里）
+        b.js("location.reload(); true")
+        b.wait_for("document.querySelector('#pager [aria-current]')?.textContent === '2'")
+        assert b.js(names) == second
+        # 页码按钮回到第 1 页
+        b.js("document.querySelector('#pager [data-page=\"1\"]').click(); true")
+        assert b.js(names) == first
+        # 在第 2 页换搜索词：回到第 1 页；结果不满一页时不显示翻页条
+        b.js("document.querySelector('#pager [data-page=\"2\"]').click(); true")
+        b.js(
+            "{ const s = document.getElementById('search'); s.value = '翻页 1'; s.dispatchEvent(new Event('input')); } true"
+        )
+        assert b.js("document.getElementById('pager').hidden")
+        assert b.js(f"{rows}.length") == 10  # 翻页 10–19
+        b.js(
+            "{ const s = document.getElementById('search'); s.value = ''; s.dispatchEvent(new Event('input')); } true"
+        )
+        assert b.js("document.querySelector('#pager [aria-current]').textContent") == "1"
+        # 第 2 页上的曲子都删了：退回第 1 页，翻页条隐藏
+        b.js("document.querySelector('#pager [data-page=\"2\"]').click(); true")
+        for sid in ids[-(int(total) - 20) :]:
+            _api(server, f"/api/songs/{sid}", "DELETE")
+        b.js("document.dispatchEvent(new Event('visibilitychange')); true")
+        b.wait_for("document.getElementById('pager').hidden", timeout=5)
+        assert b.js(f"{rows}.length") == 20
+        assert not b.errors, b.errors
+    finally:
+        for sid in ids:
+            with contextlib.suppress(urllib.error.HTTPError):  # 上面已经删掉的：404
+                _api(server, f"/api/songs/{sid}", "DELETE")
+        browser.js("localStorage.removeItem('tt.libSort'); true")

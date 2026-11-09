@@ -41,6 +41,13 @@
 .lib-tools .chips button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 
 /* 选择模式（导出曲子包） */
+/* 翻页条（曲库列表下面，超过一页才显示） */
+.pager { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.pager .range { margin-left: var(--sp-1); font-variant-numeric: tabular-nums; }
+.pager .pg { min-width: 26px; height: 26px; padding: 0 6px; border-radius: 7px; color: var(--fg-2); font-size: var(--fs-1); font-variant-numeric: tabular-nums; transition: background .15s, color .15s; }
+.pager .pg:hover { background: var(--pill); color: var(--fg); }
+.pager .pg[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pager .gap { min-width: 18px; text-align: center; color: var(--muted); font-size: var(--fs-1); }
 .select-bar { position: sticky; top: 60px; z-index: 5; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--accent); border-radius: var(--r-lg); background: var(--accent-soft); }
 .chk { display: inline-flex; align-items: center; gap: var(--sp-2); cursor: pointer; font-size: var(--fs-2); }
 .chk input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex: none; }

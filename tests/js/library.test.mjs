@@ -1,7 +1,7 @@
 // 曲库页的纯函数：js/library-view.js。运行：node --test tests/js/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ago, duration, rangeText, practiceText, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay } from '../../app/static/js/library-view.js';
+import { ago, duration, rangeText, practiceText, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay, paginate, pageNumbers, pagerHTML, PAGE_SIZE } from '../../app/static/js/library-view.js';
 
 const NOW = new Date(2026, 10, 7, 20, 0); // 2026-11-07 20:00（本地时间）
 const song = (o = {}) => ({ id: 's1', title: '曲子', source_type: 'image', is_score: false, status: 'ready', bars: 8, created: '2026-11-01 10:00', ...o });
@@ -102,4 +102,46 @@ test('sortSongs / filterSongs：排序、搜索、标签', () => {
   assert.deepEqual(ids(filterSongs(list, { q: 'tommy', sort: 'created' })), ['c']);
   assert.deepEqual(ids(filterSongs(list, { tag: '指弹' })), ['b']);
   assert.deepEqual(ids(list), ['a', 'b', 'c']); // filterSongs 不改原数组
+});
+
+test('paginate：分页、页码越界时取最近的一页', () => {
+  const list = Array.from({ length: 45 }, (_, i) => i + 1);
+  assert.equal(PAGE_SIZE, 20);
+  let p = paginate(list, 1);
+  assert.deepEqual([p.page, p.pages, p.from, p.to, p.items.length, p.items[0]], [1, 3, 1, 20, 20, 1]);
+  p = paginate(list, 3);
+  assert.deepEqual([p.page, p.from, p.to, p.items], [3, 41, 45, [41, 42, 43, 44, 45]]);
+  assert.equal(paginate(list, 9).page, 3); // 删到只剩 3 页：停在最后一页
+  assert.equal(paginate(list, 0).page, 1);
+  assert.equal(paginate(list, 'x').page, 1);
+  assert.equal(paginate(list, 2.7).page, 2);
+  p = paginate([], 4);
+  assert.deepEqual([p.page, p.pages, p.from, p.to, p.items], [1, 1, 0, 0, []]);
+  assert.equal(paginate(list.slice(0, 20), 2).page, 1); // 正好一页
+});
+
+test('pageNumbers：页多时省略中间，总是 7 格', () => {
+  assert.deepEqual(pageNumbers(1, 1), [1]);
+  assert.deepEqual(pageNumbers(3, 7), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(pageNumbers(1, 10), [1, 2, 3, 4, 5, null, 10]);
+  assert.deepEqual(pageNumbers(4, 10), [1, 2, 3, 4, 5, null, 10]);
+  assert.deepEqual(pageNumbers(5, 10), [1, null, 4, 5, 6, null, 10]);
+  assert.deepEqual(pageNumbers(7, 10), [1, null, 6, 7, 8, 9, 10]);
+  assert.deepEqual(pageNumbers(10, 10), [1, null, 6, 7, 8, 9, 10]);
+  assert.deepEqual(pageNumbers(4, 8), [1, 2, 3, 4, 5, null, 8]);
+  for (let n = 8; n <= 30; n++) for (let p = 1; p <= n; p++) assert.equal(pageNumbers(p, n).length, 7); // 宽度不随页码变，翻页时按钮不跳
+});
+
+test('pagerHTML：只有一页时不显示；当前页、首尾页的按钮状态', () => {
+  assert.equal(pagerHTML(paginate([1, 2, 3], 1), 3), '');
+  const list = Array.from({ length: 45 }, (_, i) => i);
+  let h = pagerHTML(paginate(list, 1), 45);
+  assert.match(h, /1–20 \/ 45 首/);
+  assert.match(h, /data-page="prev"[^>]*disabled/);
+  assert.doesNotMatch(h, /data-page="next"[^>]*disabled/);
+  assert.match(h, /data-page="1"[^>]*aria-current="page"/);
+  h = pagerHTML(paginate(list, 3), 45);
+  assert.match(h, /41–45 \/ 45 首/);
+  assert.match(h, /data-page="next"[^>]*disabled/);
+  assert.equal((h.match(/aria-current/g) || []).length, 1);
 });

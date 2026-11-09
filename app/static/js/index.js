@@ -3,7 +3,7 @@
 import { UI, $, esc, icon, toast } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
 import { SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
-import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS } from '/static/js/library-view.js';
+import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML } from '/static/js/library-view.js';
 import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
 
 UI.initShell();
@@ -61,6 +61,7 @@ $('uploadBtn').onclick = () => api.withBusy($('uploadBtn'), async () => {
     await api.upload('/api/songs', picked, { title: $('title').value });
     toast(picked.some(f => !isScoreFile(f.name)) ? '已上传，开始识别' : '已导入');
     setFiles([]); $('title').value = ''; $('file').value = '';
+    setPage(1);
     songsPoll.now();
   } catch (e) {
     toast(e.message, 'err', 4000);
@@ -181,18 +182,41 @@ function renderList(box, songs) {
 const SORT_KEY = 'tt.libSort';
 let savedSort = null;
 try { savedSort = localStorage.getItem(SORT_KEY); } catch { /* 读不了就用默认排序 */ }
-const lib = { q: '', tag: '', sort: SORTS.includes(savedSort) ? savedSort : 'practiced' };
+// 翻到第几页、按哪个标签筛选记在这条浏览记录里（history.state）：从练习页按“后退”回来还在原来那一页
+const saved = (history.state && history.state.lib) || {};
+const lib = { q: '', tag: typeof saved.tag === 'string' ? saved.tag : '', sort: SORTS.includes(savedSort) ? savedSort : 'practiced', page: Number(saved.page) || 1 };
+function remember() {
+  try { history.replaceState({ ...(history.state || {}), lib: { page: lib.page, tag: lib.tag } }, ''); } catch { /* 记不下就算了 */ }
+}
+function setPage(n) { lib.page = n; remember(); }
+// 换了搜索词、标签、排序：回到第一页
+function refilter(change) { Object.assign(lib, change, { page: 1 }); remember(); renderSongs(); }
 UI.seg($('sortSeg'), lib.sort, v => {
-  lib.sort = v;
   try { localStorage.setItem(SORT_KEY, v); } catch { /* 存不了就只在这次打开时生效 */ }
-  renderSongs();
+  refilter({ sort: v });
 });
-$('search').oninput = e => { lib.q = e.target.value.trim().toLowerCase(); renderSongs(); };
-$('tagFilter').onclick = e => { const b = e.target.closest('button'); if (b) { lib.tag = b.dataset.tag; renderSongs(); } };
+$('search').oninput = e => refilter({ q: e.target.value.trim().toLowerCase() });
+$('tagFilter').onclick = e => { const b = e.target.closest('button'); if (b) refilter({ tag: b.dataset.tag }); };
 const visibleSongs = () => filterSongs(lastSongs, lib);
+$('pager').onclick = e => {
+  const b = e.target.closest('button[data-page]');
+  if (!b || b.disabled) return;
+  const v = b.dataset.page, n = v === 'prev' ? lib.page - 1 : v === 'next' ? lib.page + 1 : Number(v);
+  if (n === lib.page) return;
+  setPage(n);
+  renderSongs();
+  // 焦点：上一页 / 下一页按钮留在原处（到头变成不可用时换到当前页码），点的页码换到新的当前页码
+  const pager = $('pager');
+  let el = v === 'prev' || v === 'next' ? pager.querySelector(`[data-page="${v}"]`) : null;
+  if (!el || el.disabled) el = pager.querySelector('[aria-current="page"]');
+  if (el) el.focus({ preventScroll: true });
+  // 列表顶部翻出了屏幕：滚回到搜索栏，从这一页的第一首看起
+  const top = ($('libTools').hidden ? $('songs') : $('libTools')).getBoundingClientRect().top;
+  if (top < 0) ($('libTools').hidden ? $('songs') : $('libTools')).scrollIntoView({ block: 'start' });
+};
 function renderTagFilter() {
   const tags = [...new Set(lastSongs.flatMap(s => s.tags || []))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  if (lib.tag && !tags.includes(lib.tag)) lib.tag = '';
+  if (lib.tag && !tags.includes(lib.tag)) { lib.tag = ''; lib.page = 1; remember(); }
   setHTML($('tagFilter'), tags.length ? ['', ...tags].map(t => `<button data-tag="${esc(t)}" aria-pressed="${t === lib.tag}">${t ? esc(t) : '全部'}</button>`).join('') : '');
   $('tagFilter').hidden = !tags.length;
 }
@@ -202,9 +226,15 @@ function renderSongs() {
   $('libTools').hidden = !lastSongs.length;
   renderTagFilter();
   box.removeAttribute('aria-busy');
+  // 删掉了最后一页上的曲子、筛选后变少了：停在还有曲子的最后一页
+  const pg = paginate(songs, lib.page);
+  if (pg.page !== lib.page) setPage(pg.page);
   if (!lastSongs.length) setHTML(box, '<div class="empty-state"><b>还没有曲子</b>上传原谱或 Guitar Pro 文件开始。</div>');
   else if (!songs.length) setHTML(box, '<div class="empty-state"><b>没有符合条件的曲子</b>换个关键词或标签试试。</div>');
-  else renderList(box, songs);
+  else renderList(box, pg.items);
+  const pager = pagerHTML(pg, songs.length);
+  setHTML($('pager'), pager);
+  $('pager').hidden = !pager;
 }
 
 async function loadSongs() {
@@ -227,7 +257,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) song
 $('songs').addEventListener('click', e => {
   // 标签先处理：选择模式里点标签也是筛选（勾选会保留），不是勾选这一行
   const tag = e.target.closest('.song-row [data-tag]');
-  if (tag) { e.stopPropagation(); lib.tag = tag.dataset.tag; renderSongs(); return; }
+  if (tag) { e.stopPropagation(); refilter({ tag: tag.dataset.tag }); return; }
   if (selecting) {
     const row = e.target.closest('.row[data-pick="1"]');
     if (row) {

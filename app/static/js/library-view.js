@@ -142,3 +142,38 @@ export function filterSongs(songs, { q = '', tag = '', sort = 'practiced' } = {}
   const hit = s => [s.title, s.artist, ...(s.tags || [])].some(x => (x || '').toLowerCase().includes(q));
   return sortSongs(songs.filter(s => (!tag || (s.tags || []).includes(tag)) && (!q || hit(s))), sort);
 }
+
+// ---------------- 翻页 ----------------
+export const PAGE_SIZE = 20;
+/** 第 page 页（从 1 开始；超出范围时取最近的一页，比如删掉最后一页唯一的一首之后）。from / to 是这一页第几首到第几首（从 1 开始） */
+export function paginate(list, page, size = PAGE_SIZE) {
+  const pages = Math.max(1, Math.ceil(list.length / size));
+  const p = Math.min(Math.max(1, Math.floor(Number(page)) || 1), pages);
+  const start = (p - 1) * size;
+  return { items: list.slice(start, start + size), page: p, pages, from: list.length ? start + 1 : 0, to: Math.min(start + size, list.length) };
+}
+/** 要显示的页码：不超过 7 页全列出；多了保留首页、末页和当前页前后各一页，省略的地方是 null（只省一页时直接列出那一页） */
+export function pageNumbers(page, pages) {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const keep = new Set([1, pages, page - 1, page, page + 1]);
+  if (page <= 4) [2, 3, 4, 5].forEach(n => keep.add(n));
+  if (page >= pages - 3) [pages - 4, pages - 3, pages - 2, pages - 1].forEach(n => keep.add(n));
+  const nums = [...keep].filter(n => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const out = [];
+  nums.forEach((n, i) => {
+    const gap = i ? n - nums[i - 1] : 1;
+    if (gap === 2) out.push(n - 1);
+    else if (gap > 2) out.push(null);
+    out.push(n);
+  });
+  return out;
+}
+/** 列表下面的翻页条（只有一页时返回 ''）。total：筛选后的曲子数 */
+export function pagerHTML({ page, pages, from, to }, total) {
+  if (pages <= 1) return '';
+  const nav = (dir, ic, label, off) => `<button class="icon-btn sm" data-page="${dir}" data-k="${dir}" title="${label}" aria-label="${label}"${off ? ' disabled' : ''}>${icon(ic, 14)}</button>`;
+  const nums = pageNumbers(page, pages).map(n => n === null
+    ? '<span class="gap" aria-hidden="true">…</span>'
+    : `<button class="pg" data-page="${n}" data-k="p${n}" aria-label="第 ${n} 页"${n === page ? ' aria-current="page"' : ''}>${n}</button>`).join('');
+  return `<span class="hint range">${from}–${to} / ${total} 首</span><span class="grow"></span>${nav('prev', 'left', '上一页', page <= 1)}${nums}${nav('next', 'right', '下一页', page >= pages)}`;
+}
