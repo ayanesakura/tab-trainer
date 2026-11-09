@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -41,4 +43,23 @@ def test_rhythm_survives_song_getting_shorter(trainer):
     assert b.js("tt.state.b") == 1
     assert b.js("document.querySelectorAll('#rhSvg .rh-note').length") == b.js(f"{RH}.prog.onsets.length")
     assert b.js(f"{RH}.prog.bars.length") == 2
+    assert not b.errors, b.errors
+
+
+def test_rhythm_count_in_before_every_loop(trainer):
+    """敲节奏开着预备拍：每一遍前都有一小节预备拍（以前只有第一遍前有）。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', true); tt.setLoop(0, 0); document.activeElement.blur(); true")
+    b.js("document.getElementById('rhythmBtn').click(); tt.setTempo(200); tt.play(); true")
+    # 第一遍弹完以后排进来的预备拍（开始时间晚于整个练习的开头）
+    b.wait_for(
+        f"{RH}.run && {RH}.run.loops.some(l => l.kind === 'pre' && l.start > {RH}.run.t0 + 0.01)", timeout=15
+    )
+    # 排好的顺序：遍与遍之间都隔着一个预备拍，前后相接
+    seq = b.js(f"{RH}.run.loops.map(l => [l.kind, l.start, l.end])")
+    for (k1, _, e1), (k2, s2, _) in itertools.pairwise(seq):
+        assert abs(e1 - s2) < 1e-9
+        assert k1 != k2, seq
+    b.js("tt.rhythm.stop(); true")
+    b.js("tt.set('play.countIn', false); true")
     assert not b.errors, b.errors

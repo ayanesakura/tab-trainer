@@ -119,6 +119,8 @@ function ensureApi() {
     setReady();
   });
   api.playerStateChanged.on(e => {
+    // 段尾停下、马上带着预备拍重新开始（见 onFinished）：不当成停下，播放键、练习记录都不动
+    if (e.state !== 1 && again) { again = false; startPlayer(); return; }
     set('play.playing', e.state === 1);
     if (e.state !== 1 && endBar) placeAtEnd();
   });
@@ -317,7 +319,7 @@ function applyLoopRange() {
     lastTick = -1; // 跳回起点不能当成弹完了一遍
     api.playbackRange = range;
   }
-  api.isLooping = !(a === 0 && b === mbs.length - 1); // 全曲不循环：弹到曲末停在最后一小节（见 onFinished）
+  syncLooping();
   const bars = api.tracks[0].staves[0].bars;
   const first = bars[a].voices[0].beats[0];
   const lastBeats = bars[b].voices[0].beats, last = lastBeats[lastBeats.length - 1];
@@ -429,6 +431,7 @@ export function play() {
   startPlayer();
 }
 export function stop() {
+  again = false; // 段尾停下、正要带着预备拍重新开始时按了停止：就停下
   if (get('rhythm.running') && hooks.drill) hooks.drill.stop();
   pausePlayer();
 }
@@ -483,14 +486,25 @@ export function stepSection(dir) {
   if (r.msg) UI.toast(r.msg, 'info'); else { setLoop(r.a, r.b); revealLoop(); }
 }
 
-// 全曲（isLooping = false）弹到曲末：alphaTab 先发 finished，再停下并把位置放回开头。这里先算弹完一遍，
-// 等停下（playerStateChanged）以后把光标放到最后弹到的那一小节（有 D.C. al Fine 时是 Fine 那一小节）。
+// 什么时候让 alphaTab 自己循环（段尾无缝跳回段首）：只有循环一段、又没开预备拍时。
+// 全曲：弹到曲末停在最后一小节。开着预备拍的段落循环：每一遍前都要数一小节预备拍，alphaTab 只在 play() 时数，
+// 所以不让它循环，段尾停下后马上从段首重新 play()（见 onFinished / again）
+function syncLooping() {
+  if (!api || !api.score) return;
+  const { a, b } = get('play'), whole = a === 0 && b === api.score.masterBars.length - 1;
+  api.isLooping = !whole && !get('play.countIn');
+}
+// 弹到段尾 / 曲末（isLooping = false）：alphaTab 先发 finished，再停下并把位置放回段首（全曲是开头）。这里先算弹完一遍；
+// 循环一段：停下（playerStateChanged）后马上从段首重新开始，开始时数预备拍（again）。
+// 全曲：等停下以后把光标放到最后弹到的那一小节（有 D.C. al Fine 时是 Fine 那一小节）。
 // endTick：停在曲末的位置，下次播放从头开始；停下后点了别的小节、换了循环范围就不算了（seekBar / setLoop 清掉）
-let endBar = null, endTick = null;
+let endBar = null, endTick = null, again = false;
 function onFinished() {
-  if (!api || api.isLooping) return; // 循环一段：alphaTab 自己跳回段首，onPosition 计遍数
+  if (!api || api.isLooping) return; // alphaTab 自己循环：跳回段首时 onPosition 计遍数
   set('play.loops', get('play.loops') + 1); // 练习记录（practice-log.js）记下这一遍
-  lastTick = -1; // 停下时跳回开头的那次位置变化不是又弹完一遍
+  lastTick = -1; // 停下时跳回段首的那次位置变化不是又弹完一遍
+  const { a, b } = get('play'), whole = a === 0 && b === api.score.masterBars.length - 1;
+  if (!whole) { again = true; return; }
   const tc = api.tickCache, played = tc && tc.masterBars ? tc.masterBars.filter(m => m.end > m.start) : [];
   endBar = played.length ? played[played.length - 1] : null;
 }
@@ -734,6 +748,7 @@ export function initPlayer() {
   $('score').addEventListener('mousedown', e => { shiftDown = e.shiftKey; }, true);
   bindInputs();
   on(['play.metro', 'play.metroVol', 'play.countIn', 'play.gtVol', 'play.demo'], applyAudio);
+  on('play.countIn', syncLooping); // 预备拍开关决定段落循环是 alphaTab 自己循环，还是每遍停下重新开始
   on('play.timbre', v => { remember('tt.timbre', v); switchTimbre(); });
   on('play.bpm', bpm => {
     $('bpm').value = bpm; $('bpmVal').textContent = bpm; UI.fillRange($('bpm'));

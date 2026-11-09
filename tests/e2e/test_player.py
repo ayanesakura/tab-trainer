@@ -251,3 +251,28 @@ def test_section_loop_still_loops(trainer):
     b.js("tt.stop(); true")
     b.wait_for("!tt.state.playing")
     assert not b.errors, b.errors
+
+
+def test_count_in_before_every_section_loop(trainer):
+    """开着预备拍循环一段：每一遍前都数一小节预备拍（段尾停下、从段首带预备拍重新开始），
+    中间播放键不闪成“停止”、遍数照常加；关掉预备拍就是 alphaTab 自己无缝循环。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', true); tt.setLoop(1, 1); tt.setTempo(240); true")
+    assert b.js("tt.api.isLooping") is False
+    start = b.js("tt.api.playbackRange.startTick")
+    b.js(
+        "window.__stops = 0; tt.store.on('play.playing', v => { if (!v) window.__stops++; }); tt.play(); true"
+    )
+    b.wait_for("tt.state.loops >= 1", timeout=20)
+    # 刚弹完第一遍：停在段首数预备拍（240 BPM 一小节 1 秒），位置不往前走
+    time.sleep(0.3)
+    assert abs(b.js("tt.api.tickPosition") - start) <= 2
+    assert b.js("tt.state.playing")
+    b.wait_for("tt.state.loops >= 2", timeout=20)
+    assert b.js("window.__stops") == 0  # 一直是“播放中”
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
+    # 关掉预备拍：alphaTab 自己循环
+    b.js("tt.set('play.countIn', false); true")
+    assert b.js("tt.api.isLooping") is True
+    assert not b.errors, b.errors

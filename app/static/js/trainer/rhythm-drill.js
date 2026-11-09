@@ -120,10 +120,11 @@ function click(run, when, accent) {
   o.start(when); o.stop(when + 0.07);
   run.nodes.push(o);
 }
-function makePre(run) { // 预备拍：第一小节的拍数
+function makePre(run) { // 预备拍：第一小节的拍数，接在上一遍后面（开着预备拍时每一遍前都有）
+  const prev = run.loops[run.loops.length - 1], start = prev ? prev.end : run.t0;
   const bpm = run.bpm || get('play.bpm'), spq = 60 / bpm, b0 = run.prog.bars[0];
-  const items = b0.beats.map(b => ({ t: run.t0 + (b.q - b0.q0) * spq, click: b.accent ? 2 : 1 }));
-  return { kind: 'pre', start: run.t0, end: run.t0 + b0.len * spq, spq, bpm, items, next: 0, notes: [] };
+  const items = b0.beats.map(b => ({ t: start + (b.q - b0.q0) * spq, click: b.accent ? 2 : 1 }));
+  return { kind: 'pre', start, end: start + b0.len * spq, spq, bpm, items, next: 0, notes: [] };
 }
 function makeLoop(run) {
   const prev = run.loops[run.loops.length - 1], start = prev ? prev.end : run.t0;
@@ -174,7 +175,11 @@ function tick() {
   const run = RH.run;
   if (!run) return;
   const now = ac.currentTime, loops = run.loops;
-  while (run.count < run.maxLoops && (!loops.length || loops[loops.length - 1].end < now + PREP)) loops.push(makeLoop(run));
+  while (run.count < run.maxLoops && (!loops.length || loops[loops.length - 1].end < now + PREP)) {
+    const prev = loops[loops.length - 1];
+    // 开着预备拍：每一遍前都数一小节（第一遍的在 start 里排好了）
+    loops.push(!run.calib && prev && prev.kind === 'loop' && get('play.countIn') ? makePre(run) : makeLoop(run));
+  }
   for (const L of loops) {
     while (L.next < L.items.length && L.items[L.next].t < now + LOOKAHEAD) {
       const it = L.items[L.next++], when = Math.max(it.t, now);
@@ -341,7 +346,13 @@ function frame() {
   if (!L) return;
   if (L !== run.shown) { run.shown = L; if (!run.calib && L.kind === 'loop') RH.shown = L; run.dirty = true; }
   if (L.kind === 'loop' && !L.graded) { const p = L.notes.filter(nt => nt.T <= hn).length; if (p !== run.passed) { run.passed = p; run.dirty = true; } }
-  if (run.dirty) { run.dirty = false; paintMarks(L.kind === 'loop' ? L : null); if (L.kind !== 'loop') clearMarks(); }
+  if (run.dirty) {
+    run.dirty = false;
+    // 遍与遍之间的预备拍：还显示上一遍每个音的早晚，不清掉
+    const m = L.kind === 'loop' ? L : run.loops.filter(x => x.kind === 'loop' && x.end <= L.start).pop() || null;
+    paintMarks(m);
+    if (!m) clearMarks();
+  }
   // 状态
   let st;
   if (run.calib) st = ['延迟校准', L.kind === 'pre' ? '预备…' : '跟着咔哒声敲 8 下'];
