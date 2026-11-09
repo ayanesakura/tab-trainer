@@ -860,6 +860,19 @@ def test_song_info_shows_the_lock_message(trainer):
     assert not b.errors, b.errors
 
 
+def test_song_info_says_why_settings_are_locked(trainer):
+    """调弦、变调夹和拍号被锁住时说清楚原因：精修中说“正在精修”，识别中说“正在识别”。"""
+    b = trainer()
+    b.js("location.hash = '#tune'; true")
+    for kind, word in (("refine", "正在精修"), ("parse", "正在识别")):
+        b.js(
+            f"tt.set('song.activity', {{kind: '{kind}'}}); tt.set('song.editable_meta', ['title', 'artist']); true"
+        )
+        b.wait_for(f"document.getElementById('metaMsg').textContent.startsWith('{word}')")
+        b.js("tt.set('song.editable_meta', ['title', 'artist', 'tuning', 'capo', 'time_signature']); true")
+    assert not b.errors, b.errors
+
+
 def _viewport(b, w, h):
     b._run(
         b._send("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)

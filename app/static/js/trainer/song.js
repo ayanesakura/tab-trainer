@@ -183,7 +183,7 @@ function renderNotices(s) {
   const errKey = n ? 'err:' + n.msg : '';
   const scoreFail = isScore(s) && s.status === 'error';
   const failed = !running && !isScore(s) && s.failed_rows > 0 ? s.failed_rows : 0;
-  const retry = failed ? [{ label: `重试失败的 ${failed} 行`, icon: 'refresh', primary: true, onClick: btn => retryFailed(btn, failed) }] : [];
+  const retry = failed ? [{ label: `重试失败的 ${failed} 行`, icon: 'refresh', onClick: btn => retryFailed(btn, failed) }] : [];
   // info：任务做完的说明（精修完成），不是警告
   const head = scoreFail ? '曲谱读取失败：' : n && n.kind === 'error' ? '出错了：' : n && n.kind === 'info' ? '' : '注意：';
   notice('error', n ? (dismissed.has(errKey) ? null : {
@@ -275,7 +275,7 @@ function fillMeta(s) {
   $('metaMsg').textContent = settings ? '音名写法如 D2、F#3。'
     : isScore(s) ? '调弦、变调夹和拍号以原文件为准。'
     : !Object.keys(s.meta || {}).length ? '还没读出谱头，现在只能改曲名。'
-    : '正在识别，完成后可以改调弦、变调夹和拍号。';
+    : `正在${s.activity && s.activity.kind === 'refine' ? '精修' : '识别'}，完成后可以改调弦、变调夹和拍号。`;
 }
 async function saveMeta() {
   const s = get('song');
