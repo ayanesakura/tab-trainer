@@ -419,13 +419,17 @@ class Claude(LLM):
                 msg = s.get_final_message()
             finally:
                 if msg is None:
-                    try:
-                        partial = s.current_message_snapshot
-                    except AssertionError:  # 连 message_start 都没收到
-                        partial = None
-                    self._record_usage(partial, kwargs["model"])
+                    self._record_partial(s, kwargs["model"])
         self._record_usage(msg, kwargs["model"])
         return msg
+
+    def _record_partial(self, s, model: str) -> None:
+        """流式请求中途出错 / 被关掉：按已经收到的部分记用量（服务端照样算钱；精修最高精细度一次能用几万 token）。"""
+        try:
+            partial = s.current_message_snapshot
+        except AssertionError:  # 连 message_start 都没收到
+            partial = None
+        self._record_usage(partial, model)
 
     @property
     def last_request_id(self) -> str:
@@ -448,11 +452,17 @@ class Claude(LLM):
         raise AssertionError("unreachable")
 
     def _stream_once(self, kwargs: dict, fallbacks: bool | None = None):
+        """一次流式请求，返回最后的完整消息（用量由 _call 记）。中途出错时按已经收到的部分记上用量再抛出。"""
         if self.use_fallbacks if fallbacks is None else fallbacks:
-            with self.client.beta.messages.stream(**kwargs, betas=[FALLBACK_BETA], fallbacks="default") as s:
+            manager = self.client.beta.messages.stream(**kwargs, betas=[FALLBACK_BETA], fallbacks="default")
+        else:
+            manager = self.client.messages.stream(**kwargs)
+        with manager as s:
+            try:
                 return s.get_final_message()
-        with self.client.messages.stream(**kwargs) as s:
-            return s.get_final_message()
+            except BaseException:
+                self._record_partial(s, kwargs["model"])
+                raise
 
     # -- 三类调用 -------------------------------------------------------------
     def ping(self) -> str:

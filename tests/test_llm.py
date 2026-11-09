@@ -314,3 +314,35 @@ def test_coach_stream_closed_early_still_counts_usage():
     assert next(g) == "一"
     g.close()
     assert c.usage["input_tokens"] == 5 and c.usage["cost_usd"] > 0
+
+
+def test_json_calls_count_usage_of_a_reply_broken_mid_stream(monkeypatch):
+    """JSON 请求（识别、精修）回复到一半断了：重试成功或最终失败，断掉那次已经收到的部分都记上用量。"""
+    from app import llm
+    from app.llm import _http
+
+    monkeypatch.setattr(llm, "STREAM_RETRY_WAIT", 0)
+
+    class Broken(_http.SyncByteStream):
+        def __iter__(self):
+            yield _reply(['{"ok"']).split(b"event: content_block_stop")[0]
+            raise _http.RemoteProtocolError("peer closed connection")
+
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        return _sse_response(Broken() if len(calls) == 1 else _reply(['{"ok": 1}']))
+
+    c = Claude(LLMConfig(api_key="sk-test"))
+    c.use_fallbacks = False
+    _mock_client(c, handler)
+    assert c._call([], {}) == {"ok": 1}
+    assert c.usage["input_tokens"] == 10 and c.usage["output_tokens"] == 1 + 7
+
+    c = Claude(LLMConfig(api_key="sk-test"))
+    c.use_fallbacks = False
+    _mock_client(c, lambda req: _sse_response(Broken()))
+    with pytest.raises(_http.RemoteProtocolError):
+        c._call([], {})
+    assert c.usage["input_tokens"] == 5 * (llm.STREAM_RETRIES + 1) and c.usage["cost_usd"] > 0
