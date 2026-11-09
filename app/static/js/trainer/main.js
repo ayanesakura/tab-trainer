@@ -16,6 +16,7 @@ import { initTuner } from './tuner.js';
 import { initFollow, followDelta, followDebug } from './follow.js';
 import { initGlossary } from './glossary.js';
 import { initRhythm, rhythmKey, rhythmDebug } from './rhythm-drill.js';
+import { initStudy } from './study.js';
 import { ac } from './audio.js';
 import { DERIVE_VERSION } from '../score.js';
 
@@ -140,6 +141,7 @@ initCoach();
 initPracticeLog();
 initEditor();
 initRhythm();
+initStudy();
 initSong();
 initTuner();
 initGlossary();

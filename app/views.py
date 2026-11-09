@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app import practice, state, store
+from app import practice, state, store, study
 from app.errors import CorruptSong, NotFound
 from app.jobs import jobs
 from app.llm import DEFAULT_MODEL, price_of
@@ -95,6 +95,7 @@ def song_view(s: dict) -> dict:
         failed_rows=failed_rows(s),
         refine_estimate=refine_estimate(s),
         refine_scopes=_refine().scope_estimates(s),
+        study=study.song_study(s),
     )
     return out
 
@@ -138,6 +139,7 @@ def library_item(s: dict) -> dict:
         "refine_estimate": refine_estimate(s),
         "tags": [t for t in s.get("tags") or [] if isinstance(t, str)],
         "practice": p,
+        "study": study.song_study(s),
         **cost_summary(s.get("usage")),
     }
 
@@ -154,6 +156,7 @@ def corrupt_item(sid: str, msg: str) -> dict:
         "bars": 0,
         "needs_review_bars": 0,
         "practice": None,
+        "study": None,
         "tags": [],
     }
 

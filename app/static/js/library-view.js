@@ -3,6 +3,7 @@
 
 import { esc, icon } from './lib/html.js';
 import { SOURCES } from './vocab.js';
+import { studyBadge } from './study-view.js';
 
 const SOURCE_ICON = { image: 'image', pdf: 'file', gp: 'score', musicxml: 'score' };
 export const isScore = s => !!s.is_score; // GP / MusicXML（后端给的）：没有原谱页面，不需要识别
@@ -118,7 +119,7 @@ export function rowHTML(s, { selecting = false, selected = new Set() } = {}) {
   return `<div class="row song-row${play || pick ? ' click' : ''}${on ? ' on' : ''}" data-id="${esc(s.id)}" data-play="${play ? 1 : ''}" data-pick="${pick ? 1 : ''}">
     ${selecting ? `<input type="checkbox" class="pick" data-k="pick" aria-label="选择 ${esc(s.title)}" ${on ? 'checked' : ''} ${pick ? '' : 'disabled'}>` : ''}
     <span class="src-ic" title="${esc(src ? `来源：${src}` : '')}">${icon(SOURCE_ICON[s.source_type] || 'music', 18)}</span>
-    <div class="who"><div class="name">${title}${tags}${state && !busyish ? `<span class="badges">${state}</span>` : ''}</div>
+    <div class="who"><div class="name">${title}${studyBadge(s.study)}${tags}${state && !busyish ? `<span class="badges">${state}</span>` : ''}</div>
       ${state && busyish ? `<div class="state">${state}</div>` : ''}
       ${sub || more ? `<div class="sub"${more ? ` title="${more}"` : ''}>${sub || more}</div>` : ''}</div>
     <div class="ctl"${selecting ? ' hidden' : ''}>${action}

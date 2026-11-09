@@ -1,20 +1,29 @@
-// 曲库页：上传原谱 / GP 文件、曲子列表（识别进度、练习记录、接着练）、曲子包导出 / 导入、管理原谱页面、设置（API key、模型、主题）。
+// 曲库页：练琴（今日清单、计时、日历、计划，见 study.js）、上传原谱 / GP 文件、曲子列表（识别进度、练习记录、接着练）、
+// 曲子包导出 / 导入、管理原谱页面、设置（API key、模型、主题、练琴）。
 // 词表：曲子 = 曲库里的一条；谱面 = 渲染出来的谱；原谱 = 上传的图片 / PDF。
 import { UI, $, esc, icon, toast } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
 import { SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
 import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML } from '/static/js/library-view.js';
 import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
+import { initStudy, renderPlan, refresh as refreshStudy, setVisible as setStudyVisible, setStudy, addMany } from '/static/js/study.js';
 
 UI.initShell();
 
 // ---------------- 导航 ----------------
+// 练琴 / 曲库 / 设置。地址里没写时打开上次看的那个（练琴或曲库，记在本机），第一次是曲库
+const VIEWS = ['study', 'library', 'settings'], HOME_KEY = 'tt.home';
 const setNav = UI.tabs($('nav'), 'library', v => { location.hash = v; });
 function route() {
-  const v = location.hash.slice(1) === 'settings' ? 'settings' : 'library';
+  let v = location.hash.slice(1);
+  if (!VIEWS.includes(v)) {
+    try { v = localStorage.getItem(HOME_KEY); } catch { v = null; }
+    if (v !== 'study') v = 'library';
+  }
   setNav(v);
-  $('view-library').hidden = v !== 'library';
-  $('view-settings').hidden = v !== 'settings';
+  VIEWS.forEach(x => { $('view-' + x).hidden = x !== v; });
+  if (v !== 'settings') { try { localStorage.setItem(HOME_KEY, v); } catch { /* 记不下就算了 */ } }
+  setStudyVisible(v === 'study');
 }
 addEventListener('hashchange', route);
 
@@ -126,6 +135,8 @@ function updateSelectBar() {
   $('selectAll').checked = all.length > 0 && shown === all.length;
   $('selectAll').indeterminate = shown > 0 && shown < all.length;
   $('exportBtn').disabled = !selected.size;
+  $('planAddBtn').disabled = !lastSongs.some(s => selected.has(s.id) && !s.study);
+  $('planAddBtn').title = selected.size && $('planAddBtn').disabled ? '选中的曲子都已经在计划里' : '按列表顺序排到练琴计划的最后';
 }
 $('selectBtn').onclick = () => setSelecting(true);
 $('selectCancel').onclick = () => setSelecting(false);
@@ -136,6 +147,11 @@ $('selectAll').onchange = e => {  // 只管当前列表里的
 $('exportBtn').onclick = () => api.withBusy($('exportBtn'), async () => {
   const ids = sortSongs(lastSongs.filter(s => selected.has(s.id)), lib.sort).map(s => s.id);  // 按列表顺序（包括筛掉的）
   if (await exportSongs(ids)) setSelecting(false);
+});
+$('planAddBtn').onclick = () => api.withBusy($('planAddBtn'), async () => {
+  const list = sortSongs(lastSongs.filter(s => selected.has(s.id) && s.status !== 'corrupt'), lib.sort);
+  const n = await addMany(list);
+  if (n) { toast(`已加入计划 ${n} 首`); setSelecting(false); }
 });
 addEventListener('keydown', e => { if (e.key === 'Escape' && selecting && !UI.hasLayer()) setSelecting(false); });
 
@@ -245,6 +261,7 @@ async function loadSongs() {
     throw e; // 交给 poll 退避重试
   }
   renderSongs();
+  renderPlan(lastSongs);
   return lastSongs;
 }
 // 有曲子在后台忙（识别、讲解）就每 2.5 秒刷新；做完操作后 songsPoll.now() 立刻刷新
@@ -291,7 +308,13 @@ function openMore(btn) {
     return;
   }
   const image = !isScore(s); // GP / MusicXML 没有原谱页面，也不需要识别
+  const st = s.study;
   UI.menu(btn, [
+    !st && { label: '加入练琴计划', icon: 'target', onClick: () => setStudy(s, { in_plan: true }, '已加入计划，排在最后') },
+    st && st.paused && { label: '继续练', icon: 'play', onClick: () => setStudy(s, { paused: false }, '已继续') },
+    st && !st.paused && { label: '暂停计划', icon: 'pause', onClick: () => setStudy(s, { paused: true }, '已暂停，不再排进今日清单') },
+    st && { label: '移出练琴计划', icon: 'x', onClick: () => setStudy(s, { in_plan: false }, '已移出计划（打分记录还在）') },
+    'sep',
     { label: '重命名', icon: 'edit', onClick: () => rename(s) },
     { label: '编辑标签', icon: 'list', onClick: () => editTags(s) },
     image && { label: '管理原谱页面', icon: 'image', onClick: () => openPages(id) },
@@ -525,8 +548,9 @@ $('testBtn').onclick = () => api.withBusy($('testBtn'), async () => {
   }
 });
 
+initStudy({ onSongs: () => songsPoll.now() });
 route();
 api.get('/api/settings').then(showSettings).catch(() => {});
 
 // 端到端测试 / 控制台调试用
-window.tt = { reload: loadSongs, refresh: () => songsPoll.now(), openPages, songs: () => lastSongs };
+window.tt = { reload: loadSongs, refresh: () => songsPoll.now(), openPages, songs: () => lastSongs, study: refreshStudy };

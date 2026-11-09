@@ -11,7 +11,7 @@
 </head>
 <body>
 <header class="topbar">
-  <a class="icon-btn" href="/" title="返回曲库" aria-label="返回曲库" data-ic="back"></a>
+  <a class="icon-btn" id="backBtn" href="/" title="返回曲库" aria-label="返回曲库" data-ic="back"></a>
   <div class="crumb">
     <div class="crumb-text">
       <div class="crumb-line"><h1 class="t" id="songTitle">加载中…</h1></div>
@@ -26,8 +26,19 @@
       <button data-v="glossary">记号说明</button>
     </nav>
   </div>
-  <div class="actions"><button class="icon-btn" id="themeBtn"></button></div>
+  <div class="actions">
+    <div class="timer" id="timer"></div>
+    <button class="btn sm" id="rateBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="ratePop" hidden></button>
+    <button class="icon-btn" id="themeBtn"></button>
+  </div>
 </header>
+<!-- 练琴计划：给今天这首打分（只有在计划里的曲子才有“打分”按钮） -->
+<div class="rate-pop" id="ratePop" role="dialog" aria-labelledby="rateTitle" hidden>
+  <div class="rp-h"><b id="rateTitle">今天弹得怎么样？</b><span class="hint" id="rateHint"></span></div>
+  <div class="rp-row"><span class="rp-lbl" id="rateIssuesLbl">问题</span><div class="chips multi sm" id="rateIssues" role="group" aria-labelledby="rateIssuesLbl"></div></div>
+  <input class="input" id="rateNote" maxlength="500" placeholder="备注（可不填）" aria-label="备注">
+  <div class="rp-btns" id="rateBtns" role="group" aria-label="打分"></div>
+</div>
 
 <main class="wrap trainer">
   <!-- ============ 练习 ============ -->

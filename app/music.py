@@ -14,7 +14,7 @@ from pathlib import Path
 
 from app.errors import Invalid
 
-# 前后端共用的词表（app/static/js/vocab.json）：乐器、技巧、反复记号、节奏网格、警告代码
+# 前后端共用的词表（app/static/js/vocab.json）：乐器、技巧、反复记号、节奏网格、警告代码、练琴自评
 VOCAB = json.loads((Path(__file__).parent / "static" / "js" / "vocab.json").read_text(encoding="utf-8"))
 INSTRUMENT = VOCAB["instrument"]
 STRINGS: int = INSTRUMENT["strings"]
@@ -30,6 +30,9 @@ SCORE_FILES: dict[str, tuple[str, ...]] = {
     k: tuple(v) for k, v in VOCAB["score_files"].items() if k in ("gp", "musicxml")
 }
 GBK_EXT = tuple(VOCAB["score_files"]["gbk"])  # 中文系统上按 GBK 存文字的老格式（GP7+ 和 MusicXML 是 UTF-8）
+# 练琴计划（app/study.py）：练完一遍的自评 1–4（= FSRS 的 Again / Hard / Good / Easy）和可勾的问题
+STUDY_RATINGS: dict[int, str] = {int(k): v for k, v in VOCAB["study_ratings"].items()}
+STUDY_ISSUES: tuple[str, ...] = tuple(VOCAB["study_issues"])
 _NOTE = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 _NOTE_RE = re.compile(r"^\s*([A-Ga-g])\s*([#♯b♭]?)\s*(-?\d)?\s*$")
 _NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]

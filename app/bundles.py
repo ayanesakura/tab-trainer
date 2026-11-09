@@ -1,14 +1,15 @@
-"""曲子包：把一首或多首曲子（识别结果、手工修改、AI 提示和练习建议、问答、练习记录、原图页面 / 原文件）
+"""曲子包：把一首或多首曲子（识别结果、手工修改、AI 提示和练习建议、问答、练习记录、练琴计划的自评、原图页面 / 原文件）
 打成一个 zip 导出，在本机或另一台电脑上再导入。
 
 包的结构：
     tab-trainer.json            清单：{"format": "tab-trainer-bundle", "version": 1, "songs": [{"id", "title"}]}
-    songs/<id>/song.json
+    songs/<id>/song.json          在练琴计划里的曲子带着 study 字段（排第几、是否暂停）
     songs/<id>/practice.jsonl     练习记录（练过才有）
+    songs/<id>/study.jsonl        练琴计划的自评记录（评过才有）
     songs/<id>/pages/<页面图片>   图片 / PDF 曲子
     songs/<id>/<source.gp 等>    Guitar Pro / MusicXML 曲子的原文件
 
-不导出模型设置（里面有 API key）。导入时保留原来的 id，曲库里已经有同一个 id 的曲子就跳过（同一个包导入两次
+不导出模型设置（里面有 API key）和 data/study.json（练琴计划的设置、秒表、每天的练琴时长，不属于某一首曲子）。导入时保留原来的 id，曲库里已经有同一个 id 的曲子就跳过（同一个包导入两次
 不会出现两份）。包是外来文件：只按清单里的 id 和 song.json 里登记的文件名去取，不按 zip 里的路径解压；
 大小、页数、像素数都有上限；先解到临时目录，检查完再整个改名成曲子目录。
 """
@@ -24,13 +25,14 @@ import shutil
 import tempfile
 import time
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import BinaryIO
 
 from PIL import Image
 from pydantic import ValidationError
 
-from app import migrate, model, practice, songs, state, store
+from app import migrate, model, practice, songs, state, store, study
 from app.config import settings
 from app.errors import CorruptSong, Invalid, NotFound
 from app.model import now
@@ -122,6 +124,9 @@ def export_bundle(ids: list[str]) -> tuple[Path, str]:
                 practice_lines = store.practice_text(s["id"], s)
                 if practice_lines:
                     zf.writestr(base + store.PRACTICE_FILE, practice_lines, zipfile.ZIP_DEFLATED)
+                study_lines = store.study_log_text(s["id"])
+                if study_lines:
+                    zf.writestr(base + store.STUDY_LOG_FILE, study_lines, zipfile.ZIP_DEFLATED)
                 for rel, p in _files(s):
                     # PNG 和 GP 本身已经压缩过，再压一遍只是费 CPU
                     zf.write(
@@ -227,8 +232,11 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
             raise Invalid("原文件名无效")
         wanted.append((base + src, src))
 
-    practice_name = base + store.PRACTICE_FILE
-    has_practice = practice_name in zf.namelist()
+    names = set(zf.namelist())
+    logs = [  # (包内路径, 文件名, 一行的检查, 说明)
+        (base + store.PRACTICE_FILE, store.PRACTICE_FILE, practice.clean_record, "练习记录"),
+        (base + store.STUDY_LOG_FILE, store.STUDY_LOG_FILE, study.clean_rating, "自评记录"),
+    ]
 
     tmp = store.staging_dir()  # 不符合 id 格式，曲库列表和启动恢复都会忽略
     try:
@@ -240,9 +248,10 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
             elif not songs.looks_like_score(songs.score_ext(rel), data):
                 raise Invalid("原文件不是有效的 Guitar Pro / MusicXML 文件")
             (tmp / rel).write_bytes(data)
-        if has_practice:
-            data = _read(zf, _entry(zf, practice_name, settings.max_song_json, budget, "练习记录"))
-            (tmp / store.PRACTICE_FILE).write_bytes(_clean_jsonl(data))
+        for zname, fname, clean, what in logs:
+            if zname in names:
+                data = _read(zf, _entry(zf, zname, settings.max_song_json, budget, what))
+                (tmp / fname).write_bytes(_clean_jsonl(data, clean))
         song["id"] = bid
         song = migrate.migrate(song, bid)
         _check_shape(song)  # 先查形状：后面的 recover / strip 都假定字段类型是对的
@@ -269,12 +278,12 @@ def _check_shape(song: dict) -> None:
         raise Invalid(f"song.json 格式不对（{where}{'：' + str(why) if why else ''}）") from None
 
 
-def _clean_jsonl(data: bytes) -> bytes:
-    """包里的练习记录：只留格式对的行（practice.clean_record），坏行丢掉。"""
+def _clean_jsonl(data: bytes, clean: Callable[[object], dict | None]) -> bytes:
+    """包里的练习记录 / 自评记录：只留格式对的行（practice.clean_record / study.clean_rating），坏行丢掉。"""
     lines = []
     for line in data.decode("utf-8", "replace").splitlines():
         try:
-            rec = practice.clean_record(json.loads(line))
+            rec = clean(json.loads(line))
         except ValueError:
             continue
         if rec:

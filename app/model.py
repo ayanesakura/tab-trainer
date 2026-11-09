@@ -7,6 +7,8 @@
   所以文件里每样东西只有一份，内存里的 dict 仍然什么都有（识别、讲解、提示词照常用）。
 - llm_schema：从 Note / Event 的字段生成给模型的 JSON Schema（prompts.NOTE_SCHEMA / EVENT_SCHEMA），
   tests/test_model.py 断言它和原来手写的逐字一致。
+- Study / StudyRecord / StudyTimer / StudySession：练琴计划（song.json 的 study 字段、study.jsonl 的一行、
+  data/study.json 的秒表和练琴记录，见 app/study.py）。
 - SongView / LibraryItem：接口返回的形状（见 app/views.py）。
 - 乐观锁按对象：bar.rev 只在这个小节的内容（音符；用户改提示时也算）变了时 +1，song.meta_rev 只在可改的谱头字段
   （EDITABLE_META）变了时 +1，都由 store.update 比较改前改后自动维护（见 content_snapshot / bump_revs）。
@@ -16,8 +18,10 @@
 from __future__ import annotations
 
 import copy
+import datetime
 import hashlib
 import json
+import re
 import time
 from typing import Annotated, Any, ClassVar, Literal, get_args, get_origin
 
@@ -30,6 +34,7 @@ from app.music import (
     OPTIONAL_EVENT_KEYS,
     SCORE_FILES,
     STRINGS,
+    STUDY_ISSUES,
     TECHS,
     WARN_CODES,
     clean_time_signature,
@@ -157,6 +162,34 @@ def llm_schema(cls: type[BaseModel]) -> dict:
             prop["description"] = f.description
         props[name] = prop
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+
+
+# ---------------------------------------------------------------------------
+# 时间格式
+# ---------------------------------------------------------------------------
+# 练习记录的时间：model.now() 写的本地时间 "YYYY-MM-DD HH:MM"（也认带秒的），空串 = 没记时间。
+# 会显示在曲库里：外来曲子包、手改的文件里别的内容（比如 HTML）这一条记录就不要
+LOCAL_TIME = r"^([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?)?$"
+# 练琴计划（app/study.py）的时间：本地时间 "YYYY-MM-DD HH:MM:SS"（也认不带秒的），必填；练琴日 "YYYY-MM-DD"
+STAMP = r"^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?$"
+DAY = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+
+
+def _real_day(v: str) -> str:
+    """格式对、而且是真的日期（2026-02-30 不行）。"""
+    datetime.date.fromisoformat(v)
+    return v
+
+
+def _real_stamp(v: str) -> str:
+    if not re.match(STAMP, v):
+        raise ValueError(f"时间格式不对：{v[:30]!r}")
+    datetime.datetime.fromisoformat(v)
+    return v
+
+
+Day = Annotated[str, Field(pattern=DAY), AfterValidator(_real_day)]
+Stamp = Annotated[str, AfterValidator(_real_stamp)]
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +375,15 @@ class RefineScopes(_M):
     rows: list[RefineEstimate | None] = Field(default_factory=list)
 
 
+class Study(_M):
+    """这首曲子在练琴计划里（见 app/study.py）：排第几、什么时候加的、是否暂停。没有这个字段 = 不在计划里。
+    练习进度（新 / 学习中 / 复习）不存这里，每次按 study.jsonl 的自评记录重算。"""
+
+    order: int = 0
+    added: str = Field("", pattern=LOCAL_TIME)
+    paused: bool = False
+
+
 class Song(_M):
     schema_version: int
     id: str
@@ -369,6 +411,7 @@ class Song(_M):
     track: int = 0
     derived: Derived | None = None
     refined: Refined | None = None
+    study: Study | None = None  # 在练琴计划里才有
 
 
 def problems(song: dict) -> list[str]:
@@ -435,11 +478,6 @@ class _Rec(BaseModel):
     model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
 
 
-# 练习记录的时间：model.now() 写的本地时间 "YYYY-MM-DD HH:MM"（也认带秒的），空串 = 没记时间。
-# 会显示在曲库里：外来曲子包、手改的文件里别的内容（比如 HTML）这一条记录就不要
-LOCAL_TIME = r"^([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?)?$"
-
-
 class PracticeRecord(_Rec):
     """一段练习。"""
 
@@ -471,6 +509,66 @@ class PracticeSeed(_Rec):
     bars: dict[str, SeedBar] = Field(default_factory=dict)
     last: SeedLast | None = None
     total_seconds: float = Field(0, ge=0)
+
+
+# ---------------------------------------------------------------------------
+# 练琴计划（见 app/study.py）：study.jsonl 的一行、data/study.json
+# ---------------------------------------------------------------------------
+class StudyRecord(_Rec):
+    """练完一遍的自评（study.jsonl 一行）。day 是练琴日（凌晨 4 点换日）。"""
+
+    at: Stamp
+    day: Day
+    rating: int = Field(ge=1, le=4)  # 1 卡住 / 2 磕绊 / 3 顺 / 4 轻松（vocab.study_ratings）
+    issues: list[str] = Field(default_factory=list)  # vocab.study_issues 的代码
+    note: str = Field("", max_length=500)
+    bpm: int = Field(0, ge=0)
+
+    @field_validator("issues", mode="before")
+    @classmethod
+    def _known_issues(cls, v: object) -> list[str]:
+        """只留认识的代码（去重、保持顺序）：以后词表删掉某一项时，旧记录照样能读。"""
+        if not isinstance(v, list):
+            raise ValueError("issues 要是列表")  # noqa: TRY004 - pydantic 只把 ValueError 当成校验错误
+        return list(dict.fromkeys(x for x in v if isinstance(x, str) and x in STUDY_ISSUES))
+
+
+# 练琴设置：字段 → (最小, 最大, 默认)。接口的范围（schemas.StudySettingsIn）和读文件时的检查都用这一份
+STUDY_SETTINGS = {"goal_minutes": (5, 600, 45), "max_learning": (1, 10, 2), "max_reviews": (0, 50, 5)}
+MAX_SESSION_MINUTES = 600
+
+
+def _check_segments(v: list[list[str | None]]) -> list[list[str | None]]:
+    """[[开始, 结束 | None], ...]：时间格式对；只有最后一段可以还没结束。"""
+    for i, seg in enumerate(v):
+        if len(seg) != 2 or seg[0] is None:
+            raise ValueError("计时段要是 [开始, 结束]")
+        for x in seg:
+            if x is not None:
+                _real_stamp(x)
+        if seg[1] is None and i != len(v) - 1:
+            raise ValueError("只有最后一段可以没结束")
+    return v
+
+
+Segments = Annotated[list[list[str | None]], AfterValidator(_check_segments)]
+
+
+class StudyTimer(_Rec):
+    """正在计时（或暂停中）的秒表：一段一段的 [开始, 结束]，最后一段结束是 None = 正在走。"""
+
+    segments: Segments = Field(min_length=1)
+
+
+class StudySession(_Rec):
+    """记下的一次练琴：秒表停下时（timer）或手动补记（manual）。"""
+
+    id: str = Field(pattern=r"^[0-9a-f]{8}$")
+    kind: Literal["timer", "manual"]
+    day: Day
+    segments: Segments = Field(default_factory=list)  # 只有 timer 有，都已结束
+    minutes: float = Field(ge=0)  # 秒表忘了停可能很长：按记下的算（停的时候可以改成实际练的分钟数）
+    note: str = Field("", max_length=500)
 
 
 def now() -> str:
@@ -647,6 +745,40 @@ class PracticeView(_M):
     total_seconds: float = 0
 
 
+StudyState = Literal["new", "learning", "review"]
+
+
+class StudyPreview(_M):
+    state: StudyState
+    due_in: int | None = None
+
+
+class StudyLast(_M):
+    day: str
+    rating: int
+    issues: list[str] = Field(default_factory=list)
+    note: str = ""
+    bpm: int = 0
+
+
+class StudyView(_M):
+    """曲子在练琴计划里的状态（app/study.py 的 view）：按自评记录重放 FSRS 算出来的。"""
+
+    state: StudyState
+    paused: bool = False
+    order: int = 0
+    added: str = ""
+    due: str | None = None  # 下次该练的练琴日；新曲子是 null
+    due_in: int | None = None  # 离今天几天，负数 = 过期了
+    last: StudyLast | None = None
+    rated_today: int | None = None
+    reps: int = 0  # 评过几天
+    lapses: int = 0  # 复习时卡住、退回学习的次数
+    stability: float | None = None
+    difficulty: float | None = None
+    preview: dict[str, StudyPreview]  # 今天评 1–4 分别会怎样
+
+
 class BarView(Bar):
     orig: Orig | None = Field(None, exclude=True)  # _orig 只是撤销基线，不给前端
     n: int
@@ -695,6 +827,7 @@ class SongView(_M):
     refined: Refined | None = None  # 上一次精修整首的结果
     refine_estimate: RefineEstimate | None = None  # 图片曲子：现在精修整首的范围和预估；GP 是 null
     refine_scopes: RefineScopes | None = None  # 图片曲子：精修一个小节 / 一行的预估；GP 是 null
+    study: StudyView | None = None  # 不在练琴计划里是 null
 
 
 class LibraryPractice(_M):
@@ -730,3 +863,4 @@ class LibraryItem(_M):
     tokens: int = 0
     refined: Refined | None = None
     refine_estimate: RefineEstimate | None = None
+    study: StudyView | None = None

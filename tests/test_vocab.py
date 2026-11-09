@@ -18,6 +18,9 @@ def test_backend_constants_come_from_vocab():
     assert list(music.DIRECTIONS) == [d["code"] for d in VOCAB["directions"]]
     assert music.GRID == Fraction(VOCAB["grid_ticks"], VOCAB["ticks_per_quarter"]) == Fraction(1, 48)
     assert music.WARN_CODES == VOCAB["warn_codes"]
+    assert music.STUDY_ISSUES == tuple(VOCAB["study_issues"]) and all(VOCAB["study_issues"].values())
+    assert music.STUDY_RATINGS == {1: "卡住", 2: "磕绊", 3: "顺", 4: "轻松"}
+    assert list(VOCAB["study_ratings"]) == ["1", "2", "3", "4"]  # = FSRS 的 Again / Hard / Good / Easy
 
 
 def test_vocab_is_well_formed():

@@ -378,3 +378,37 @@ body.song-gone main > .view, body.song-gone #nav, body.song-gone .fb-dock { disp
 
 /* 小节卡片标题里的小节号 */
 #barNo { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; margin: 0 2px; }
+
+/* ---- 练琴计划：顶栏的“打分”按钮和弹层（js/trainer/study.js） ---- */
+.topbar .actions .timer + .rate-btn { margin-left: 2px; }
+.rate-btn.rated.ok { background: var(--green-soft); color: var(--green); }
+.rate-btn.rated.warn { background: var(--amber-soft); color: var(--amber); }
+.rate-btn.rated.err { background: var(--red-soft); color: var(--red); }
+.rate-btn.rated.accent { background: var(--accent-soft); color: var(--accent); }
+.rate-btn.rated:hover { filter: brightness(.97); }
+.rate-pop { position: fixed; z-index: 40; width: 360px; padding: 14px; border-radius: var(--r-lg); background: var(--card); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; animation: pop-in .14s var(--ease); }
+.rp-h { display: flex; flex-direction: column; gap: 2px; }
+.rp-h b { font-size: var(--fs-3); font-weight: 600; }
+.rp-row { display: flex; align-items: center; gap: 10px; }
+.rp-lbl { color: var(--fg-2); flex: none; }
+.rp-btns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.rp-btns .rate { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 8px 2px 7px; border-radius: var(--r-md); background: var(--pill); color: var(--fg); transition: background .15s, transform .12s var(--ease), box-shadow .15s; }
+.rp-btns .rate b { font-size: var(--fs-3); font-weight: 600; }
+.rp-btns .rate span { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.rp-btns .rate:active { transform: scale(.96); }
+.rp-btns .rate:disabled { opacity: .5; pointer-events: none; }
+.rp-btns .rate.err b { color: var(--red); }
+.rp-btns .rate.warn b { color: var(--amber); }
+.rp-btns .rate.ok b { color: var(--green); }
+.rp-btns .rate.accent b { color: var(--accent); }
+.rp-btns .rate.err:hover, .rp-btns .rate.err[aria-pressed="true"] { background: var(--red-soft); }
+.rp-btns .rate.warn:hover, .rp-btns .rate.warn[aria-pressed="true"] { background: var(--amber-soft); }
+.rp-btns .rate.ok:hover, .rp-btns .rate.ok[aria-pressed="true"] { background: var(--green-soft); }
+.rp-btns .rate.accent:hover, .rp-btns .rate.accent[aria-pressed="true"] { background: var(--accent-soft); }
+.rp-btns .rate[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px currentColor; }
+.rp-btns .rate.err[aria-pressed="true"] { color: var(--red); }
+.rp-btns .rate.warn[aria-pressed="true"] { color: var(--amber); }
+.rp-btns .rate.ok[aria-pressed="true"] { color: var(--green); }
+.rp-btns .rate.accent[aria-pressed="true"] { color: var(--accent); }
+.rp-btns .rate[aria-pressed="true"] span { color: var(--fg-2); }
+@media (max-width: 760px) { .rate-pop { width: calc(100vw - 16px); } }

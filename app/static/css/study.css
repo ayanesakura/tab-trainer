@@ -1,0 +1,110 @@
+/* 曲库页“练琴”视图：今日进度、今日清单、练琴日历、计划；补记对话框。颜色、字号等变量在 /static/ui.css，
+   计时器胶囊和打分徽章两页共用，也在 ui.css。 */
+#view-study .section-title { display: flex; align-items: baseline; gap: var(--sp-2); }
+.st-aside { margin-left: auto; font-weight: 400; letter-spacing: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+#view-study .head-actions { align-items: center; }
+
+/* ---- 今日进度：圆环 + 三个数字 ---- */
+.hero { display: flex; align-items: center; gap: 26px; padding: 18px 22px; min-height: 128px; }
+.hero > .spinner { margin: 0 auto; }
+.ring { position: relative; width: 92px; height: 92px; flex: none; }
+.ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring circle { fill: none; stroke-width: 7; }
+.ring .track { stroke: var(--pill-hover); }
+.ring .bar { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .7s var(--ease), stroke .3s; }
+.ring.reached .bar { stroke: var(--green); }
+.ring-c { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; line-height: 1.15; }
+.ring-c b { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.ring-c span { font-size: 11px; color: var(--muted); }
+.hero-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.hero-msg { font-size: var(--fs-3); color: var(--fg); font-weight: 500; }
+.hero-msg .hint { font-weight: 400; margin-left: 6px; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.stat { padding: 0 18px; border-left: 1px solid var(--line-2); min-width: 0; }
+.stat:first-child { padding-left: 0; border-left: 0; }
+.stat .v { display: flex; align-items: baseline; gap: 3px; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.stat .v small { font-size: var(--fs-1); font-weight: 400; color: var(--muted); letter-spacing: 0; }
+.stat .k { display: flex; align-items: center; gap: var(--sp-1); margin-top: 1px; font-size: var(--fs-1); color: var(--muted); white-space: nowrap; }
+.stat .k .ic { width: 12px; height: 12px; }
+.stat.lit .k .ic { color: var(--amber); }
+
+/* ---- 今日清单、计划：每行前面一个阶段标记 ---- */
+.study-row .kind, .plan-row .kind { flex: none; min-width: 38px; height: 22px; padding: 0 6px; border-radius: var(--r-sm); display: inline-grid; place-items: center; font-size: 11.5px; font-weight: 600; background: var(--pill); color: var(--fg-2); }
+.kind.accent { background: var(--accent-soft); color: var(--accent); }
+.kind.ok { background: var(--green-soft); color: var(--green); }
+.kind.muted { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+.study-row .kind.done-mark { min-width: 0; width: 24px; height: 24px; padding: 0; margin: 0 7px; border-radius: 50%; background: var(--green-soft); color: var(--green); }
+.study-row .name, .plan-row .name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.study-row .title, .plan-row .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.study-row.done .title { color: var(--fg-2); }
+.study-row .act { min-width: 64px; }
+.list-sep { display: flex; align-items: center; gap: var(--sp-2); padding: 7px 14px; background: var(--card-2); border-top: 1px solid var(--line-2); font-size: var(--fs-1); color: var(--muted); }
+.list-sep:first-child { border-top: 0; }
+.list-sep + .row { border-top: 0; }
+.study-empty { display: flex; align-items: center; gap: 14px; padding: 18px; }
+.study-empty .big { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex: none; }
+.study-empty .big.ok { background: var(--green-soft); color: var(--green); }
+.study-empty .big .ic { width: 20px; height: 20px; }
+.study-empty b { display: block; font-weight: 500; font-size: var(--fs-3); }
+.study-empty .grow + .btn { flex: none; }
+.plan-row .ord { flex: none; width: 18px; text-align: right; font-size: var(--fs-1); color: var(--muted); font-variant-numeric: tabular-nums; }
+.plan-row.paused .title { color: var(--muted); }
+.plan-row .ctl { gap: 2px; }
+.plan-more { display: flex; justify-content: center; padding: 6px; border-top: 1px solid var(--line-2); }
+
+/* ---- 练琴日历：53 周 × 7 天，颜色按每日目标分 5 档 ---- */
+.cal-card { padding: 16px 18px 12px; }
+.cal-scroll { overflow-x: auto; scrollbar-width: thin; }
+.cal { --cell: 13px; --gap: 3px; display: grid; grid-template-columns: 18px auto; grid-template-rows: 15px auto; column-gap: 6px; row-gap: 5px; width: max-content; margin: 0 auto; }
+.cal-months { grid-column: 2; grid-row: 1; display: grid; grid-template-columns: repeat(var(--weeks), var(--cell)); column-gap: var(--gap); font-size: 11px; line-height: 15px; color: var(--muted); }
+.cal-months span { white-space: nowrap; }
+.cal-days { grid-column: 1; grid-row: 2; display: grid; grid-template-rows: repeat(7, var(--cell)); row-gap: var(--gap); font-size: 10.5px; line-height: var(--cell); color: var(--muted); }
+.cal-grid { grid-column: 2; grid-row: 2; display: grid; grid-template-rows: repeat(7, var(--cell)); grid-auto-flow: column; grid-auto-columns: var(--cell); gap: var(--gap); }
+.cell { width: var(--cell); height: var(--cell); padding: 0; border-radius: 3px; background: var(--pill-hover); transition: outline-color .12s; outline: 1.5px solid transparent; outline-offset: 1px; }
+.cell.future { background: transparent; }
+.cell.l1, .cal-legend .l1 { background: color-mix(in srgb, var(--accent) 28%, var(--card)); }
+.cell.l2, .cal-legend .l2 { background: color-mix(in srgb, var(--accent) 50%, var(--card)); }
+.cell.l3, .cal-legend .l3 { background: color-mix(in srgb, var(--accent) 74%, var(--card)); }
+.cell.l4, .cal-legend .l4 { background: var(--accent); }
+.cal-legend .l0 { background: var(--pill-hover); }
+button.cell:hover { outline-color: var(--line-strong); }
+.cell.today { outline-color: var(--muted); }
+.cell.sel, .cell.sel:hover { outline: 2px solid var(--fg); }
+.cal-foot { display: flex; align-items: center; gap: var(--sp-2); margin-top: 12px; }
+.cal-legend { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); }
+.cal-legend i { width: 10px; height: 10px; border-radius: 2px; }
+.cal-legend i:first-child { margin-left: 4px; }
+.cal-legend i:last-child { margin-right: 4px; }
+
+/* 某一天的明细（点日历格子） */
+.day-card { margin-top: var(--sp-3); animation: pop-in .16s var(--ease); }
+.day-card .card-h .total { font-weight: 400; color: var(--muted); font-size: var(--fs-2); }
+.day-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.day-col { padding: 10px 14px 12px; min-width: 0; }
+.day-col + .day-col { border-left: 1px solid var(--line-2); }
+.day-col h3 { font-size: var(--fs-1); font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+.day-item { display: flex; align-items: center; gap: var(--sp-2); min-height: 34px; padding: 4px 0; }
+.day-item + .day-item { border-top: 1px solid var(--line-2); }
+.day-item .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.day-item .lbl a { color: var(--fg); }
+.day-item .lbl a:hover { color: var(--accent); }
+.day-item .lbl .hint { margin-left: 6px; }
+.day-item .num { font-variant-numeric: tabular-nums; color: var(--fg-2); font-size: var(--fs-1); white-space: nowrap; }
+.day-col .none { color: var(--muted); font-size: var(--fs-1); padding: 8px 0; }
+
+/* 补记对话框（样子和 ui.js 的确认框一样，但不用 .dlg-msg：那个类名留给动态建的确认框） */
+.log-dlg { width: 400px; max-width: 100%; }
+.log-dlg .dlg-b { padding: 18px 20px 6px; display: flex; flex-direction: column; gap: 14px; }
+.log-dlg .dlg-t { font-size: var(--fs-3); font-weight: 600; }
+.form-grid { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center; }
+.form-grid label { color: var(--fg-2); }
+.unit-input { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--fg-2); }
+.log-dlg .input[type=date] { width: 160px; }
+.log-dlg .input.num { width: 72px; }
+
+@media (max-width: 760px) {
+  .hero { flex-wrap: wrap; gap: 16px; }
+  .stat { padding: 0 10px; }
+  .day-body { grid-template-columns: 1fr; }
+  .day-col + .day-col { border-left: 0; border-top: 1px solid var(--line-2); }
+}

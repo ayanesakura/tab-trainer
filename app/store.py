@@ -1,4 +1,5 @@
-"""本地存储：data/ 目录下一首曲子一个文件夹（song.json、practice.jsonl、页面图片 / 原文件），另有 config.json 存模型设置。
+"""本地存储：data/ 目录下一首曲子一个文件夹（song.json、practice.jsonl、study.jsonl、页面图片 / 原文件），
+另有 config.json 存模型设置、study.json 存练琴计划的设置 / 秒表 / 练琴时长记录。
 
 只管文件：路径、加锁的读-改-写、备份、删除。数据格式的升级在 app/migrate.py，派生字段在 app/model.py。
 
@@ -34,6 +35,7 @@ SCHEMA_VERSION = migrate.SCHEMA_VERSION
 _lock = threading.RLock()
 _ID_RE = re.compile(r"^[a-z0-9-]{4,64}$")
 PRACTICE_FILE = "practice.jsonl"
+STUDY_LOG_FILE = "study.jsonl"  # 练琴计划的自评记录（app/study.py）
 log = logging.getLogger("tab_trainer.store")
 
 __all__ = ["CorruptSong", "NotFound"]
@@ -228,7 +230,7 @@ def page_image(song_id: str, page: dict) -> Image.Image:
 
 
 # ---------------------------------------------------------------------------
-# practice.jsonl：追加写，一行一条 JSON
+# practice.jsonl / study.jsonl：追加写，一行一条 JSON
 # ---------------------------------------------------------------------------
 def practice_path(song_id: str) -> Path:
     return song_dir(song_id) / PRACTICE_FILE
@@ -247,12 +249,33 @@ def practice_text(song_id: str, song: dict | None = None) -> str:
 
 
 def append_practice(song_id: str, record: dict) -> None:
+    _append_jsonl(song_id, PRACTICE_FILE, record)
+
+
+def study_log_path(song_id: str) -> Path:
+    return song_dir(song_id) / STUDY_LOG_FILE
+
+
+def study_log_text(song_id: str) -> str:
+    """study.jsonl 的全部内容（曲子包导出用），没有是空串。"""
+    try:
+        return study_log_path(song_id).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def append_study_log(song_id: str, record: dict) -> None:
+    _append_jsonl(song_id, STUDY_LOG_FILE, record)
+
+
+def _append_jsonl(song_id: str, name: str, record: dict) -> None:
+    """往曲子目录里的 jsonl 追加一行并落盘。曲子目录不在了（删掉了）抛 NotFound，不会重新建出来。"""
     with _lock:
         d = song_dir(song_id)
         if not d.is_dir():
             raise NotFound()
         line = json.dumps(record, ensure_ascii=False) + "\n"
-        path = d / PRACTICE_FILE
+        path = d / name
         with open(path, "ab+") as f:
             # 上次写到一半断电留下的半行没有换行：另起一行，免得这条和它粘在一起、读的时候一起被跳过
             if f.seek(0, os.SEEK_END) > 0:
@@ -324,6 +347,40 @@ def update_config(fn: Callable[[dict], None]) -> dict:
         fn(cfg)
         save_config(cfg)
         return cfg
+
+
+# ---------------------------------------------------------------------------
+# study.json（练琴计划的设置、秒表、练琴时长记录，内容由 app/study.py 解释）
+# ---------------------------------------------------------------------------
+def study_file() -> Path:
+    return DATA / "study.json"  # 调用时才拼：测试会替换 DATA
+
+
+def load_study() -> dict:
+    """练琴计划的数据（原样，没有补默认值）。没有文件是 {}；文件和备份都坏了时把坏文件改名留着，按 {} 处理。"""
+    path = study_file()
+    with _lock:
+        if not path.exists() and not _bak(path).exists():
+            return {}
+        try:
+            return _read_json(path)
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as e:
+            keep = path.with_name(f"study.corrupt-{time.strftime('%Y%m%d-%H%M%S')}.json")
+            log.error("练琴计划文件损坏（%s），已改名为 %s", e, keep.name)
+            if path.exists():
+                os.replace(path, keep)
+            return {}
+
+
+def update_study(fn: Callable[[dict], None]) -> dict:
+    """加锁读-改-写 study.json（fn 原地修改），返回改完的内容。"""
+    with _lock:
+        data = load_study()
+        fn(data)
+        write_json(study_file(), data)
+        return data
 
 
 _lock_file = None

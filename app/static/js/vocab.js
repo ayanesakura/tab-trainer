@@ -31,3 +31,7 @@ export function parseDur(s) {
   const [a, b] = String(s).trim().split('/');
   return b === undefined ? +a : +a / +b;
 }
+
+// 练琴计划：打分 1–4（卡住 / 磕绊 / 顺 / 轻松）和练完勾的问题（code → 中文），后端 app/study.py 读同一份
+export const STUDY_RATINGS = freeze({ ...vocab.study_ratings });
+export const STUDY_ISSUES = freeze({ ...vocab.study_issues });

@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.model import Event
-from app.music import STRINGS
+from app.model import DAY, MAX_SESSION_MINUTES, STUDY_SETTINGS, Event
+from app.music import STRINGS, STUDY_ISSUES
 
 MAX_TAGS = 12
 MAX_TAG_LEN = 20
@@ -123,6 +124,71 @@ class RefineIn(_Strict):
     hint: str = Field("", max_length=1000)
 
 
+# ---------------------------------------------------------------------------
+# 练琴计划（app/study.py）
+# ---------------------------------------------------------------------------
+class StudyIn(_Strict):
+    """加入 / 移出练琴计划、暂停 / 继续：只改给了的。"""
+
+    in_plan: bool | None = None
+    paused: bool | None = None
+
+
+class StudyOrderIn(_Strict):
+    ids: list[str] = Field(max_length=5000)
+
+
+class StudyRateIn(_Strict):
+    rating: int = Field(ge=1, le=4)
+    issues: list[str] = Field(default_factory=list, max_length=len(STUDY_ISSUES))
+    note: str = Field("", max_length=500)
+    bpm: int | None = Field(None, ge=0, le=1000)
+
+    @field_validator("issues")
+    @classmethod
+    def _known(cls, v: list[str]) -> list[str]:
+        if len(set(v)) != len(v):
+            raise ValueError("有重复的项")
+        if bad := [x for x in v if x not in STUDY_ISSUES]:
+            raise ValueError(f"不认识的问题：{bad[0][:20]}")
+        return v
+
+
+class StudyTimerIn(_Strict):
+    action: Literal["start", "pause", "resume", "stop", "discard"]
+    minutes: float | None = Field(
+        None, gt=0, le=MAX_SESSION_MINUTES
+    )  # 只有 stop 用：忘了停时改成实际练的分钟数
+
+
+class StudySessionIn(_Strict):
+    day: str = Field(pattern=DAY)
+    minutes: float = Field(ge=1, le=MAX_SESSION_MINUTES)
+    note: str = Field("", max_length=500)
+
+    @field_validator("day")
+    @classmethod
+    def _real_day(cls, v: str) -> str:
+        try:
+            d = datetime.date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("日期不存在") from None
+        if d.year < 2000:
+            raise ValueError("日期太早了")
+        return v
+
+
+def _setting(name: str):
+    lo, hi, _ = STUDY_SETTINGS[name]
+    return Field(None, ge=lo, le=hi)
+
+
+class StudySettingsIn(_Strict):
+    goal_minutes: int | None = _setting("goal_minutes")
+    max_learning: int | None = _setting("max_learning")
+    max_reviews: int | None = _setting("max_reviews")
+
+
 def page_order(raw: str) -> list[str]:
     """补页 / 调页序的表单字段 order：JSON 数组，每项是已有页的文件名或 "new:k"（multipart 里没法直接用 JSON 请求体）。"""
     import json
@@ -161,6 +227,19 @@ FIELD_NAMES = {
     "bars": "小节",
     "system": "行",
     "track": "音轨",
+    "in_plan": "加入计划",
+    "paused": "暂停",
+    "ids": "曲子",
+    "rating": "自评",
+    "issues": "问题",
+    "note": "备注",
+    "action": "操作",
+    "minutes": "分钟数",
+    "day": "日期",
+    "days": "天数",
+    "goal_minutes": "每天目标",
+    "max_learning": "同时学几首",
+    "max_reviews": "每天复习几首",
 }
 
 
@@ -169,7 +248,7 @@ def describe(errors: list[dict]) -> str:
     if not errors:
         return "请求格式不对"
     e = errors[0]
-    loc = [str(x) for x in e.get("loc", []) if x not in ("body",)]
+    loc = [str(x) for x in e.get("loc", []) if x not in ("body", "query", "path")]
     field = FIELD_NAMES.get(loc[0], loc[0]) if loc else ""
     if len(loc) > 1 and loc[0] in ("events", "bars") and loc[1].isdigit():
         field += f"第 {int(loc[1]) + 1} 个"
@@ -188,6 +267,8 @@ def describe(errors: list[dict]) -> str:
         why = "超出范围"
     elif kind == "too_short":
         why = "不能为空"
+    elif kind == "string_pattern_mismatch":
+        why = "格式不对"
     elif kind == "value_error":
         why = str((e.get("ctx") or {}).get("error") or e.get("msg", "格式不对"))
     else:

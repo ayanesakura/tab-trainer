@@ -60,5 +60,7 @@
     "string_range": "弦号 / 品位超出范围",
     "empty": "没有任何音符",
     "other": "其他"
-  }
+  },
+  "study_ratings": { "1": "卡住", "2": "磕绊", "3": "顺", "4": "轻松" },
+  "study_issues": { "rhythm": "节奏", "noise": "杂音", "dynamics": "层次", "phrasing": "呼吸" }
 }

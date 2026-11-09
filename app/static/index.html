@@ -7,6 +7,7 @@
 <script src="/static/js/lib/theme-boot.js"></script>
 <link rel="stylesheet" href="/static/ui.css">
 <link rel="stylesheet" href="/static/css/index.css">
+<link rel="stylesheet" href="/static/css/study.css">
 <script type="module" src="/static/js/index.js"></script>
 </head>
 <body>
@@ -14,6 +15,7 @@
   <a class="brand" href="/"><span class="logo" data-ic="logo"></span><span class="label">吉他谱练习器</span></a>
   <div class="center">
     <div class="seg" id="nav" aria-label="页面">
+      <button data-v="study" data-ic="target" id="tab-study" aria-controls="view-study">练琴</button>
       <button data-v="library" data-ic="music" id="tab-library" aria-controls="view-library">曲库</button>
       <button data-v="settings" data-ic="settings" id="tab-settings" aria-controls="view-settings">设置</button>
     </div>
@@ -22,13 +24,40 @@
 </header>
 
 <main class="wrap">
+  <!-- ============ 练琴：今日清单、计时、日历、计划 ============ -->
+  <section class="view" id="view-study" role="tabpanel" aria-labelledby="tab-study" hidden>
+    <div class="head">
+      <div><h1>练琴</h1><p id="studyDate"></p></div>
+      <div class="head-actions">
+        <div class="timer" id="timer"></div>
+        <button class="btn sm ghost" id="logAdd" data-ic="plus" title="补记没有计时的练习">补记</button>
+      </div>
+    </div>
+
+    <div class="card hero" id="hero" aria-busy="true"><div class="spinner center"></div></div>
+
+    <div class="section-title"><span>今天</span><span class="st-aside" id="queueAside"></span></div>
+    <div class="list" id="queue" aria-label="今天要练的曲子"></div>
+
+    <div class="section-title"><span>日历</span><span class="st-aside" id="calSum"></span></div>
+    <div class="card cal-card">
+      <div class="cal-scroll" id="cal"></div>
+      <div class="cal-foot"><span class="hint" id="calHint">点格子看那一天</span><span class="grow"></span>
+        <span class="cal-legend" aria-hidden="true">少<i class="l0"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i>多</span></div>
+    </div>
+    <div class="card day-card" id="dayCard" hidden></div>
+
+    <div class="section-title"><span>计划</span><span class="st-aside" id="planAside"></span></div>
+    <div class="list" id="plan" aria-label="练琴计划里的曲子"></div>
+  </section>
+
   <!-- ============ 曲库 ============ -->
   <section class="view" id="view-library" role="tabpanel" aria-labelledby="tab-library">
     <div class="head">
       <div><h1>曲库</h1></div>
       <div class="head-actions">
         <button class="btn sm" id="importBtn" data-ic="download" title="导入曲子包（.zip），可以一次选多个">导入曲子包</button>
-        <button class="btn sm" id="selectBtn" data-ic="upload" title="选择曲子打包导出（识别结果、提示、练习记录和原图都在里面）">导出…</button>
+        <button class="btn sm" id="selectBtn" data-ic="check" title="多选曲子：打包导出，或一起加入练琴计划">选择</button>
         <input type="file" id="bundleFile" multiple accept=".zip,application/zip" hidden>
       </div>
     </div>
@@ -56,6 +85,7 @@
         <label class="chk"><input type="checkbox" id="selectAll"><span id="selectCount">已选 0 首</span></label>
         <span class="grow"></span>
         <button class="btn ghost sm" id="selectCancel">取消</button>
+        <button class="btn sm" id="planAddBtn" data-ic="target" disabled title="按列表顺序排到练琴计划的最后">加入计划</button>
         <button class="btn primary sm" id="exportBtn" data-ic="upload" disabled>导出曲子包</button>
       </div>
       <div class="lib-tools" id="libTools" hidden>
@@ -114,6 +144,22 @@
       </div>
     </div>
 
+    <div class="section-title">练琴</div>
+    <div class="list set">
+      <div class="row">
+        <div class="who"><div class="name" id="goalLbl">每日目标</div><div class="sub">今日进度环和日历颜色按它算。</div></div>
+        <div class="ctl"><div class="seg sm" id="goalSeg" aria-labelledby="goalLbl"><button data-v="20">20 分钟</button><button data-v="30">30</button><button data-v="45">45</button><button data-v="60">60</button><button data-v="90">90</button></div></div>
+      </div>
+      <div class="row">
+        <div class="who"><div class="name" id="learnLbl">同时在学</div><div class="sub">在学的曲子少于这个数，才开始下一首新曲。</div></div>
+        <div class="ctl"><div class="seg sm" id="learnSeg" aria-labelledby="learnLbl"><button data-v="1">1 首</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button></div></div>
+      </div>
+      <div class="row">
+        <div class="who"><div class="name" id="revLbl">每天复习</div><div class="sub">到期的多了，按逾期久的先排，其余顺延。</div></div>
+        <div class="ctl"><div class="seg sm" id="revSeg" aria-labelledby="revLbl"><button data-v="3">最多 3 首</button><button data-v="5">5</button><button data-v="8">8</button><button data-v="0">不限</button></div></div>
+      </div>
+    </div>
+
     <div class="section-title">外观</div>
     <div class="list set">
       <div class="row">
@@ -144,6 +190,18 @@
     <button class="btn ghost sm" id="pagesCancel">取消</button>
     <button class="btn primary sm" id="pagesSave">保存</button>
   </div>
+</dialog>
+
+<dialog class="dlg log-dlg" id="logDlg" aria-labelledby="logTitle">
+  <form class="dlg-b" id="logForm" novalidate>
+    <div class="dlg-t" id="logTitle">补记练琴</div>
+    <div class="form-grid">
+      <label for="logDay">日期</label><input class="input" type="date" id="logDay" required>
+      <label for="logMin">时长</label><span class="unit-input"><input class="input num" type="number" id="logMin" min="1" max="600" step="1" value="30" required>分钟</span>
+      <label for="logNote">备注</label><input class="input" id="logNote" maxlength="200" placeholder="爬格子、对着纸谱练……（可不填）">
+    </div>
+  </form>
+  <div class="dlg-f"><button class="btn ghost" id="logCancel">取消</button><button class="btn primary" id="logSave" form="logForm" type="submit">记下</button></div>
 </dialog>
 
 </body>

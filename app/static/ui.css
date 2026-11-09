@@ -349,6 +349,16 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
 .toast.ok { color: var(--green); } .toast.err { color: var(--red); } .toast.info { color: var(--accent); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 6px); } }
 
+/* ---- 练琴计时器（曲库页“练琴”和练习页顶栏共用，js/lib/study-timer.js） ---- */
+.timer { display: inline-flex; }
+.timer-pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 3px 0 11px; border-radius: 15px; background: var(--accent-soft); color: var(--accent); animation: pop-in .16s var(--ease); }
+.timer-pill.paused { background: var(--amber-soft); color: var(--amber); }
+.timer-pill .t { min-width: 42px; font-size: var(--fs-3); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.timer-pill .icon-btn { width: 24px; height: 24px; border-radius: 12px; color: inherit; }
+.timer-pill .icon-btn:hover { background: color-mix(in srgb, currentColor 15%, transparent); color: inherit; }
+.timer-pill .dot { background: currentColor; }
+.badge.rating { height: 18px; padding: 0 6px; flex: none; }
+
 /* ---- 设置行：左边说明，右边控件 ---- */
 .set .row { min-height: 58px; padding: 10px var(--sp-4); }
 .set .row .name { font-weight: 500; }

@@ -1,5 +1,5 @@
 """接口背后的编排：main.py 只做 HTTP（参数、文件、响应），所有路由都经过这里，再分给 songs / recognize / pages /
-coach / bundles。多数函数只是一行转发，留着是为了让 main 只依赖这一个模块、返回的视图形状统一在这里决定。
+coach / bundles / study。多数函数只是一行转发，留着是为了让 main 只依赖这一个模块、返回的视图形状统一在这里决定。
 
 错误一律抛 app.errors 里的 AppError（main 统一转成 {"detail": 中文说明} 和对应的状态码）。
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import BinaryIO
 
-from app import bundles, coach, config, pages, practice, recognize, refine, songs, store, views
+from app import bundles, coach, config, pages, practice, recognize, refine, songs, store, study, views
 from app.config import settings
 from app.errors import Busy, Conflict, Invalid, NotFound
 from app.jobs import jobs
@@ -173,3 +173,50 @@ def prepare_ask(sid: str, bar_id: str, question: str):
 
 def record_practice(sid: str, bar_ids: list[str], loops: int, bpm: float, seconds: float) -> dict:
     return practice.record(sid, bar_ids, loops, bpm, seconds)
+
+
+# ---------------------------------------------------------------------------
+# 练琴计划（app/study.py）
+# ---------------------------------------------------------------------------
+def set_study(sid: str, in_plan: bool | None, paused: bool | None) -> dict:
+    return study.set_plan(sid, in_plan, paused)
+
+
+def study_order(ids: list[str]) -> None:
+    study.reorder(ids)
+
+
+def rate_song(sid: str, rating: int, issues: list[str], note: str, bpm: int | None) -> dict:
+    return study.rate(sid, rating, issues, note, bpm or 0)
+
+
+def study_today() -> dict:
+    return study.today()
+
+
+def study_timer() -> dict:
+    return study.timer()
+
+
+def study_timer_action(action: str, minutes: float | None) -> dict:
+    return study.timer_action(action, minutes)
+
+
+def add_study_session(day: str, minutes: float, note: str) -> dict:
+    return study.add_session(day, minutes, note)
+
+
+def delete_study_session(session_id: str) -> None:
+    study.delete_session(session_id)
+
+
+def study_settings(fields: dict) -> dict:
+    return study.set_settings(fields)
+
+
+def study_calendar(days: int) -> dict:
+    return study.calendar(days)
+
+
+def study_day(day: str) -> dict:
+    return study.day_detail(day)

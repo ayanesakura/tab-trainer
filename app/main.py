@@ -379,6 +379,69 @@ def reparse_line(sid: str, si: int, body: schemas.ReparseIn | None = None):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# 练琴计划
+# ---------------------------------------------------------------------------
+@app.put("/api/songs/{sid}/study")
+def put_study(sid: str, body: schemas.StudyIn):
+    """加入 / 移出练琴计划、暂停 / 继续（只改给了的）。返回 {study}（不在计划里是 null）。"""
+    return service.set_study(sid, body.in_plan, body.paused)
+
+
+@app.post("/api/songs/{sid}/study/rate")
+def rate_song(sid: str, body: schemas.StudyRateIn):
+    """练完一遍的自评 1–4（同一个练琴日再评替换当天的）。不在计划里 400。返回 {study}。"""
+    return service.rate_song(sid, body.rating, body.issues, body.note, body.bpm)
+
+
+@app.get("/api/study/today")
+def study_today():
+    return service.study_today()
+
+
+@app.put("/api/study/order")
+def study_order(body: schemas.StudyOrderIn):
+    service.study_order(body.ids)
+    return {"ok": True}
+
+
+@app.get("/api/study/timer")
+def study_timer():
+    """只读秒表（练习页轮询用，不读曲库）。"""
+    return service.study_timer()
+
+
+@app.post("/api/study/timer")
+def study_timer_action(body: schemas.StudyTimerIn):
+    return service.study_timer_action(body.action, body.minutes)
+
+
+@app.post("/api/study/sessions")
+def add_study_session(body: schemas.StudySessionIn):
+    return service.add_study_session(body.day, body.minutes, body.note)
+
+
+@app.delete("/api/study/sessions/{session_id}")
+def delete_study_session(session_id: str):
+    service.delete_study_session(session_id)
+    return {"ok": True}
+
+
+@app.put("/api/study/settings")
+def study_settings(body: schemas.StudySettingsIn):
+    return service.study_settings(body.model_dump(exclude_unset=True, exclude_none=True))
+
+
+@app.get("/api/study/calendar")
+def study_calendar(days: Annotated[int, Query(ge=1, le=800)] = 371):
+    return service.study_calendar(days)
+
+
+@app.get("/api/study/day/{day}")
+def study_day(day: str):
+    return service.study_day(day)
+
+
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
