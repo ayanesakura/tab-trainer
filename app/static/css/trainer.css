@@ -22,13 +22,14 @@
 .main-col { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
 /* 几条通知合成一张卡片，中间细线分开（不再是一摞独立的卡片） */
 .notices { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
-.notices .notice { align-items: center; padding: 5px 12px; min-height: 36px; border: 0; border-radius: 0; }
+.notices .notice { align-items: center; padding: 3px 12px; min-height: 32px; border: 0; border-radius: 0; }
 .notices .notice + .notice { border-top: 1px solid var(--line-2); }
 .notices .notice > .dot, .notices .notice > .spinner { margin-top: 0; }
 .notices .n-acts { margin: -2px -6px -2px 0; }
 /* 长的备注默认只显示一行，点一下展开 */
-.n-fold { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; cursor: pointer; }
-.n-fold.open { display: block; }
+.n-fold { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; cursor: pointer; border-radius: var(--r-sm); }
+.n-fold[aria-expanded="true"] { display: block; }
+.n-fold:focus-visible { outline-offset: -2px; }
 .n-fold > b { margin-right: var(--sp-2); color: var(--muted); font-weight: 600; }
 
 /* ---- 控制条（吸顶，一行）+ 分段 chips ---- */
@@ -36,7 +37,7 @@
 .t-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; } /* 放不下时换行，不会把右边的按钮挤出去 */
 /* 吸顶时控制条和顶栏之间有 8px 缝，滚动的谱面会从缝里露出来：用一条页面底色盖住（没吸顶时盖的是本来就空着的间距） */
 .transport::before { content: ''; position: absolute; left: -12px; right: -12px; bottom: 100%; height: calc(var(--sp-2) + 1px); background: var(--bg); }
-.t-end { margin-left: auto; } /* 指板 / 更多一起靠右；换行时一起换 */
+.t-end { margin-left: auto; } /* 播放设置靠右；换行时一起换 */
 .t-sep { width: 1px; height: 24px; background: var(--line); flex: none; }
 .play { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-fg); flex: none; box-shadow: var(--shadow-sm); transition: transform .12s var(--ease), background .15s; }
 .play:hover { background: var(--accent-hover); }
@@ -60,7 +61,11 @@
 /* 在谱面上拖选小节时不要顺带选中文字 */
 #score.dragging, #score.dragging * { user-select: none; -webkit-user-select: none; cursor: col-resize; }
 #moreBtn.flag::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 2px; }
-.sections { padding-top: var(--sp-2); border-top: 1px solid var(--line-2); }
+/* 分段 chips：放不下就换行，最多两行高；再多就在这一块里上下滚（鼠标滚轮直接能滚，不用 Shift），
+   第三行露出一点并淡出，看得出下面还有（滚动驱动的动画：不能滚时时间线无效，不淡出；滚到底也不淡出） */
+.chips.sections { flex-wrap: wrap; row-gap: 6px; max-height: calc(var(--sp-2) + 26px * 2 + 6px * 2 + 10px); overflow: hidden auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
+  padding: var(--sp-2) 3px 3px; margin: 0 -3px; border-top: 1px solid var(--line-2); animation: sec-more linear both; animation-timeline: scroll(self block); }
+@keyframes sec-more { 0%, 95% { -webkit-mask-image: linear-gradient(#000 calc(100% - 14px), transparent); mask-image: linear-gradient(#000 calc(100% - 14px), transparent); } 100% { -webkit-mask-image: none; mask-image: none; } }
 .chips button.warn::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
 
 /* “更多”弹层 */
@@ -77,12 +82,7 @@
 .score-card .card-h { flex-wrap: wrap; }
 .score-legend { padding: var(--sp-2) 14px 0; margin: 0; }
 .score-legend[hidden] { display: none; }
-/* 谱面标题栏的“?”：悬停或键盘聚焦时弹出平时的操作说明 */
-.help-wrap { position: relative; display: inline-flex; }
-.help-btn { font-weight: 600; font-size: var(--fs-2); color: var(--muted); }
-.help-pop { display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: max-content; max-width: 360px; margin: 0;
-  flex-direction: column; gap: 6px; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--card); box-shadow: var(--shadow); color: var(--fg-2); }
-.help-wrap:hover .help-pop, .help-wrap:focus-within .help-pop { display: flex; }
+/* 谱面标题栏的“?”（.help-wrap，样式在 ui.css）：悬停或键盘聚焦时弹出平时的操作说明 */
 .legend kbd { margin-right: 3px; }
 .legend i.review-key { display: inline-block; margin-right: 4px; width: 18px; height: 11px; border-radius: 3px; vertical-align: -1px; background: color-mix(in srgb, var(--amber) 8%, transparent); box-shadow: inset 0 3px 0 color-mix(in srgb, var(--amber) 75%, transparent); }
 .legend i.refine-key { display: inline-block; margin-right: 4px; width: 18px; height: 11px; border-radius: 3px; vertical-align: -1px; background: color-mix(in srgb, var(--green) 5%, transparent); box-shadow: inset 0 3px 0 color-mix(in srgb, var(--green) 60%, transparent); }
@@ -131,10 +131,10 @@
 .paper canvas { display: block; }
 .paper-msg { color: var(--muted); font-size: var(--fs-1); }
 .paper-cap { position: absolute; left: 8px; top: 4px; font-size: var(--fs-1); color: var(--muted); }
-:root[data-theme="dark"] .paper canvas, :root[data-theme="dark"] .orig-body canvas { filter: invert(.88) hue-rotate(180deg); }
+:root[data-theme="dark"] .paper canvas, :root[data-theme="dark"] #origCanvas { filter: invert(.88) hue-rotate(180deg); }
 /* 原谱是白底黑字：浅色下正片叠底、深色下（反相后）变亮混合，白底融进卡片的底色，不露出一个白框（暖色“纸”配色时尤其明显） */
-.paper canvas, .orig-body canvas { mix-blend-mode: multiply; }
-:root[data-theme="dark"] .paper canvas, :root[data-theme="dark"] .orig-body canvas { mix-blend-mode: lighten; }
+.paper canvas, #origCanvas { mix-blend-mode: multiply; }
+:root[data-theme="dark"] .paper canvas, :root[data-theme="dark"] #origCanvas { mix-blend-mode: lighten; }
 .sec-h { font-size: var(--fs-1); font-weight: 600; color: var(--muted); }
 .coach { display: flex; flex-direction: column; gap: var(--sp-2); border-top: 1px solid var(--line-2); padding-top: var(--sp-3); }
 .qa-list { display: flex; flex-direction: column; gap: var(--sp-3); max-height: 300px; overflow-y: auto; }
@@ -143,7 +143,7 @@
 .qa .q .ic { color: var(--accent); }
 .qa .q .t { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
 .qa .a { white-space: pre-wrap; line-height: 1.7; color: var(--fg-2); }
-.qa.stale { opacity: .6; }
+.qa.stale .q, .qa.stale .a { color: var(--muted); } /* 谱子改过、回答可能过时：字变灰（不用透明度，免得对比度不够） */
 .qa.pending .a .spinner { display: inline-block; vertical-align: -2px; margin-right: 6px; } /* 正在回答、还没收到字 */
 .qa .old { font-weight: 400; font-size: 11px; color: var(--amber); border: 1px solid currentColor; border-radius: 5px; padding: 0 4px; }
 .ask { display: flex; gap: 6px; }
@@ -162,6 +162,10 @@
 .tools #reparseBtn { order: 3; }
 .editor { margin-top: var(--sp-2); }
 .editor textarea { width: 100%; height: 220px; margin-bottom: 6px; }
+/* 字段说明的“?”：弹层以整行说明为准左对齐、不超出侧栏（侧栏会滚动，超出会出现横向滚动条） */
+.editor > .hint, .rh-guide { position: relative; }
+.editor > .hint .help-wrap, .rh-guide .help-wrap { position: static; }
+.editor > .hint .help-pop, .rh-guide .help-pop { max-width: 100%; }
 .ed-bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 
 /* ---- 敲节奏（rhythm-drill.js）：打开后代替侧栏的小节卡片，底部指板也收起来 ---- */
@@ -201,8 +205,8 @@
 .rh-legend i.miss { box-shadow: inset 0 0 0 2px var(--red); }
 .rh-result { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); padding: var(--sp-3) 14px 14px; }
 .rh-guide { color: var(--fg-2); line-height: 1.7; font-size: var(--fs-1); }
-.rh-guide ol { margin: var(--sp-1) 0 0 18px; display: flex; flex-direction: column; gap: var(--sp-1); }
-.rh-guide .rh-auto { margin-top: var(--sp-2); }
+.rh-guide b { font-weight: 600; color: var(--muted); margin-right: var(--sp-1); }
+.rh-guide .rh-auto { margin-top: var(--sp-1); }
 .rh-score { display: flex; align-items: baseline; gap: 2px; flex: none; }
 .rh-score b { font-size: 36px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
 .rh-score span { color: var(--muted); }
@@ -243,6 +247,7 @@ body:not([data-view="practice"]) .fb-dock { display: none; }
 .fb-toggle .chev { width: 7px; height: 7px; border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor; transform: rotate(45deg) translate(-2px, -2px); transition: transform .15s; }
 .fb-toggle[aria-expanded="false"] .chev { transform: rotate(-135deg) translate(-1px, -1px); }
 .fb-legend { margin: 0; white-space: nowrap; overflow: hidden; }
+.fb-help { margin-left: calc(var(--sp-4) * -1 + 6px); } /* 紧跟在图例后面 */
 .lg-cur { background: var(--fb-on); }
 .lg-next { border: 2px solid var(--fb-next); }
 .fb-body { padding: 0 var(--sp-4) var(--sp-2); overflow-x: auto; }
@@ -269,6 +274,10 @@ body:not([data-view="practice"]) .fb-dock { display: none; }
 .orig-dlg[open] { display: flex; flex-direction: column; }
 .orig-h { display: flex; align-items: center; gap: var(--sp-2); padding: 10px var(--sp-3); border-bottom: 1px solid var(--line-2); }
 .orig-body { padding: var(--sp-3); overflow: auto; background: var(--paper-bg); display: flex; justify-content: center; }
+/* 当前小节的框和别的小节上的淡化画在另一层（#origMark）：不跟着原谱图片在深色下反相，颜色才对 */
+.orig-stack { position: relative; flex: none; }
+.orig-stack canvas { display: block; }
+#origMark { position: absolute; inset: 0; pointer-events: none; }
 
 /* ---- 调弦 ---- */
 table.tune { width: 100%; border-collapse: collapse; }
@@ -354,15 +363,18 @@ body.song-gone main > .view, body.song-gone #nav, body.song-gone .fb-dock { disp
 .refine-scope .hint { overflow-wrap: anywhere; }
 .refine-scope .hint:empty { display: none; }
 /* 精修改过的小节：改了什么 + 撤销 */
-.refine-row { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--accent-soft); font-size: var(--fs-1); }
-.refine-diff { display: flex; gap: 6px; align-items: flex-start; white-space: pre-wrap; }
-.refine-diff .ic { color: var(--accent); margin-top: 2px; }
-.refine-acts { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.refine-acts .hint { overflow-wrap: anywhere; }
-.warns.reviewed { opacity: .6; }
+/* 和谱面上精修过的小节、图例、曲库的“已精修”一样用绿色系 */
+.refine-row { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) 6px var(--sp-3); border-radius: var(--r-md); background: var(--green-soft); font-size: var(--fs-1); }
+.refine-diff { display: flex; gap: 6px; align-items: flex-start; white-space: pre-wrap; padding-right: var(--sp-1); }
+.refine-acts { display: flex; align-items: center; gap: var(--sp-2); }
+/* 原来的读法：一行，放不下用省略号，完整的在悬停提示里 */
+.refine-acts .hint { flex: 1; min-width: 0; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.refine-acts .btn { flex: none; }
+/* 已确认的待核对说明：换成中性的灰底灰字（不再是提醒），不用透明度 */
+.warns.reviewed { background: var(--card-2); color: var(--muted); }
+.warns.reviewed .ic { color: var(--muted); }
 #lyricLayer { position: absolute; inset: 0; pointer-events: none; }
 #lyricLayer .lyric { position: absolute; transform: translateX(-2px); font-size: 13px; line-height: 16px; color: var(--fg); white-space: nowrap; }
 
-/* 小节卡片标题里的小节号、指板图例里的“?”（悬停看说明） */
+/* 小节卡片标题里的小节号 */
 #barNo { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; margin: 0 2px; }
-.fb-legend .hint { cursor: help; }

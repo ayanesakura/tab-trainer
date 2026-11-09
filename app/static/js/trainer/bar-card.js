@@ -28,14 +28,14 @@ function renderCard() {
   $('tipWarn').hidden = !warn.length;
   $('tipWarn').innerHTML = warn.map(w => `<div>${UI.icon('alert', 13)}<span>${esc(w)}</span></div>`).join('');
   $('barReview').hidden = !v.review[bi];
-  // 待核对的小节：看过原谱觉得没问题就点确认（之后改了音要重新核对）；确认过的可以撤销
+  // 待核对的小节：看过原谱觉得没问题就点确认（之后改了音要重新核对）；确认过的可以取消确认
   $('reviewRow').hidden = !(sb.needs_review || sb.reviewed);
   $('tipWarn').classList.toggle('reviewed', !!sb.reviewed);
-  // 没确认：一个“无误”按钮（说明在悬停提示里）；确认过：左边“已核对”，右边小的“撤销”
+  // 没确认：一个“无误”按钮（说明在悬停提示里）；确认过：左边“已核对”，右边小的“取消确认”（“撤销”留给撤销精修）
   $('reviewRow').classList.toggle('done', !!sb.reviewed);
-  setButton($('reviewBtn'), sb.reviewed ? '撤销' : `${UI.icon('check')}无误`);
+  setButton($('reviewBtn'), sb.reviewed ? '取消确认' : `${UI.icon('check')}无误`);
   $('reviewBtn').classList.toggle('ghost', !!sb.reviewed);
-  $('reviewBtn').title = sb.reviewed ? '撤销确认，重新算作待核对' : '对照原谱看过，识别是对的';
+  $('reviewBtn').title = sb.reviewed ? '取消确认，重新算作待核对' : '对照原谱看过，识别是对的';
   $('reviewHint').innerHTML = sb.reviewed ? `${UI.icon('check', 13)}已核对` : '';
   // 精修改过这个小节：模型说的改动 + 撤销（恢复精修之前的读法）
   const rf = sb.refine;
@@ -43,6 +43,7 @@ function renderCard() {
   if (rf) {
     $('refineDiff').textContent = `精修改过：${rf.diff || '（没有说明）'}`;
     $('refinePrev').textContent = eventsText((rf.prev && rf.prev.events) || []);
+    $('refinePrevLine').title = '精修之前：' + $('refinePrev').textContent; // 卡片上只显示一行
     $('undoRefineBtn').disabled = !!sb.locked;
     $('undoRefineBtn').title = sb.locked || '恢复成精修之前的读法';
   }
@@ -118,7 +119,7 @@ async function toggleReview() {
   await withBusy($('reviewBtn'), async () => {
     try {
       applySong(await put(songUrl(`/bars/${encodeURIComponent(sb.id)}/review`), { ok: !sb.reviewed, rev: sb.rev }));
-      UI.toast(sb.reviewed ? `已撤销第 ${bi + 1} 小节的确认` : `第 ${bi + 1} 小节已确认`, 'ok');
+      UI.toast(sb.reviewed ? `已取消第 ${bi + 1} 小节的确认` : `第 ${bi + 1} 小节已确认`, 'ok');
     } catch (e) {
       await writeFailed(e);
     }

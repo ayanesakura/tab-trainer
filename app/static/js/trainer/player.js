@@ -83,9 +83,10 @@ function setReady() {
   applyAudio();
 }
 
+// 谱线（六线谱的弦）有意义：用 --line-strong（卡片底上至少 3:1），不用 --faint
 function themeColors() {
   const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim() || '#808080';
-  return { mainGlyphColor: v('--fg'), secondaryGlyphColor: v('--muted'), staffLineColor: v('--faint'), barSeparatorColor: v('--muted'), barNumberColor: v('--muted'), scoreInfoColor: v('--fg') };
+  return { mainGlyphColor: v('--fg'), secondaryGlyphColor: v('--muted'), staffLineColor: v('--line-strong'), barSeparatorColor: v('--muted'), barNumberColor: v('--muted'), scoreInfoColor: v('--fg') };
 }
 const CHORD_NOTATION_KEY = 'tt.notation.chordSheet';
 const hasChords = song => !!song && (song.bars || []).some(b => (b.events || []).some(e => e.chord));

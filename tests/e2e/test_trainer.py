@@ -247,7 +247,7 @@ def test_layout_score_first_and_sidebar(server, browser):
     b.key("Escape", vk=27)
     assert b.js("document.getElementById('morePop').hidden")
     was = b.js("tt.get('ui.fb')")
-    b.js("document.getElementById('fbBtn').click(); true")
+    b.js("document.getElementById('fbToggle').click(); true")
     assert b.js("localStorage.getItem('tt.fb')") == ("0" if was else "1")
     assert b.js("document.getElementById('fbBody').hidden") == was
     assert not b.errors, b.errors

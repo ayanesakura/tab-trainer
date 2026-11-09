@@ -22,28 +22,34 @@ function step(d) {
 function draw() {
   const bi = get('ui.orig');
   if (bi < 0) return;
-  const s = get('song'), v = get('view'), b = s.bars[bi], [p, bx0, bx1, by0, by1] = v.regions[bi], im = images.list[p], c = $('origCanvas');
+  const s = get('song'), v = get('view'), b = s.bars[bi], [p, bx0, bx1, by0, by1] = v.regions[bi], im = images.list[p], c = $('origCanvas'), m = $('origMark');
   const sys = s.systems && s.systems[b.system];
   const [x0, x1, y0, y1] = sys && sys.crop && sys.page === p ? sys.crop : [bx0, bx1, by0, by1]; // 整行；没有行信息时只看这一小节
   $('origTitle').textContent = `原谱 · 第 ${bi + 1} 小节`;
   $('origHint').textContent = needsReview(b) ? '待核对' : '';
   $('origPrev').disabled = bi === 0; $('origNext').disabled = bi === s.bars.length - 1;
-  if (!im || im.bad) { c.hidden = true; $('origHint').textContent = '原谱图片加载失败'; return; }
-  c.hidden = false;
+  if (!im || im.bad) { c.hidden = m.hidden = true; $('origHint').textContent = '原谱图片加载失败'; return; }
+  c.hidden = m.hidden = false;
   if (!im.ok) return; // 加载好了会再画（tt-images）
-  const box = c.parentElement, w = x1 - x0, h = y1 - y0;
+  const box = c.closest('.orig-body'), w = x1 - x0, h = y1 - y0;
   const sc = Math.min((box.clientWidth - 24) / w, (innerHeight * 0.72) / h, 2), dpr = window.devicePixelRatio || 1;
-  c.style.width = w * sc + 'px'; c.style.height = h * sc + 'px';
-  c.width = Math.round(w * sc * dpr); c.height = Math.round(h * sc * dpr);
-  const g = c.getContext('2d'), k = sc * dpr;
-  g.drawImage(im, x0, y0, w, h, 0, 0, c.width, c.height);
-  // 其他小节淡一点，当前小节描边
+  for (const x of [c, m]) {
+    x.style.width = w * sc + 'px'; x.style.height = h * sc + 'px';
+    x.width = Math.round(w * sc * dpr); x.height = Math.round(h * sc * dpr);
+  }
+  const k = sc * dpr;
+  c.getContext('2d').drawImage(im, x0, y0, w, h, 0, 0, c.width, c.height);
+  // 其他小节淡一点，当前小节描边：画在上面一层（#origMark），不跟着图片在深色下反相，用的就是主题里的颜色
+  const g = m.getContext('2d'), css = getComputedStyle(document.documentElement);
   const hx0 = (bx0 - x0) * k, hx1 = (bx1 - x0) * k;
-  g.fillStyle = 'rgba(255,255,255,.55)';
-  g.fillRect(0, 0, Math.max(0, hx0), c.height); g.fillRect(hx1, 0, Math.max(0, c.width - hx1), c.height);
-  g.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  g.clearRect(0, 0, m.width, m.height);
+  g.globalAlpha = 0.55;
+  g.fillStyle = css.getPropertyValue('--paper-bg').trim();
+  g.fillRect(0, 0, Math.max(0, hx0), m.height); g.fillRect(hx1, 0, Math.max(0, m.width - hx1), m.height);
+  g.globalAlpha = 1;
+  g.strokeStyle = css.getPropertyValue('--accent').trim();
   g.lineWidth = 2 * dpr;
-  g.strokeRect(hx0 + dpr, dpr, hx1 - hx0 - 2 * dpr, c.height - 2 * dpr);
+  g.strokeRect(hx0 + dpr, dpr, hx1 - hx0 - 2 * dpr, m.height - 2 * dpr);
 }
 
 export function initOrig() {
@@ -63,5 +69,6 @@ export function initOrig() {
     draw();
   });
   document.addEventListener('tt-images', draw);
+  document.addEventListener('themechange', draw); // 框和淡化的颜色跟着主题、配色走
   addEventListener('resize', draw);
 }

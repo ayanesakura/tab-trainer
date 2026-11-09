@@ -285,7 +285,7 @@ export function notice(el, opts) {
   el.className = `notice ${kind}`.trim();
   el.setAttribute('role', kind === 'err' ? 'alert' : 'status');
   const acts = opts.actions || [];
-  el.innerHTML = `<span class="dot ${kind || 'info'}"></span><div class="n-body">${opts.html ?? ''}</div>`
+  el.innerHTML = `<span class="dot ${kind || 'plain'}"></span><div class="n-body">${opts.html ?? ''}</div>`
     + (acts.length || opts.onDismiss ? `<div class="n-acts">${acts.map((a, i) => `<button class="btn sm${a.primary ? ' primary' : ' ghost'}" data-act="${i}">${a.icon ? icon(a.icon, 13) : ''}${esc(a.label)}</button>`).join('')}${opts.onDismiss ? `<button class="icon-btn sm" data-dismiss title="关闭" aria-label="关闭">${icon('x')}</button>` : ''}</div>` : '');
   el.querySelectorAll('[data-act]').forEach(b => { b.onclick = () => acts[+b.dataset.act].onClick(b); });
   const x = el.querySelector('[data-dismiss]');

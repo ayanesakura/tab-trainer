@@ -58,7 +58,6 @@
               <button class="btn sm ghost" id="rhythmBtn" data-ic="tap" aria-pressed="false" aria-controls="rhythmCard" title="只练节奏：不拿琴，跟着示范在键盘上敲出这一段的节奏，每个音判早晚、每遍打分">敲节奏</button>
             </div>
             <div class="grp t-end">
-              <button class="icon-btn sm" id="fbBtn" data-ic="tuning" aria-pressed="true" title="显示 / 收起指板" aria-label="指板"></button>
               <button class="icon-btn sm" id="moreBtn" data-ic="settings" title="节拍器、预备拍、示范音、音色、自动提速" aria-label="播放设置" aria-haspopup="true" aria-expanded="false" aria-controls="morePop"></button>
             </div>
           </div>
@@ -132,9 +131,9 @@
             <div class="bar-chords" id="barChords" hidden></div>
             <div class="tip" id="tipText"></div>
             <div class="warns" id="tipWarn" hidden></div>
-            <div class="refine-row" id="refineRow" hidden><div class="refine-diff"><span id="refineDiff"></span></div><div class="refine-acts"><button class="btn sm ghost" id="undoRefineBtn" data-ic="back" title="恢复成精修之前的读法">撤销</button><span class="hint">原来：<span id="refinePrev"></span></span></div></div>
+            <div class="refine-row" id="refineRow" hidden><div class="refine-diff"><span id="refineDiff"></span></div><div class="refine-acts"><span class="hint" id="refinePrevLine">原来：<span id="refinePrev"></span></span><button class="btn sm ghost" id="undoRefineBtn" data-ic="back" title="恢复成精修之前的读法">撤销精修</button></div></div>
             <div class="bar-acts"><div class="review-row" id="reviewRow" hidden><span class="review-ok" id="reviewHint"></span><button class="btn sm" id="reviewBtn" data-ic="check" title="对照原谱看过，识别是对的">无误</button></div>
-            <div class="refine-scope" id="refineScope" hidden><div class="refine-scope-btns" id="refineScopeBtns"><button class="btn sm ghost" id="refineBarBtn">精修本小节</button><button class="btn sm ghost" id="refineRowBtn">精修本行</button></div><span class="refine-busy" id="refineBusy" hidden><span class="spinner"></span>精修中…</span><span class="hint" id="refineScopeHint"></span></div></div>
+            <div class="refine-scope" id="refineScope" hidden><div class="refine-scope-btns" id="refineScopeBtns"><button class="btn sm" id="refineBarBtn">精修本小节</button><button class="btn sm" id="refineRowBtn">精修本行</button></div><span class="refine-busy" id="refineBusy" hidden><span class="spinner"></span>精修中…</span><span class="hint" id="refineScopeHint"></span></div></div>
             <button class="paper" id="cropBox" title="点开看这一整行的原谱" hidden><canvas id="crop"></canvas><span class="paper-msg" id="cropMsg" hidden></span><span class="paper-cap">原谱</span></button>
             <div class="coach">
               <div class="sec-h">问 AI</div>
@@ -154,7 +153,7 @@
               </div>
               <div class="editor" id="editor" hidden>
                 <textarea class="input" id="edText" spellcheck="false" aria-label="本小节的数据（JSON）"></textarea>
-                <div class="hint">每行一个事件：dur = 到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string 弦（1 最细）、fret 品；tech 可用 h p sl si pm nh ah th roll x vib bend；grace 倚音品位（-1 表示没有）；点弦泛音（th）的 harm 是右手点的品。</div>
+                <div class="hint">每行一个事件（音符） <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="字段说明" aria-describedby="edHelp">?</button><span class="help-pop left up" id="edHelp" role="tooltip">dur：到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string：弦（1 最细）；fret：品；tech：h p sl si pm nh ah th roll x vib bend；grace：倚音品位（-1 表示没有）；harm：点弦泛音（th）右手点的品。</span></span></div>
                 <div class="ed-bar"><button class="btn sm primary" id="edSave">保存</button><button class="btn sm ghost" id="edCancel">取消</button><span class="hint" id="edMsg"></span></div>
               </div>
             </details>
@@ -218,7 +217,7 @@
   <section class="view narrow" id="view-plan" hidden>
     <div class="head"><div><h1>练习建议</h1></div></div>
     <div class="stack" id="plan"></div>
-    <div class="notice plan-tip"><span class="dot"></span><div class="n-body">弹不顺时：缩到那一小节，降到能连续弹对 3 遍的速度，再慢慢加速。</div></div>
+    <div class="notice plan-tip"><span class="dot plain"></span><div class="n-body">弹不顺时：缩到那一小节，降到能连续弹对 3 遍的速度，再慢慢加速。</div></div>
   </section>
 
   <!-- ============ 记号说明 ============ -->
@@ -232,7 +231,8 @@
 <div class="fb-dock" id="fbDock">
   <div class="fb-bar">
     <button class="fb-toggle" id="fbToggle" aria-controls="fbBody" aria-expanded="true"><span class="chev" aria-hidden="true"></span>指板</button>
-    <div class="legend fb-legend"><span><i class="lg-cur"></i>正在弹</span><span><i class="lg-next"></i>下一个</span><span title="泛音：轻触品丝正上方，不要按下">◆ 泛音</span><span class="hint" title="数字从变调夹算起，圆点是实际品位">?</span></div>
+    <div class="legend fb-legend"><span><i class="lg-cur"></i>正在弹</span><span><i class="lg-next"></i>下一个</span><span>◆ 泛音</span></div>
+    <span class="help-wrap fb-help"><button class="icon-btn help-btn xs" aria-label="指板说明" aria-describedby="fbHelp">?</button><span class="help-pop left up" id="fbHelp" role="tooltip"><span>泛音（◆）：轻触品丝正上方，不要按下</span><span>数字从变调夹算起，圆点是实际品位</span></span></span>
   </div>
   <div class="fb-body" id="fbBody"><svg id="fb" viewBox="0 0 960 146" role="img" aria-label="指板：正在弹和下一个要弹的位置"></svg></div>
 </div>
@@ -246,7 +246,7 @@
     <button class="icon-btn sm" id="origNext" data-ic="right" title="下一小节（→）" aria-label="下一小节"></button>
     <button class="icon-btn sm" id="origClose" data-ic="x" title="关闭（Esc）" aria-label="关闭"></button>
   </div>
-  <div class="orig-body"><canvas id="origCanvas"></canvas></div>
+  <div class="orig-body"><div class="orig-stack"><canvas id="origCanvas"></canvas><canvas id="origMark" aria-hidden="true"></canvas></div></div>
 </dialog>
 </body>
 </html>
