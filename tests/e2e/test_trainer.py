@@ -427,6 +427,31 @@ def test_ask_ai_error_mid_answer_restores_the_question(trainer):
     assert not b.errors, b.errors
 
 
+def test_ask_ai_answer_survives_a_late_poll(server, trainer):
+    """回答存好之前发出的读取（轮询）晚回来：不能用旧数据把刚并进来的问答盖掉。"""
+    b = trainer()
+    b.js(f"""(() => {{ const of = window.fetch; window.__held = [];
+      window.fetch = (u, i) => {{
+        if (String(u).includes('/ask/stream')) return Promise.resolve(new Response(
+          '{{"type":"done","qa":[{{"q":"怎么练","a":"慢练","at":"今天"}}]}}\\n', {{status: 200}}));
+        if (String(u) === '/api/songs/{server["image"]}' && window.__hold)
+          return new Promise(r => __held.push(r)).then(() => of(u, i));
+        return of(u, i); }};
+      return true; }})()""")
+    b.js("window.__hold = true; tt.refresh(); true")  # 读取发出去了，先不让它回来
+    b.wait_for("__held.length === 1")
+    b.js(
+        "window.__hold = false; tt.set('ui.bar', 1); document.getElementById('askInput').value = '怎么练'; "
+        "document.getElementById('askBtn').click(); true"
+    )
+    b.wait_for("(tt.song.bars[1].qa || []).length === 1")
+    b.js("__held[0](); true")  # 旧的读取回来了（服务上还没有这条问答）
+    time.sleep(1)
+    assert b.js("(tt.song.bars[1].qa || []).map(x => x.a)") == ["慢练"]
+    assert "慢练" in b.js("document.getElementById('qaList').textContent")
+    assert not b.errors, b.errors
+
+
 def test_refine_hint_is_only_sent_for_its_own_bar(trainer):
     """“哪里不对”的说明只跟着写它的那个小节：精修发出去以后清掉；换到别的小节也清掉，不会带到别的小节上。"""
     b = trainer()

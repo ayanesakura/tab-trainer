@@ -44,6 +44,11 @@ async function load() {
   set('song', s);
   return s;
 }
+/** 本地直接改了 store 里的曲子（问 AI 的回答并进 qa）：在这之前发出、还没回来的读取结果作废，免得旧数据把它盖掉 */
+export function setLocal(path, value) {
+  applied = ++seq;
+  set(path, value);
+}
 /** 写接口返回了最新的曲子：直接用它（比它早发出的读取结果作废） */
 export function applySong(s) {
   applied = ++seq;
