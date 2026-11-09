@@ -740,6 +740,24 @@ def test_tuner_mic_stops_while_the_page_is_hidden(trainer):
     assert not b.errors, b.errors
 
 
+def test_leaving_the_practice_page_stops_playback(trainer):
+    """切到调弦等页面时停下播放（播放键在练习页，切走就停不了；调弦的麦克风也会听到）；预备拍里切走也停，之后不会自己开始。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 5); tt.setTempo(120); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    b.js("location.hash = '#tune'; true")
+    b.wait_for("!tt.state.playing", timeout=3)
+    b.js("location.hash = '#practice'; true")
+    b.js("tt.set('play.countIn', true); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    time.sleep(0.3)  # 还在预备拍里
+    b.js("location.hash = '#plan'; true")
+    b.wait_for("!tt.state.playing", timeout=3)
+    time.sleep(2.5)  # 预备拍里停下要重新生成 MIDI：生成好了也不能接着放
+    assert not b.js("tt.state.playing")
+    assert not b.errors, b.errors
+
+
 def _viewport(b, w, h):
     b._run(
         b._send("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)

@@ -731,6 +731,13 @@ export function initPlayer() {
     if (!now && was) setStatus('已暂停', IDLE_HINT);
   });
   on('play.ready', r => { if (!r) return; applyAudio(); if (!playing() && !get('rhythm.on')) setStatus('已停止', IDLE_HINT); });
+  // 离开练习页（调弦、练习建议…）时停下：播放键和快捷键都只在练习页，切走就停不了了；调弦的麦克风也会听到它。
+  // 预备拍、节拍器是同一个播放器，一起停；谱子正在重新加载、本来要接着放的也不放了
+  on('ui.view', v => {
+    if (v === 'practice') return;
+    if (reloading) reloading.play = false;
+    if (playing() || countIn.from !== null || countIn.reload) stop();
+  });
   on(['play.a', 'play.b'], () => paintLoop());
   on('view', renderSections);
   on('view.source', loadSource);
