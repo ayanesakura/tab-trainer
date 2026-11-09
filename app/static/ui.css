@@ -36,18 +36,18 @@
   --ctl-fg: #63636b;
   --line: #e3e3e8;
   --line-2: #ececf0;
-  --line-strong: #c9c9d1; /* 输入框边框：比 --line 深，看得出是控件 */
+  --line-strong: #8a8a93; /* 输入框边框、六线谱的弦线：卡片和页面底上都至少 3:1，看得出是控件 */
   --switch-off: #92929c; /* 开关关闭时的轨道（卡片底上约 3:1） */
   --fg: #1c1c21;
   --fg-2: #4b4b53;
   --muted: #6e6e76; /* 白底上约 5:1 */
   --faint: #b9b9c2;
-  --placeholder: #8e8e96; /* 例句只写在占位符里：至少 3:1 */
+  --placeholder: #74747c; /* 例句只写在占位符里：和正文一样至少 4.5:1 */
   --accent: #4f46e5;
   --accent-hover: #4338ca;
   --accent-soft: #eeedfd;
   --accent-fg: #ffffff;
-  --green: #117a45;
+  --green: #0f7040;
   --green-soft: #e4f6ec;
   --red: #b93a3a;
   --red-soft: #fbe9e9;
@@ -72,8 +72,8 @@
   --fb-dot: #dcd2c2;
   --fb-on: var(--accent);
   --fb-on-fg: var(--accent-fg);
-  --fb-next: #0ea5e9;
-  --fb-label: var(--muted);
+  --fb-next: #0369a1; /* 木色底上至少 3:1 */
+  --fb-label: #626269; /* 木色底上至少 4.5:1（--muted 只有 4.2） */
   color-scheme: light;
 }
 :root[data-theme="dark"] {
@@ -88,13 +88,13 @@
   --ctl-fg: #a1a1aa;
   --line: #333339;
   --line-2: #2c2c32;
-  --line-strong: #55555d;
+  --line-strong: #6e6e78;
   --switch-off: #72727c;
   --fg: #ededf1;
   --fg-2: #b9b9c1;
   --muted: #9a9aa3;
   --faint: #56565f;
-  --placeholder: #7a7a83;
+  --placeholder: #8e8e97;
   --accent: #a5b4fc;
   --accent-hover: #c7d2fe;
   --accent-soft: #2b2c47;
@@ -122,6 +122,7 @@
   --fb-string: #8f887d;
   --fb-dot: #3d3832;
   --fb-next: #7dd3fc;
+  --fb-label: var(--muted);
   color-scheme: dark;
 }
 
@@ -131,23 +132,23 @@
 :root:is([data-palette="walnut"], [data-palette="pine"], [data-palette="cinnabar"]):not([data-theme="dark"]) {
   --bg: #f4efe6; --card: #fffcf6; --card-2: #faf5ec; --pill: #efe7da; --pill-hover: #e7ddcc;
   --seg-track: #e9e1d3; --seg-thumb: #fffcf6; --ctl-fg: #6b5f50;
-  --line: #e6dccb; --line-2: #eee6d8; --line-strong: #cdbfa8; --switch-off: #9a8d7b;
-  --fg: #2a231b; --fg-2: #51473b; --muted: #776a59; --faint: #c2b5a2; --placeholder: #93866f;
-  --green: #3f7a3a; --green-soft: #e6efdc; --red: #b03a2e; --red-soft: #f7e3dc; --amber: #9b5a0c; --amber-soft: #f6ead2;
+  --line: #e6dccb; --line-2: #eee6d8; --line-strong: #968672; --switch-off: #9a8d7b;
+  --fg: #2a231b; --fg-2: #51473b; --muted: #776a59; --faint: #c2b5a2; --placeholder: #7d705d;
+  --green: #386d31; --green-soft: #e6efdc; --red: #b03a2e; --red-soft: #f7e3dc; --amber: #9b5a0c; --amber-soft: #f6ead2;
   --knob: #fffcf6; --paper-bg: var(--card); --pop-bg: rgba(255, 252, 246, .95);
   --shadow-sm: 0 2px 8px rgba(70, 50, 20, .10); --shadow-md: 0 6px 20px rgba(70, 50, 20, .12);
   --shadow: 0 16px 44px rgba(70, 50, 20, .14), 0 2px 8px rgba(70, 50, 20, .06), 0 0 0 .5px rgba(70, 50, 20, .1);
-  --fb-wood: #eadfca; --fb-fret: #c9b99c; --fb-dot: #dccdb2; --fb-next: #2f8f9d;
+  --fb-wood: #eadfca; --fb-fret: #c9b99c; --fb-dot: #dccdb2; --fb-next: #2a7a86; --fb-label: #6a5d4d;
 }
 :root:is([data-palette="walnut"], [data-palette="pine"], [data-palette="cinnabar"])[data-theme="dark"] {
   --bg: #1b1814; --card: #24201b; --card-2: #201c17; --pill: #2f2a23; --pill-hover: #3a332b;
-  --ctl-fg: #b0a492; --line: #3a332a; --line-2: #2f2a22; --line-strong: #5c5346; --switch-off: #7c7262;
-  --fg: #efe8dc; --fg-2: #c9bfae; --muted: #a39784; --faint: #5c5346; --placeholder: #857a69;
+  --ctl-fg: #b0a492; --line: #3a332a; --line-2: #2f2a22; --line-strong: #7a6f60; --switch-off: #7c7262;
+  --fg: #efe8dc; --fg-2: #c9bfae; --muted: #a39784; --faint: #5c5346; --placeholder: #968a77;
   --green: #9fd08a; --green-soft: #26331f; --red: #f0907d; --red-soft: #45261f; --amber: #e8b45f; --amber-soft: #3d301c;
   --knob: #efe8dc; --paper-bg: var(--card); --pop-bg: rgba(40, 35, 29, .96);
-  --fb-wood: #2c261f; --fb-next: #7fd0da;
+  --fb-wood: #2c261f; --fb-next: #7fd0da; --fb-label: var(--muted);
 }
-:root[data-palette="walnut"]:not([data-theme="dark"]) { --accent: #8a5328; --accent-hover: #71431f; --accent-soft: #f2e4d3; --accent-fg: #ffffff; --amber: #b4461a; --amber-soft: #f8e4d8; }
+:root[data-palette="walnut"]:not([data-theme="dark"]) { --accent: #8a5328; --accent-hover: #71431f; --accent-soft: #f2e4d3; --accent-fg: #ffffff; --amber: #a8411a; --amber-soft: #f8e4d8; }
 :root[data-palette="walnut"][data-theme="dark"] { --accent: #d8a670; --accent-hover: #e8bd8c; --accent-soft: #3a2a1c; --accent-fg: #1d130a; --amber: #f29a6c; --amber-soft: #43281c; }
 :root[data-palette="pine"]:not([data-theme="dark"]) { --accent: #2f6a50; --accent-hover: #245640; --accent-soft: #e1ece4; --accent-fg: #ffffff; --green: #5e6c0e; --green-soft: #edf0d6; }
 :root[data-palette="pine"][data-theme="dark"] { --accent: #8fc6a6; --accent-hover: #acd8be; --accent-soft: #1f3329; --accent-fg: #0d1f16; --green: #cddc7e; --green-soft: #303515; }
