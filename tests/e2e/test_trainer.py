@@ -427,6 +427,55 @@ def test_ask_ai_error_mid_answer_restores_the_question(trainer):
     assert not b.errors, b.errors
 
 
+def test_ask_ai_answer_survives_a_late_poll(server, trainer):
+    """回答存好之前发出的读取（轮询）晚回来：不能用旧数据把刚并进来的问答盖掉。"""
+    b = trainer()
+    b.js(f"""(() => {{ const of = window.fetch; window.__held = [];
+      window.fetch = (u, i) => {{
+        if (String(u).includes('/ask/stream')) return Promise.resolve(new Response(
+          '{{"type":"done","qa":[{{"q":"怎么练","a":"慢练","at":"今天"}}]}}\\n', {{status: 200}}));
+        if (String(u) === '/api/songs/{server["image"]}' && window.__hold)
+          return new Promise(r => __held.push(r)).then(() => of(u, i));
+        return of(u, i); }};
+      return true; }})()""")
+    b.js("window.__hold = true; tt.refresh(); true")  # 读取发出去了，先不让它回来
+    b.wait_for("__held.length === 1")
+    b.js(
+        "window.__hold = false; tt.set('ui.bar', 1); document.getElementById('askInput').value = '怎么练'; "
+        "document.getElementById('askBtn').click(); true"
+    )
+    b.wait_for("(tt.song.bars[1].qa || []).length === 1")
+    b.js("__held[0](); true")  # 旧的读取回来了（服务上还没有这条问答）
+    time.sleep(1)
+    assert b.js("(tt.song.bars[1].qa || []).map(x => x.a)") == ["慢练"]
+    assert "慢练" in b.js("document.getElementById('qaList').textContent")
+    assert not b.errors, b.errors
+
+
+def test_refine_hint_is_only_sent_for_its_own_bar(trainer):
+    """“哪里不对”的说明只跟着写它的那个小节：精修发出去以后清掉；换到别的小节也清掉，不会带到别的小节上。"""
+    b = trainer()
+    b.js("""(() => { const of = window.fetch; window.__refines = [];
+      window.fetch = (u, i) => String(u).endsWith('/refine') && i && i.method === 'POST'
+        ? (__refines.push(JSON.parse(i.body)), Promise.resolve(new Response('{}', {status: 200}))) : of(u, i);
+      return true; })()""")
+    typed = "(t => { const el = document.getElementById('hintInput'); el.value = t; el.dispatchEvent(new Event('input')); return true; })"
+    b.js(f"tt.set('ui.bar', 1); {typed}('第 3 拍是 2 弦 4 品')")
+    b.wait_for("!document.getElementById('refineBarBtn').disabled")
+    b.js("document.getElementById('refineBarBtn').click(); true")
+    b.wait_for("__refines.length === 1")
+    assert b.js("__refines[0]") == {"bars": ["bar2"], "hint": "第 3 拍是 2 弦 4 品"}
+    b.wait_for("document.getElementById('hintInput').value === ''")
+    b.js(f"{typed}('这里少了一个音')")
+    b.js("tt.set('ui.bar', 4); true")  # 换了小节：说明清掉
+    assert b.js("document.getElementById('hintInput').value") == ""
+    b.wait_for("!document.getElementById('refineBarBtn').disabled")
+    b.js("document.getElementById('refineBarBtn').click(); true")
+    b.wait_for("__refines.length === 2")
+    assert b.js("__refines[1]") == {"bars": ["bar5"]}
+    assert not b.errors, b.errors
+
+
 def test_notice_buttons_survive_song_updates(trainer):
     """识别进度每次轮询都会更新：文字变了只换文字，按钮还是原来那个（按下和松开之间不会被换掉）。"""
     b = trainer()
@@ -462,14 +511,54 @@ def test_corrupt_song_stops_polling(server, browser):
             )
         )
         b.open(f"{server['base']}/trainer?id={sid}")
-        b.wait_for("document.getElementById('notices').innerText.includes('数据损坏')", timeout=20)
+        gone = "(document.getElementById('songGone') || {}).textContent || ''"
+        b.wait_for(f"{gone}.includes('数据损坏')", timeout=20)
         time.sleep(6)  # 退避重试的话这段时间里至少还会再请求一次
         assert b.js("window.__gets") == 1
-        text = b.js("document.getElementById('notices').innerText")
-        assert "自动重试" not in text and "重试" in text
+        text = b.js(gone)
+        assert "自动重试" not in text and "重试" in text and "返回曲库" in text
         assert b.js("document.getElementById('songTitle').textContent") == "加载失败"
+        assert b.js("document.querySelector('.practice-grid').getClientRects().length") == 0
+        b.js("document.getElementById('goneRetry').click(); true")  # 手动重试：再请求一次
+        b.wait_for("window.__gets === 2")
     finally:
         shutil.rmtree(store.song_dir(sid), ignore_errors=True)
+
+
+def test_unknown_song_shows_an_empty_state(server, browser):
+    """曲子不存在：不显示空谱面、假的小节卡片和问 AI，只有一句说明和“返回曲库”。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id=no-such-song#tune")
+    b.wait_for("!!document.getElementById('songGone')")
+    assert "曲子不存在" in b.js("document.getElementById('songGone').textContent")
+    assert b.js("document.querySelector('#songGone a.btn').getAttribute('href')") == "/"
+    assert b.js("!document.getElementById('goneRetry')")
+    for sel in (".practice-grid", "#fbDock", "#nav", "#view-tune"):
+        assert b.js(f"document.querySelector('{sel}').getClientRects().length") == 0, sel
+    assert b.js("location.hash") == "#practice"  # 不在调弦页开麦克风
+    assert not b.errors, b.errors
+
+
+def test_load_failure_offers_retry(server, browser):
+    """第一次就连不上服务：说明 + “重试”，重试成功后正常显示练习页。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id={server['image']}")
+    b._run(
+        b._send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            source="""window.__fail = true; const of = window.fetch;
+            window.fetch = (u, i) => window.__fail && String(u).startsWith('/api/songs/')
+              ? Promise.reject(new TypeError('Failed to fetch')) : of(u, i);""",
+        )
+    )
+    b._run(b._send("Page.navigate", url=f"{server['base']}/trainer?id={server['image']}&offline=1"))
+    b.wait_for("location.search.includes('offline') && !!document.getElementById('goneRetry')")
+    assert "加载失败" in b.js("document.getElementById('songGone').textContent")
+    assert b.js("document.querySelector('.practice-grid').getClientRects().length") == 0
+    b.js("window.__fail = false; document.getElementById('goneRetry').click(); true")
+    b.wait_for("!document.getElementById('songGone') && !!tt.song")
+    assert b.js("document.querySelector('.practice-grid').getClientRects().length") > 0
+    assert b.js("document.getElementById('songTitle').textContent") == "E2E 图片曲"
 
 
 def test_rhythm_drill_scores_taps(trainer):
@@ -679,6 +768,95 @@ def test_tuner_reading_settles_on_a_steady_tone(trainer):
     b.wait_for("document.getElementById('tNote').textContent === '--'", timeout=5)
     assert "弹一根空弦" in b.js(read)
     b.js("location.hash = '#practice'; true")
+    assert not b.errors, b.errors
+
+
+_FAKE_MIC = """(() => { window.__streams = [];
+  navigator.mediaDevices.getUserMedia = async () => {
+    const c = new AudioContext(), o = c.createOscillator(), d = c.createMediaStreamDestination();
+    o.frequency.value = 110; o.connect(d); o.start(); await c.resume(); __streams.push(d.stream); return d.stream; };
+  return true; })()"""
+_LIVE = "__streams.at(-1).getTracks().every(t => t.readyState === 'live')"
+_ENDED = "__streams.at(-1).getTracks().every(t => t.readyState === 'ended')"
+
+
+def test_tuner_opened_directly_before_the_song_loads(server, browser):
+    """直接打开（刷新）#tune、曲子还没加载完就开了麦克风：先按标准调弦识别，不能出错卡在“正在打开麦克风…”；
+    曲子到了换成它的调弦，照样有读数。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id={server['image']}")
+    b._run(
+        b._send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            source=_FAKE_MIC
+            + """; (() => { const of = window.fetch.bind(window);  // 曲子等测试放行（__go）才到
+              const gate = new Promise(r => { window.__go = r; });
+              window.fetch = (u, i) => String(u).includes('/api/songs/') ? gate.then(() => of(u, i)) : of(u, i); })();""",
+        )
+    )
+    b._run(b._send("Page.navigate", url=f"{server['base']}/trainer?id={server['image']}&direct=1#tune"))
+    read = "document.getElementById('tRead').textContent"
+    b.wait_for(f"location.search.includes('direct') && window.__streams && __streams.length === 1 && {_LIVE}")
+    b.wait_for(f"{read}.includes('5 弦')", timeout=5)  # 曲子还没到：按标准调弦识别出 5 弦 A2
+    assert b.js("!tt.view")
+    b.js("__go(); true")
+    b.wait_for("!!tt.view && !!document.getElementById('tr5')")
+    b.wait_for(f"{read}.includes('5 弦 → 目标 A2')", timeout=5)  # 曲子到了：还在读
+    assert b.js("document.getElementById('tr5').classList.contains('hit')")
+    b.js("location.hash = '#practice'; true")
+    b.wait_for(_ENDED)
+    assert not b.errors, b.errors
+
+
+def test_tuner_mic_stops_while_the_page_is_hidden(trainer):
+    """切到别的标签页 / 最小化时关掉麦克风，回来还在调弦页就重新打开；关页面（pagehide）也关掉。"""
+    b = trainer()
+    b.js(_FAKE_MIC)
+    hide = """(h => { Object.defineProperty(document, 'hidden', {configurable: true, get: () => h});
+      document.dispatchEvent(new Event('visibilitychange')); return true; })"""
+    b.js("location.hash = '#tune'; true")
+    b.wait_for(f"__streams.length === 1 && {_LIVE}")
+    b.js(f"{hide}(true)")
+    b.wait_for(_ENDED)
+    b.js("location.hash = '#practice'; location.hash = '#tune'; true")  # 在后台切过来也不开
+    time.sleep(0.5)
+    assert b.js("__streams.length") == 1
+    b.js(f"{hide}(false)")
+    b.wait_for(f"__streams.length === 2 && {_LIVE}")
+    b.wait_for("document.getElementById('tRead').textContent.includes('5 弦')", timeout=5)
+    b.js("dispatchEvent(new PageTransitionEvent('pagehide')); true")
+    b.wait_for(_ENDED)
+    assert not b.errors, b.errors
+
+
+def test_leaving_the_practice_page_stops_playback(trainer):
+    """切到调弦等页面时停下播放（播放键在练习页，切走就停不了；调弦的麦克风也会听到）；预备拍里切走也停，之后不会自己开始。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 5); tt.setTempo(120); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    b.js("location.hash = '#tune'; true")
+    b.wait_for("!tt.state.playing", timeout=3)
+    b.js("location.hash = '#practice'; true")
+    b.js("tt.set('play.countIn', true); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    time.sleep(0.3)  # 还在预备拍里
+    b.js("location.hash = '#plan'; true")
+    b.wait_for("!tt.state.playing", timeout=3)
+    time.sleep(2.5)  # 预备拍里停下要重新生成 MIDI：生成好了也不能接着放
+    assert not b.js("tt.state.playing")
+    assert not b.errors, b.errors
+
+
+def test_song_info_shows_the_lock_message(trainer):
+    """精修进行中改曲子信息：服务返回 423 时把它的说明原样告诉用户。"""
+    b = trainer()
+    b.js("""(() => { const of = window.fetch; window.fetch = (u, i) => String(u).endsWith('/meta') && i && i.method === 'PUT'
+      ? Promise.resolve(new Response(JSON.stringify({detail: '正在精修，完成后再改曲子信息'}), {status: 423}))
+      : of(u, i); return true; })()""")
+    b.js("location.hash = '#tune'; document.getElementById('metaSave').click(); true")
+    b.wait_for(
+        "[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('正在精修，完成后再改曲子信息'))"
+    )
     assert not b.errors, b.errors
 
 

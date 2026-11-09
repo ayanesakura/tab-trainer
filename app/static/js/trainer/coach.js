@@ -1,9 +1,10 @@
 // 小节 AI 教练：针对正在看的小节向 AI 提问，问答记在小节上。回答边生成边显示（流式接口，见 app/main.py 的 ask_bar_stream）。
 
-import { get, set, on } from './store.js';
+import { get, on } from './store.js';
 import { $, UI, esc, setButton, songUrl } from './dom.js';
 import { postStream } from '../lib/api.js';
 import { holdBarWhile } from './player.js';
+import { setLocal } from './song.js';
 
 // 正在等的回答（一次只问一个）：{bar: 小节 id, q: 问题, a: 已经收到的回答}
 let pending = null;
@@ -65,7 +66,7 @@ async function ask() {
     // 问答不改小节的 rev 和曲子的 meta_rev，所以下一次改谱 / 改谱头带的版本号仍然是对的，不会误报 409
     pending = null;
     const k = get('song').bars.findIndex(x => x.id === bar.id);
-    if (k >= 0) set(`song.bars.${k}.qa`, d.qa);
+    if (k >= 0) setLocal(`song.bars.${k}.qa`, d.qa); // 在这之前发出的轮询晚到了也不会把新问答盖掉
   } catch (e) {
     // 没存下来的半截回答不留；问题放回输入框（还停在这个小节、也没有新打字时），改一改就能再问
     pending = null;

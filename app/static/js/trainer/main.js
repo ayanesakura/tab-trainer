@@ -11,7 +11,7 @@ import { initOrig } from './orig.js';
 import { initCoach } from './coach.js';
 import { initPracticeLog } from './practice-log.js';
 import { initEditor, setEditMode, openNotePop, editorState } from './editor.js';
-import { initSong, startLoading, refresh } from './song.js';
+import { initSong, startLoading, refresh, songGone } from './song.js';
 import { initTuner } from './tuner.js';
 import { initFollow, followDelta, followDebug } from './follow.js';
 import { initGlossary } from './glossary.js';
@@ -150,5 +150,5 @@ initMore();
 initDock();
 showView(location.hash.slice(1));
 
-if (!SONG_ID) $('songTitle').textContent = '缺少曲子 id，请从曲库进入';
+if (!SONG_ID) { $('songTitle').textContent = '缺少曲子 id，请从曲库进入'; songGone('缺少曲子 id'); }
 else startLoading();

@@ -9,7 +9,7 @@ import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.
 import { SOURCES } from '../vocab.js';
 import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
-import { alphaTab, setLoop, setTempo, setPlayerHooks, revealLoop } from './player.js';
+import { alphaTab, setLoop, setTempo, setPlayerHooks, revealLoop, stop } from './player.js';
 import { notice } from './notices.js';
 import { refineConfirm, NO_REFINE, refineScopeLabel } from '../lib/refine.js';
 
@@ -27,22 +27,36 @@ async function load() {
     if (e.name === 'AbortError') throw e;
     if (!transient(e)) { // 404、数据损坏（500 带说明）……重试也没用：停止轮询，说清楚原因
       polling = false; if (poller) poller.stop();
-      if (e.status === 404) $('songTitle').textContent = '曲子不存在';
-      else {
-        if (!get('song')) $('songTitle').textContent = '加载失败';
-        notice('offline', { kind: 'err', html: `加载失败：${esc(e.message)}`, actions: [{ label: '重试', onClick: () => refresh() }] });
-      }
+      if (e.status === 404) { $('songTitle').textContent = '曲子不存在'; songGone('曲子不存在'); }
+      else if (!get('song')) { $('songTitle').textContent = '加载失败'; songGone('加载失败', e.message, true); }
+      else notice('offline', { kind: 'err', html: `加载失败：${esc(e.message)}`, actions: [{ label: '重试', onClick: () => refresh() }] });
       return null;
     }
-    if (!get('song')) $('songTitle').textContent = '加载失败';
-    notice('offline', { kind: 'err', html: `${esc(e.message)}，稍后自动重试。` });
+    if (!get('song')) { $('songTitle').textContent = '加载失败'; songGone('加载失败', `${e.message}，稍后自动重试。`, true); }
+    else notice('offline', { kind: 'err', html: `${esc(e.message)}，稍后自动重试。` });
     throw e; // poll 退避重试
   }
-  notice('offline', null);
+  notice('offline', null); songGone(null);
   if (my < applied) return get('song'); // 晚到的旧结果
   applied = my;
   set('song', s);
   return s;
+}
+/** 曲子不存在 / 一直没加载出来：谱面、侧栏、指板都是空架子，换成一句说明和“返回曲库”（加载失败的再给个“重试”）；head 为空时收起 */
+export function songGone(head, msg = '', retry = false) {
+  document.body.classList.toggle('song-gone', !!head);
+  let box = $('songGone');
+  if (!head) { if (box) box.remove(); return; }
+  if (!box) { box = document.createElement('div'); box.id = 'songGone'; box.className = 'empty-state gone-box'; document.querySelector('main').prepend(box); }
+  box.innerHTML = `<b>${esc(head)}</b>${msg ? `<p>${esc(msg)}</p>` : ''}<div class="gone-btns">${retry ? `<button class="btn sm" id="goneRetry">${UI.icon('refresh')}重试</button>` : ''}<a class="btn sm primary" href="/">返回曲库</a></div>`;
+  if (retry) $('goneRetry').onclick = e => withBusy(e.currentTarget, refresh);
+  stop(); // 曲子被删了还在放的话停下（播放键已经看不见了）
+  if (get('ui.view') !== 'practice') location.hash = '#practice'; // 调弦页的麦克风也关掉
+}
+/** 本地直接改了 store 里的曲子（问 AI 的回答并进 qa）：在这之前发出、还没回来的读取结果作废，免得旧数据把它盖掉 */
+export function setLocal(path, value) {
+  applied = ++seq;
+  set(path, value);
 }
 /** 写接口返回了最新的曲子：直接用它（比它早发出的读取结果作废） */
 export function applySong(s) {

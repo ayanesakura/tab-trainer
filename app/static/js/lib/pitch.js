@@ -262,6 +262,7 @@ export class LevelTracker {
  */
 export class TunerEngine {
   constructor(targets, sr, { okIn = 4, okOut = 7, switchMargin = 30, switchFrames = 4, ...opts } = {}) {
+    if (!targets || !targets.length) throw new RangeError('调音器没有目标音（调弦还没加载）'); // 不然 fmin / fmax 成了 ±Infinity，bufferSize 算出 2
     this.targets = targets; this.sr = sr;
     Object.assign(this, { okIn, okOut, switchMargin, switchFrames });
     const ms = targets.map(t => t.m);

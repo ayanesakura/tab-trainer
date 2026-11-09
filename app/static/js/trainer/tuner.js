@@ -37,11 +37,15 @@ function micError(err) {
 }
 const FRAME_MS = 40; // 每秒算 25 次音高就够了（一次不到 1ms），指针的平滑靠 CSS 过渡
 let starting = false;
-/** 按当前调弦建音高跟踪（目标没变就沿用，不打断正在显示的读数）；缓冲长度跟着最低弦变 */
+/** 麦克风该开着：在调弦页、并且页面看得见（切到别的标签页、最小化时关掉） */
+const wanted = () => get('ui.view') === 'tune' && !document.hidden;
+/** 按当前调弦建音高跟踪（目标没变就沿用，不打断正在显示的读数）；缓冲长度跟着最低弦变。
+ * 直接打开 #tune 时曲子可能还没加载（TUNE 是空的）：先按标准调弦识别，曲子到了 renderTune 再换成它的调弦 */
 function makeEngine() {
-  const key = TUNE.map(t => t.m).join();
+  const targets = TUNE.length ? TUNE.map(t => ({ s: t.s, m: t.m })) : [6, 5, 4, 3, 2, 1].map(s => ({ s, m: STD_MIDI[s - 1] }));
+  const key = targets.map(t => t.m).join();
   if (mic.eng && mic.key === key) return;
-  const eng = new TunerEngine(TUNE.map(t => ({ s: t.s, m: t.m })), ac.sampleRate);
+  const eng = new TunerEngine(targets, ac.sampleRate);
   if (mic.an.fftSize !== eng.bufferSize) mic.an.fftSize = eng.bufferSize;
   mic.buf = new Float32Array(mic.an.fftSize);
   Object.assign(mic, { eng, key });
@@ -91,12 +95,12 @@ async function startMic() {
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
   catch (err) { if (get('ui.view') === 'tune') $('tRead').textContent = micError(err); return; }
   finally { starting = false; }
-  if (get('ui.view') !== 'tune') { stream.getTracks().forEach(t => t.stop()); return; } // 等授权的时候已经离开了调弦页
+  if (!wanted()) { stream.getTracks().forEach(t => t.stop()); return; } // 等授权的时候已经离开了调弦页（或页面切到了后台）
   const an = ac.createAnalyser();
   const src = ac.createMediaStreamSource(stream);
   src.connect(an);
   mic = { stream, src, an, buf: null, eng: null, key: '', raf: 0, last: -Infinity, shown: null };
-  makeEngine();
+  try { makeEngine(); } catch (err) { stopMic(); $('tRead').textContent = micError(err); return; } // 起不来就别让麦克风开着空转
   mic.raf = requestAnimationFrame(tick);
   // 直接打开 #tune、还没在页面上点过：浏览器不让声音跑起来，分析器拿到的全是 0。提示点一下，点了再接着算
   if (ac.state === 'running') resetDisplay();
@@ -117,10 +121,15 @@ function stopMic() {
 }
 
 export function initTuner() {
-  on('ui.view', v => (v === 'tune' ? startMic() : stopMic()));
+  const sync = () => (wanted() ? startMic() : stopMic());
+  on('ui.view', sync);
+  // 切到别的标签页、最小化、关页面时关掉麦克风（系统的麦克风指示别一直亮着）；回来还在调弦页就重新打开
+  document.addEventListener('visibilitychange', sync);
+  addEventListener('pagehide', stopMic);
+  addEventListener('pageshow', sync);
   if (!window.isSecureContext) $('tRead').textContent = MIC_BLOCKED;
   $('tuneRows').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; initAudio(); pluck(0, +b.dataset.m, ac.currentTime + 0.02); });
   on('view', v => { if (v) renderTune(v); });
   if (get('view')) renderTune(get('view'));
-  if (get('ui.view') === 'tune') startMic(); // 直接打开的就是调弦页
+  if (wanted()) startMic(); // 直接打开的就是调弦页
 }

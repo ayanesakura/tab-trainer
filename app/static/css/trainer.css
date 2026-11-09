@@ -298,6 +298,10 @@ table.tune td b { font-variant-numeric: tabular-nums; }
 .plan-row .sub { white-space: normal; line-height: 1.6; color: var(--fg-2); margin-top: 3px; }
 .plan-tip { margin-top: var(--sp-3); }
 .empty-state p { margin: 2px 0 var(--sp-3); }
+/* 曲子不存在 / 加载失败（song.js 的 songGone）：只留顶栏和一句说明 */
+body.song-gone main > .view, body.song-gone #nav, body.song-gone .fb-dock { display: none; }
+.gone-box { margin-top: 12vh; }
+.gone-btns { display: flex; gap: var(--sp-2); justify-content: center; }
 .glossary .sym { flex: none; min-width: 44px; text-align: center; font-size: var(--fs-1); }
 
 /* ---- 窄屏：小节卡片落到谱面下面，控制条换行 ---- */
