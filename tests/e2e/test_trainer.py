@@ -427,6 +427,30 @@ def test_ask_ai_error_mid_answer_restores_the_question(trainer):
     assert not b.errors, b.errors
 
 
+def test_refine_hint_is_only_sent_for_its_own_bar(trainer):
+    """“哪里不对”的说明只跟着写它的那个小节：精修发出去以后清掉；换到别的小节也清掉，不会带到别的小节上。"""
+    b = trainer()
+    b.js("""(() => { const of = window.fetch; window.__refines = [];
+      window.fetch = (u, i) => String(u).endsWith('/refine') && i && i.method === 'POST'
+        ? (__refines.push(JSON.parse(i.body)), Promise.resolve(new Response('{}', {status: 200}))) : of(u, i);
+      return true; })()""")
+    typed = "(t => { const el = document.getElementById('hintInput'); el.value = t; el.dispatchEvent(new Event('input')); return true; })"
+    b.js(f"tt.set('ui.bar', 1); {typed}('第 3 拍是 2 弦 4 品')")
+    b.wait_for("!document.getElementById('refineBarBtn').disabled")
+    b.js("document.getElementById('refineBarBtn').click(); true")
+    b.wait_for("__refines.length === 1")
+    assert b.js("__refines[0]") == {"bars": ["bar2"], "hint": "第 3 拍是 2 弦 4 品"}
+    b.wait_for("document.getElementById('hintInput').value === ''")
+    b.js(f"{typed}('这里少了一个音')")
+    b.js("tt.set('ui.bar', 4); true")  # 换了小节：说明清掉
+    assert b.js("document.getElementById('hintInput').value") == ""
+    b.wait_for("!document.getElementById('refineBarBtn').disabled")
+    b.js("document.getElementById('refineBarBtn').click(); true")
+    b.wait_for("__refines.length === 2")
+    assert b.js("__refines[1]") == {"bars": ["bar5"]}
+    assert not b.errors, b.errors
+
+
 def test_notice_buttons_survive_song_updates(trainer):
     """识别进度每次轮询都会更新：文字变了只换文字，按钮还是原来那个（按下和松开之间不会被换掉）。"""
     b = trainer()

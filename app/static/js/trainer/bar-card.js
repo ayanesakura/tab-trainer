@@ -11,6 +11,7 @@ import { barTags, warnText, isScore, eventsText } from './view.js';
 import { images, loadImages } from './page-images.js';
 import { barChords, chordShapes, chordSVG } from './chords.js';
 import { barRefineHint, rowRefineHint, refineScopeLabel } from '../lib/refine.js';
+import { holdBarWhile } from './player.js';
 
 function renderCard() {
   const bi = get('ui.bar'), s = get('song'), v = get('view');
@@ -82,6 +83,7 @@ async function refineScope(kind) {
   await withBusy(btn, async () => {
     try {
       await post(songUrl('/refine'), body);
+      if (hint) clearHint(); // 说明是写给这一次的，别带到下一次精修别的小节
       UI.toast(kind === 'bar' ? `已开始精修第 ${bi + 1} 小节` : `已开始精修第 ${sb.system + 1} 行`, 'info');
     } catch (e) {
       if (isLocked(e)) lockedToast(e); else UI.toast(e.message, 'err', 5000);
@@ -90,6 +92,10 @@ async function refineScope(kind) {
   await refresh();
   scopeNow(); // withBusy 结束时把按钮还原成点之前的样子：按新状态重画一次
 }
+// “哪里不对”的说明是对着哪个小节写的（小节 id）：换到别的小节就清掉，不会被当成别的小节的说明发出去
+let hintFor = null;
+const shownId = () => { const s = get('song'), sb = s && s.bars[get('ui.bar')]; return sb ? sb.id : null; };
+function clearHint() { $('hintInput').value = ''; hintFor = null; scopeNow(); }
 function scopeNow() { const s = get('song'), sb = s && s.bars[get('ui.bar')]; if (sb) renderRefineScope(s, sb); }
 
 async function undoRefine() {
@@ -142,7 +148,9 @@ export function initBarCard() {
   $('undoRefineBtn').onclick = undoRefine;
   $('refineBarBtn').onclick = () => refineScope('bar');
   $('refineRowBtn').onclick = () => refineScope('row');
-  $('hintInput').addEventListener('input', scopeNow);
+  $('hintInput').addEventListener('input', () => { hintFor = shownId(); scopeNow(); });
+  on('ui.bar', () => { if (hintFor !== null && shownId() !== hintFor) clearHint(); });
+  holdBarWhile(() => document.activeElement === $('hintInput')); // 播放中写说明：侧栏停在这个小节
   on(['song.activity', 'song.busy', 'song.refine_scopes'], scopeNow); // 精修开始 / 核对完一个小节：只重画这一行（不重画截图）
   on('view', v => { if (v) loadImages(v.pages); });
   document.addEventListener('tt-images', drawCrop);
