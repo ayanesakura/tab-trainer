@@ -564,7 +564,16 @@ def test_pages_and_static_files_are_revalidated(client):
         assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
     etag = client.get("/static/js/trainer/player.js").headers["etag"]
     assert client.get("/static/js/trainer/player.js", headers={"If-None-Match": etag}).status_code == 304
-    assert "cache-control" not in client.get("/api/songs").headers
+
+
+def test_api_responses_are_never_cached(client, data_dir):
+    """接口数据一律 no-store。没有它时，从练习页“后退”回曲库（Chrome 没能从往返缓存恢复页面、重新加载）
+    会直接用 HTTP 缓存里的旧 /api/songs，不问服务器：刚确认过的小节，曲库里的“待核对”数量还是旧的。"""
+    sid = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
+    for path in ("/api/songs", f"/api/songs/{sid}", "/api/settings"):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-store", path
+    assert client.get("/api/songs/nope").headers["cache-control"] == "no-store"  # 出错的回应也不缓存
 
 
 def test_bar_confirmation_survives_rerecognition_but_not_new_warnings(data_dir, sync_jobs):

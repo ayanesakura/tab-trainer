@@ -178,13 +178,17 @@ app.add_middleware(LimitUploadSize)
 
 
 @app.middleware("http")
-async def revalidate_static(request: Request, call_next):
+async def cache_headers(request: Request, call_next):
     """页面和前端代码每次都向服务器确认有没有更新（没变只回 304）。不加的话浏览器按“最后修改时间”自己猜能缓存多久，
-    普通刷新只重新验证 HTML，JS 模块还用旧的：改了前端，用户刷新也看不到。"""
+    普通刷新只重新验证 HTML，JS 模块还用旧的：改了前端，用户刷新也看不到。
+    接口数据一律不缓存（no-store）：前进 / 后退时 Chrome 会直接用 HTTP 缓存里的旧回应、不问服务器，
+    从练习页后退回曲库（页面没能从往返缓存恢复、重新加载时）看到的就是旧的“待核对”数量、练习记录。"""
     response = await call_next(request)
     path = request.url.path
     if path in ("/", "/trainer") or path.startswith("/static/"):
         response.headers.setdefault("Cache-Control", "no-cache")
+    elif path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
     return response
 
 

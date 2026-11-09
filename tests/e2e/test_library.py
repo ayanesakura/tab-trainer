@@ -470,6 +470,31 @@ def test_library_refreshes_after_back_and_on_return(server, browser):
         _put_json(server, f"/api/songs/{gp}/meta", {"title": old})
 
 
+def test_back_to_library_without_bfcache_shows_fresh_data(server):
+    # Chrome 没能从往返缓存恢复曲库页（在练习页待久了、缓存被清掉）时，“后退”会重新加载页面，
+    # 而且优先用 HTTP 缓存：/api/songs 不带 no-store 时拿到的是旧数据（刚确认的小节，“待核对”数量不变）
+    from tests.e2e.cdp import Browser
+
+    gp = server["gp"]
+    old = json.loads(_api(server, f"/api/songs/{gp}"))["title"]
+    title = f"document.querySelector('.song-row[data-id=\"{gp}\"] .title').textContent"
+    try:
+        with Browser(args=("--disable-features=BackForwardCache",)) as b:
+            b.open(server["base"] + "/")
+            b.wait_for(f"{title} === {json.dumps(old)}")
+            b.js(f"location.href = '/trainer?id={gp}'; true")
+            b.wait_for("location.pathname === '/trainer' && document.readyState === 'complete'")
+            # 相当于在练习页里改了数据
+            _put_json(server, f"/api/songs/{gp}/meta", {"title": "E2E 后退重新加载"})
+            b.js("window.__same = 1; history.back(); true")
+            b.wait_for("location.pathname === '/' && document.readyState === 'complete'")
+            assert b.js("window.__same") is None  # 确实是重新加载（没有往返缓存）
+            b.wait_for(f"{title} === 'E2E 后退重新加载'", timeout=5)
+            assert not b.errors, b.errors
+    finally:
+        _put_json(server, f"/api/songs/{gp}/meta", {"title": old})
+
+
 def test_tag_click_filters_in_select_mode(server, browser):
     img = server["image"]
     _put_json(server, f"/api/songs/{img}/tags", {"tags": ["e2e-sel"]})

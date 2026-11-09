@@ -34,8 +34,9 @@ def free_port() -> int:
 class Browser:
     """同步接口（内部用 asyncio）：with Browser() as b: b.open(url); b.js("1+1")。"""
 
-    def __init__(self, width: int = 1400, height: int = 1800):
+    def __init__(self, width: int = 1400, height: int = 1800, args: tuple[str, ...] = ()):
         self.width, self.height = width, height
+        self.args = tuple(args)  # 额外的 Chrome 启动参数（比如关掉往返缓存）
         self.errors: list[str] = []
         self._loop = asyncio.new_event_loop()
 
@@ -54,6 +55,7 @@ class Browser:
                 "--use-fake-ui-for-media-stream",  # 麦克风（调音器）：自动允许，用假的输入设备
                 "--use-fake-device-for-media-stream",
                 f"--window-size={self.width},{self.height}",
+                *self.args,
                 "about:blank",
             ],
             stdout=subprocess.DEVNULL,
