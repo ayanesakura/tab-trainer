@@ -709,3 +709,89 @@ def test_settings_are_locked_while_refining(client, sync_jobs, monkeypatch):
     client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
     assert _frets(store.load(sid)["bars"][1]) == [7] * 4
     assert client.put(f"/api/songs/{sid}/meta", json={"capo": 3}).status_code == 200  # 精修完就能改
+
+
+def test_a_doubtful_result_on_a_confirmed_bar_needs_review_again(client, sync_jobs, monkeypatch):
+    """用户确认过没问题的小节，点“精修这个小节”后几遍核对对不上：提示说标成了待核对，小节就真的要待核对。"""
+    sid = _song()
+    bid = store.load(sid)["bars"][1]["id"]
+    client.put(f"/api/songs/{sid}/bars/{bid}/review", json={"ok": True})
+    n = {"k": 0}
+
+    def flaky(img, meta, span, events, previous, ts):
+        n["k"] += 1
+        fixed = [{**e, "notes": [{**x, "fret": 10 + n["k"]} for x in e["notes"]]} for e in events]
+        return {"diff": "第 1 拍可能不对", "changed": True, "events": fixed, "uncertain": ""}  # 每遍都不一样
+
+    monkeypatch.setattr(FakeClaude, "verify_result", flaky)
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    v = client.get(f"/api/songs/{sid}").json()
+    b = next(x for x in v["bars"] if x["id"] == bid)
+    assert "标成了待核对" in v["notice"]["msg"]
+    assert b["needs_review"] is True and b["reviewed"] is False and "第 1 拍可能不对" in b["uncertain"]
+    assert _frets(b) == [1] * 4
+
+    # 再精修一次还是对不上（说明已经写过了）：照样说标成了待核对，不说“没问题”
+    client.put(f"/api/songs/{sid}/bars/{bid}/review", json={"ok": True})
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    v = client.get(f"/api/songs/{sid}").json()
+    assert "标成了待核对" in v["notice"]["msg"]
+    assert next(x for x in v["bars"] if x["id"] == bid)["needs_review"] is True
+
+
+def test_the_refine_result_is_shown_even_over_another_notice(client, sync_jobs, monkeypatch):
+    """别的任务留下了提示（讲解取消、有行没识别出来）：精修的结果（包括失败）照样告诉用户，那条也不丢。"""
+    sid = _song()
+    store.update(
+        sid, lambda s: state.set_notice(s, "warn", "讲解生成已取消，已完成的部分会保留。", "explain")
+    )
+    bid = store.load(sid)["bars"][1]["id"]
+
+    def boom(*a):
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(FakeClaude, "verify_result", boom)
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    n = client.get(f"/api/songs/{sid}").json()["notice"]
+    assert n["kind"] == "warn" and n["msg"].startswith("讲解生成已取消") and "第 2 小节没核对成" in n["msg"]
+
+    # 再精修：只换掉上一次精修的提示，别的那条还在
+    monkeypatch.setattr(FakeClaude, "verify_result", None)
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    n = client.get(f"/api/songs/{sid}").json()["notice"]
+    assert n["msg"] == "讲解生成已取消，已完成的部分会保留。 第 2 小节精修完：没问题。"
+    assert client.get("/api/songs").json()[0]["notice"] == n
+    s = store.load(sid)
+    model.Song.model_validate(s)
+
+    # 精修再开始时去掉的只是精修自己的提示；讲解再开始时去掉讲解的，精修的露出来
+    state.begin(s, "refine")
+    assert s["notice"] == {"kind": "warn", "msg": "讲解生成已取消，已完成的部分会保留。", "source": "explain"}
+    store.update(sid, lambda x: state.begin(x, "explain"))
+    assert store.load(sid)["notice"] == {
+        "kind": "info",
+        "msg": "第 2 小节精修完：没问题。",
+        "source": "refine",
+    }
+
+
+def test_a_change_without_usable_events_is_not_taken_as_checked(client, sync_jobs, monkeypatch):
+    """模型说要改，给出的事件却用不了（格式不对 / 空的）：不能当成“没问题”记下核对过，算没核对成。"""
+    sid = _song()
+    ids = [b["id"] for b in store.load(sid)["bars"]]
+
+    def broken(img, meta, span, events, previous, ts):
+        if events[0]["notes"][0]["fret"] == 1:
+            return {"diff": "第 2 拍应是 3 品", "changed": True, "events": [{"dur": "x", "notes": []}]}
+        if events[0]["notes"][0]["fret"] == 2:
+            return {"diff": "第 2 拍应是 3 品", "changed": True, "events": []}
+        return {"diff": "", "changed": False, "events": events, "uncertain": ""}
+
+    monkeypatch.setattr(FakeClaude, "verify_result", broken)
+    client.post(f"/api/songs/{sid}/refine", json={"system": 0})
+    s = store.load(sid)
+    assert "refine_key" in s["bars"][0] and not any("refine_key" in b for b in s["bars"][1:3])
+    assert all("refine" not in b for b in s["bars"])
+    assert "2 个小节没核对成（AI 给出的改动格式不对）" in s["notice"]["msg"]
+    assert s["notice"]["kind"] == "warn"
+    assert refine.pick(s) == [ids[1], ids[2], *ids[3:]]

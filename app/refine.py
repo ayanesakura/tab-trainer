@@ -216,7 +216,8 @@ def verify(
     hint: str = "",
 ) -> dict:
     """核对一个小节。返回 {out: 模型的回答, events: 要改成的事件（不改是 None）, status, note}：
-    - status = unchanged：模型说没问题（或者改出来的格式不对、和原来一样）；
+    - status = unchanged：模型说没问题（或者改出来的和原来一样）；
+    - invalid：模型说要改，但给出的事件格式不对或是空的：不知道它到底要怎么改，算没核对成（不记 refine_key，可以再试）；
     - accepted：模型提出了改动、不做确认（CONFIRM_CHANGES 关着）直接采用；
     - confirmed：再独立核对（还是对着原来的读法），有两遍提出了一模一样的改动（最多核对 MAX_READS 遍，够了就停）；
     - rejected：核对 MAX_READS 遍都没有两遍一样的改动，不改；note 是要加到这个小节“不确定”说明里的话，提醒用户对照原谱。
@@ -224,20 +225,28 @@ def verify(
     cancel：确认的几遍之间点了取消就不再核对（Cancelled）。hint：用户写的“哪里不对”（每一遍都告诉模型）。"""
     img, span = crop(page, sysinfo, bar["region"])
 
+    bad: list[bool] = []  # 每一遍：模型说要改、给出的事件却用不了
+
     def propose() -> tuple[dict, list[dict] | None]:
         out = claude.verify_bar(img, meta, span, bar["events"], previous, time_signature, hint=hint)
+        bad.append(False)
         if not out.get("changed"):
             return out, None
         try:
             events = clean_events(out.get("events") or [])
         except ValueError as e:
             log.info("refine: bar %s returned bad events: %s", bar.get("id"), e)
+            events = []
+        if not events:
+            bad[-1] = True
             return out, None
-        if not events or same_events(events, bar["events"]):
+        if same_events(events, bar["events"]):
             return out, None
         return out, events
 
     first = propose()
+    if bad[0]:
+        return {"out": first[0], "events": None, "status": "invalid", "note": ""}
     if first[1] is None:
         return {"out": first[0], "events": None, "status": "unchanged", "note": ""}
     if not CONFIRM_CHANGES:
@@ -353,10 +362,8 @@ def _run(
     def end(s):
         if done and whole:
             s["refined"] = {"at": now(), "checked": tally["checked"], "changed": tally["changed"]}
-        notice = _end_notice(s, tally, cancelled, error)
-        other = s.get("notice") and s["notice"].get("source") != "refine"
-        # 识别留下的提示（有行失败等）更要紧：不盖掉它（精修的结果在小节卡片和曲库里也看得到）
-        state.finish(s, notice=None if other else notice, source="refine")
+        # 总要告诉用户精修的结果；识别留下的提示（有行失败等）也不盖掉：叠在它上面（见 state.set_notice）
+        state.finish(s, notice=_end_notice(s, tally, cancelled, error), source="refine")
         meter.charge(s)
 
     try:
@@ -458,6 +465,10 @@ def refine_bars(
             meter.charge(s)
             if result is None:
                 return
+            if result["status"] == "invalid":  # 说要改、却没给出能用的改法：算没核对成，下次照样核对
+                tally["failed"] += 1
+                tally["error"] = tally["error"] or "AI 给出的改动格式不对"
+                return
             out, events = result["out"], result["events"]
             cur = next((b for b in s["bars"] if b.get("id") == bar["id"]), None)
             # 核对期间这个小节被改过（rev 变了）、被重新识别掉了、或者已经不该核对（确认过、正在识别），
@@ -474,11 +485,15 @@ def refine_bars(
                 diff = str(out.get("diff") or "").strip()
                 staleness.refine_bar(s, cur, events, str(out.get("uncertain") or "").strip(), diff)
                 tally["changed"] += 1
-            elif result["note"] and result["note"] not in (cur.get("uncertain") or ""):
+            elif result["status"] == "rejected":
                 # 几遍核对对不上：不改音，标成待核对（不确定说明里写上第一遍说的问题）
-                cur["uncertain"] = " ".join(
-                    x for x in (str(cur.get("uncertain") or "").strip(), result["note"]) if x
-                )
+                if result["note"] not in (cur.get("uncertain") or ""):
+                    cur["uncertain"] = " ".join(
+                        x for x in (str(cur.get("uncertain") or "").strip(), result["note"]) if x
+                    )
+                # 用户确认过没问题的（点了“精修这个小节”）：精修觉得可能读错了，确认不再算数，重新待核对
+                for k in ("reviewed_key", "reviewed_rev", "reviewed_warn"):
+                    cur.pop(k, None)
                 tally["doubtful"] += 1
             cur["refine_key"] = notes_key(cur)
 

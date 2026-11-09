@@ -9,6 +9,7 @@
   reparse_row = 识别某几行（单行重新识别、补页的新行），systems 是这几行；explain = AI 讲解（不改谱面）；
   refine = 精修（逐小节放大核对，见 app/refine.py）：期间照常能练、能改小节（调弦等设定不能改），写回时小节被改过的就不写。
 - notice：None 或 {kind: warn | error | info, msg, source}。source 是留下它的任务类型；同类任务再开始时清掉，整首识别清掉所有。
+  精修的结果（STACKED）叠在别的任务留下的提示上面：那条记在 rest 里，接口里两条拼成一条（见 public_notice）。
 """
 
 from __future__ import annotations
@@ -19,6 +20,9 @@ RECOGNIZE_KINDS = ("parse", "reparse_row")
 META_FIELDS = list(EDITABLE_META)
 SETTING_FIELDS = ("tuning", "capo", "time_signature")
 SCORE_BARS_LOCKED = "Guitar Pro / MusicXML 曲子的小节来自原文件，不能在这里改"
+# 留下的提示叠在别的提示上面的任务：精修的结果（包括失败）总要让用户看到，识别留下的（有行失败等）也不能被它盖掉
+STACKED = ("refine",)
+_SEVERITY = {"info": 0, "warn": 1, "error": 2}
 
 
 def begin(
@@ -35,9 +39,10 @@ def begin(
         s["progress"] = progress
     if status:
         s["status"] = status
-    notice = s.get("notice")
-    if notice and (kind == "parse" or notice.get("source") == kind):
+    if kind == "parse":
         s["notice"] = None
+    else:
+        drop_notice(s, kind)
 
 
 def finish(
@@ -63,12 +68,29 @@ def settle(s: dict) -> None:
         return
     if s.get("status") in ("error", "cancelled"):
         s["status"] = "ready"
-    if (s.get("notice") or {}).get("source") == "parse":
-        s["notice"] = None
+    drop_notice(s, "parse")
 
 
 def set_notice(s: dict, kind: str, msg: str, source: str = "") -> None:
-    s["notice"] = {"kind": kind, "msg": msg, "source": source}
+    """留下一条提示，取代原来的；STACKED 的任务只取代自己上次留下的，别的任务留下的记在 rest 里。"""
+    cur = s.get("notice")
+    rest = None
+    if source in STACKED and cur:
+        rest = (
+            cur.get("rest") if cur.get("source") == source else {k: v for k, v in cur.items() if k != "rest"}
+        )
+    s["notice"] = {"kind": kind, "msg": msg, "source": source, **({"rest": rest} if rest else {})}
+
+
+def drop_notice(s: dict, source: str) -> None:
+    """去掉 source 这类任务留下的提示（叠在下面的那条露出来）。"""
+    n = s.get("notice")
+    if not n:
+        return
+    if n.get("source") == source:
+        s["notice"] = n.get("rest")
+    elif (n.get("rest") or {}).get("source") == source:
+        n.pop("rest")
 
 
 def recognizing(s: dict) -> bool:
@@ -138,8 +160,16 @@ def flags(s: dict, running: bool) -> dict:
 
 
 def public_notice(s: dict) -> dict | None:
+    """给前端的一条提示：叠着两条时（见 set_notice）拼成一句，按更要紧的那条的 kind 显示。"""
     n = s.get("notice")
-    return {"kind": n.get("kind", "warn"), "msg": n.get("msg", "")} if n else None
+    if not n:
+        return None
+    kind, msg, rest = n.get("kind", "warn"), n.get("msg", ""), n.get("rest")
+    if rest:
+        under = rest.get("kind", "warn")
+        kind = max(kind, under, key=lambda k: _SEVERITY.get(k, 1))
+        msg = f"{rest.get('msg', '')} {msg}".strip()
+    return {"kind": kind, "msg": msg}
 
 
 def recover(s: dict) -> bool:

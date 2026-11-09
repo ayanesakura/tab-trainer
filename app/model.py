@@ -304,6 +304,7 @@ class Notice(_M):
     kind: Literal["warn", "error", "info"]
     msg: str
     source: str = ""  # 哪类任务留下的（同类任务再开始时清掉）
+    rest: Notice | None = None  # 被精修的结果叠在下面的、别的任务留下的提示（见 state.set_notice）
 
 
 class Progress(_M):
