@@ -1,6 +1,6 @@
 // 敲节奏：不拿琴，跟着示范（或只有节拍器）在键盘上敲出循环段的节奏；每个音判早晚，每遍打分，指出常错的位置。
 // 入口是控制条的“敲节奏”按钮（store 的 rhythm.on）。打开后侧栏的小节卡片和底部指板收起来，位置给节奏卡片；
-// 播放键 / 空格开始的是敲节奏而不是 alphaTab 播放。循环哪几个小节、速度、节拍器、预备拍、示范音量和自动提速
+// 播放键 / 空格开始的是敲节奏而不是 alphaTab 播放。循环哪几个小节、速度、节拍器、预备拍和示范音量
 // 都和平时共用（store 的 play 切片）。
 // 计时不走 alphaTab：这里用 WebAudio 自己排节拍器和示范音（audio.js 的拨弦合成），敲击时间换算到同一个音频时钟上比较，
 // 误差在几毫秒以内。蓝牙耳机等输出延迟报得不准时，用“校准”测一个补偿值。
@@ -16,7 +16,7 @@
 import * as core from '../rhythm.js';
 import { get, set, on } from './store.js';
 import { $, UI, esc, setButton, svgEl } from './dom.js';
-import { stop as stopPlayback, setLoop, setTempo, setStatus, setPlayerHooks, IDLE_HINT } from './player.js';
+import { stop as stopPlayback, setLoop, setStatus, setPlayerHooks, IDLE_HINT } from './player.js';
 import { ac, initAudio, playEvent, stopAllVoices, setGuitarVolume } from './audio.js';
 import { loopLabel } from './view.js';
 
@@ -24,7 +24,7 @@ const MODES = ['follow', 'listen', 'blind'];
 const stored = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const remember = (k, v) => { try { localStorage.setItem(k, v); } catch { /* 只在这次打开时生效 */ } };
 const RH = {
-  run: null, prog: null, key: '', hist: [], errs: [], last: null, streak: 0, shown: null,
+  run: null, prog: null, key: '', hist: [], errs: [], last: null, shown: null,
   mode: MODES.includes(stored('tt.rhythmMode')) ? stored('tt.rhythmMode') : 'follow',
   latency: Math.max(-300, Math.min(300, Math.round(+stored('tt.tapLatency') || 0))), // 毫秒，正数表示声音实际听到得更晚
 };
@@ -56,7 +56,7 @@ function rebuild() {
   RH.prog = program(a, b);
   // 换了段或者谱改过：之前几遍的成绩对不上了，清掉
   const key = v.ids.slice(a, b + 1).join(',') + '|' + RH.prog.onsets.map(o => o.q.toFixed(4)).join(',');
-  if (key !== RH.key) { RH.key = key; RH.hist = []; RH.errs = []; RH.last = null; RH.streak = 0; RH.shown = null; }
+  if (key !== RH.key) { RH.key = key; RH.hist = []; RH.errs = []; RH.last = null; RH.shown = null; }
   $('rhRange').textContent = `${loopLabel(a, b, v.bars.length)} · ${RH.prog.onsets.length} 个音`;
   drawStrip(RH.prog);
   if (RH.shown) paintMarks(RH.shown);
@@ -231,21 +231,7 @@ function finishLoop(run, L) {
   if (RH.hist.length > 60) RH.hist.shift();
   RH.errs.push(L.notes.map(nt => nt.err));
   if (RH.errs.length > 30) RH.errs.shift();
-  autoSpeed(L.result.score);
   renderResult();
-}
-// 自动提速（“更多”里的开关）：敲节奏时要连续几遍 90 分以上才加速
-function autoSpeed(score) {
-  const p = get('play');
-  if (!p.auto) return;
-  RH.streak = score >= 90 ? RH.streak + 1 : 0;
-  const every = Math.max(1, p.autoEvery || 1), step = p.autoStep || 0, target = p.autoTarget || p.bpm;
-  if (RH.streak >= every && p.bpm < target && step > 0) {
-    RH.streak = 0;
-    setTempo(Math.min(target, p.bpm + step));
-    // 打分时下一遍已经开始了（提前排好的），新速度从它之后的那一遍起生效
-    UI.toast(`连续 ${every} 遍 90 分以上，这一遍结束后提速到 ${get('play.bpm')} BPM`);
-  }
 }
 function finishCalib(L) {
   const errs = L.notes.filter(nt => nt.err != null).map(nt => nt.err).sort((a, b) => a - b);
@@ -384,14 +370,13 @@ function clearMarks() {
 // ---------------------------------------------------------------------
 const tone = score => (score >= 90 ? 'good' : score >= 70 ? 'warn' : 'bad');
 function renderResult() {
-  const box = $('rhResult'), p = get('play');
-  const auto = p.auto ? `<div class="hint rh-auto">自动提速已打开：连续 ${Math.max(1, p.autoEvery || 1)} 遍 90 分以上才加速。</div>` : '';
+  const box = $('rhResult');
   if (!RH.last) {
     // 卡片上只留一行，三步练法放在“?”的说明里（悬停或 Tab 聚焦时弹出）
     box.innerHTML = `<div class="rh-guide"><b>怎么练</b>空格开始，每个音响时敲一下 <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="怎么练（详细）" aria-describedby="rhHelp">?</button><span class="help-pop left up" id="rhHelp" role="tooltip">
       <span>1. 先用“跟着示范”：按空格开始，每个音响的时候按一下空格（或 F、J 键，也可以点节奏条）。</span>
       <span>2. 能连续几遍 90 分以上，换“听一遍再敲”，再换“只有节拍器”。不靠示范也敲得准，节奏才算记住了。</span>
-      <span>3. 循环哪几个小节、速度用控制条，节拍器和预备拍在播放设置里；从慢速开始。</span></span></span>${auto}</div>`;
+      <span>3. 循环哪几个小节、速度用控制条，节拍器和预备拍在播放设置里；从慢速开始。</span></span></span></div>`;
     return;
   }
   const s = RH.last, d = core.diagnose(s);
@@ -409,7 +394,7 @@ function renderResult() {
     <div class="rh-side">
       <div class="rh-hist"><span class="lbl">每遍</span>${hist}${best ? `<span class="hint">最好 ${best.score} 分（${best.bpm} BPM）</span>` : ''}</div>
       ${weak.length ? `<div class="rh-weak"><span class="lbl">常错</span><div class="rh-weak-list">${weak.map(w => `<span class="rh-w"><button class="btn sm ghost" data-bi="${w.bi}" title="只循环这一小节">${esc(core.placeName(RH.prog.onsets[w.i]))}</button><span class="${w.kind}">${esc(w.text)}</span></span>`).join('')}</div></div>` : ''}
-    </div>${auto}`;
+    </div>`;
   box.querySelectorAll('.rh-weak button').forEach(b => { b.onclick = () => setLoop(+b.dataset.bi, +b.dataset.bi); });
 }
 
@@ -450,8 +435,6 @@ export function initRhythm() {
   on('rhythm.on', paintOn);
   on('rhythm.running', paintCalib);
   on('play.gtVol', v => { if (RH.run) setGuitarVolume(v / 100); });
-  on('play.auto', () => { RH.streak = 0; if (isOn()) renderResult(); });
-  on('play.autoEvery', () => { if (isOn()) renderResult(); });
   // 谱改过（改音、重新识别）：没在敲的话节奏条马上换成新的；在敲的话下次开始时再换
   on('view', () => { if (isOn() && !RH.run) rebuild(); });
   // 切到调弦、练习建议等视图时停下

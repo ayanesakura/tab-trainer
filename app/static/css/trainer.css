@@ -60,7 +60,6 @@
 .loop-num:disabled { background: transparent; cursor: default; }
 /* 在谱面上拖选小节时不要顺带选中文字 */
 #score.dragging, #score.dragging * { user-select: none; -webkit-user-select: none; cursor: col-resize; }
-#moreBtn.flag::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 2px; }
 /* 分段 chips：放不下就换行，最多两行高；再多就在这一块里上下滚（鼠标滚轮直接能滚，不用 Shift），
    第三行露出一点并淡出，看得出下面还有（滚动驱动的动画：不能滚时时间线无效，不淡出；滚到底也不淡出） */
 .chips.sections { flex-wrap: wrap; row-gap: 6px; max-height: calc(var(--sp-2) + 26px * 2 + 6px * 2 + 10px); overflow: hidden auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
@@ -74,8 +73,6 @@
 .mp-row { display: flex; align-items: center; gap: var(--sp-2); justify-content: space-between; color: var(--fg-2); }
 .mp-lbl { color: var(--fg-2); }
 .more-pop .vol { width: 130px; }
-.auto-row { justify-content: flex-start; flex-wrap: nowrap; gap: 5px; font-size: var(--fs-1); color: var(--fg-2); white-space: nowrap; }
-.auto-row .input.num { width: 48px; height: 26px; }
 
 /* ---- 谱面（alphaTab） ---- */
 .score-card { position: relative; }
@@ -206,7 +203,6 @@
 .rh-result { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); padding: var(--sp-3) 14px 14px; }
 .rh-guide { color: var(--fg-2); line-height: 1.7; font-size: var(--fs-1); }
 .rh-guide b { font-weight: 600; color: var(--muted); margin-right: var(--sp-1); }
-.rh-guide .rh-auto { margin-top: var(--sp-1); }
 .rh-score { display: flex; align-items: baseline; gap: 2px; flex: none; }
 .rh-score b { font-size: 36px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
 .rh-score span { color: var(--muted); }
@@ -236,7 +232,6 @@
 .rh-w .btn { padding: 0 6px; }
 .rh-w .early, .rh-w .late { color: var(--amber); }
 .rh-w .miss { color: var(--red); }
-.rh-result > .rh-auto { flex: 1 1 100%; }
 
 /* ---- 指板：底部停靠条 ---- */
 .fb-dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; background: var(--card); border-top: 1px solid var(--line); box-shadow: 0 -2px 10px rgba(0, 0, 0, .04); }

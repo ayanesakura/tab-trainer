@@ -57,7 +57,7 @@ function initShortcuts() {
 }
 
 // ---------------------------------------------------------------------
-// “更多”弹层：节拍器、预备拍、示范音量、音色、自动提速、自动跟随（这些设置记在本机，见 prefs.js）
+// “更多”弹层：节拍器、预备拍、示范音量、音色、自动跟随（这些设置记在本机，见 prefs.js）
 // ---------------------------------------------------------------------
 function initMore() {
   const btn = $('moreBtn'), pop = $('morePop');
@@ -72,10 +72,6 @@ function initMore() {
     btn.setAttribute('aria-expanded', 'true');
     lay = UI.layer(pop, { ignore: [btn], onClose: () => { lay = null; pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); } });
   };
-  // 开着自动提速时按钮上标一个点，收起来也知道
-  const flag = v => btn.classList.toggle('flag', !!v);
-  on('play.auto', flag);
-  flag(get('play.auto')); // 记住的设置里可能一打开就是开着的
 }
 
 // ---------------------------------------------------------------------

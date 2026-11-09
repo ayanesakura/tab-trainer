@@ -50,14 +50,13 @@ def test_edit_while_looping_keeps_the_cursor_in_the_loop(trainer, image_song):
 
 
 def test_background_update_while_playing_is_not_a_finished_loop(server, trainer, image_song):
-    """播放中后台识别出新内容（谱子重新加载）：接着播放，不算弹完一遍、不记练习、不自动提速。"""
+    """播放中后台识别出新内容（谱子重新加载）：接着播放，不算弹完一遍、不记练习。"""
     sid, store = image_song
     ids = ["bar3", "bar4", "bar5"]
     before = _loops(server, sid, ids)
     b = trainer()
     b.js(
-        "tt.set('play.countIn', false); tt.set('play.auto', true); tt.set('play.autoEvery', 1);"
-        "tt.set('play.autoStep', 10); tt.set('play.autoTarget', 200); tt.setLoop(2, 4); tt.setTempo(100); tt.play(); true"
+        "tt.set('play.countIn', false); tt.setLoop(2, 4); tt.setTempo(100); tt.play(); true"
     )
     b.wait_for("tt.state.playing")
     time.sleep(1.0)
@@ -76,7 +75,6 @@ def test_background_update_while_playing_is_not_a_finished_loop(server, trainer,
     b.wait_for("!tt.state.playing")
     time.sleep(0.8)
     assert _loops(server, sid, ids) == before
-    b.js("tt.set('play.auto', false); true")
     assert not b.errors, b.errors
 
 
@@ -87,7 +85,7 @@ def test_reselecting_the_current_section_while_playing_is_not_a_loop(server, tra
     before = _loops(server, sid, ids)
     b = trainer()
     b.js(
-        "tt.set('play.countIn', false); tt.set('play.auto', false); tt.setLoop(3, 5); tt.setTempo(60); tt.play(); true"
+        "tt.set('play.countIn', false); tt.setLoop(3, 5); tt.setTempo(60); tt.play(); true"
     )
     b.wait_for("tt.state.playing")
     time.sleep(1.5)
@@ -138,29 +136,6 @@ def test_status_counts_beats_in_the_time_signature(server, trainer, image_song):
     b.wait_for("__st.has('第 1 小节 · 第 6 拍')", timeout=8)
     b.js("tt.stop(); true")
     assert not any("第 7 拍" in x for x in b.js("[...__st]"))
-    assert not b.errors, b.errors
-
-
-def test_typed_negative_speed_up_step_is_clamped(trainer):
-    """自动提速的“每次加多少”手打成负数（浏览器不拦）：按最小值 1 算，不会越练越慢。"""
-    b = trainer()
-    b.js("""(() => { const el = document.getElementById('autoStep');
-      el.value = '-'; el.dispatchEvent(new Event('input'));  // 打字过程中：先不改设置
-      el.value = '-4'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); return true; })()""")
-    assert b.js("tt.state.autoStep") == 1 and b.js("document.getElementById('autoStep').value") == "1"
-    b.js(
-        """(() => { const el = document.getElementById('autoTarget'); el.value = '8'; el.dispatchEvent(new Event('input')); return true; })()"""
-    )
-    assert b.js("tt.state.autoTarget") != 8  # 打“80”打到一半，不先把最高速度设成 8
-    # 设置里已经是负数（比如别的路径写进来的）：播放时也不会往下调速
-    b.js(
-        "tt.set('play.countIn', false); tt.set('play.auto', true); tt.set('play.autoEvery', 1); tt.set('play.autoStep', -10);"
-        "tt.set('play.autoTarget', 240); tt.setLoop(0, 0); tt.setTempo(200); tt.play(); true"
-    )
-    b.wait_for("tt.state.loops >= 2", timeout=10)
-    b.js("tt.stop(); true")
-    assert b.js("tt.state.bpm") == 200
-    b.js("tt.set('play.auto', false); tt.set('play.autoStep', 4); true")
     assert not b.errors, b.errors
 
 

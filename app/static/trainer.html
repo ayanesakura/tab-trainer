@@ -69,7 +69,7 @@
               <button class="btn sm ghost" id="rhythmBtn" data-ic="tap" aria-pressed="false" aria-controls="rhythmCard" title="只练节奏：不拿琴，跟着示范在键盘上敲出这一段的节奏，每个音判早晚、每遍打分">敲节奏</button>
             </div>
             <div class="grp t-end">
-              <button class="icon-btn sm" id="moreBtn" data-ic="settings" title="节拍器、预备拍、示范音、音色、自动提速" aria-label="播放设置" aria-haspopup="true" aria-expanded="false" aria-controls="morePop"></button>
+              <button class="icon-btn sm" id="moreBtn" data-ic="settings" title="节拍器、预备拍、示范音、音色、谱面跟随" aria-label="播放设置" aria-haspopup="true" aria-expanded="false" aria-controls="morePop"></button>
             </div>
           </div>
           <div class="chips sections" id="secBtns" role="group" aria-label="按原谱的行选段"></div>
@@ -90,13 +90,6 @@
             </div>
             <hr>
             <div class="mp-row"><label class="switch" title="播放时光标走到看不见的行，谱面自动滚过去；手动滚动后停几秒，不和你抢"><input type="checkbox" id="follow">谱面跟随</label></div>
-            <hr>
-            <div class="mp-row"><label class="switch"><input type="checkbox" id="auto">自动提速</label></div>
-            <div class="mp-row auto-row">
-              <label for="autoEvery">每循环</label><input class="input num" type="number" id="autoEvery" min="1"><span>遍提速</span>
-              <input class="input num" type="number" id="autoStep" min="1" aria-label="每次提速多少 BPM"><label for="autoStep">BPM，</label>
-              <label for="autoTarget">最高</label><input class="input num" type="number" id="autoTarget" min="20" max="140"><span>BPM</span>
-            </div>
           </div>
         </div>
 

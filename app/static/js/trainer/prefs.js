@@ -1,19 +1,17 @@
-// 播放设置记在本机（localStorage），所有曲子共用：节拍器、预备拍、示范音开关、音量、自动提速（每几遍、每次加多少）、自动跟随。
-// 速度和循环范围不在这里：它们跟着曲子走（接着练 / 练习记录）；自动提速的“最高”默认是这首曲子的原速，也跟着曲子走。
+// 播放设置记在本机（localStorage），所有曲子共用：节拍器、预备拍、示范音开关、音量、自动跟随。
+// 速度和循环范围不在这里：它们跟着曲子走（接着练 / 练习记录）。
 // 读的时候逐项检查：旧版本、手改坏的值不会把页面弄坏，不对的那一项用默认值。纯函数，不碰 DOM（有 node 测试）。
 
 export const PREFS_KEY = 'tt.playPrefs';
-export const PREF_DEFAULTS = { metro: true, metroVol: 70, countIn: true, demo: true, gtVol: 80, auto: false, autoEvery: 2, autoStep: 4, follow: true };
-const RANGES = { metroVol: [0, 100], gtVol: [0, 100], autoEvery: [1, 50], autoStep: [1, 40] };
-
-const NUM_RANGES = { ...RANGES, autoTarget: [20, 240] }; // 自动提速的“最高”跟着曲子走，不存，但输入框一样要管
+export const PREF_DEFAULTS = { metro: true, metroVol: 70, countIn: true, demo: true, gtVol: 80, follow: true };
+const RANGES = { metroVol: [0, 100], gtVol: [0, 100] };
 
 /**
- * 输入框里的数字 → 合法的值（取整、夹到范围里），不是数字返回 null。max：再按输入框当时的上限收紧（“最高”不超过速度滑块的上限）。
- * 浏览器不会拦住手打的负数、0 这类值：每遍提速 -4 BPM 会越练越慢
+ * 输入框里的数字 → 合法的值（取整、夹到范围里），不是数字返回 null。max：再按输入框当时的上限收紧。
+ * 浏览器不会拦住手打的负数、超出范围的值
  */
 export function clampPref(key, v, max = Infinity) {
-  const r = NUM_RANGES[key];
+  const r = RANGES[key];
   if (!r || typeof v !== 'number' || !Number.isFinite(v)) return null;
   return Math.max(r[0], Math.min(r[1], max, Math.round(v)));
 }

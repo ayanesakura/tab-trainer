@@ -50,7 +50,7 @@ const countIn = {
   seek(tick) { if (this.from !== null) this.from = tick; if (this.reload) this.reload.tick = tick; },
 };
 // 谱子重新加载（改音、撤销、改曲子信息、识别出新的一行……都会重新生成 alphaTex）：alphaTab 会停下播放、把位置放回 0，
-// 停下前后还会发几个往回跳的位置事件（会被 onPosition 当成“弹完一遍”：记练习、自动提速）。
+// 停下前后还会发几个往回跳的位置事件（会被 onPosition 当成“弹完一遍”：记练习）。
 // 重新加载前记下位置和是否在播放：{tick, play}；MIDI 好了以后（midiLoaded）放回去（不在循环范围里就放到段首），
 // 原来在播放就接着播放。这期间的位置事件都不算
 let reloading = null;
@@ -248,7 +248,7 @@ async function onScoreLoaded(score) {
     const s = get('song'), t = (s.meta && s.meta.tempo) || (isScore(s) ? baseTempo : 0);
     if (t) { // 原速比滑块上限快时把上限放宽，原速也能拖得到（已经定下的速度更快时不收窄）
       const bpm = get('play.bpm');
-      set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10, Math.ceil(bpm / 10) * 10)), 'play.autoTarget': t });
+      set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10, Math.ceil(bpm / 10) * 10)) });
     }
     // 默认就用谱上标的速度（识别出来的 / GP 文件里的）；没有标速度就 50。接着练 / 用户在谱子加载好之前已经定了速度的，不覆盖
     if (!tempoSet) setTempo(t || 50);
@@ -484,13 +484,7 @@ function onPosition(tick) {
   // 只有从段尾跳回段首才算弹完一遍；重新设置循环范围、停止时也会跳回起点，那些不算（applyLoopRange 会重置 lastTick）
   const r = api && api.playbackRange, start = r ? r.startTick : 0;
   if (playing() && lastTick >= 0 && tick < lastTick - 10 && tick <= start + TICKS) {
-    const loops = get('play.loops') + 1;
-    set('play.loops', loops); // 练习记录先按提速前的速度记下刚弹完的这一遍
-    const p = get('play');
-    if (p.auto) {
-      const every = Math.max(1, p.autoEvery || 1), step = Math.max(0, p.autoStep || 0), target = p.autoTarget || p.bpm;
-      if (loops % every === 0 && p.bpm < target) setTempo(Math.min(target, p.bpm + step));
-    }
+    set('play.loops', get('play.loops') + 1); // 练习记录（practice-log.js）记下刚弹完的这一遍
   }
   lastTick = tick;
 }
@@ -648,7 +642,7 @@ function paintLoop(preview) {
 }
 
 // 跟着曲子走的默认值（加载谱子后按原速调整）；其余播放设置记在本机，见 prefs.js
-const SONG_DEFAULTS = { autoTarget: 72, bpmMax: 140 };
+const SONG_DEFAULTS = { bpmMax: 140 };
 const stored = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const remember = (k, v) => { try { localStorage.setItem(k, v); } catch { /* 只在这次打开时生效 */ } };
 
@@ -668,7 +662,6 @@ function bindInputs() {
     paint(get('play.' + key));
   };
   bind('metro', 'metro', 'check'); bind('metroVol', 'metroVol'); bind('countIn', 'countIn', 'check'); bind('gtVol', 'gtVol'); bind('demo', 'demo', 'check');
-  bind('auto', 'auto', 'check'); bind('autoEvery', 'autoEvery'); bind('autoStep', 'autoStep'); bind('autoTarget', 'autoTarget');
   bind('follow', 'follow', 'check');
 }
 
@@ -719,7 +712,7 @@ export function initPlayer() {
     $('bpm').value = bpm; $('bpmVal').textContent = bpm; UI.fillRange($('bpm'));
     if (api) api.playbackSpeed = bpm / baseTempo;
   });
-  on('play.bpmMax', m => { $('bpm').max = m; $('autoTarget').max = m; UI.fillRange($('bpm')); });
+  on('play.bpmMax', m => { $('bpm').max = m; UI.fillRange($('bpm')); });
   // 播放键：alphaTab 在放，或者敲节奏在进行，都显示成“停止”
   on(['play.playing', 'rhythm.running'], () => {
     const now = playing() || !!get('rhythm.running');

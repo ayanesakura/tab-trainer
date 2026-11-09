@@ -929,41 +929,36 @@ def test_follow_keeps_the_next_row_in_view(trainer):
 
 
 def test_play_settings_survive_reload(trainer):
-    """节拍器、预备拍、音量、自动提速、自动跟随记在本机，换一首 / 重新打开还在；存坏了的值用默认值。"""
+    """节拍器、预备拍、音量、自动跟随记在本机，换一首 / 重新打开还在；存坏了的值用默认值。"""
     b = trainer()
     b.js("""(() => { const ch = (id, v) => { const el = document.getElementById(id);
         if (el.type === 'checkbox') { el.checked = v; el.dispatchEvent(new Event('change')); }
         else { el.value = v; el.dispatchEvent(new Event('input')); } };
       ch('metro', false); ch('countIn', false); ch('gtVol', 33); ch('metroVol', 12);
-      ch('auto', true); ch('autoEvery', 3); ch('autoStep', 6); ch('follow', false); return true; })()""")
+      ch('follow', false); return true; })()""")
     b = trainer()
     got = b.js(
-        "(({metro, countIn, gtVol, metroVol, auto, autoEvery, autoStep, follow}) => "
-        "({metro, countIn, gtVol, metroVol, auto, autoEvery, autoStep, follow}))(tt.state)"
+        "(({metro, countIn, gtVol, metroVol, follow}) => ({metro, countIn, gtVol, metroVol, follow}))(tt.state)"
     )
     assert got == {
         "metro": False,
         "countIn": False,
         "gtVol": 33,
         "metroVol": 12,
-        "auto": True,
-        "autoEvery": 3,
-        "autoStep": 6,
         "follow": False,
     }
     assert (
         not b.js("document.getElementById('follow').checked")
         and b.js("document.getElementById('gtVol').value") == "33"
     )
-    assert "flag" in b.js("document.getElementById('moreBtn').className")  # 自动提速开着：按钮上有点
     b.js(
-        """localStorage.setItem('tt.playPrefs', '{"gtVol": "x", "metro": 1, "autoStep": 999, "follow": false}'); true"""
+        """localStorage.setItem('tt.playPrefs', '{"gtVol": "x", "metro": 1, "metroVol": 999, "follow": false}'); true"""
     )
     b = trainer()
-    assert b.js("[tt.state.gtVol, tt.state.metro, tt.state.autoStep, tt.state.follow]") == [
+    assert b.js("[tt.state.gtVol, tt.state.metro, tt.state.metroVol, tt.state.follow]") == [
         80,
         True,
-        4,
+        70,
         False,
     ]
     b.js("localStorage.setItem('tt.playPrefs', 'not json'); true")
