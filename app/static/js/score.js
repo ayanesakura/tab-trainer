@@ -26,7 +26,7 @@ export const TICKS = TICKS_PER_QUARTER; // 每个四分音符的 MIDI tick 数�
 // 9：歌词（lyrics，每段一个字符串）
 // 10：写着和弦名或歌词的休止 / 延音拍保留成没有新音的事件（原来并进前一个音，和弦、歌词丢了）
 // 11：点弦泛音（GP 的 Tap harmonic）记成 tech th + harm（右手点的品），品格仍是左手按的品
-export const DERIVE_VERSION = 11;
+export const DERIVE_VERSION = 12;
 
 // 可以直接写成一个拍的时值：[tick 数, alphaTex 时值, 附点数, 是否三连音]
 const UNITS = [
@@ -319,6 +319,9 @@ export function deriveSong(score, trackIndex = 0) {
     const pendingGrace = [];
     for (const voice of bar.voices) {
       for (const beat of voice.beats) {
+        // 没写东西的声部里 alphaTab 补的占位拍（isEmpty，默认四分音符长）：不画也不播，不算进小节长度
+        // （1/8 的弱起小节里它比整个小节还长，会把小节撑成 1 拍）
+        if (beat.isEmpty) continue;
         // 用谱面位置（displayStart），不用播放位置：拍上倚音会让 alphaTab 把主音的 playbackStart 往后推
         // 一个三十二分，按 playbackStart 算会在小节开头多出一个假休止
         if (beat.graceType) { // 倚音：记下来，交给同一根弦上紧跟着的音

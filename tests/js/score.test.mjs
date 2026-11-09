@@ -378,3 +378,17 @@ test('events past the bar length are not written; the last note is cut at the ba
   assert.deepEqual(hb.bars[0].events.map(e => e.notes[0].fret), [5]);
   assert.deepEqual(hb.bars[1].events[0].notes[0].tech, ['h']);
 });
+
+// GP 文件里没写东西的声部，alphaTab 补一个“空拍”（isEmpty，默认四分音符长）占位，不画也不播。
+// 1/8 的弱起小节里它比小节还长：不能当成四分休止算进时值（卡尔卡西 Op.59 的华尔兹，弱起小节被标成“1 拍，应为 0.5 拍”）
+test('empty placeholder beats of an unused voice do not add length', () => {
+  const d = deriveSong(gpRoundTrip(`\\track "G" { instrument 25 }
+\\staff {score tabs}
+\\voice
+\\ts (1 8) 0.1.8 | \\ts (3 8) 0.1.8 0.2.8 0.3.8
+\\voice
+| 0.6.4{d}`), 0);
+  assert.deepEqual(d.bars.map(b => b.events.map(e => e.dur)), [['1/2'], ['1/2', '1/2', '1/2']]);
+  assert.deepEqual(d.bars[0].time_signature, undefined); // 全曲拍号取第一个小节的 1/8
+  assert.deepEqual(d.bars[1].time_signature, [3, 8]);
+});
