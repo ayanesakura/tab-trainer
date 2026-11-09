@@ -293,6 +293,16 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
 .muted { color: var(--muted); }
 .hint { color: var(--muted); font-size: var(--fs-1); }
 
+/* “?”说明按钮：悬停或键盘聚焦时弹出详细说明（.help-pop 默认和按钮右边对齐、往下弹；.left 左边对齐，.up 往上弹） */
+.help-wrap { position: relative; display: inline-flex; vertical-align: middle; }
+.help-btn { font-weight: 600; font-size: var(--fs-2); color: var(--muted); }
+.help-btn.xs { width: 20px; height: 20px; font-size: var(--fs-1); border-radius: var(--r-sm); }
+.help-wrap .help-pop { display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: max-content; max-width: 360px; margin: 0; white-space: normal; text-align: left;
+  flex-direction: column; gap: 6px; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--card); box-shadow: var(--shadow); color: var(--fg-2); font-size: var(--fs-1); font-weight: 400; line-height: 1.6; }
+.help-wrap .help-pop.left { right: auto; left: 0; }
+.help-wrap .help-pop.up { top: auto; bottom: calc(100% + 6px); }
+.help-wrap:hover .help-pop, .help-wrap:focus-within .help-pop { display: flex; }
+
 /* 标签条（chips）：一行可横向滚动的小圆角按钮，选中 aria-pressed / .on */
 .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
 .chips::-webkit-scrollbar { display: none; }

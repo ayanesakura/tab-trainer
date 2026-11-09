@@ -387,10 +387,11 @@ function renderResult() {
   const box = $('rhResult'), p = get('play');
   const auto = p.auto ? `<div class="hint rh-auto">自动提速已打开：连续 ${Math.max(1, p.autoEvery || 1)} 遍 90 分以上才加速。</div>` : '';
   if (!RH.last) {
-    box.innerHTML = `<div class="rh-guide"><div class="sec-h">怎么练</div><ol>
-      <li>先用“跟着示范”：按空格开始，每个音响的时候按一下空格（或 F、J 键，也可以点节奏条）。</li>
-      <li>能连续几遍 90 分以上，换“听一遍再敲”，再换“只有节拍器”。不靠示范也敲得准，节奏才算记住了。</li>
-      <li>循环哪几个小节、速度用控制条，节拍器和预备拍在“更多”里；从慢速开始。</li></ol>${auto}</div>`;
+    // 卡片上只留一行，三步练法放在“?”的说明里（悬停或 Tab 聚焦时弹出）
+    box.innerHTML = `<div class="rh-guide"><b>怎么练</b>空格开始，每个音响时敲一下 <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="怎么练（详细）" aria-describedby="rhHelp">?</button><span class="help-pop left up" id="rhHelp" role="tooltip">
+      <span>1. 先用“跟着示范”：按空格开始，每个音响的时候按一下空格（或 F、J 键，也可以点节奏条）。</span>
+      <span>2. 能连续几遍 90 分以上，换“听一遍再敲”，再换“只有节拍器”。不靠示范也敲得准，节奏才算记住了。</span>
+      <span>3. 循环哪几个小节、速度用控制条，节拍器和预备拍在播放设置里；从慢速开始。</span></span></span>${auto}</div>`;
     return;
   }
   const s = RH.last, d = core.diagnose(s);

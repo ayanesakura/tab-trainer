@@ -82,12 +82,7 @@
 .score-card .card-h { flex-wrap: wrap; }
 .score-legend { padding: var(--sp-2) 14px 0; margin: 0; }
 .score-legend[hidden] { display: none; }
-/* 谱面标题栏的“?”：悬停或键盘聚焦时弹出平时的操作说明 */
-.help-wrap { position: relative; display: inline-flex; }
-.help-btn { font-weight: 600; font-size: var(--fs-2); color: var(--muted); }
-.help-pop { display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: max-content; max-width: 360px; margin: 0;
-  flex-direction: column; gap: 6px; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--card); box-shadow: var(--shadow); color: var(--fg-2); }
-.help-wrap:hover .help-pop, .help-wrap:focus-within .help-pop { display: flex; }
+/* 谱面标题栏的“?”（.help-wrap，样式在 ui.css）：悬停或键盘聚焦时弹出平时的操作说明 */
 .legend kbd { margin-right: 3px; }
 .legend i.review-key { display: inline-block; margin-right: 4px; width: 18px; height: 11px; border-radius: 3px; vertical-align: -1px; background: color-mix(in srgb, var(--amber) 8%, transparent); box-shadow: inset 0 3px 0 color-mix(in srgb, var(--amber) 75%, transparent); }
 .legend i.refine-key { display: inline-block; margin-right: 4px; width: 18px; height: 11px; border-radius: 3px; vertical-align: -1px; background: color-mix(in srgb, var(--green) 5%, transparent); box-shadow: inset 0 3px 0 color-mix(in srgb, var(--green) 60%, transparent); }
@@ -167,6 +162,10 @@
 .tools #reparseBtn { order: 3; }
 .editor { margin-top: var(--sp-2); }
 .editor textarea { width: 100%; height: 220px; margin-bottom: 6px; }
+/* 字段说明的“?”：弹层以整行说明为准左对齐、不超出侧栏（侧栏会滚动，超出会出现横向滚动条） */
+.editor > .hint, .rh-guide { position: relative; }
+.editor > .hint .help-wrap, .rh-guide .help-wrap { position: static; }
+.editor > .hint .help-pop, .rh-guide .help-pop { max-width: 100%; }
 .ed-bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 
 /* ---- 敲节奏（rhythm-drill.js）：打开后代替侧栏的小节卡片，底部指板也收起来 ---- */
@@ -206,8 +205,8 @@
 .rh-legend i.miss { box-shadow: inset 0 0 0 2px var(--red); }
 .rh-result { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); padding: var(--sp-3) 14px 14px; }
 .rh-guide { color: var(--fg-2); line-height: 1.7; font-size: var(--fs-1); }
-.rh-guide ol { margin: var(--sp-1) 0 0 18px; display: flex; flex-direction: column; gap: var(--sp-1); }
-.rh-guide .rh-auto { margin-top: var(--sp-2); }
+.rh-guide b { font-weight: 600; color: var(--muted); margin-right: var(--sp-1); }
+.rh-guide .rh-auto { margin-top: var(--sp-1); }
 .rh-score { display: flex; align-items: baseline; gap: 2px; flex: none; }
 .rh-score b { font-size: 36px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
 .rh-score span { color: var(--muted); }
@@ -248,6 +247,7 @@ body:not([data-view="practice"]) .fb-dock { display: none; }
 .fb-toggle .chev { width: 7px; height: 7px; border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor; transform: rotate(45deg) translate(-2px, -2px); transition: transform .15s; }
 .fb-toggle[aria-expanded="false"] .chev { transform: rotate(-135deg) translate(-1px, -1px); }
 .fb-legend { margin: 0; white-space: nowrap; overflow: hidden; }
+.fb-help { margin-left: calc(var(--sp-4) * -1 + 6px); } /* 紧跟在图例后面 */
 .lg-cur { background: var(--fb-on); }
 .lg-next { border: 2px solid var(--fb-next); }
 .fb-body { padding: 0 var(--sp-4) var(--sp-2); overflow-x: auto; }
@@ -274,15 +274,15 @@ body:not([data-view="practice"]) .fb-dock { display: none; }
 .orig-dlg[open] { display: flex; flex-direction: column; }
 .orig-h { display: flex; align-items: center; gap: var(--sp-2); padding: 10px var(--sp-3); border-bottom: 1px solid var(--line-2); }
 .orig-body { padding: var(--sp-3); overflow: auto; background: var(--paper-bg); display: flex; justify-content: center; }
+/* 当前小节的框和别的小节上的淡化画在另一层（#origMark）：不跟着原谱图片在深色下反相，颜色才对 */
+.orig-stack { position: relative; flex: none; }
+.orig-stack canvas { display: block; }
+#origMark { position: absolute; inset: 0; pointer-events: none; }
 
 /* ---- 调弦 ---- */
 table.tune { width: 100%; border-collapse: collapse; }
 table.tune th { text-align: left; font-size: var(--fs-1); font-weight: 500; color: var(--muted); padding: 10px var(--sp-4); border-bottom: 1px solid var(--line-2); }
 table.tune td { padding: 10px var(--sp-4); border-top: 1px solid var(--line-2); }
-/* 当前小节的框和别的小节上的淡化画在另一层（#origMark）：不跟着原谱图片在深色下反相，颜色才对 */
-.orig-stack { position: relative; flex: none; }
-.orig-stack canvas { display: block; }
-#origMark { position: absolute; inset: 0; pointer-events: none; }
 table.tune tr:first-child td { border-top: 0; }
 table.tune tr.hit td { background: var(--accent-soft); }
 table.tune td b { font-variant-numeric: tabular-nums; }
@@ -372,6 +372,5 @@ table.tune td b { font-variant-numeric: tabular-nums; }
 #lyricLayer { position: absolute; inset: 0; pointer-events: none; }
 #lyricLayer .lyric { position: absolute; transform: translateX(-2px); font-size: 13px; line-height: 16px; color: var(--fg); white-space: nowrap; }
 
-/* 小节卡片标题里的小节号、指板图例里的“?”（悬停看说明） */
+/* 小节卡片标题里的小节号 */
 #barNo { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; margin: 0 2px; }
-.fb-legend .hint { cursor: help; }

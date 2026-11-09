@@ -46,6 +46,7 @@
 
 /* 设置 */
 .keyline { display: flex; gap: 6px; align-items: center; }
+.list.set { overflow: visible; } /* “?”的说明弹层不能被列表的圆角裁掉（设置行没有底色，不需要裁） */
 .keyline .input { width: 280px; }
 .w-model { width: 170px; }
 .w-url { width: 260px; }
