@@ -677,3 +677,35 @@ def test_undo_refine_of_a_hand_edited_bar_keeps_the_plan_stale(client, sync_jobs
     s = refine.undo(sid, b["id"], b["rev"])
     assert _frets(s["bars"][1]) == [5] and s["bars"][1]["edited"]
     assert s["plan"]["changed_bars"] == [b["id"]] and s["plan"]["stale"]
+
+
+def test_settings_are_locked_while_refining(client, sync_jobs, monkeypatch):
+    """核对按调弦、拍号做：精修期间不能改它们（423，曲名照样能改）；万一改了（别的途径），旧设定下的结果不写回。"""
+    sid = _song()
+    bid = store.load(sid)["bars"][1]["id"]
+    seen = []
+
+    def verify(img, meta, span, events, previous, ts):
+        v = client.get(f"/api/songs/{sid}").json()
+        seen.append(v["editable_meta"])
+        r = client.put(f"/api/songs/{sid}/meta", json={"time_signature": [3, 4]})
+        seen.append((r.status_code, r.json().get("detail")))
+        seen.append(client.put(f"/api/songs/{sid}/meta", json={"title": "新名字"}).status_code)
+        return change_fret(1, 7)(img, meta, span, events, previous, ts)
+
+    monkeypatch.setattr(FakeClaude, "verify_result", verify)
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    assert "time_signature" not in seen[0] and "capo" not in seen[0] and "title" in seen[0]
+    assert seen[1][0] == 423 and "正在精修" in seen[1][1]
+    assert seen[2] == 200
+    s = store.load(sid)
+    assert s["meta"]["time_signature"] == [4, 4] and _frets(s["bars"][1]) == [7] * 4
+
+    def sneak(img, meta, span, events, previous, ts):
+        store.update(sid, lambda x: x["meta"].update(capo=5))  # 绕过接口改了设定
+        return change_fret(7, 9)(img, meta, span, events, previous, ts)
+
+    monkeypatch.setattr(FakeClaude, "verify_result", sneak)
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    assert _frets(store.load(sid)["bars"][1]) == [7] * 4
+    assert client.put(f"/api/songs/{sid}/meta", json={"capo": 3}).status_code == 200  # 精修完就能改

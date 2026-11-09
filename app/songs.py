@@ -397,7 +397,7 @@ def review_bar(sid: str, bar_id: str, ok: bool, rev: int | None = None) -> dict:
 
 
 def edit_meta(sid: str, raw: dict, rev: int | None = None) -> dict:
-    """改谱头：曲名随时能改；调弦 / 变调夹 / 拍号在识别进行中不能改，GP / MusicXML 曲子来自原文件不能改。"""
+    """改谱头：曲名随时能改；调弦 / 变调夹 / 拍号在识别、精修进行中不能改，GP / MusicXML 曲子来自原文件不能改。"""
 
     def apply(s):
         check_rev(s.get("meta_rev"), rev)
@@ -419,9 +419,9 @@ def edit_meta(sid: str, raw: dict, rev: int | None = None) -> dict:
             raise Invalid(
                 "Guitar Pro / MusicXML 曲子的调弦、变调夹和拍号来自原文件，不能在这里改（可以改曲名）"
             )
-        if changed and state.settings_locked(s):
-            # 识别时按调弦、拍号检查和返修，改了会和正在写回的结果对不上（曲名之类随时能改）
-            raise Busy("正在识别，完成后再改调弦、变调夹和拍号")
+        if changed and (why := state.settings_lock_reason(s)):
+            # 识别、精修时按调弦、拍号检查和返修，改了会和正在写回的结果对不上（曲名之类随时能改）
+            raise Busy(why)
         s["meta"] = new
         if new["artist"] != old.get("artist", ""):
             s.setdefault("meta_user", {})["artist"] = new["artist"]  # 重新识别时同样以用户的为准

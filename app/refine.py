@@ -14,7 +14,8 @@
 - 写回：每个小节核对完马上写回，但只在这个小节还在、rev 没变（期间用户没改过）、仍然该核对时才写，否则悄悄跳过。
   改了的小节：提示 / 问答 / 练习建议按“音变了”处理（staleness.refine_bar），改之前的内容记在 bar["refine"]，可以撤销（undo）。
 - 任务：activity kind = refine（scope = song / bars / row，row = 行号，bars = 范围里的小节 id，pending = 还没核对完的），
-  每首曲子同一时间只有一个任务（再点：423，说清楚正在做什么，见 busy_text）；期间照常能练、能改；进度 {stage: 精修, done, total}；
+  每首曲子同一时间只有一个任务（再点：423，说清楚正在做什么，见 busy_text）；期间照常能练、能改小节和曲名，
+  调弦 / 变调夹 / 拍号不能改（核对是按它们做的，见 state.settings_lock_reason）；进度 {stage: 精修, done, total}；
   全局名额和识别共用（recognize.run_queued），能取消；费用记到曲子上（jobs.UsageMeter）。
   整首精修完成时记下 song["refined"] = {at, checked, changed}（只精修了一部分不动它）；结束提示见 _end_notice。
 - 自动精修（设置里 refine = auto，见 config.refine_mode）：识别结束后在同一个任务里接着精修（refine_after）。
@@ -459,10 +460,12 @@ def refine_bars(
                 return
             out, events = result["out"], result["events"]
             cur = next((b for b in s["bars"] if b.get("id") == bar["id"]), None)
-            # 核对期间这个小节被改过（rev 变了）、被重新识别掉了、或者已经不该核对（确认过、正在识别）：不写
+            # 核对期间这个小节被改过（rev 变了）、被重新识别掉了、或者已经不该核对（确认过、正在识别），
+            # 或者调弦 / 变调夹 / 拍号变了（核对时按旧设定；精修期间本来就不让改，见 state.settings_lock_reason）：不写
             if (
                 cur is None
                 or int(cur.get("rev") or 0) != int(bar.get("rev") or 0)
+                or staleness.setting_changed(song["meta"], s["meta"])
                 or not eligible(s, cur, explicit)
             ):
                 return

@@ -7,7 +7,7 @@
 - activity：None 或 {kind: parse | reparse_row | explain | refine, restaging, systems}。
   parse = 整首识别（restaging = 已有结果时的重新识别：新结果全部成功才替换，期间所有小节不能改）；
   reparse_row = 识别某几行（单行重新识别、补页的新行），systems 是这几行；explain = AI 讲解（不改谱面）；
-  refine = 精修（逐小节放大核对，见 app/refine.py）：期间照常能练、能改，写回时小节被改过的就不写。
+  refine = 精修（逐小节放大核对，见 app/refine.py）：期间照常能练、能改小节（调弦等设定不能改），写回时小节被改过的就不写。
 - notice：None 或 {kind: warn | error | info, msg, source}。source 是留下它的任务类型；同类任务再开始时清掉，整首识别清掉所有。
 """
 
@@ -106,8 +106,17 @@ def bar_locked(s: dict, bar: dict) -> str | None:
 
 
 def settings_locked(s: dict) -> bool:
-    """识别时按调弦、拍号检查和返修，改了会和正在写回的结果对不上（曲名之类随时能改）。"""
-    return recognizing(s) or any(x.get("status") == "parsing" for x in s.get("systems") or [])
+    """识别、精修时按调弦、拍号检查和返修，改了会和正在写回的结果对不上（曲名之类随时能改）。"""
+    return settings_lock_reason(s) is not None
+
+
+def settings_lock_reason(s: dict) -> str | None:
+    """现在不能改调弦、变调夹和拍号的原因（改谱头的 423 说明），能改是 None。"""
+    if recognizing(s) or any(x.get("status") == "parsing" for x in s.get("systems") or []):
+        return "正在识别，完成后再改调弦、变调夹和拍号"
+    if (s.get("activity") or {}).get("kind") == "refine":
+        return "正在精修，完成后再改调弦、变调夹和拍号（也可以先取消精修）"
+    return None
 
 
 def editable_meta(s: dict) -> list[str]:
