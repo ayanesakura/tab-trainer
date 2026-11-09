@@ -847,6 +847,19 @@ def test_leaving_the_practice_page_stops_playback(trainer):
     assert not b.errors, b.errors
 
 
+def test_song_info_shows_the_lock_message(trainer):
+    """精修进行中改曲子信息：服务返回 423 时把它的说明原样告诉用户。"""
+    b = trainer()
+    b.js("""(() => { const of = window.fetch; window.fetch = (u, i) => String(u).endsWith('/meta') && i && i.method === 'PUT'
+      ? Promise.resolve(new Response(JSON.stringify({detail: '正在精修，完成后再改曲子信息'}), {status: 423}))
+      : of(u, i); return true; })()""")
+    b.js("location.hash = '#tune'; document.getElementById('metaSave').click(); true")
+    b.wait_for(
+        "[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('正在精修，完成后再改曲子信息'))"
+    )
+    assert not b.errors, b.errors
+
+
 def _viewport(b, w, h):
     b._run(
         b._send("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
