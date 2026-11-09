@@ -88,7 +88,6 @@ function initDock() {
     $('fbBody').hidden = !v;
     $('fbToggle').setAttribute('aria-expanded', v);
     $('fbToggle').title = v ? '收起指板' : '展开指板';
-    $('fbBtn').setAttribute('aria-pressed', v);
     document.body.classList.toggle('fb-open', v);
   };
   on('ui.fb', paint);
@@ -103,8 +102,7 @@ function initDock() {
   const dock = $('fbDock');
   // 指板是 position: fixed（offsetParent 永远是 null，不能拿它判断显没显示）：用 getClientRects 判断是否显示
   new ResizeObserver(() => document.documentElement.style.setProperty('--dock-h', (dock.getClientRects().length ? dock.offsetHeight : 0) + 'px')).observe(dock);
-  $('fbBtn').onclick = toggle;
-  on('rhythm.on', v => { dock.hidden = v; $('fbBtn').disabled = v; });
+  on('rhythm.on', v => { dock.hidden = v; });
 }
 
 function initViews() {
