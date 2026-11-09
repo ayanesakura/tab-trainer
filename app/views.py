@@ -54,7 +54,7 @@ def needs_review(bar: dict) -> bool:
     return has_doubts(bar) and not reviewed(bar)
 
 
-def bar_view(s: dict, bar: dict) -> dict:
+def bar_view(s: dict, bar: dict, slots: dict | None = None) -> dict:
     out = _public(bar)
     out["warn"] = list(out.get("warn") or [])
     out["rev"] = int(bar.get("rev") or 0)
@@ -64,7 +64,7 @@ def bar_view(s: dict, bar: dict) -> dict:
     for k in ("reviewed_key", "reviewed_rev", "reviewed_warn", "refine_key"):
         out.pop(k, None)
     out["locked"] = state.bar_locked(s, bar)
-    out["refinable"] = _refine().refinable(s, bar)
+    out["refinable"] = _refine().refinable(s, bar, slots)  # slots：见 refine.row_slots
     return out
 
 
@@ -79,6 +79,7 @@ def song_view(s: dict) -> dict:
     running = jobs.running(s["id"])
     flags = state.flags(s, running)
     notice = state.public_notice(s)
+    slots = _refine().row_slots(s)
     out = {k: v for k, v in s.items() if k not in _HIDDEN and k not in ("bars", "notice", "practice")}
     out = _public(out)
     out.update(
@@ -88,7 +89,7 @@ def song_view(s: dict) -> dict:
         activity=s.get("activity"),
         notice=notice,
         **flags,
-        bars=[bar_view(s, b) for b in s.get("bars") or []],
+        bars=[bar_view(s, b, slots) for b in s.get("bars") or []],
         practice=practice.aggregate(s["id"], s),
         is_score=is_score(s),
         failed_rows=failed_rows(s),

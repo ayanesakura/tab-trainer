@@ -7,7 +7,7 @@
 - 范围：整首（曲库“…”菜单和练习页的“精修整首”、自动精修），或者用户在小节卡片上点的某个小节 / 某一行
   （POST /api/songs/{id}/refine 带 {"bars": [...]} 或 {"system": 行号}，可以带 hint：用户写的“哪里不对”，告诉模型）。
 - 核对哪些小节：只有图片 / PDF 曲子；跳过识别失败按休止占位的、所在行正在识别的，以及整行当一个小节的
-  （没检测到小节线，裁不出一个小节，见 refinable）。整首（pick）：再跳过用户手改过的、确认过没问题的；核对过、
+  （没检测到小节线，裁不出一个小节）、识别出的小节数和小节线对不上的行（不知道哪个小节在哪，见 refinable）。整首（pick）：再跳过用户手改过的、确认过没问题的；核对过、
   音没再变的（refine_key）不再核对，用户点“精修整首”时全都核对过了就整首重来（自动精修不重来）。
   点了某个小节 / 某一行（pick_scope）：范围里的都核对，手改过、确认过、核对过的也核对（用户明确要求的，改了能撤销）。
 - 确认（CONFIRM_CHANGES）：模型提出改动时再独立核对，最多 MAX_READS 遍里有两遍提出一模一样的改动才改，否则不改、标成待核对（见 verify）。
@@ -53,20 +53,39 @@ MAX_READS = 5
 # ---------------------------------------------------------------------------
 # 核对哪些小节
 # ---------------------------------------------------------------------------
-def refinable(s: dict, bar: dict) -> bool:
+def row_slots(s: dict) -> dict[str, tuple[int, int]]:
+    """小节 id → (它在所在行里是第几个（从 0 数）, 这一行有几个小节)。给 refinable 对小节线区间用。"""
+    rows: dict = {}
+    for b in s.get("bars") or []:
+        rows.setdefault(b.get("system"), []).append(b.get("id"))
+    return {bid: (k, len(ids)) for ids in rows.values() for k, bid in enumerate(ids)}
+
+
+def refinable(s: dict, bar: dict, slots: dict[str, tuple[int, int]] | None = None) -> bool:
     """这个小节能不能单独裁出来核对（不管手改过、确认过没有）：图片 / PDF 曲子、不是识别失败按休止占位的、
-    所在行检测到了小节线（整行一个小节时裁不出来）。小节卡片上的“精修这个小节 / 这一行”按它显示。"""
+    所在行检测到了小节线（整行一个小节时裁不出来），而且这一行识别出的小节数和小节线区间数一样、
+    这个小节的区域就是它那个区间（小节数对不上时第 k 个小节不一定在第 k 个区间里：早先的数据按位置分了区域，
+    精修会拿相邻小节的图去核对；之后识别的给的是整行的区域）。小节卡片上的“精修这个小节 / 这一行”按它显示。
+    slots：row_slots(s) 的结果（挑一批小节时只算一次）。"""
     if is_score(s) or bar.get("placeholder"):
         return False
     si, systems = bar.get("system"), s.get("systems") or []
     if not isinstance(si, int) or not 0 <= si < len(systems):
         return False
-    return bool(systems[si].get("spans")) and bool(bar.get("region")) and bar.get("page") is not None
+    spans, region = systems[si].get("spans"), bar.get("region")
+    if not spans or not region or bar.get("page") is None:
+        return False
+    k, n = (slots if slots is not None else row_slots(s)).get(bar.get("id"), (-1, 0))
+    if n != len(spans) or not 0 <= k < n:
+        return False
+    a, c = spans[k][0], spans[k][1]
+    # 识别时给的是区间左右各多 8 像素（不超出页面）：区域要盖住这个区间、又不比它宽出太多（整行的区域）
+    return region[0] <= a and region[1] >= c and region[1] - region[0] <= c - a + 17
 
 
-def eligible(s: dict, bar: dict, explicit: bool = False) -> bool:
+def eligible(s: dict, bar: dict, explicit: bool = False, slots: dict | None = None) -> bool:
     """这个小节现在能不能精修（见模块说明）。explicit：用户点了这个小节 / 这一行，手改过、确认过的也核对。"""
-    if not refinable(s, bar) or state.row_parsing(s, bar.get("system")):
+    if not refinable(s, bar, slots) or state.row_parsing(s, bar.get("system")):
         return False
     return explicit or not (bar.get("edited") or views.reviewed(bar))
 
@@ -74,7 +93,12 @@ def eligible(s: dict, bar: dict, explicit: bool = False) -> bool:
 def pick(s: dict, only: set[str] | None = None, recheck: bool = False) -> list[str]:
     """整首要核对的小节 id（按顺序）：能精修、还没核对过（或核对之后音又变了）的。only：只在这些小节里挑。
     recheck（用户点了“精修整首”）：全都核对过了的话就整首重新核对一遍；自动精修不重来。"""
-    ok = [b for b in s.get("bars") or [] if eligible(s, b) and (only is None or b.get("id") in only)]
+    slots = row_slots(s)
+    ok = [
+        b
+        for b in s.get("bars") or []
+        if (only is None or b.get("id") in only) and eligible(s, b, slots=slots)
+    ]
     fresh = [b for b in ok if b.get("refine_key") != notes_key(b)]
     return [b["id"] for b in (ok if recheck and not fresh else fresh)]
 
@@ -100,8 +124,12 @@ def scope_ids(s: dict, bars: list[str] | None = None, system: int | None = None)
 
 def pick_scope(s: dict, ids: list[str]) -> list[str]:
     """用户点的小节 / 行里要核对的：能裁出来核对的都核对（手改过、确认过、核对过的也核对）。"""
-    want = set(ids)
-    return [b["id"] for b in s.get("bars") or [] if b.get("id") in want and eligible(s, b, explicit=True)]
+    want, slots = set(ids), row_slots(s)
+    return [
+        b["id"]
+        for b in s.get("bars") or []
+        if b.get("id") in want and eligible(s, b, explicit=True, slots=slots)
+    ]
 
 
 def _estimate(n: int) -> dict:
@@ -129,9 +157,9 @@ def scope_estimates(s: dict) -> dict | None:
     GP / MusicXML 曲子是 None。"""
     if is_score(s):
         return None
-    counts = [0] * len(s.get("systems") or [])
+    counts, slots = [0] * len(s.get("systems") or []), row_slots(s)
     for b in s.get("bars") or []:
-        if refinable(s, b):
+        if refinable(s, b, slots):
             counts[b["system"]] += 1
     return {"bar": _estimate(1), "rows": [_estimate(n) if n else None for n in counts]}
 

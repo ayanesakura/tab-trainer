@@ -521,3 +521,74 @@ def test_view_gives_estimates_for_a_bar_and_each_row(client):
     client.put(f"/api/songs/{gp}/derived", json={"bars": derived_bars(2)})
     g = client.get(f"/api/songs/{gp}").json()
     assert g["refine_scopes"] is None and not any(b["refinable"] for b in g["bars"])
+
+
+def _frets(b: dict) -> list[int]:
+    return [n["fret"] for e in b["events"] for n in e["notes"]]
+
+
+def test_a_row_whose_bar_count_differs_from_the_bar_lines_is_not_refined(data_dir, monkeypatch):
+    """模型读出的小节数和检测到的小节线区间数不一样：第 k 个小节不一定在第 k 个区间里。
+    新识别的不按位置分区域（给整行的）；早先按位置分了区域的，refinable 也挡掉这一行（不拿相邻小节的图去核对）。"""
+    orig = FakeClaude.transcribe
+
+    def extra_bar(self, img, meta, first_bar, spans, **kw):
+        out = orig(self, img, meta, first_bar, spans, **kw)
+        if first_bar == 1:  # 第 1 行多读出一个小节
+            out["bars"].append(dict(out["bars"][-1]))
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", extra_bar)
+    sid = _song()
+    s = store.load(sid)
+    row0 = [b for b in s["bars"] if b["system"] == 0]
+    assert len(row0) == 4 and len(s["systems"][0]["spans"]) == 3
+    assert all(b["region"] == s["systems"][0]["crop"] for b in row0)  # 整行的区域
+    assert not any(refine.refinable(s, b) for b in row0)
+    assert all(refine.refinable(s, b) for b in s["bars"] if b["system"] == 1)
+    assert refine.pick(s) == [b["id"] for b in s["bars"] if b["system"] == 1]
+
+    # 早先的数据：中间漏了一个小节，后面的小节按位置拿了前一个区间（第 2 小节的区域其实是第 3 小节）
+    monkeypatch.setattr(FakeClaude, "transcribe", orig)
+    sid = _song()
+
+    def skip_middle(x):
+        spans, bars = x["systems"][0]["spans"], x["bars"]
+        del bars[1]
+        bars[1]["region"] = [spans[1][0] - 8, spans[1][1] + 8, *bars[1]["region"][2:]]
+
+    store.update(sid, skip_middle)
+    s = store.load(sid)
+    assert not any(refine.refinable(s, b) for b in s["bars"] if b["system"] == 0)
+    v = views.song_view(s)
+    assert [b["refinable"] for b in v["bars"]] == [False, False, True, True, True]
+    assert v["refine_scopes"]["rows"][0] is None
+    assert refine.pick(s, recheck=True) == [b["id"] for b in s["bars"] if b["system"] == 1]
+
+
+def test_split_rows_get_regions_per_half(data_dir, monkeypatch):
+    """切成两半识别的行：每半按自己的小节线分区域；一半的小节数对不上，这一行整行都不精修（总数对不上）。"""
+    monkeypatch.setattr(recognize, "SPLIT_ROWS", True)
+    monkeypatch.setattr(recognize, "_should_split", lambda sysinfo: True)
+    sid = _song()
+    s = store.load(sid)
+    assert all(refine.refinable(s, b) for b in s["bars"])
+
+    orig = FakeClaude.transcribe
+
+    def extra_right(self, img, meta, first_bar, spans, **kw):
+        out = orig(self, img, meta, first_bar, spans, **kw)
+        if first_bar == 3:  # 第 1 行的右半（第 3 小节起）多读出一个小节
+            out["bars"].append(dict(out["bars"][-1]))
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", extra_right)
+    sid = _song()
+    s = store.load(sid)
+    row0 = [b for b in s["bars"] if b["system"] == 0]
+    spans = s["systems"][0]["spans"]
+    assert len(row0) == 4
+    assert [b["region"][:2] for b in row0[:2]] == [[a - 8, c + 8] for a, c in spans[:2]]  # 左半照常
+    assert row0[2]["region"] == row0[3]["region"] and row0[2]["region"][1] - row0[2]["region"][0] > 100
+    assert not any(refine.refinable(s, b) for b in row0)
+    assert all(refine.refinable(s, b) for b in s["bars"] if b["system"] == 1)

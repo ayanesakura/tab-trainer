@@ -501,8 +501,11 @@ def transcribe_system(
             if only_ai:
                 msg += f"{'，' if only_ocr else '：'}AI 写的是 {_note_names(only_ai)}"
             b["warn"] = [*b["warn"], warn("ocr_mismatch", msg + "。请对照原谱核对")]
+    # 小节数和检测到的小节线对得上，才按位置给每个小节它自己的区域；对不上（多了 / 漏了小节）时第 k 个小节不一定是
+    # 第 k 个区间，按位置分会让精修拿别的小节的图去核对（refine.refinable 也会挡掉这样的行），都给整行的区域
+    exact = bool(spans) and len(bars) == len(spans)
     for i, b in enumerate(bars):
-        if spans and i < len(spans):
+        if exact:
             a, c = sysinfo["spans"][i]
             region = [max(0, a - 8), min(page["width"], c + 8), y0, y1]
         else:
