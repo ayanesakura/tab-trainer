@@ -11,9 +11,11 @@
 
 from __future__ import annotations
 
+import copy
 import difflib
 import json
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from app.model import touch_bar
 from app.music import DERIVED_WARNS, bar_length, canonical_events, same_events
@@ -186,6 +188,13 @@ class Policy:
     ts_field: str = "time_signature"
 
 
+class Dropped(NamedTuple):
+    """reconcile_bars 没能保留的：手改过的小节数、精修改过的小节数。"""
+
+    edits: int = 0
+    refines: int = 0
+
+
 DERIVE = Policy()  # GP / MusicXML 重新转换（小节不能手改）
 RESTAGE = Policy(keep_edits=True)  # 整首重新识别图片谱子（新结果替换前已经算好拍号）
 ROW = Policy(ts_field="ts_change")  # 重新识别某一行（用户要的就是新结果）、补页、两遍携带拍号
@@ -205,16 +214,24 @@ def reconcile_bars(
 
     policy.keep_edits（重新识别图片谱子）：用户手改过的小节（edited）按改之前的识别结果（_orig）去比对，
     一一对应上的保留用户改的音，新识别的结果记成它的 _orig（撤销回识别结果用）。
+    精修改过的小节（refine、没手改过）同样按精修之前的识别结果（refine.prev）去比对：这个小节新识别出来的和当时一模一样，
+    精修的改正就还适用，保留改过的音和精修记录（还能撤销）；识别结果变了的，精修是对着旧结果核对的，不保留
+    （音按新识别的，下次精修整首会再核对它）。
     setting_changed_：调弦 / 变调夹 / 拍号也变了（所有提示都按旧设定写的）。metas =（原来的谱头, 新的谱头）给出时，
-    设定变了也保留手改的音：品位和调弦、变调夹无关；拍号变了的话只保留小节长度没变的（见 _edit_fits）。
-    返回因为对不上而没能保留的手改小节数。调用方之后自己把 bars 放进 s。"""
+    设定变了也保留手改、精修改过的音：品位和调弦、变调夹无关；拍号变了的话只保留小节长度没变的（见 _edit_fits）。
+    返回没能保留的手改小节数和精修改过的小节数（Dropped）。调用方之后自己把 bars 放进 s。"""
     keep_edits = policy.keep_edits
 
     def key(events, b):
         return json.dumps([canonical_events(events), b.get(policy.ts_field)], sort_keys=True)
 
+    def refined(b) -> bool:
+        return keep_edits and bool(b.get("refine")) and not b.get("edited")
+
     def old_key(b):
         orig = b.get("_orig") if keep_edits and b.get("edited") else None
+        if refined(b):
+            orig = b["refine"]["prev"]
         return key(orig["events"] if orig else b["events"], b)
 
     pairs = []  # (原来的小节, 新小节, 内容是否一样, 是否一一对应)
@@ -229,6 +246,7 @@ def reconcile_bars(
             ]
     paired = {id(p[0]) for p in pairs}
     dropped = sum(1 for b in old if keep_edits and b.get("edited") and id(b) not in paired)
+    lost_refines = sum(1 for b in old if refined(b) and id(b) not in paired)
     for prev, new, same, one_to_one in pairs:
         new["id"] = prev["id"]
         if prev.get("qa"):
@@ -244,6 +262,12 @@ def reconcile_bars(
             if setting_changed_:
                 mark_qa_stale(new)
             continue
+        if refined(prev):
+            if same and (not setting_changed_ or _edit_fits(prev, new, metas)):
+                _keep_refine(prev, new, setting_changed_)
+                continue
+            # 新识别的正好就是精修改成的样子：改正还在，只是不用撤销了
+            lost_refines += not same_events(prev["events"], new["events"])
         dropped += edited
         if same and not setting_changed_:
             new["tip"] = prev.get("tip") or new.get("tip", "")  # 讲解补写的提示比识别时顺手写的更完整
@@ -253,7 +277,25 @@ def reconcile_bars(
             invalidate_plan(s, new["id"])
     if setting_changed_ or len(old) != len(bars):  # 小节编号整体移动了，练习建议里的小节号对不上
         invalidate_plan(s)
-    return dropped
+    return Dropped(dropped, lost_refines)
+
+
+def _keep_refine(prev: dict, new: dict, setting_changed_: bool) -> None:
+    """重新识别出来的和精修之前一模一样：保留精修改过的音、精修时的不确定说明和精修记录（还能撤销回新识别的结果）。
+    setting_changed_：提示（包括撤销时恢复的）是按旧设定写的，不再沿用，问答整体过时。"""
+    refine = copy.deepcopy(prev["refine"])
+    refine["prev"].update(
+        events=new["events"], uncertain=new.get("uncertain", ""), warn=recognition_warns(new)
+    )
+    if setting_changed_:
+        refine["prev"]["tip"] = ""
+    new["refine"] = refine
+    new["events"] = prev["events"]
+    new["tip"] = "" if setting_changed_ else prev.get("tip", "")
+    new["uncertain"] = prev.get("uncertain", "")
+    new["warn"] = [w for w in recognition_warns(new) if w.get("code") != "ocr_mismatch"]  # OCR 比的是识别结果
+    if setting_changed_:
+        mark_qa_stale(new)
 
 
 def _edit_fits(prev: dict, new: dict, metas: tuple[dict, dict] | None) -> bool:

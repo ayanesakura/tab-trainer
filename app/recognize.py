@@ -821,14 +821,25 @@ def _run_parse(sid: str, cancel: threading.Event, claude: LLM, meter: jobs.Usage
             )
             changed = staleness.setting_changed(s.get("meta") or {}, work["meta"])
             metas = (s.get("meta") or {}, work["meta"])
+            # 精修改过的小节：这个小节识别得和精修之前一样就保留精修的改正，否则不保留（见 reconcile_bars）
             dropped = staleness.reconcile_bars(s, s["bars"], work["bars"], staleness.RESTAGE, changed, metas)
             s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"])
+            if dropped.refines:  # 上次精修整首的结果（改了几个）不再是现在的样子
+                s.pop("refined", None)
             return dropped
 
-        dropped = []
+        dropped: list[staleness.Dropped] = []
         store.update(sid, lambda s: dropped.append(swap(s)))
-        if dropped and dropped[0]:
-            note = f"重新识别完成；有 {dropped[0]} 个手改过的小节和新结果对不上，改动没有保留。"
+        lost = [
+            f"{n} 个{what}的小节和新结果对不上，{why}"
+            for n, what, why in (
+                (dropped[0].edits, "手改过", "改动没有保留"),
+                (dropped[0].refines, "精修改过", "精修的改动没有保留，可以再精修"),
+            )
+            if n
+        ]
+        if lost:
+            note = "重新识别完成；有 " + "；".join(lost) + "。"
 
     try:
         _finish_parse(sid, claude, meter, len(systems), restage, "；".join(errors) or note)

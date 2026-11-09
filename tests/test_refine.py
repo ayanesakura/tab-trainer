@@ -795,3 +795,44 @@ def test_a_change_without_usable_events_is_not_taken_as_checked(client, sync_job
     assert "2 个小节没核对成（AI 给出的改动格式不对）" in s["notice"]["msg"]
     assert s["notice"]["kind"] == "warn"
     assert refine.pick(s) == [ids[1], ids[2], *ids[3:]]
+
+
+def test_full_re_recognition_keeps_refine_corrections_when_the_reading_is_unchanged(
+    client, sync_jobs, monkeypatch
+):
+    """整首重新识别：小节识别得和精修之前一样，精修的改正照样适用（保留，还能撤销）；识别结果变了的不保留，
+    提示里说出来，上次精修整首的结果（改了几个）也不再显示。"""
+    sid = _song()
+    store.update(sid, lambda s: s["bars"][1].update(qa=[{"q": "q", "a": "a", "at": "2026-11-01 10:00"}]))
+    monkeypatch.setattr(FakeClaude, "verify_result", change_fret(1, 7))
+    client.post(f"/api/songs/{sid}/refine")
+    s = store.load(sid)
+    assert s["refined"]["changed"] == 2
+    monkeypatch.setattr(FakeClaude, "verify_result", None)
+
+    recognize.run_parse(sid)  # 替身模型每次读得都一样
+    s = store.load(sid)
+    assert [_frets(b)[0] for b in s["bars"]] == [0, 7, 2, 0, 7, 2]
+    b = s["bars"][1]
+    assert b["refine"]["prev"]["events"][0]["notes"][0]["fret"] == 1 and b["uncertain"] == "第 2 拍看不清"
+    assert b["qa"][0]["stale"] and b["qa"][0]["stale_by_refine"]
+    assert s["refined"]["changed"] == 2 and not s["notice"]
+    assert refine.pick(s) == []  # 核对过、音没变
+    b = refine.undo(sid, b["id"], b["rev"])["bars"][1]
+    assert _frets(b) == [1] * 4 and b["tip"] == "tip 2" and not b["qa"][0].get("stale")
+
+    orig = FakeClaude.transcribe
+
+    def reread(self, img, meta, first_bar, spans, **kw):
+        out = orig(self, img, meta, first_bar, spans, **kw)
+        if first_bar == 4:  # 第 2 行第 2 小节这次读成了 3 品
+            for e in out["bars"][1]["events"]:
+                e["notes"][0]["fret"] = 3
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", reread)
+    recognize.run_parse(sid)
+    s = store.load(sid)
+    assert _frets(s["bars"][4]) == [3] * 4 and "refine" not in s["bars"][4]
+    assert "1 个精修改过的小节和新结果对不上" in s["notice"]["msg"] and "refined" not in s
+    assert s["bars"][4]["id"] in refine.pick(s)
