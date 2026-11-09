@@ -32,6 +32,7 @@
 .song-row .tag:hover { background: color-mix(in srgb, var(--accent) 22%, var(--card)); }
 .song-row .pick { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex: none; margin-right: 2px; }
 .song-row.on { background: var(--accent-soft); }
+.song-row.on .sub, .song-row.on .state { color: var(--fg-2); } /* 淡强调色底上 --muted 不到 4.5:1 */
 
 /* 曲库工具条：搜索、标签筛选、排序 */
 .lib-tools { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
@@ -45,11 +46,11 @@
 .chk input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex: none; }
 
 /* 设置 */
-.keyline { display: flex; gap: 6px; align-items: center; }
 .list.set { overflow: visible; } /* “?”的说明弹层不能被列表的圆角裁掉（设置行没有底色，不需要裁） */
+.keyline { display: flex; gap: 6px; align-items: center; }
 .keyline .input { width: 280px; }
 .w-model { width: 170px; }
-.w-url { width: 260px; }
+.w-url { width: 400px; }
 .test-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-1); }
 .head-actions { display: flex; gap: 6px; }
 

@@ -258,7 +258,7 @@ function fillMeta(s) {
   document.querySelectorAll('.meta-setting').forEach(el => { el.hidden = !settings; });
   $('metaHead').textContent = editable.length > 1 ? '曲子信息' : '曲名';
   // 改不了调弦等设定的原因：GP / MusicXML 来自原文件；图片曲子还没读出谱头，或者正在识别
-  $('metaMsg').textContent = settings ? '音名写法如 D2、F♯3（F#3 也可以）。'
+  $('metaMsg').textContent = settings ? '音名写法如 D2、F#3。'
     : isScore(s) ? '调弦、变调夹和拍号以原文件为准。'
     : !Object.keys(s.meta || {}).length ? '还没读出谱头，现在只能改曲名。'
     : '正在识别，完成后可以改调弦、变调夹和拍号。';
