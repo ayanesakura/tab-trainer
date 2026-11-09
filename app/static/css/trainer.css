@@ -143,7 +143,7 @@
 .qa .q .ic { color: var(--accent); }
 .qa .q .t { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
 .qa .a { white-space: pre-wrap; line-height: 1.7; color: var(--fg-2); }
-.qa.stale { opacity: .6; }
+.qa.stale .q, .qa.stale .a { color: var(--muted); } /* 谱子改过、回答可能过时：字变灰（不用透明度，免得对比度不够） */
 .qa.pending .a .spinner { display: inline-block; vertical-align: -2px; margin-right: 6px; } /* 正在回答、还没收到字 */
 .qa .old { font-weight: 400; font-size: 11px; color: var(--amber); border: 1px solid currentColor; border-radius: 5px; padding: 0 4px; }
 .ask { display: flex; gap: 6px; }
@@ -354,12 +354,16 @@ table.tune td b { font-variant-numeric: tabular-nums; }
 .refine-scope .hint { overflow-wrap: anywhere; }
 .refine-scope .hint:empty { display: none; }
 /* 精修改过的小节：改了什么 + 撤销 */
-.refine-row { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--accent-soft); font-size: var(--fs-1); }
-.refine-diff { display: flex; gap: 6px; align-items: flex-start; white-space: pre-wrap; }
-.refine-diff .ic { color: var(--accent); margin-top: 2px; }
-.refine-acts { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.refine-acts .hint { overflow-wrap: anywhere; }
-.warns.reviewed { opacity: .6; }
+/* 和谱面上精修过的小节、图例、曲库的“已精修”一样用绿色系 */
+.refine-row { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) 6px var(--sp-3); border-radius: var(--r-md); background: var(--green-soft); font-size: var(--fs-1); }
+.refine-diff { display: flex; gap: 6px; align-items: flex-start; white-space: pre-wrap; padding-right: var(--sp-1); }
+.refine-acts { display: flex; align-items: center; gap: var(--sp-2); }
+/* 原来的读法：一行，放不下用省略号，完整的在悬停提示里 */
+.refine-acts .hint { flex: 1; min-width: 0; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.refine-acts .btn { flex: none; }
+/* 已确认的待核对说明：换成中性的灰底灰字（不再是提醒），不用透明度 */
+.warns.reviewed { background: var(--card-2); color: var(--muted); }
+.warns.reviewed .ic { color: var(--muted); }
 #lyricLayer { position: absolute; inset: 0; pointer-events: none; }
 #lyricLayer .lyric { position: absolute; transform: translateX(-2px); font-size: 13px; line-height: 16px; color: var(--fg); white-space: nowrap; }
 
