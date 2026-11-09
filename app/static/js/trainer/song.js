@@ -185,15 +185,15 @@ function renderNotices(s) {
     kind: '',
     html: ex.fresh ? '让 AI 为每个小节写练习提示，并生成练习建议。'
       : [ex.missing ? `${ex.missing} 个小节还没有提示` : '', ex.planStale ? '练习建议可能已过时（谱子改过）' : ''].filter(Boolean).join('；'),
-    actions: [{ label: ex.fresh ? '让 AI 讲解这首曲子' : '让 AI 补写', icon: 'sparkle', primary: true, onClick: explain }],
+    actions: [{ label: ex.fresh ? '让 AI 讲解这首曲子' : '让 AI 补写', icon: 'sparkle', onClick: explain }], // 不是主按钮：通知区最多一个主按钮（接着练）
     onDismiss: closable(exKey),
   } : null);
 
   // AI 读谱头时写的备注：关掉后同一段备注不再显示（备注变了才重新出现）
   const m = s.meta || {}, noteKey = 'tt.noteHidden.' + SONG_ID;
   notice('metaNote', m.notes && localStorage.getItem(noteKey) !== m.notes ? {
-    // 备注常常很长：默认只显示一行，点一下展开 / 收起（样式 .n-fold，点击在 initSong 里接）
-    kind: '', html: `<span class="n-fold" title="点击展开 / 收起"><b>备注</b>${esc(m.notes)}</span>`, onDismiss: () => localStorage.setItem(noteKey, m.notes),
+    // 备注常常很长：默认只显示一行，点一下（或 Tab 到它按回车 / 空格）展开 / 收起（样式 .n-fold，事件在 initSong 里接）
+    kind: '', html: `<span class="n-fold" role="button" tabindex="0" aria-expanded="false" title="展开 / 收起"><b>备注</b>${esc(m.notes)}</span>`, onDismiss: () => localStorage.setItem(noteKey, m.notes),
   } : null);
 }
 
@@ -231,7 +231,7 @@ function renderPlan() {
     if (can) $('planCreate').onclick = e => explain(e.currentTarget);
     return;
   }
-  const staleNote = p.stale ? `<div class="notice warn"><span class="dot warn"></span><div class="msg">谱子改过，这些建议可能已过时。</div><button class="btn sm" id="planRefresh">${UI.icon('refresh')}重新生成</button></div>` : '';
+  const staleNote = p.stale ? `<div class="notice warn"><span class="dot warn"></span><div class="n-body">谱子改过，这些建议可能已过时。</div><div class="n-acts"><button class="btn sm" id="planRefresh">${UI.icon('refresh')}重新生成</button></div></div>` : '';
   const steps = (p.steps || []).map((st, i) => {
     const r = planRange(st.bars, n);
     const link = r ? `<button class="btn sm" data-a="${r.a}" data-z="${r.z}">${UI.icon('repeat', 13)}循环这段</button>` : '';
@@ -342,7 +342,12 @@ export function initSong() {
   on(['song', 'view'], () => renderHeader(get('song')));
   on('song', s => { renderNotices(s); renderResume(s); renderRefineBtn(s); });
   $('refineBtn').onclick = e => startRefine(e.currentTarget);
-  $('notices').addEventListener('click', e => { const f = e.target.closest('.n-fold'); if (f) f.classList.toggle('open'); });
+  const fold = f => f.setAttribute('aria-expanded', String(f.getAttribute('aria-expanded') !== 'true'));
+  $('notices').addEventListener('click', e => { const f = e.target.closest('.n-fold'); if (f) fold(f); });
+  $('notices').addEventListener('keydown', e => {
+    const f = e.target.closest('.n-fold');
+    if (f && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); fold(f); } // 空格不能再当播放键
+  });
   on(['song.plan', 'song.status', 'song.busy', 'view'], renderPlan);
   on(['song.meta', 'song.title', 'song.editable_meta'], () => fillMeta(get('song')));
   $('metaSave').onclick = () => withBusy($('metaSave'), saveMeta);
