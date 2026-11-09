@@ -18,7 +18,15 @@ class _In(BaseModel):
     model_config = ConfigDict(extra="ignore")  # 前端多带的字段忽略，不报错
 
 
-class SettingsIn(_In):
+class _Strict(_In):
+    """不认识的字段报 400：写错了键名（{"bar": [...]} 少了 s）不能被当成没写——精修 / 重新识别会变成整首（要花钱），
+    改谱头、改小节会悄悄什么都不改。前端发的都是固定的几个键；练习记录（关页面时发出、出错没人看到）和
+    GP 转换结果（字段跟着转换器走）仍然忽略多余的字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SettingsIn(_Strict):
     api_key: str | None = Field(None, max_length=500)
     clear_api_key: bool = False
     base_url: str | None = Field(None, max_length=500)
@@ -40,11 +48,11 @@ class DerivedIn(_In):
     derived: DerivedInfo | None = None
 
 
-class ImportErrorIn(_In):
+class ImportErrorIn(_Strict):
     error: str = Field("", max_length=5000)
 
 
-class MetaIn(_In):
+class MetaIn(_Strict):
     title: str | None = Field(None, max_length=200)
     artist: str | None = Field(None, max_length=200)
     tuning: list[str] | None = Field(None, max_length=STRINGS)
@@ -53,13 +61,13 @@ class MetaIn(_In):
     rev: int | None = None  # 曲子的 meta_rev：带上时和现在的不一致 → 409（别处改过谱头）
 
 
-class BarIn(_In):
+class BarIn(_Strict):
     events: list[Event] = Field(max_length=500)
     tip: str | None = Field(None, max_length=5000)
     rev: int | None = None  # 这个小节的 rev：带上时和现在的不一致 → 409（别处改过这个小节）
 
 
-class AskIn(_In):
+class AskIn(_Strict):
     question: str = Field(max_length=500)
 
     @field_validator("question")
@@ -78,7 +86,7 @@ class PracticeIn(_In):
     seconds: float = Field(0, ge=0, le=6 * 3600)
 
 
-class TagsIn(_In):
+class TagsIn(_Strict):
     tags: list[str] = Field(max_length=50)
 
     @field_validator("tags")
@@ -93,20 +101,20 @@ class TagsIn(_In):
         return clean
 
 
-class ReviewIn(_In):
+class ReviewIn(_Strict):
     ok: bool = True
     rev: int | None = None
 
 
-class RevIn(_In):
+class RevIn(_Strict):
     rev: int | None = None  # 这个小节的 rev：带上时和现在的不一致 → 409
 
 
-class ReparseIn(_In):
+class ReparseIn(_Strict):
     hint: str = Field("", max_length=1000)
 
 
-class RefineIn(_In):
+class RefineIn(_Strict):
     """精修的范围：都不给 = 整首；bars = 这几个小节（小节卡片上的“精修这个小节”）；system = 这一行（从 0 数）。
     hint：用户写的“哪里不对”，核对每个小节时告诉模型。"""
 
@@ -166,6 +174,8 @@ def describe(errors: list[dict]) -> str:
     if len(loc) > 1 and loc[0] in ("events", "bars") and loc[1].isdigit():
         field += f"第 {int(loc[1]) + 1} 个"
     kind = e.get("type", "")
+    if kind == "extra_forbidden":
+        return f"请求格式不对：不认识“{'.'.join(loc)}”这一项（可能写错了）"
     if kind == "missing":
         why = "缺少这一项"
     elif kind in ("string_too_long", "too_long"):

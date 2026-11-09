@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app import config, main, recognize
+from app import config, main, recognize, store
 from tests.fakes import FakeClaude, derived_bars, score_png
 
 
@@ -720,3 +720,34 @@ def test_ask_stream_finishes_after_the_browser_leaves(data_dir, monkeypatch):
     saved = store.load(sid)
     assert saved["bars"][0]["qa"][-1]["a"] == "回答：怎么弹"
     assert saved["usage"]["cost_usd"] == pytest.approx(before + 0.01)
+
+
+def test_unknown_keys_are_rejected_instead_of_meaning_the_whole_song(client, sync_jobs):
+    """{"bar": [...]}（少了 s）不能被当成空请求体 = 精修整首（要花钱）；改谱头写错键名也不能悄悄什么都不改。
+    练习记录（关页面时发出）、GP 转换结果照旧忽略多余的字段。"""
+    sid = client.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
+    recognize.run_parse(sid)
+    bar = client.get(f"/api/songs/{sid}").json()["bars"][1]["id"]
+    FakeClaude.calls.clear()
+    cases = [
+        ("post", f"/api/songs/{sid}/refine", {"bar": [bar]}),
+        ("post", f"/api/songs/{sid}/refine", {"bars": [bar], "sytem": 0}),
+        ("post", f"/api/songs/{sid}/systems/0/reparse", {"hnit": "x"}),
+        ("put", f"/api/songs/{sid}/meta", {"capo_fret": 3}),
+        ("put", f"/api/songs/{sid}/bars/{bar}", {"events": [], "tips": "x"}),
+        ("put", f"/api/songs/{sid}/bars/{bar}/review", {"okay": True}),
+        ("put", f"/api/songs/{sid}/bars/{bar}/undo-refine", {"revision": 1}),
+        ("put", f"/api/songs/{sid}/tags", {"tags": [], "x": 1}),
+        ("put", "/api/settings", {"efort": "max"}),
+    ]
+    for method, url, body in cases:
+        r = getattr(client, method)(url, json=body)
+        assert r.status_code == 400, (url, body, r.status_code, r.text)
+        assert r.json()["detail"].startswith("请求格式不对：不认识“"), r.json()
+    assert client.post(f"/api/songs/{sid}/refine", json={"bar": [bar]}).json()["detail"] == (
+        "请求格式不对：不认识“bar”这一项（可能写错了）"
+    )
+    assert not any("verify" in c for c in FakeClaude.calls) and store.load(sid)["activity"] is None
+    r = client.post(f"/api/songs/{sid}/practice", json={"bar_ids": [bar], "bpm": 60, "extra": 1})
+    assert r.status_code == 200
+    assert client.post(f"/api/songs/{sid}/refine", json={"bars": [bar]}).status_code == 200
