@@ -511,14 +511,54 @@ def test_corrupt_song_stops_polling(server, browser):
             )
         )
         b.open(f"{server['base']}/trainer?id={sid}")
-        b.wait_for("document.getElementById('notices').innerText.includes('数据损坏')", timeout=20)
+        gone = "(document.getElementById('songGone') || {}).textContent || ''"
+        b.wait_for(f"{gone}.includes('数据损坏')", timeout=20)
         time.sleep(6)  # 退避重试的话这段时间里至少还会再请求一次
         assert b.js("window.__gets") == 1
-        text = b.js("document.getElementById('notices').innerText")
-        assert "自动重试" not in text and "重试" in text
+        text = b.js(gone)
+        assert "自动重试" not in text and "重试" in text and "返回曲库" in text
         assert b.js("document.getElementById('songTitle').textContent") == "加载失败"
+        assert b.js("document.querySelector('.practice-grid').getClientRects().length") == 0
+        b.js("document.getElementById('goneRetry').click(); true")  # 手动重试：再请求一次
+        b.wait_for("window.__gets === 2")
     finally:
         shutil.rmtree(store.song_dir(sid), ignore_errors=True)
+
+
+def test_unknown_song_shows_an_empty_state(server, browser):
+    """曲子不存在：不显示空谱面、假的小节卡片和问 AI，只有一句说明和“返回曲库”。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id=no-such-song#tune")
+    b.wait_for("!!document.getElementById('songGone')")
+    assert "曲子不存在" in b.js("document.getElementById('songGone').textContent")
+    assert b.js("document.querySelector('#songGone a.btn').getAttribute('href')") == "/"
+    assert b.js("!document.getElementById('goneRetry')")
+    for sel in (".practice-grid", "#fbDock", "#nav", "#view-tune"):
+        assert b.js(f"document.querySelector('{sel}').getClientRects().length") == 0, sel
+    assert b.js("location.hash") == "#practice"  # 不在调弦页开麦克风
+    assert not b.errors, b.errors
+
+
+def test_load_failure_offers_retry(server, browser):
+    """第一次就连不上服务：说明 + “重试”，重试成功后正常显示练习页。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id={server['image']}")
+    b._run(
+        b._send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            source="""window.__fail = true; const of = window.fetch;
+            window.fetch = (u, i) => window.__fail && String(u).startsWith('/api/songs/')
+              ? Promise.reject(new TypeError('Failed to fetch')) : of(u, i);""",
+        )
+    )
+    b._run(b._send("Page.navigate", url=f"{server['base']}/trainer?id={server['image']}&offline=1"))
+    b.wait_for("location.search.includes('offline') && !!document.getElementById('goneRetry')")
+    assert "加载失败" in b.js("document.getElementById('songGone').textContent")
+    assert b.js("document.querySelector('.practice-grid').getClientRects().length") == 0
+    b.js("window.__fail = false; document.getElementById('goneRetry').click(); true")
+    b.wait_for("!document.getElementById('songGone') && !!tt.song")
+    assert b.js("document.querySelector('.practice-grid').getClientRects().length") > 0
+    assert b.js("document.getElementById('songTitle').textContent") == "E2E 图片曲"
 
 
 def test_rhythm_drill_scores_taps(trainer):
