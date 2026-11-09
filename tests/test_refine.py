@@ -592,3 +592,88 @@ def test_split_rows_get_regions_per_half(data_dir, monkeypatch):
     assert row0[2]["region"] == row0[3]["region"] and row0[2]["region"][1] - row0[2]["region"][0] > 100
     assert not any(refine.refinable(s, b) for b in row0)
     assert all(refine.refinable(s, b) for b in s["bars"] if b["system"] == 1)
+
+
+def test_reverting_a_refined_bar_to_the_recognition_drops_the_refine(client, sync_jobs, monkeypatch):
+    """手改 → 精修 → 用户改回识别结果：精修的撤销基线是那次手改，已经被用户丢掉了，不能再撤销回去。"""
+    sid = _song()
+    b = store.load(sid)["bars"][1]
+    orig = b["events"]
+    b = songs.edit_bar(sid, b["id"], [{"dur": "1", "notes": [{"string": 1, "fret": 5}]}], None, b["rev"])[
+        "bars"
+    ][1]
+    monkeypatch.setattr(FakeClaude, "verify_result", change_fret(5, 9))
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [b["id"]]})
+    b = store.load(sid)["bars"][1]
+    assert _frets(b) == [9] and b["refine"] and b["edited"]
+    b = songs.edit_bar(sid, b["id"], orig, None, b["rev"])["bars"][1]
+    assert not b["edited"] and "refine" not in b and _frets(b) == [1, 1, 1, 1]
+    r = client.put(f"/api/songs/{sid}/bars/{b['id']}/undo-refine", json={"rev": b["rev"]})
+    assert r.status_code == 400 and "没有精修改动" in r.json()["detail"]
+
+
+def test_undo_refine_keeps_a_tip_the_user_wrote_afterwards(client, sync_jobs, monkeypatch):
+    sid = _song()
+    monkeypatch.setattr(FakeClaude, "verify_result", change_fret(1, 7))
+    bid = store.load(sid)["bars"][1]["id"]
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    b = store.load(sid)["bars"][1]
+    b = songs.edit_bar(sid, bid, b["events"], "我自己的提示", b["rev"])["bars"][1]
+    assert b["refine"]  # 只改提示：精修照样能撤销
+    b = refine.undo(sid, bid, b["rev"])["bars"][1]
+    assert _frets(b) == [1, 1, 1, 1] and b["tip"] == "我自己的提示"
+
+
+def test_undo_refine_after_a_setting_change_keeps_old_tips_and_qa_out(client, sync_jobs, monkeypatch):
+    """精修后改了变调夹：旧设定下写的提示和问答都过时了，撤销精修也不能把它们恢复。"""
+    sid = _song()
+    store.update(sid, lambda s: s["bars"][1].update(qa=[{"q": "q", "a": "a", "at": "2026-11-01 10:00"}]))
+    monkeypatch.setattr(FakeClaude, "verify_result", change_fret(1, 7))
+    bid = store.load(sid)["bars"][1]["id"]
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    assert client.put(f"/api/songs/{sid}/meta", json={"capo": 5}).status_code == 200
+    b = store.load(sid)["bars"][1]
+    assert b["refine"]["prev"]["tip"] == "" and b["qa"][0]["stale"] and "stale_by_refine" not in b["qa"][0]
+    b = refine.undo(sid, bid, b["rev"])["bars"][1]
+    assert _frets(b) == [1, 1, 1, 1] and b["tip"] == "" and b["qa"][0]["stale"] is True
+
+
+def test_undo_after_two_refines_returns_to_before_the_first(client, sync_jobs, monkeypatch):
+    """连着精修两次再撤销：回到第一次精修之前（音、提示、问答），两次之间问的问答说的是中间的音，算过时。"""
+    sid = _song()
+
+    def prepare(s):
+        s["bars"][1]["qa"] = [{"q": "q0", "a": "a0", "at": "2026-11-01 10:00"}]
+        s["plan"] = {"overview": "慢练", "steps": []}
+
+    store.update(sid, prepare)
+    bid = store.load(sid)["bars"][1]["id"]
+    monkeypatch.setattr(FakeClaude, "verify_result", change_fret(1, 7, "第一次"))
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    store.update(sid, lambda s: s["bars"][1]["qa"].append({"q": "q1", "a": "a1", "at": "2026-11-01 11:00"}))
+    monkeypatch.setattr(FakeClaude, "verify_result", change_fret(7, 8, "第二次"))
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [bid]})
+    b = store.load(sid)["bars"][1]
+    assert _frets(b) == [8] * 4 and _frets(b["refine"]["prev"]) == [1] * 4
+    assert b["refine"]["diff"] == "第一次；第二次"
+    s = refine.undo(sid, bid, b["rev"])
+    b = s["bars"][1]
+    assert _frets(b) == [1] * 4 and b["tip"] == "tip 2" and "refine" not in b
+    assert [q.get("stale", False) for q in b["qa"]] == [False, True]
+    assert bid not in s["plan"]["changed_bars"]
+
+
+def test_undo_refine_of_a_hand_edited_bar_keeps_the_plan_stale(client, sync_jobs, monkeypatch):
+    """手改过的小节再精修、撤销精修：回到的是手改，练习建议照样按“这个小节改过”过时。"""
+    sid = _song()
+    store.update(sid, lambda s: s.update(plan={"overview": "慢练", "steps": []}))
+    b = store.load(sid)["bars"][1]
+    b = songs.edit_bar(sid, b["id"], [{"dur": "1", "notes": [{"string": 1, "fret": 5}]}], None, b["rev"])[
+        "bars"
+    ][1]
+    monkeypatch.setattr(FakeClaude, "verify_result", change_fret(5, 9))
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [b["id"]]})
+    b = store.load(sid)["bars"][1]
+    s = refine.undo(sid, b["id"], b["rev"])
+    assert _frets(s["bars"][1]) == [5] and s["bars"][1]["edited"]
+    assert s["plan"]["changed_bars"] == [b["id"]] and s["plan"]["stale"]

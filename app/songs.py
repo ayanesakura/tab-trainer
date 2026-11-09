@@ -38,6 +38,7 @@ from app.staleness import (
     invalidate_bar,
     invalidate_plan,
     invalidate_tips_for_setting,
+    note_user_tip,
     reconcile_bars,
     restore_bar,
     restore_plan_bar,
@@ -368,6 +369,7 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
         if tip is not None:
             if tip != bar.get("tip", ""):
                 touch_bar(bar)  # 只改了提示（音符变了的话 store.update 会自己 +1，不会重复）
+                note_user_tip(bar, tip)  # 精修改过的小节：撤销精修时保留用户写的提示
             bar["tip"] = tip
 
     return store.update(sid, apply)

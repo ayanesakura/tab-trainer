@@ -2,7 +2,9 @@
 
 都是对内存里 song dict 的纯操作，由调用方放在 store.update 里执行。
 - 用户改了音：bar["edited"] = True，第一次改之前的内容记在 bar["_orig"]（撤销基线）；之后又改回原样就恢复、edited 变回 False。
-- 精修改了音（app/refine.py）：不算用户手改，改之前的内容记在 bar["refine"]["prev"]，撤销精修时恢复；用户再手改就丢掉它。
+- 精修改了音（app/refine.py）：不算用户手改，改之前的内容记在 bar["refine"]["prev"]，撤销精修时恢复；连着精修几次，
+  记的是第一次之前的（撤销回到精修之前）。音被别的途径改了（手改、改回识别结果）就丢掉它；只改提示时，
+  用户写的提示也记进去（撤销精修时保留）。
 - 练习记录按小节 id 记在 practice.jsonl 里（见 app/practice.py）：小节换了一批时，对上的沿用原来的 id，
   记录自然保留；对不上的小节的记录在聚合时忽略，不用删。
 """
@@ -72,6 +74,7 @@ def restore_bar(bar: dict) -> None:
     """改回了第一次改动前的音：恢复当时的提示和不确定说明；改动期间问的问题反过来变成过时的。"""
     orig = bar.pop("_orig")
     bar["edited"] = False
+    bar.pop("refine", None)  # 音又变了（回到识别结果）：撤销精修会把丢掉的手改恢复回来
     bar["tip"], bar["uncertain"] = orig["tip"], orig["uncertain"]
     if "warn" in orig:  # 早先的 _orig 没记（当时第一次改就清掉了）
         bar["warn"] = orig["warn"]
@@ -81,24 +84,40 @@ def restore_bar(bar: dict) -> None:
 def refine_bar(s: dict, bar: dict, events: list[dict], uncertain: str, diff: str) -> None:
     """精修改了这个小节的音：和手改一样，提示清掉（按旧音写的，讲解可以补写）、问答标成过时、练习建议记下这个小节变了；
     不确定说明换成精修时模型给的；识别时留下的警告里 OCR 不一致说的是旧音，去掉（按内容算的读取时重算）。
-    不算用户手改（edited 不变）。改之前的内容记在 bar["refine"]，撤销精修时恢复（undo_refine）。"""
-    bar["refine"] = {"diff": diff, "prev": _snapshot(bar)}
+    不算用户手改（edited 不变）。改之前的内容记在 bar["refine"]，撤销精修时恢复（undo_refine）。
+    已经精修改过（之后没手改过）又改：撤销要回到第一次精修之前，留着原来的 prev；这期间问的问答说的是中间的音，
+    撤销时不恢复。"""
+    old = bar.get("refine")
+    if old:
+        diffs = [d for d in (old.get("diff") or "", diff) if d]
+        bar["refine"] = {"diff": "；".join(dict.fromkeys(diffs)), "prev": old["prev"]}
+    else:
+        bar["refine"] = {"diff": diff, "prev": _snapshot(bar)}
     bar["events"] = events
     bar["tip"] = ""
     bar["uncertain"] = uncertain
     bar["warn"] = [w for w in recognition_warns(bar) if w.get("code") != "ocr_mismatch"]
-    _stale_qa(bar, "stale_by_refine")
+    _stale_qa(bar, None if old else "stale_by_refine")
     invalidate_plan(s, bar["id"])
 
 
 def undo_refine(s: dict, bar: dict) -> None:
-    """撤销精修：音、提示、不确定说明和警告恢复成精修之前的；因为精修才过时的问答和练习建议也恢复。"""
+    """撤销精修：音、提示、不确定说明和警告恢复成精修之前的；因为精修才过时的问答和练习建议也恢复
+    （精修之前就是手改过的音：练习建议照样按手改过时，不恢复）。精修之后用户自己写的提示记在 prev 里（见 note_user_tip），
+    撤销时保留。"""
     prev = bar.pop("refine")["prev"]
     bar["events"] = prev["events"]
     bar["tip"], bar["uncertain"] = prev.get("tip", ""), prev.get("uncertain", "")
     bar["warn"] = prev.get("warn") or []
     _restore_qa(bar, "stale_by_refine")
-    restore_plan_bar(s, bar["id"])
+    if not bar.get("edited"):
+        restore_plan_bar(s, bar["id"])
+
+
+def note_user_tip(bar: dict, tip: str) -> None:
+    """用户只改了提示（音没变）：精修改过的小节，撤销精修时保留用户写的（它取代了精修之前的提示）。"""
+    if bar.get("refine"):
+        bar["refine"]["prev"]["tip"] = tip
 
 
 def invalidate_plan(s: dict, bar_id: str | None = None) -> None:
@@ -143,15 +162,18 @@ def invalidate_tips_for_setting(s: dict) -> None:
         b["tip"] = ""
         if "_orig" in b:  # 改回原样时也不该恢复旧设定下写的提示
             b["_orig"]["tip"] = ""
+        if b.get("refine"):  # 撤销精修时同样
+            b["refine"]["prev"]["tip"] = ""
         mark_qa_stale(b)
     invalidate_plan(s)
 
 
 def mark_qa_stale(bar: dict) -> None:
-    """问答整体过时，而且不会因为改回原样而恢复。"""
+    """问答整体过时，而且不会因为改回原样、撤销精修而恢复。"""
     for q in bar.get("qa") or []:
         q["stale"] = True
         q.pop("stale_by_edit", None)
+        q.pop("stale_by_refine", None)
 
 
 @dataclass(frozen=True)
