@@ -55,9 +55,7 @@ def test_background_update_while_playing_is_not_a_finished_loop(server, trainer,
     ids = ["bar3", "bar4", "bar5"]
     before = _loops(server, sid, ids)
     b = trainer()
-    b.js(
-        "tt.set('play.countIn', false); tt.setLoop(2, 4); tt.setTempo(100); tt.play(); true"
-    )
+    b.js("tt.set('play.countIn', false); tt.setLoop(2, 4); tt.setTempo(100); tt.play(); true")
     b.wait_for("tt.state.playing")
     time.sleep(1.0)
     t1 = b.js("tt.api.tickPosition")
@@ -84,9 +82,7 @@ def test_reselecting_the_current_section_while_playing_is_not_a_loop(server, tra
     ids = ["bar4", "bar5", "bar6"]
     before = _loops(server, sid, ids)
     b = trainer()
-    b.js(
-        "tt.set('play.countIn', false); tt.setLoop(3, 5); tt.setTempo(60); tt.play(); true"
-    )
+    b.js("tt.set('play.countIn', false); tt.setLoop(3, 5); tt.setTempo(60); tt.play(); true")
     b.wait_for("tt.state.playing")
     time.sleep(1.5)
     b.js("""document.querySelector('#secBtns button[data-a="3"]').click(); true""")
@@ -212,4 +208,46 @@ def test_dragging_across_bars_on_the_score_selects_a_loop(trainer):
     b.mouse("mouseReleased", *p1)
     time.sleep(0.2)
     assert b.js("[tt.state.a, tt.state.b]") == [0, 3]
+    assert not b.errors, b.errors
+
+
+def test_whole_song_stops_on_the_last_bar(server, trainer):
+    """循环全曲：弹到曲末停在最后一小节（算弹完一遍、记练习），不跳回第一小节；再播放从头开始。
+    用 GP 曲子：图片曲子的练习记录别的测试要查（不能多出这一遍）。"""
+    sid = server["gp"]
+    b = trainer(sid)
+    n = b.js("tt.view.bars.length")
+    last_id = b.js(f"tt.song.bars[{n - 1}].id")
+    before = _loops(server, sid, [last_id])[last_id]
+    b.js(f"tt.set('play.countIn', false); tt.setLoop(0, {n - 1}); tt.setTempo(240); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    b.wait_for("!tt.state.playing", timeout=30)
+    time.sleep(0.6)
+    assert b.js("tt.state.loops") == 1
+    assert b.js("tt.get('ui.bar')") == n - 1
+    last_start = b.js(f"tt.api.tickCache.masterBars[{n - 1}].start")
+    assert (
+        abs(b.js("tt.api.tickPosition") - last_start) <= 2
+    )  # 光标停在最后一小节开头（播放器取整差 1 tick），不是第一小节
+    assert _loops(server, sid, [last_id])[last_id] == before + 1
+    # 再播放：从头开始
+    b.js("tt.play(); true")
+    b.wait_for("tt.state.playing")
+    time.sleep(0.3)
+    assert b.js("tt.api.tickPosition") < last_start
+    assert b.js("tt.get('ui.bar')") == 0
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
+    assert not b.errors, b.errors
+
+
+def test_section_loop_still_loops(trainer):
+    """循环一段（最后一小节在段里也一样）：弹到段尾跳回段首接着弹，不停下。"""
+    b = trainer()
+    n = b.js("tt.view.bars.length")
+    b.js(f"tt.set('play.countIn', false); tt.setLoop({n - 1}, {n - 1}); tt.setTempo(240); tt.play(); true")
+    b.wait_for("tt.state.loops >= 1", timeout=20)
+    assert b.js("tt.state.playing")
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
     assert not b.errors, b.errors

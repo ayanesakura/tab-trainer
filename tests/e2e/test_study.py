@@ -61,7 +61,9 @@ def test_plan_queue_and_rate(server, browser):
         )  # 后端也改了（曲库列表重新取过）
 
         # 练习页：从今日清单进来，“返回”回到练琴；打分：勾“杂音”，点“顺”
-        b.open(server["base"] + f"/trainer?id={gp}&resume=1&from=today")
+        b.open(
+            server["base"] + f"/trainer?id={gp}&from=today"
+        )  # 不带 resume：有练习记录时页面会把它从地址里去掉
         b.wait_for("!document.getElementById('rateBtn').hidden")
         assert b.js("document.getElementById('backBtn').getAttribute('href')") == "/#study"
         assert "打分" in b.js("document.getElementById('rateBtn').textContent")

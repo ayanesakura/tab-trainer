@@ -118,7 +118,11 @@ function ensureApi() {
     if (soundFontsLoaded < 2) return; // 等木吉他音色也加载完
     setReady();
   });
-  api.playerStateChanged.on(e => set('play.playing', e.state === 1));
+  api.playerStateChanged.on(e => {
+    set('play.playing', e.state === 1);
+    if (e.state !== 1 && endBar) placeAtEnd();
+  });
+  api.playerFinished.on(onFinished);
   api.playerPositionChanged.on(e => onPosition(e.currentTick));
   api.playedBeatChanged.on(beat => onBeat(beat, false));
   // 点音符时 alphaTab 先触发拍、再触发音符：攒到同一轮里，点在音符上就只试听（不改播放位置），点在别处才从这个小节开始播放。
@@ -313,7 +317,7 @@ function applyLoopRange() {
     lastTick = -1; // 跳回起点不能当成弹完了一遍
     api.playbackRange = range;
   }
-  api.isLooping = true;
+  api.isLooping = !(a === 0 && b === mbs.length - 1); // 全曲不循环：弹到曲末停在最后一小节（见 onFinished）
   const bars = api.tracks[0].staves[0].bars;
   const first = bars[a].voices[0].beats[0];
   const lastBeats = bars[b].voices[0].beats, last = lastBeats[lastBeats.length - 1];
@@ -419,6 +423,7 @@ function markReviewBars() {
 export function play() {
   if (get('rhythm.on') && hooks.drill) { hooks.drill.start(); return; } // 敲节奏打开时：开始的是敲节奏，不是 alphaTab
   if (!api || !get('play.ready')) { UI.toast('音色加载中', 'info'); return; }
+  if (endTick !== null) { api.tickPosition = 0; endTick = null; } // 全曲弹完停在最后：再播放从头开始
   set('play.loops', 0); lastTick = -1;
   if (countIn.queuePlay()) return; // 预备拍里停过、MIDI 还在重新生成：好了再开始
   startPlayer();
@@ -459,6 +464,7 @@ export function setLoop(a, b, restart = true, show = true) {
   const { a: oa, b: ob } = get('play');
   if (!restart && na === oa && nb === ob) { if (show) set('ui.bar', na); return; }
   set({ 'play.a': na, 'play.b': nb }); // 练习记录（practice-log.js）跟着它记上一段、开始下一段
+  endTick = null;
   const range = applyLoopRange();
   if (show) set('ui.bar', na);
   if (!range) cursorPending = true; // 谱子还没加载好：加载好以后（midiLoaded）再把光标放到段首
@@ -475,6 +481,26 @@ export function stepSection(dir) {
   const r = stepCalc({ a, b, n: v.bars.length, shown: get('ui.bar'), secs: v.sections }, dir);
   if (!r) return;
   if (r.msg) UI.toast(r.msg, 'info'); else { setLoop(r.a, r.b); revealLoop(); }
+}
+
+// 全曲（isLooping = false）弹到曲末：alphaTab 先发 finished，再停下并把位置放回开头。这里先算弹完一遍，
+// 等停下（playerStateChanged）以后把光标放到最后弹到的那一小节（有 D.C. al Fine 时是 Fine 那一小节）。
+// endTick：停在曲末的位置，下次播放从头开始；停下后点了别的小节、换了循环范围就不算了（seekBar / setLoop 清掉）
+let endBar = null, endTick = null;
+function onFinished() {
+  if (!api || api.isLooping) return; // 循环一段：alphaTab 自己跳回段首，onPosition 计遍数
+  set('play.loops', get('play.loops') + 1); // 练习记录（practice-log.js）记下这一遍
+  lastTick = -1; // 停下时跳回开头的那次位置变化不是又弹完一遍
+  const tc = api.tickCache, played = tc && tc.masterBars ? tc.masterBars.filter(m => m.end > m.start) : [];
+  endBar = played.length ? played[played.length - 1] : null;
+}
+function placeAtEnd() {
+  const m = endBar;
+  endBar = null;
+  endTick = m.start;
+  lastTick = -1;
+  api.tickPosition = m.start;
+  set('ui.bar', m.masterBar.index);
 }
 
 function onPosition(tick) {
@@ -575,6 +601,7 @@ function seekBar(bi) {
   const inRange = runs.find(m => !r || (m.start >= r.startTick && m.start < r.endTick));
   const t = inRange ? inRange.start : runs.length ? runs[0].start : mb.start;
   lastTick = -1; // 往回跳不能当成弹完了一遍
+  endTick = null;
   api.tickPosition = t;
   countIn.seek(t); // 预备拍里点的：之后停下时放回这里，不是开始播放的位置
 }
