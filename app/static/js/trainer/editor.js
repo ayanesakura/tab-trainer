@@ -320,15 +320,15 @@ export function initEditor() {
   $('scoreHelp').innerHTML = LEGEND_PLAY;
   on('ui.editMode', paintEditMode);
   paintEditMode(false);
-  on(['ui.bar', 'song'], updateBarTools);
+  on(['ui.bar', 'song.bars', 'song.systems', 'song.busy'], updateBarTools);
   // 正在改的小节被删掉或内容变了才关面板；别的刷新（比如后台轮询）不打断
   on('song.bars', bars => {
     if (!np) return;
     const k = bars.findIndex(b => b.id === np.barId);
     if (k < 0 || JSON.stringify(bars[k].events) !== JSON.stringify(np.snap)) closeNotePop(); else np.bi = k;
   });
-  on('song', s => {
-    const can = !!(s && s.can_edit_bars);
+  on('song.can_edit_bars', v => {
+    const can = !!v;
     $('fixBox').hidden = !can;
     $('editModeBtn').hidden = !can;
     if (!can && get('ui.editMode')) setEditMode(false);

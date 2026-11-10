@@ -1047,3 +1047,40 @@ def test_choosing_a_section_scrolls_it_into_view(trainer):
       return s.top + r.y + r.h; })()""")
     assert bottom <= b.js("innerHeight")
     assert not b.errors, b.errors
+
+
+def test_rating_survives_later_song_updates(server, trainer):
+    """打了分以后曲子的其他部分变了（练完一遍写练习记录、问答、轮询）：打分按钮不变回“打分”。
+    以前 on('song') 每次都把（旧的）song.study 抄回打分状态，下一遍练完按钮就复原了。"""
+    sid = server["image"]
+    req = urllib.request.Request(
+        f"{server['base']}/api/songs/{sid}/study",
+        data=json.dumps({"in_plan": True}).encode(),
+        method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req)
+    try:
+        b = trainer()
+        b.wait_for("!document.getElementById('rateBtn').hidden")
+        b.js("document.getElementById('rateBtn').click(); true")
+        b.wait_for("!document.getElementById('ratePop').hidden")
+        b.js("document.querySelector('#rateBtns .r3').click(); true")
+        b.wait_for("document.getElementById('rateBtn').classList.contains('rated')")
+        # 练完一遍：practice-log 把新的练习记录写进 song.practice（别的 song.* 写入也一样）
+        b.js("tt.set('song.practice', { ...(tt.song.practice || {}), total_seconds: 12345 }); true")
+        b.js("tt.set('song.bars.0.qa', [{ q: '问', a: '答', at: '' }]); true")
+        assert b.js("document.getElementById('rateBtn').classList.contains('rated')")
+        assert b.js("tt.song.study.rated_today") == 3
+        b.js("tt.refresh(); true")  # 轮询到的也是打过分的状态
+        time.sleep(0.5)
+        assert b.js("document.getElementById('rateBtn').classList.contains('rated')")
+        assert not b.errors, b.errors
+    finally:
+        req = urllib.request.Request(
+            f"{server['base']}/api/songs/{sid}/study",
+            data=json.dumps({"in_plan": False}).encode(),
+            method="PUT",
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req)

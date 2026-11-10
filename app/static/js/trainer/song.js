@@ -355,8 +355,12 @@ export function initSong() {
   });
   on(['song.bars', 'song.meta', 'song.pages', 'song.source_type', 'song.track', 'song.id'], () => set('view', deriveView(get('song'))));
   on('view', onView);
-  on(['song', 'view'], () => renderHeader(get('song')));
-  on('song', s => { renderNotices(s); renderResume(s); renderRefineBtn(s); });
+  // 只订阅用到的那几项：练完一遍（song.practice）、问答（song.bars.k.qa 会动 song.bars）、打分（song.study）这些写入
+  // 不该让顶栏、通知、精修按钮跟着重画
+  on(['song.title', 'song.meta', 'song.source_type', 'view'], () => renderHeader(get('song')));
+  on(['song.activity', 'song.progress', 'song.notice', 'song.status', 'song.failed_rows', 'song.is_score', 'song.bars', 'song.plan', 'song.meta'], () => renderNotices(get('song')));
+  on(['song.bars', 'song.practice'], () => renderResume(get('song')));
+  on(['song.is_score', 'song.bars', 'song.busy', 'song.activity', 'song.refined'], () => renderRefineBtn(get('song')));
   $('refineBtn').onclick = e => startRefine(e.currentTarget);
   const fold = f => f.setAttribute('aria-expanded', String(f.getAttribute('aria-expanded') !== 'true'));
   $('notices').addEventListener('click', e => { const f = e.target.closest('.n-fold'); if (f) fold(f); });

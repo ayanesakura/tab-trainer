@@ -1,8 +1,10 @@
 // 练琴计划在练习页上的部分：顶栏的计时器、“打分”按钮和打分弹层；从今日清单进来（?from=today）时“返回”回到练琴页。
-// 这首在计划里才显示“打分”。打分的状态放在 store 的 study（不是 song.study：set('song.…') 会让谱面重新派生）。
+// 这首在计划里才显示“打分”。打分的状态就是 song.study（只订阅这一项；谱面只在 song.bars / song.meta 等变了时才重新派生，
+// 改 song.study 不会）。打完分用 setLocal 写回 song.study：之前发出、还没回来的轮询作废，不会把旧的状态盖回来。
 // 每次打分记下：1–4 分、勾的问题、备注、当时的速度（play.bpm）；同一天再打一次是改分（后端按天取最后一次）。
 
-import { get, set, on } from './store.js';
+import { get, on } from './store.js';
+import { setLocal } from './song.js';
 import { $, UI, esc, songUrl } from './dom.js';
 import * as api from '../lib/api.js';
 import { icon } from '../lib/html.js';
@@ -33,8 +35,10 @@ function previewText(st, r) {
   return p.due_in <= 1 ? '明天复习' : `${gapText(p.due_in)}后复习`;
 }
 
+const study = () => get('song.study') || null;
+
 function renderPop() {
-  const st = get('study');
+  const st = study();
   if (!st) return;
   const k = KINDS[st.state] || KINDS.new;
   const hint = [k.label, st.last ? `上次${ratingName(st.last.rating)}${st.last.day ? `（${st.last.day.slice(5).replace('-', '/')}）` : ''}` : '第一次打分', st.state === 'learning' && '打“顺”就转入复习']
@@ -46,7 +50,7 @@ function renderPop() {
 }
 
 function openPop() {
-  const st = get('study'), btn = $('rateBtn'), pop = $('ratePop');
+  const st = study(), btn = $('rateBtn'), pop = $('ratePop');
   if (!st) return;
   if (layer) { layer.close(); return; }
   // 今天打过分：带出上次勾的问题和备注，改分时不用重来
@@ -74,7 +78,7 @@ async function rate(r) {
   btns.forEach(b => { b.disabled = true; });
   try {
     const res = await api.post(songUrl('/study/rate'), body);
-    set('study', res.study || null);
+    setLocal('song.study', res.study || null);
     const st = res.study || {};
     const next = st.state === 'learning' ? '明天再练' : st.due_in != null ? `下次：${dueText(st.due_in)}` : '';
     UI.toast(`已记下：${ratingName(r)}${next ? ` · ${next}` : ''}`);
@@ -99,8 +103,7 @@ export function initStudy() {
   });
   $('rateBtns').addEventListener('click', e => { const b = e.target.closest('[data-r]'); if (b && !b.disabled) rate(+b.dataset.r); });
   $('rateNote').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); const p = $('rateBtns').querySelector('[aria-pressed="true"]'); if (p) rate(+p.dataset.r); } });
-  // 曲子（轮询）带来的 study：计划在曲库里改了、别的标签页打了分，这里跟着变
-  on('song', s => { if (s) set('study', s.study || null); });
-  on('study', st => { paintButton(st); if (layer) renderPop(); });
-  paintButton(get('study'));
+  // 曲子（轮询）带来的 study：计划在曲库里改了、别的标签页打了分，这里跟着变；曲子的其他部分变了（练完一遍、问答）不重画
+  on('song.study', () => { paintButton(study()); if (layer) renderPop(); });
+  paintButton(study());
 }
