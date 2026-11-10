@@ -94,8 +94,10 @@ function ensureApi() {
   api = new alphaTab.AlphaTabApi($('score'), {
     core: { fontDirectory: AT_BASE + 'font/', includeNoteBounds: true }, // 不开这个 alphaTab 不会触发点击音符事件（试听、改音都靠它）
     display: { scale: 0.9, layoutMode: 'Page', staveProfile: staveProfile(), resources: themeColors() },
-    // 曲名、艺人等页面顶栏已经有了，谱面上不再画（省出一大块地方）；调弦说明保留。alphaTab 署名不受影响
-    notation: { rhythmMode: 'ShowWithBars', elements: { scoreTitle: false, scoreSubTitle: false, scoreArtist: false, scoreAlbum: false, scoreWords: false, scoreMusic: false, scoreWordsAndMusic: false, scoreCopyright: false, effectLyrics: false } }, // 歌词自己画在六线谱下方（lyrics.js）
+    // 曲名、艺人等页面顶栏已经有了，谱面上不再画（省出一大块地方）。alphaTab 署名不受影响。
+    // 调弦说明也不画：alphaTab 按降号拼音名（③=Gb ④=Db），和我们全站的升号写法（F♯ C♯，view.js 的 NN）对不上，
+    // 又不能改它的拼法；非标准调弦由谱面标题栏的 #tuningLine 用我们的写法显示（song.js），标准调弦什么都不写
+    notation: { rhythmMode: 'ShowWithBars', elements: { scoreTitle: false, scoreSubTitle: false, scoreArtist: false, scoreAlbum: false, scoreWords: false, scoreMusic: false, scoreWordsAndMusic: false, scoreCopyright: false, guitarTuning: false, effectLyrics: false } }, // 歌词自己画在六线谱下方（lyrics.js）
     player: {
       playerMode: 'EnabledSynthesizer', soundFont: SF_BASE,
       enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true,
@@ -229,7 +231,7 @@ async function onScoreLoaded(score) {
   if (isScore(song) && hasHook('score.loaded') && !(await invoke('score.loaded', score))) return;
   if (!scoreTempoDone) {
     scoreTempoDone = true;
-    const s = get('song'), t = (s.meta && s.meta.tempo) || (isScore(s) ? baseTempo : 0);
+    const s = get('song'), t = origTempo(s);
     if (t) { // 原速比滑块上限快时把上限放宽，原速也能拖得到（已经定下的速度更快时不收窄）
       const bpm = get('play.bpm');
       set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10, Math.ceil(bpm / 10) * 10)) });
@@ -237,8 +239,11 @@ async function onScoreLoaded(score) {
     // 默认就用谱上标的速度（识别出来的 / GP 文件里的）；没有标速度就 50。接着练 / 用户在谱子加载好之前已经定了速度的，不覆盖
     if (!tempoSet) setTempo(t || 50);
   }
+  set('play.origBpm', origTempo(get('song'))); // 控制条上的原速刻度和百分比（controls.js）
   if (api) api.playbackSpeed = get('play.bpm') / baseTempo;
 }
+/** 谱上标的速度（识别出来的 / GP 文件里的）；不知道是 0 */
+const origTempo = s => Math.round((s && s.meta && s.meta.tempo) || (isScore(s) ? baseTempo : 0)) || 0;
 
 export function applyAudio() {
   if (!api) return;
@@ -346,11 +351,11 @@ export function toLoopStart() {
   const range = applyLoopRange();
   if (range) dispatch({ type: playing() ? 'restart' : 'seek', tick: range.start });
 }
-/** 上一段 / 下一段 */
+/** 上一段 / 下一段（按控制条上选段的方式：原谱的行，或 AI 分的段落） */
 export function stepSection(dir) {
   const v = get('view'), { a, b } = get('play');
   if (!v) return;
-  const r = stepCalc({ a, b, n: v.bars.length, shown: get('ui.bar'), secs: v.sections }, dir);
+  const r = stepCalc({ a, b, n: v.bars.length, shown: get('ui.bar'), secs: get('ui.secs') || v.sections }, dir); // 选段按段落时按段落换（controls.js）
   if (!r) return;
   if (r.msg) UI.toast(r.msg, 'info'); else { setLoop(r.a, r.b); revealLoop(); }
 }
@@ -440,6 +445,41 @@ export function refreshScoreTheme() {
   api.updateSettings(); api.render();
 }
 
+// ---------------------------------------------------------------------
+// 预备拍：状态栏倒数“预备 3…2…1”，每一拍谱面上的光标和底部指板轻轻闪一下（第一拍重一点）。
+// 按 play.countInStart（状态机进入预备拍的时刻）、速度和开始那一小节的拍号算（alphaTab 数一小节：分子个拍，每拍一个分母音符）
+// ---------------------------------------------------------------------
+let ciRaf = 0;
+function meterAt(bi) {
+  const s = get('song'), b = s && s.bars[bi];
+  return (b && b.time_signature) || (s && s.meta && s.meta.time_signature) || [4, 4];
+}
+function pulse(el, strong) {
+  if (!el || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  el.classList.remove('ci-beat', 'ci-strong');
+  void el.offsetWidth; // 重新开始动画
+  el.classList.add('ci-beat');
+  if (strong) el.classList.add('ci-strong');
+}
+function countIn() {
+  cancelAnimationFrame(ciRaf);
+  const shown = get('ui.bar'), { a, b } = get('play');
+  const [num, den] = meterAt(shown >= a && shown <= b ? shown : a);
+  let last = -1;
+  const frame = () => {
+    if (get('play.phase') !== 'countIn') { ['score', 'fbDock'].forEach(id => $(id).classList.remove('ci-beat', 'ci-strong')); return; }
+    const beat = 60 / (get('play.bpm') || 60) * 4 / (den || 4) * 1000;
+    const k = Math.max(0, Math.floor((performance.now() - (get('play.countInStart') || performance.now())) / beat));
+    if (k !== last && k < num) {
+      last = k;
+      setStatus(`预备 ${num - k}…`, `${get('play.bpm')} BPM · 第 ${get('play.loops') + 1} 遍`);
+      pulse($('score'), k === 0); pulse($('fbDock'), k === 0);
+    }
+    ciRaf = requestAnimationFrame(frame);
+  };
+  frame();
+}
+
 /** 状态栏两行（窄的时候会截断：悬停看全文） */
 export function setStatus(l1, l2) { $('statusL1').textContent = l1; $('statusL2').textContent = l2; $('statusL1').parentElement.title = l2 ? `${l1}\n${l2}` : l1; }
 
@@ -456,7 +496,7 @@ export function initPlayer() {
   on('play.timbre', switchTimbre);
   on('play.bpm', bpm => { if (api) api.playbackSpeed = bpm / baseTempo; });
   on('play.playing', (now, was) => { if (!now && was) setStatus('已暂停', IDLE_HINT); });
-  on('play.phase', ph => { if (ph === 'countIn') setStatus(`预备 · ${get('play.bpm')} BPM`, `第 ${get('play.loops') + 1} 遍`); });
+  on('play.phase', ph => { if (ph === 'countIn') countIn(); });
   on('play.ready', r => { if (!r) return; applyAudio(); if (!playing() && !get('rhythm.on')) setStatus('已停止', IDLE_HINT); });
   // 离开练习页（调弦、练习建议…）时停下：播放键和快捷键都只在练习页，切走就停不了了；调弦的麦克风也会听到它。
   // 预备拍、节拍器是同一个播放器，一起停；谱子正在重新加载、本来要接着放的也不放了（状态机的 stop 都管）

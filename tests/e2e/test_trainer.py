@@ -14,6 +14,12 @@ pytestmark = pytest.mark.e2e
 UNDO_MOD = 4 if sys.platform == "darwin" else 2  # ⌘ / Ctrl
 
 
+def _ai_on(b):
+    """e2e 的服务没有 API key，AI 按钮默认灰掉（点了只说明去设置）：当作有 key（模型调用由测试换成假的或拦下）。"""
+    b.wait_for("tt.get('ui.hasKey') !== undefined")
+    b.js("tt.set('ui.hasKey', true); true")
+
+
 def _song(server, sid):
     return json.load(urllib.request.urlopen(f"{server['base']}/api/songs/{sid}"))
 
@@ -83,6 +89,8 @@ def test_playback_does_not_scroll_when_follow_is_off(trainer):
     b.js(
         "import('/static/js/trainer/notices.js').then(({ notice }) => { notice('resume', null); return true; })"
     )
+    # 播放第 4 小节时侧栏换成第 4 小节，卡片高度可能不同（曲子很短时侧栏比谱面高，页面跟着变高变矮）：先换过去
+    b.js("tt.setLoop(3, 3); true")
     # 页面加高，滚到最下面：播放光标在视野上方
     b.js("document.body.style.paddingBottom = '4000px'; scrollTo(0, document.body.scrollHeight); true")
     y = b.js("scrollY")
@@ -297,6 +305,7 @@ def test_background_writes_do_not_cause_false_conflicts(server, trainer):
     sid, store = server["image"], server["store"]
     raw = store.load(sid)["bars"]
     b = trainer()
+    _ai_on(b)
     try:
         # 模拟问 AI：后端存了一次（写 qa，顶层 rev 变了），前端把返回的 qa 并进 store
         store.update(sid, lambda s: s["bars"][0].update(qa=[{"q": "Q", "a": "A", "at": "now"}]))
@@ -384,6 +393,7 @@ def test_ask_ai_answer_streams_in(server, trainer, monkeypatch):
     raw = store.load(sid)["bars"]
     answer = "回答：这里左手怎么按呢"  # 替身每 3 个字一段：4 段
     b = trainer()
+    _ai_on(b)
     try:
         b.js(
             "tt.set('ui.bar', 2); document.getElementById('askInput').value = '这里左手怎么按呢'; "
@@ -414,6 +424,7 @@ def test_ask_ai_answer_streams_in(server, trainer, monkeypatch):
 def test_ask_ai_error_mid_answer_restores_the_question(trainer):
     """回答到一半出错：提示错误，半截回答不留，问题放回输入框。"""
     b = trainer()
+    _ai_on(b)
     b.js("""(() => { const of = window.fetch; window.fetch = (u, init) => String(u).includes('/ask/stream')
       ? Promise.resolve(new Response('{"type":"delta","text":"先用"}\\n{"type":"error","detail":"和模型服务的连接中断了"}\\n', {status: 200}))
       : of(u, init); return true; })()""")
@@ -430,6 +441,7 @@ def test_ask_ai_error_mid_answer_restores_the_question(trainer):
 def test_ask_ai_answer_survives_a_late_poll(server, trainer):
     """回答存好之前发出的读取（轮询）晚回来：不能用旧数据把刚并进来的问答盖掉。"""
     b = trainer()
+    _ai_on(b)
     b.js(f"""(() => {{ const of = window.fetch; window.__held = [];
       window.fetch = (u, i) => {{
         if (String(u).includes('/ask/stream')) return Promise.resolve(new Response(
@@ -455,6 +467,7 @@ def test_ask_ai_answer_survives_a_late_poll(server, trainer):
 def test_refine_hint_is_only_sent_for_its_own_bar(trainer):
     """“哪里不对”的说明只跟着写它的那个小节：精修发出去以后清掉；换到别的小节也清掉，不会带到别的小节上。"""
     b = trainer()
+    _ai_on(b)
     b.js("""(() => { const of = window.fetch; window.__refines = [];
       window.fetch = (u, i) => String(u).endsWith('/refine') && i && i.method === 'POST'
         ? (__refines.push(JSON.parse(i.body)), Promise.resolve(new Response('{}', {status: 200}))) : of(u, i);
@@ -575,7 +588,8 @@ def test_rhythm_drill_scores_taps(trainer):
     assert b.js("document.getElementById('fbDock').hidden")
     assert b.js("document.querySelectorAll('#rhSvg .rh-note').length") == 4  # 第 1 小节四个四分音符
     assert b.js("document.getElementById('rhRange').textContent") == "第 1 小节 · 4 个音"
-    assert "怎么练" in b.js("document.getElementById('rhResult').textContent")
+    assert "空格开始" in b.js("document.getElementById('rhResult').textContent")
+    assert "Esc" in b.js("document.getElementById('rhHelp').textContent")  # 按键说明在“?”里
 
     # 开始（播放键 / 空格开始的是敲节奏，不是 alphaTab）
     b.js("tt.setTempo(120); tt.play(); true")
@@ -682,16 +696,21 @@ def test_clicking_a_note_auditions_without_changing_loop(trainer):
 
 
 def test_song_info_form_edits_artist(server, trainer):
-    """曲子信息：图片曲子能改艺人；GP 曲子只能改曲名，提示以原文件为准。"""
+    """曲名 / 艺人：点顶栏的曲名打开对话框；图片曲子能改艺人；GP 曲子只能改曲名，调弦页提示以原文件为准。"""
     sid, store = server["image"], server["store"]
     old = store.load(sid)["meta"].get("artist", "")
     b = trainer()
     try:
+        b.js("document.getElementById('songTitle').click(); true")
+        b.wait_for("document.getElementById('metaDlg').open")
+        assert b.js("document.activeElement.id") == "mTitle"
         assert not b.js("document.getElementById('mArtistLbl').hidden")
         b.js(
-            "document.getElementById('mArtist').value = '测试艺人'; document.getElementById('metaSave').click(); true"
+            "document.getElementById('mArtist').value = '测试艺人'; document.getElementById('metaDlgSave').click(); true"
         )
         b.wait_for("tt.song.meta.artist === '测试艺人'")
+        b.wait_for("!document.getElementById('metaDlg').open")
+        assert b.js("tt.song.title") == "E2E 图片曲"
         assert _song(server, sid)["meta"]["artist"] == "测试艺人"
     finally:
         store.update(
@@ -699,8 +718,13 @@ def test_song_info_form_edits_artist(server, trainer):
         )
     b = trainer(server["gp"])
     b.wait_for("tt.song.status === 'ready'")
+    b.js("document.getElementById('titleEditBtn').click(); true")
+    b.wait_for("document.getElementById('metaDlg').open")
     assert b.js("document.getElementById('mArtistLbl').hidden")
+    b.key("Escape", vk=27)
+    b.wait_for("!document.getElementById('metaDlg').open")
     assert "原文件" in b.js("document.getElementById('metaMsg').textContent")
+    assert b.js("document.getElementById('metaSave').hidden")
     assert not b.errors, b.errors
 
 
@@ -1200,3 +1224,303 @@ def image_song_restore(server):
     raw = store.load(sid)["bars"]
     yield
     store.update(sid, lambda s: s.update(bars=raw))
+
+
+# ---------------------------------------------------------------------------
+# 界面：谱面的地方、控制条、抽屉、小节卡片
+# ---------------------------------------------------------------------------
+def _open_at(server, b, w, h, sid=None, query=""):
+    _viewport(b, w, h)
+    b.open(f"{server['base']}/trainer?id={sid or server['image']}{query}")
+    b.wait_for("window.tt && tt.state.ready && !!document.querySelector('#score .at-surface')", timeout=40)
+    return b
+
+
+def test_score_gets_most_of_a_1440x900_screen(server, browser):
+    """1440×900 第一次打开：通知合成一行（+N 展开）、选段只有一行、指板收成细栏，谱面至少露出 560 px。"""
+    b = _open_at(server, browser, 1440, 900)
+    b.js("""import('/static/js/trainer/notices.js').then(({ notice }) => {
+      notice('resume', { kind: 'info', html: '上次练到', actions: [{ label: '接着练', primary: true, onClick: () => {} }] });
+      notice('metaNote', { kind: '', html: '备注' }); return true; })""")
+    time.sleep(0.3)
+    assert b.js("document.getElementById('fbBody').hidden")  # 矮屏幕默认收起指板
+    top, dock = b.js(
+        "[document.querySelector('#score .at-surface').getBoundingClientRect().top, document.getElementById('fbDock').getBoundingClientRect().top]"
+    )
+    assert dock - top >= 560, (top, dock)
+    rows = b.js(
+        "new Set([...document.querySelectorAll('#secBtns button')].map(x => Math.round(x.getBoundingClientRect().top))).size"
+    )
+    assert rows == 1
+    assert not b.errors, b.errors
+
+
+def test_control_bar_stays_on_one_row_from_1000_to_1440(server, browser):
+    """窗口 1000–1440：控制条一行放得下（按钮依次收成图标），不会有孤零零换到第二行的按钮，也不超出卡片。"""
+    b = _open_at(server, browser, 1440, 900)
+    check = """(() => { const row = document.querySelector('#transport .t-row'), rr = row.getBoundingClientRect();
+      const cs = [...row.children].filter(x => x.offsetParent).map(x => x.getBoundingClientRect());
+      const mid = cs.map(c => c.top + c.height / 2);
+      return [Math.max(...mid) - Math.min(...mid) <= 12, cs.every(c => c.right <= rr.right + 1)]; })()"""
+    for playing in (False, True):
+        b.js(
+            f"document.getElementById('transport').classList.toggle('playing', {str(playing).lower()}); true"
+        )
+        for w in (1000, 1040, 1100, 1150, 1199, 1200, 1280, 1360, 1440):
+            _viewport(b, w, 900)
+            time.sleep(0.15)
+            assert b.js(check) == [True, True], (w, playing)
+    assert not b.errors, b.errors
+
+
+def test_narrow_window_puts_the_bar_card_in_a_drawer(server, browser):
+    """窗口窄于 1000px：小节卡片是右边滑出的抽屉——按钮打开、焦点移进去，Esc 收起、焦点回到按钮；
+    抽屉开着时播放快捷键照常；打开敲节奏时抽屉跟着打开。"""
+    b = _open_at(server, browser, 990, 800)
+    hidden = "getComputedStyle(document.getElementById('side')).visibility === 'hidden'"
+    b.wait_for(hidden)
+    assert b.js("document.getElementById('side').inert")
+    b.js("document.getElementById('drawerBtn').click(); true")
+    b.wait_for(f"!({hidden})")
+    assert b.js("document.getElementById('side').contains(document.activeElement)")
+    b.wait_for(
+        "(l => 990 - 400 < l && l < 990 - 300)(document.getElementById('side').getBoundingClientRect().left)"
+    )  # 滑进来了
+    bpm = b.js("tt.state.bpm")
+    b.js("document.activeElement.blur(); true")
+    b.key("ArrowUp", vk=38)  # 不是浮层：快捷键照常
+    assert b.js("tt.state.bpm") == bpm + 4
+    b.js("document.getElementById('drawerClose').focus(); true")
+    b.key("Escape", vk=27)
+    b.wait_for(hidden)
+    assert b.js("document.activeElement.id") == "drawerBtn"
+    b.js("document.getElementById('rhythmBtn').click(); true")
+    b.wait_for(f"!({hidden})")
+    assert b.js("tt.get('ui.drawer')")
+    b.js("tt.rhythm.toggle(false); true")
+    _viewport(b, 1200, 800)  # 变宽：不再是抽屉
+    b.wait_for(f"!({hidden}) && !document.getElementById('side').inert")
+    assert not b.errors, b.errors
+
+
+def test_bar_card_order_and_one_correction_section(trainer):
+    """小节卡片：原谱紧跟在提示后面，问答不自己滚；纠错集中在一块（改音 / 改数据 → 哪里不对 + AI 核对 → 重新识别整行）；
+    待核对的小节标题栏有“核对”；“改音”进入改音模式，谱面标题栏只剩“完成”。"""
+    b = trainer()
+    b.js("tt.set('ui.bar', 1); true")
+    order = b.js(
+        "[...document.querySelectorAll('.bar-card .body > *')].filter(x => !x.hidden).map(x => x.id || x.className)"
+    )
+    assert (
+        order.index("tipText") < order.index("cropBox") < order.index("practiceLine") < order.index("fixBox")
+    )
+    assert b.js("getComputedStyle(document.getElementById('qaList')).overflowY") == "visible"
+    fix = b.js(
+        "[...document.querySelectorAll('#fixBox button, #fixBox input')].filter(x => x.offsetParent).map(x => x.id)"
+    )
+    assert fix == ["barEditBtn", "editBtn", "hintInput", "refineBarBtn", "refineRowBtn", "reparseBtn"]
+    assert "本小节" in b.js("document.getElementById('practiceLine').textContent")
+    assert b.js("document.getElementById('barCheckBtn').hidden")
+    b.js(
+        """tt.set('song', {...tt.song, bars: tt.song.bars.map((x, i) => i === 1 ? {...x, needs_review: true} : x)}); true"""
+    )
+    b.wait_for("!document.getElementById('barCheckBtn').hidden")
+    assert "核对" in b.js("document.getElementById('barCheckBtn').textContent")
+    assert b.js("document.getElementById('editModeBtn').hidden")
+    b.js("document.getElementById('barEditBtn').click(); true")
+    assert b.js("tt.get('ui.editMode')") and not b.js("document.getElementById('editModeBtn').hidden")
+    assert "改音" in b.js("document.getElementById('scoreHelp').textContent")
+    b.js("document.getElementById('editModeBtn').click(); true")
+    assert not b.js("tt.get('ui.editMode')") and b.js("document.getElementById('editModeBtn').hidden")
+    assert "快捷键" in b.js("document.getElementById('scoreHelp').textContent")
+    # 整首练了多久：副标题最后，悬停说明不带日期的旧记录
+    b.js(
+        "tt.set('song.practice', {...tt.song.practice, time: {total_seconds: 600, undated_seconds: 120}}); true"
+    )
+    assert b.js("document.getElementById('songSub').textContent").endswith("练了 10 分钟")
+    assert "旧版本" in b.js("document.getElementById('songSub').title")
+    assert not b.errors, b.errors
+
+
+def test_gp_bar_card_shows_its_plan_section(server, trainer):
+    """GP 曲子：没有纠错（小节来自原文件），卡片上显示这一小节所在的分段，可以直接循环它。"""
+    b = trainer(server["gp"])
+    b.wait_for("tt.song.bars.length === 3")
+    assert b.js("document.getElementById('fixBox').hidden")
+    b.js("""tt.set('song', {...tt.song, plan: {overview: '', steps: [{bars: '2-3', title: '后半', advice: '慢练换把'}]}});
+      tt.set('ui.bar', 2); true""")
+    b.wait_for("!document.getElementById('barPlan').hidden")
+    assert "后半" in b.js("document.getElementById('barPlan').textContent")
+    b.js("document.querySelector('#barPlan button').click(); true")
+    assert [b.js("tt.state.a"), b.js("tt.state.b")] == [1, 2]
+    b.js("tt.set('ui.bar', 0); true")
+    assert b.js("document.getElementById('barPlan').hidden")
+    assert not b.errors, b.errors
+
+
+def test_tuning_is_spelled_one_way(trainer):
+    """调弦只用一种写法：alphaTab 自己的调弦说明（降号：③=Gb）不画，非标准调弦在谱面标题栏用我们的升号写法写出来。"""
+    b = trainer()
+    assert (
+        b.js("tt.api.settings.notation.elements.get(tt.player.alphaTab.NotationElement.GuitarTuning)")
+        is False
+    )
+    assert b.js("document.getElementById('tuningLine').textContent") == ""  # 标准调弦不写
+    b.js("tt.set('song', {...tt.song, meta: {...tt.song.meta, tuning_midi: [62, 57, 54, 49, 45, 38]}}); true")
+    b.wait_for("document.getElementById('tuningLine').textContent !== ''")
+    assert b.js("document.getElementById('tuningLine').textContent") == "⑥D ⑤A ④C♯ ③F♯ ②A ①D"
+    assert "C♯ F♯" in b.js("document.getElementById('songSub').textContent")
+    assert not b.errors, b.errors
+
+
+def test_section_chips_switch_between_rows_and_plan_sections(server, trainer):
+    """选段可以按原谱的行或 AI 分的段落（记住选择）；段落的按钮直接循环那一段；没有练习建议时没有这个开关。"""
+    b = trainer()
+    assert not b.js("document.getElementById('secMode').hidden")
+    chips = "[...document.querySelectorAll('#secBtns button')].map(x => x.textContent)"
+    assert b.js(chips) == ["全曲", "1–3", "4–6"]
+    b.js("document.querySelector('#secMode [data-v=plan]').click(); true")
+    assert b.js(chips) == ["全曲", "1 第一行"]
+    assert b.js("localStorage.getItem('tt.secMode')") == "plan"
+    b.js("document.querySelectorAll('#secBtns button')[1].click(); true")
+    assert [b.js("tt.state.a"), b.js("tt.state.b")] == [0, 2]
+    assert b.js("tt.get('ui.secs')") == [{"a": 0, "z": 2}]
+    b = trainer()  # 重新打开：还是按段落
+    assert b.js(chips) == ["全曲", "1 第一行"]
+    b.js("document.querySelector('#secMode [data-v=rows]').click(); true")
+    b = trainer(server["gp"])
+    b.wait_for("tt.song.bars.length === 3")
+    assert b.js("document.getElementById('secMode').hidden")
+    assert not b.errors, b.errors
+
+
+def test_ai_actions_are_greyed_out_without_an_api_key(trainer):
+    """没有 API key：AI 的按钮灰掉，悬停提示说先去设置里填，点了不发请求、弹出说明（可以去设置）。"""
+    b = trainer()
+    b.wait_for("tt.get('ui.hasKey') === false")  # e2e 的服务没有 key
+    assert b.js("document.documentElement.classList.contains('no-ai-key')")
+    b.js("""(() => { const of = window.fetch; window.__ai = [];
+      window.fetch = (u, i) => { if (/refine|ask|reparse|explain/.test(String(u))) __ai.push(String(u)); return of(u, i); };
+      return true; })()""")
+    b.js("tt.set('ui.bar', 1); true")
+    b.wait_for("!document.getElementById('refineBarBtn').hidden")
+    assert float(b.js("getComputedStyle(document.getElementById('refineBarBtn')).opacity")) < 0.6
+    b.js(
+        "document.getElementById('refineBarBtn').dispatchEvent(new PointerEvent('pointerover', {bubbles: true})); true"
+    )
+    assert b.js("document.getElementById('refineBarBtn').title") == "先在设置里填 API key"
+    b.js("document.getElementById('refineBarBtn').click(); true")
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    assert "API key" in b.js("document.querySelector('.dlg-msg[open]').textContent")
+    b.key("Escape", vk=27)
+    b.js(
+        "document.getElementById('askInput').value = '怎么练'; document.getElementById('askBtn').click(); true"
+    )
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    b.key("Escape", vk=27)
+    time.sleep(0.3)
+    assert b.js("__ai") == []
+    assert all(
+        b.js(f"document.getElementById('{i}').hasAttribute('data-ai')")
+        for i in ("refineBtn", "reparseBtn", "askBtn", "barCheckBtn")
+    )
+    assert not b.errors, b.errors
+
+
+def _api(server, path, method="GET", body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        server["base"] + path, data=data, method=method, headers={"Content-Type": "application/json"}
+    )
+    raw = urllib.request.urlopen(req).read()
+    return json.loads(raw) if raw else None
+
+
+@pytest.fixture
+def plan_song(server):
+    """一首新的图片曲子，加进练琴计划；结束后删掉（今天的打分不影响别的测试）。"""
+    from tests.e2e.conftest import _seed
+
+    sid = _seed()
+    _api(server, f"/api/songs/{sid}/study", "PUT", {"in_plan": True})
+    yield sid
+    _api(server, f"/api/songs/{sid}/study", "PUT", {"in_plan": False})
+    server["store"].delete(sid)
+
+
+def test_leaving_from_today_prompts_for_a_rating_once(server, browser, plan_song):
+    """从今日清单进来、今天还没打分：点“返回”先弹出打分（可以跳过），一次打开只拦一次。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id={plan_song}&from=today")
+    b.wait_for("window.tt && tt.song && !document.getElementById('rateBtn').hidden", timeout=40)
+    b.js("document.getElementById('backBtn').click(); true")
+    b.wait_for("!document.getElementById('ratePop').hidden")
+    assert b.js("location.pathname") == "/trainer"
+    assert b.js("document.getElementById('rateTitle').textContent").startswith("走之前")
+    assert not b.js("document.getElementById('rateSkip').closest('[hidden]')")
+    b.key("Escape", vk=27)  # 关掉：留在这里
+    b.wait_for("document.getElementById('ratePop').hidden")
+    b.js("document.getElementById('backBtn').click(); true")  # 第二次不拦
+    b.wait_for("location.hash === '#study'", timeout=10)
+    assert not b.errors, b.errors
+
+
+def test_rating_records_stuck_bars_and_today_starts_there(server, browser, plan_song):
+    """打分弹层的“卡住”默认勾上现在循环的小节，可以去掉；记下的卡住小节下次从今日清单打开时就是循环范围。
+    点“跳过”照样离开，打分后接着离开。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id={plan_song}")
+    b.wait_for("window.tt && tt.state.ready && !document.getElementById('rateBtn').hidden", timeout=40)
+    b.js("""(() => { window.__rate = null; const of = window.fetch;
+      window.fetch = (u, i) => { if (String(u).endsWith('/study/rate')) __rate = JSON.parse(i.body); return of(u, i); };
+      tt.setLoop(3, 5); return true; })()""")
+    b.js("document.getElementById('rateBtn').click(); true")
+    b.wait_for("!document.getElementById('ratePop').hidden")
+    chips = "[...document.querySelectorAll('#rateStuck button')].map(x => [x.textContent, x.getAttribute('aria-pressed')])"
+    assert b.js(chips) == [["4", "true"], ["5", "true"], ["6", "true"]]
+    assert b.js("document.getElementById('rateFoot').hidden")  # 自己点开的：没有“跳过”
+    b.js(
+        "document.querySelector('#rateStuck [data-bar=bar5]').click(); document.querySelector('#rateBtns .r2').click(); true"
+    )
+    b.wait_for("document.getElementById('rateBtn').classList.contains('rated')")
+    assert b.js("__rate.stuck_bars") == ["bar4", "bar6"]
+    assert [x["id"] for x in _api(server, f"/api/songs/{plan_song}")["study"]["stuck_bars"]] == [
+        "bar4",
+        "bar6",
+    ]
+    # 从今日清单打开：循环范围放在卡住的第 4–6 小节
+    b.open(f"{server['base']}/trainer?id={plan_song}&from=today")
+    b.wait_for("window.tt && tt.state.a === 3 && tt.state.b === 5", timeout=40)
+    assert "从上次卡住的第 4–6 小节开始" in b.js("(document.querySelector('.toast') || {}).textContent || ''")
+    assert not b.js("document.querySelector('#notices [data-id=resume]')")
+    assert not b.errors, b.errors
+
+
+def test_stopping_the_timer_prompts_after_practising(server, browser, plan_song):
+    """不是从今日清单进来：练过 1 分钟以上，结束计时前先提醒打分；“跳过”以后照常结束计时。"""
+    b = browser
+    _api(server, "/api/study/timer", "POST", {"action": "start"})
+    try:
+        b.open(f"{server['base']}/trainer?id={plan_song}")
+        b.wait_for("window.tt && tt.song && !!document.querySelector('#timer [data-act=stop]')", timeout=40)
+        b.js("document.querySelector('#timer [data-act=stop]').click(); true")  # 还没练：不拦
+        b.wait_for("!document.querySelector('#timer [data-act=stop]')", timeout=10)
+        assert b.js("document.getElementById('ratePop').hidden")
+        _api(server, "/api/study/timer", "POST", {"action": "start"})
+        b.open(f"{server['base']}/trainer?id={plan_song}")
+        b.wait_for("window.tt && tt.song && !!document.querySelector('#timer [data-act=stop]')", timeout=40)
+        # 练了 1 分钟以上（播放开始的时刻往前拨）
+        b.js("tt.set('play.playing', true); true")
+        b.js(
+            "performance.now = (n => () => n() + 120000)(performance.now.bind(performance)); tt.set('play.playing', false); true"
+        )
+        b.js("document.querySelector('#timer [data-act=stop]').click(); true")
+        b.wait_for("!document.getElementById('ratePop').hidden")
+        assert b.js("!!document.querySelector('#timer [data-act=stop]')")  # 还没结束
+        b.js("document.getElementById('rateSkip').click(); true")
+        b.wait_for("!document.querySelector('#timer [data-act=stop]')", timeout=10)
+        assert b.js("document.getElementById('ratePop').hidden")
+        assert not b.errors, b.errors
+    finally:
+        if (_api(server, "/api/study/timer") or {}).get("timer"):  # 测试中途失败：别把计时器留着
+            _api(server, "/api/study/timer", "POST", {"action": "stop"})

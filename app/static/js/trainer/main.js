@@ -15,7 +15,7 @@ import { initFretboard } from './fretboard.js';
 import { initBarCard } from './bar-card.js';
 import { initOrig } from './orig.js';
 import { initCoach } from './coach.js';
-import { initPracticeLog } from './practice-log.js';
+import { initPracticeLog, markClean } from './practice-log.js';
 import { initEditor, setEditMode, openNotePop, editorState } from './editor.js';
 import { initSong, startLoading, refresh, songGone } from './song.js';
 import { initTuner } from './tuner.js';
@@ -23,12 +23,13 @@ import { initFollow, followDelta, followDebug } from './follow.js';
 import { initGlossary } from './glossary.js';
 import { initRhythm, rhythmDebug } from './rhythm-drill.js';
 import { initStudy } from './study.js';
+import { initAiKey } from './ai-key.js';
 import { ac } from './audio.js';
 import { DERIVE_VERSION } from '../score.js';
 import { stored, remember } from './prefs.js';
 
 // ---------------------------------------------------------------------
-// 视图切换（顶栏：练习 / 调弦 / 练习建议 / 记号说明）
+// 视图切换（顶栏：练习 / 调弦 / 分段 / 记号说明）
 // ---------------------------------------------------------------------
 const VIEWS = ['practice', 'tune', 'plan', 'glossary'];
 let setNav;
@@ -44,9 +45,14 @@ function showView(v) {
 
 // ---------------------------------------------------------------------
 // 键盘（判断条件和唯一的监听在 keys.js）：空格 播放 / 停止；← → 上一段 / 下一段；↑ ↓ 快 / 慢 4 BPM；
-// Home 回到段首（播放中就从段首重新开始）；M 节拍器开 / 关。滑块、按钮用过之后照样能用空格（按完让它失焦）。
+// Home 回到段首（播放中就从段首重新开始）；M 节拍器开 / 关；Enter 这遍干净。滑块、按钮用过之后照样能用空格（按完让它失焦）。
 // 敲节奏进行中的空格 / F / J / Esc、改音的 ⌘Z、原谱弹窗里的 ←→ 由各自的模块登记，排在这一组前面。
 // ---------------------------------------------------------------------
+const cleanKey = e => {
+  const t = e.target;
+  if (t && t !== document.body && t.closest && t.closest('button, a[href], summary, [role=button], [tabindex]')) return false;
+  markClean();
+};
 function initShortcuts() {
   const blur = e => { if (e.target.blur && e.target !== document.body) e.target.blur(); }; // 免得空格再“按”一次刚点过的按钮
   const act = fn => e => { blur(e); fn(); };
@@ -58,6 +64,8 @@ function initShortcuts() {
       ArrowUp: act(() => setTempo(get('play.bpm') + 4)), ArrowDown: act(() => setTempo(get('play.bpm') - 4)),
       Home: act(() => { toLoopStart(); revealLoop(); }),
       KeyM: act(() => { const v = !get('play.metro'); set('play.metro', v); UI.toast(v ? '节拍器：开' : '节拍器：关', 'info', 1200); }),
+      // 这遍干净：焦点在按钮、链接上时 Enter 归它们（照常“按下”）
+      Enter: cleanKey, NumpadEnter: cleanKey,
     },
   });
   initKeys();
@@ -86,9 +94,9 @@ function initMore() {
 // ---------------------------------------------------------------------
 function initDock() {
   let open = true;
-  // 没设过的话：屏幕够高才默认展开（矮屏幕上先把地方留给谱面）
+  // 没设过的话：屏幕够高才默认展开（1440×900 这类矮屏幕上先把地方留给谱面，收起时只剩一条细栏）
   const v = stored('tt.fb');
-  open = v ? v === '1' : innerHeight >= 900;
+  open = v ? v === '1' : innerHeight >= 1000;
   const paint = v => {
     $('fbBody').hidden = !v;
     $('fbToggle').setAttribute('aria-expanded', v);
@@ -108,6 +116,37 @@ function initDock() {
   // 指板是 position: fixed（offsetParent 永远是 null，不能拿它判断显没显示）：用 getClientRects 判断是否显示
   new ResizeObserver(() => document.documentElement.style.setProperty('--dock-h', (dock.getClientRects().length ? dock.offsetHeight : 0) + 'px')).observe(dock);
   on('rhythm.on', v => { dock.hidden = v; });
+}
+
+// ---------------------------------------------------------------------
+// 窗口窄于 1000px：侧栏（小节卡片 / 敲节奏）是右边滑出的抽屉（ui.drawer）。控制条上的按钮开关，Esc 收起；
+// 打开时焦点移进抽屉，收起时还给按钮；收着的时候抽屉 inert（Tab 不会走进看不见的地方）。
+// 不用 UI.layer：抽屉开着时空格、方向键这些播放快捷键照样要能用（浮层开着时 keys.js 只问浮层自己的那组）
+// ---------------------------------------------------------------------
+function initDrawer() {
+  const narrow = matchMedia('(max-width: 999px)'), side = $('side'), btn = $('drawerBtn');
+  const open = v => set('ui.drawer', !!v && narrow.matches);
+  const paint = v => {
+    document.body.classList.toggle('drawer-open', v);
+    btn.setAttribute('aria-expanded', String(v));
+    side.inert = narrow.matches && !v;
+    if (v) {
+      const first = [...side.querySelectorAll('button, input, [tabindex]')].find(x => !x.disabled && x.offsetParent);
+      if (first) first.focus({ preventScroll: true });
+    } else if (side.contains(document.activeElement)) btn.focus({ preventScroll: true });
+  };
+  on('ui.drawer', paint);
+  paint(false);
+  narrow.addEventListener('change', () => { if (!narrow.matches) open(false); paint(get('ui.drawer')); });
+  btn.onclick = () => open(!get('ui.drawer'));
+  $('drawerClose').onclick = () => open(false);
+  // 敲节奏的卡片也在抽屉里：窄屏上打开敲节奏时抽屉跟着打开
+  on('rhythm.on', v => { if (v) open(true); });
+  addShortcuts({ name: 'drawer', order: 30, when: () => !!get('ui.drawer'), keys: { Escape: () => open(false) } });
+  // 焦点在抽屉里的输入框上时 keys.js 不管按键：Esc 在这里收起
+  side.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && get('ui.drawer') && !UI.hasLayer() && !e.defaultPrevented && !e.isComposing) { e.preventDefault(); open(false); }
+  });
 }
 
 function initViews() {
@@ -139,6 +178,7 @@ window.tt = {
 // 启动
 // ---------------------------------------------------------------------
 initViews();
+initAiKey();
 initPlayer();
 initControls();
 initLyrics();
@@ -158,6 +198,7 @@ initGlossary();
 initShortcuts();
 initMore();
 initDock();
+initDrawer();
 showView(location.hash.slice(1));
 
 if (!SONG_ID) { $('songTitle').textContent = '缺少曲子 id，请从曲库进入'; songGone('缺少曲子 id'); }

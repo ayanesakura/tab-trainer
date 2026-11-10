@@ -1,5 +1,6 @@
-// 侧栏的小节卡片：编号、技巧标签、这一小节的和弦（弹唱谱）、提示、待核对说明（可以确认没问题）、精修改了什么（可以撤销）、
-// 精修这个小节 / 这一行、原谱截图。
+// 侧栏的小节卡片，从上到下：编号（待核对的小节右上角有“核对”）、技巧标签、这一小节的和弦（弹唱谱）、提示、
+// 待核对说明（可以确认没问题）、精修改了什么（可以撤销）、原谱截图、所在的分段（GP 曲子、没有提示的小节）、本小节的练习记录、
+// 问 AI、纠错（改音 / 改数据在 editor.js；“哪里不对” + AI 核对本小节 / 本行在这里；重新识别整行在 editor.js）。
 // 正在看的小节是 store 的 ui.bar。
 // 敲节奏打开时（rhythm.on）这张卡片收起来，位置让给节奏卡片。
 
@@ -7,11 +8,11 @@ import { get, on } from './store.js';
 import { $, UI, esc, songUrl, setButton } from './dom.js';
 import { post, put, withBusy } from '../lib/api.js';
 import { applySong, writeFailed, refresh, isLocked, lockedToast } from './song.js';
-import { barTags, warnText, isScore, eventsText } from './view.js';
+import { barTags, warnText, isScore, eventsText, planRange } from './view.js';
 import { images, loadImages } from './page-images.js';
 import { barChords, chordShapes, chordSVG } from './chords.js';
 import { barRefineHint, rowRefineHint, refineScopeLabel } from '../lib/refine.js';
-import { holdBarWhile } from './player.js';
+import { holdBarWhile, setLoop, revealLoop } from './player.js';
 
 function renderCard() {
   const bi = get('ui.bar'), s = get('song'), v = get('view');
@@ -48,17 +49,37 @@ function renderCard() {
     $('undoRefineBtn').title = sb.locked || '恢复成精修之前的读法';
   }
   renderRefineScope(s, sb);
+  renderPlan(s, bi);
   drawCrop();
 }
 
-// 精修这个小节 / 这一行（便宜，不弹确认框）：手改过、确认过的也核对；“识别有误？”里写了哪里不对就一起告诉 AI。
-// 正在精修的小节显示“精修中…”，别的小节的按钮先禁用（同一时间只能有一个任务）。
+// 这一小节所在的分段（AI 的练习建议里覆盖它的那一步）：GP 曲子的小节没有逐小节的提示，卡片上就靠它；
+// 识别出来的曲子只在这一小节没有提示时显示
+function renderPlan(s, bi) {
+  const box = $('barPlan'), steps = (s.plan && s.plan.steps) || [], n = s.bars.length;
+  const k = steps.findIndex(st => { const r = planRange(st.bars, n); return r && r.a <= bi && bi <= r.z; });
+  box.hidden = k < 0 || !(isScore(s) || !(s.bars[bi].tip || '').trim());
+  if (box.hidden) return;
+  const st = steps[k], r = planRange(st.bars, n);
+  box.innerHTML = `<div class="bp-h"><span class="sec-h">分段 ${k + 1}</span><b>${esc(st.title || '')}</b><span class="hint">第 ${esc(st.bars)} 小节</span><div class="grow"></div>
+    <button class="btn sm ghost" data-a="${r.a}" data-z="${r.z}" title="循环这一段">${UI.icon('repeat', 13)}循环</button></div><div class="bp-adv" title="${esc(st.advice || '')}">${esc(st.advice || '')}</div>`;
+  box.querySelector('button').onclick = () => { setLoop(r.a, r.z); revealLoop(); };
+}
+
+// AI 核对本小节 / 本行（即精修这一处，便宜，不弹确认框）：手改过、确认过的也核对；上面“哪里不对”写了说明就一起告诉 AI。
+// 正在核对的小节显示“核对中…”，别的小节的按钮先禁用（同一时间只能有一个任务）。
+// 待核对的小节：标题栏右边有一个“核对”（能裁出这一小节就核对这一小节，否则核对这一行）。
 function renderRefineScope(s, sb) {
   const scopes = s.refine_scopes, rowEst = scopes && (scopes.rows || [])[sb.system];
   const canBar = !!sb.refinable && !!scopes, canRow = !!rowEst;
-  $('refineScope').hidden = isScore(s) || !(canBar || canRow);
-  if ($('refineScope').hidden) return;
+  const score = isScore(s);
+  $('refineScope').hidden = score || !(canBar || canRow);
+  // “哪里不对”和重新识别整行：识别出来的、能找到这一行的小节才有
+  $('fixAi').hidden = score || !(canBar || canRow || (s.systems || [])[sb.system]);
   const a = s.activity, refining = !!a && a.kind === 'refine', mine = refining && (a.pending || []).includes(sb.id);
+  const check = $('barCheckBtn');
+  check.hidden = score || !sb.needs_review || mine || !(canBar || canRow);
+  if ($('refineScope').hidden) return;
   $('refineScopeBtns').hidden = mine;
   $('refineBusy').hidden = !mine;
   $('refineBarBtn').hidden = !canBar;
@@ -71,13 +92,15 @@ function renderRefineScope(s, sb) {
     btn.disabled = !!why;
     btn.title = why || `AI 放大核对原谱：${est}${note}`;
   }
+  check.disabled = !!why;
+  check.title = why || `让 AI 对照原谱核对${canBar ? `这个小节：${barHint}` : `这一行：${rowHint}`}${note}`;
+  check.dataset.kind = canBar ? 'bar' : 'row';
   $('refineScopeHint').textContent = mine ? `正在精修${refineScopeLabel(a, s.bars.map(b => b.id))}` : '';
 }
 
-async function refineScope(kind) {
+async function refineScope(kind, btn = kind === 'bar' ? $('refineBarBtn') : $('refineRowBtn')) {
   const bi = get('ui.bar'), s = get('song'), sb = s && s.bars[bi];
   if (!sb) return;
-  const btn = kind === 'bar' ? $('refineBarBtn') : $('refineRowBtn');
   const body = kind === 'bar' ? { bars: [sb.id] } : { system: sb.system };
   const hint = $('hintInput').value.trim();
   if (hint) body.hint = hint;
@@ -149,13 +172,14 @@ export function initBarCard() {
   $('undoRefineBtn').onclick = undoRefine;
   $('refineBarBtn').onclick = () => refineScope('bar');
   $('refineRowBtn').onclick = () => refineScope('row');
+  $('barCheckBtn').onclick = e => refineScope(e.currentTarget.dataset.kind || 'bar', e.currentTarget);
   $('hintInput').addEventListener('input', () => { hintFor = shownId(); scopeNow(); });
   on('ui.bar', () => { if (hintFor !== null && shownId() !== hintFor) clearHint(); });
   holdBarWhile(() => document.activeElement === $('hintInput')); // 播放中写说明：侧栏停在这个小节
   on(['song.activity', 'song.busy', 'song.refine_scopes'], scopeNow); // 精修开始 / 核对完一个小节：只重画这一行（不重画截图）
   on('view', v => { if (v) loadImages(v.pages); });
   document.addEventListener('tt-images', drawCrop);
-  on(['ui.bar', 'view', 'song.bars', 'song.is_score'], renderCard);
+  on(['ui.bar', 'view', 'song.bars', 'song.is_score', 'song.plan'], renderCard);
   on(['ui.view', 'ui.drawer'], drawCrop); // 隐藏时量不出大小：切回练习页 / 打开抽屉时重画
   // 敲节奏打开时节奏卡片占这个位置（rhythm-drill.js）；关掉后回来，截图重画一次
   on('rhythm.on', v => { $('barCard').hidden = v; drawCrop(); });

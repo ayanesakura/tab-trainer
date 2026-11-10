@@ -5,15 +5,16 @@ import { $, UI, esc, setButton, songUrl } from './dom.js';
 import { postStream } from '../lib/api.js';
 import { holdBarWhile } from './player.js';
 import { setLocal } from './song.js';
+import { hasKey, askForKey } from './ai-key.js';
 
 // 正在等的回答（一次只问一个）：{bar: 小节 id, q: 问题, a: 已经收到的回答}
 let pending = null;
 let shownBar = null; // 问答列表上次画的是哪个小节：换了小节就滚到最底下
 
-// 列表本来就在最底下（或者换了小节）时，内容变长后跟着滚到底；用户往上翻着看时不打扰
+// 问答列表不自己滚（不在会滚动的侧栏里再套一层滚动）：回答变长时，侧栏本来就滚在最底下的话跟着滚到底；用户往上翻着看时不打扰
 function keepBottom(update) {
-  const el = $('qaList');
-  const stick = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  const el = $('side');
+  const stick = el.scrollHeight > el.clientHeight && el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   update();
   if (stick) el.scrollTop = el.scrollHeight;
 }
@@ -33,7 +34,7 @@ function render() {
       : '');
     list.hidden = !qa.length && !mine;
   };
-  if (shownBar !== bar.id) { shownBar = bar.id; draw(); list.scrollTop = list.scrollHeight; } else keepBottom(draw);
+  if (shownBar !== bar.id) { shownBar = bar.id; draw(); } else keepBottom(draw);
   const busy = !!pending;
   $('askBtn').disabled = busy;
   const otherN = busy && !mine ? (s.bars.find(b => b.id === pending.bar) || {}).n || '' : '';
@@ -50,6 +51,7 @@ function showPending() {
 async function ask() {
   const bi = get('ui.bar');
   if (bi < 0 || pending) return;
+  if (!hasKey()) { askForKey(); return; } // 回车提问不经过按钮：在这里也拦一下
   const q = $('askInput').value.trim();
   if (!q) { $('askInput').focus(); return; }
   const bar = get('song').bars[bi];

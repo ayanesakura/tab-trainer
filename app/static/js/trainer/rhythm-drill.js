@@ -16,14 +16,14 @@
 import * as core from '../rhythm.js';
 import { get, set, on } from './store.js';
 import { $, UI, esc, setButton, svgEl } from './dom.js';
-import { stop as stopPlayback, setLoop, setStatus, IDLE_HINT } from './player.js';
+import { stop as stopPlayback, setLoop, revealLoop, setStatus, IDLE_HINT } from './player.js';
 import { provide } from './hooks.js';
 import { addShortcuts } from './keys.js';
 import { ac, initAudio, playEvent, stopAllVoices, setGuitarVolume } from './audio.js';
 import { getApi } from './player.js';
 import { renderMetronomeClick } from './at-adapter.js';
 import { clickGain, metronomeLevel, countInLevel, audibleLevel, FALLBACK } from './click.js';
-import { loopLabel } from './view.js';
+import { loopLabel, isScore } from './view.js';
 import { stored, remember } from './prefs.js';
 
 const MODES = ['follow', 'listen', 'blind'];
@@ -78,12 +78,29 @@ function rebuild() {
 // ---------------------------------------------------------------------
 // 打开 / 关闭
 // ---------------------------------------------------------------------
+// 打开时循环范围太长（比如全曲 86 小节、七百多个音）：先缩到正在看的那一小节所在的原谱那一行，
+// GP 曲子（没有原谱的行）缩到它附近的 4 个小节，并说一声
+const DRILL_MAX = 8;
+function shrinkForDrill(v) {
+  const { a, b } = get('play'), n = v.bars.length;
+  if (b - a + 1 <= DRILL_MAX) return;
+  const shown = get('ui.bar'), bi = shown >= a && shown <= b ? shown : a;
+  const row = isScore(get('song')) ? null : v.sections.find(g => g.a <= bi && bi <= g.z);
+  let na, nb;
+  if (row && row.z - row.a + 1 <= DRILL_MAX) [na, nb] = [row.a, row.z];
+  else { na = Math.max(0, Math.min(bi - 1, n - 4)); nb = Math.min(n - 1, na + 3); }
+  setLoop(na, nb);
+  revealLoop();
+  UI.toast(`段太长，敲节奏先练${loopLabel(na, nb, n)}`, 'info', 3500);
+}
+
 function toggle(want) {
   if (want === isOn()) return;
   const v = get('view');
   if (want && !(v && v.bars.length)) { UI.toast('曲子还没加载好', 'info'); return; }
   if (!want) stopRun();
   if (want && get('play.playing')) stopPlayback(); // alphaTab 在放就先停下
+  if (want) shrinkForDrill(v);
   set('rhythm.on', want); // 小节卡片、指板停靠条、播放键各自订阅
 }
 function paintOn(v) {
@@ -380,7 +397,7 @@ function frame() {
   // 状态
   let st;
   if (run.calib) st = ['延迟校准', L.kind === 'pre' ? '预备…' : '跟着咔哒声敲 8 下'];
-  else if (L.kind === 'pre') st = [`预备 · ${L.bpm} BPM`, `${Math.max(1, Math.ceil((L.end - hn) / L.spq - 1e-6))}…`];
+  else if (L.kind === 'pre') st = [`预备 ${Math.max(1, Math.ceil((L.end - hn) / L.spq - 1e-6))}…`, `${L.bpm} BPM`]; // 和播放的预备拍一样的写法
   else st = [`第 ${L.n} 遍 · ${L.bpm} BPM`, !L.graded ? '这一遍先听，下一遍自己敲' : L.demo ? '跟着示范敲' : '不放示范，自己敲'];
   const key = st.join('|');
   if (key !== run.status) { run.status = key; setStatus(st[0], st[1]); }
@@ -407,11 +424,8 @@ const tone = score => (score >= 90 ? 'good' : score >= 70 ? 'warn' : 'bad');
 function renderResult() {
   const box = $('rhResult');
   if (!RH.last) {
-    // 卡片上只留一行，三步练法放在“?”的说明里（悬停或 Tab 聚焦时弹出）
-    box.innerHTML = `<div class="rh-guide"><b>怎么练</b>空格开始，每个音响时敲一下 <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="怎么练（详细）" aria-describedby="rhHelp">?</button><span class="help-pop left up" id="rhHelp" role="tooltip">
-      <span>1. 先用“跟着示范”：按空格开始，每个音响的时候按一下空格（或 F、J 键，也可以点节奏条）。</span>
-      <span>2. 能连续几遍 90 分以上，换“听一遍再敲”，再换“只有节拍器”。不靠示范也敲得准，节奏才算记住了。</span>
-      <span>3. 循环哪几个小节、速度用控制条，节拍器和预备拍在播放设置里；从慢速开始。</span></span></span></div>`;
+    // 卡片上只留一句，按键、颜色、口令和三步练法都在标题栏的“?”里
+    box.innerHTML = '<div class="rh-guide">空格开始，每个音响时敲一下</div>';
     return;
   }
   const s = RH.last, d = core.diagnose(s);

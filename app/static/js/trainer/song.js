@@ -1,13 +1,13 @@
 // 加载曲子并保持最新：取 /api/songs/<id> 放进 store（set('song')），由它派生 view（deriveView），
 // 页面各部分各自订阅。识别 / 讲解进行中时定时轮询（出错退避重试，不会停）。
-// 也包括：曲名和副标题、通知（进度 / 出错 / 讲解 / AI 备注 / 接着练）、练习建议页、曲子信息的保存、
+// 也包括：曲名和副标题、通知（进度 / 出错 / 讲解 / AI 备注 / 接着练）、分段页、曲名 / 艺人对话框和调弦页的保存、
 // GP / MusicXML 第一次打开时把谱子转换成我们的小节数据。
 
 import { get, set, on } from './store.js';
 import { $, UI, esc, songUrl, SONG_ID } from './dom.js';
 import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.js';
 import { SOURCES } from '../vocab.js';
-import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
+import { deriveView, isScore, STD_MIDI, songSubtitle, songTimeText, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
 import { alphaTab, setLoop, setTempo, revealLoop, stop } from './player.js';
 import { provide } from './hooks.js';
@@ -106,7 +106,17 @@ function renderHeader(s) {
   // 太长会被截断：悬停看全名；来源（图片 / GP …）也只放在悬停提示里，顶栏不再单独占一个标签
   const src = SOURCES[s.source_type];
   $('songTitle').textContent = title; $('songTitle').title = src ? `${title}（来源：${src}）` : title;
-  $('songSub').textContent = $('songSub').title = songSubtitle(s, v);
+  // 副标题最后是整首练了多久（practice.time：重叠的时间只算一次；悬停说明有没有不带日期的旧记录）
+  const sub = songSubtitle(s, v), tm = songTimeText((s.practice || {}).time);
+  $('songSub').textContent = [sub, tm && tm.text].filter(Boolean).join(' · ');
+  $('songSub').title = [sub, tm && tm.title].filter(Boolean).join('\n');
+  // 非标准调弦：谱面标题栏写出每根弦（代替 alphaTab 自己的调弦说明，写法和副标题、指板一致，见 player.js）
+  $('tuningLine').textContent = tuningLine(v);
+}
+const CIRCLED = ['', '①', '②', '③', '④', '⑤', '⑥'];
+function tuningLine(v) {
+  if (!v || !v.bars.length || STD_MIDI.every((m, i) => v.open[i + 1] === m)) return '';
+  return [6, 5, 4, 3, 2, 1].map(k => `${CIRCLED[k]}${v.openName[k]}`).join(' ');
 }
 
 // ---------------------------------------------------------------------
@@ -202,7 +212,7 @@ function renderNotices(s) {
     kind: '',
     html: ex.fresh ? '让 AI 为每个小节写练习提示，并生成练习建议。'
       : [ex.missing ? `${ex.missing} 个小节还没有提示` : '', ex.planStale ? '练习建议可能已过时（谱子改过）' : ''].filter(Boolean).join('；'),
-    actions: [{ label: ex.fresh ? '让 AI 讲解这首曲子' : '让 AI 补写', icon: 'sparkle', onClick: explain }], // 不是主按钮：通知区最多一个主按钮（接着练）
+    actions: [{ label: ex.fresh ? '让 AI 讲解这首曲子' : '让 AI 补写', icon: 'sparkle', ai: true, onClick: explain }], // 不是主按钮：通知区最多一个主按钮（接着练）
     onDismiss: closable(exKey),
   } : null);
 
@@ -215,18 +225,31 @@ function renderNotices(s) {
 }
 
 let resumeDone = false;
+/** 上次打分时卡住的小节（还在曲子里的）→ 小节下标范围 {a, z}；没有是 null */
+function stuckRange(s) {
+  const idx = ((s.study && s.study.stuck_bars) || []).map(x => s.bars.findIndex(b => b.id === x.id)).filter(i => i >= 0);
+  return idx.length ? { a: Math.min(...idx), z: Math.max(...idx) } : null;
+}
 function renderResume(s) {
   if (resumeDone || !s.bars.length) return;
   resumeDone = true;
+  const params = new URLSearchParams(location.search);
   const r = resumeInfo(s);
-  if (!r) return;
   const go = () => { setLoop(r.a, r.z); revealLoop(); if (r.bpm) setTempo(r.bpm); notice('resume', null); };
-  if (new URLSearchParams(location.search).get('resume') === '1') {
+  if (r && params.get('resume') === '1') {
     // 从曲库的“接着练”进来：直接接着练，地址里去掉 resume（刷新页面不会再跳）
     const u = new URL(location.href); u.searchParams.delete('resume'); history.replaceState(null, '', u);
     go();
     return;
   }
+  // 从今日清单进来、上次打分时勾了卡住的小节：循环范围先放在那几个小节（地址要求接着练时以接着练为准，见上面）
+  const stuckAt = params.get('from') === 'today' ? stuckRange(s) : null;
+  if (stuckAt) {
+    setLoop(stuckAt.a, stuckAt.z); revealLoop();
+    UI.toast(`从上次卡住的第 ${stuckAt.a + 1}${stuckAt.z > stuckAt.a ? `–${stuckAt.z + 1}` : ''} 小节开始`, 'info', 4000);
+    return;
+  }
+  if (!r) return;
   notice('resume', {
     kind: 'info', html: `<span title="${esc(r.at)}">上次练到 <b>${r.label}</b> · ${r.bpm} BPM</span>`,
     actions: [{ label: '接着练', primary: true, onClick: go }], onDismiss: () => {},
@@ -244,11 +267,11 @@ function renderPlan() {
   const p = s.plan, n = v.bars.length;
   if (!p) {
     const can = n && !s.recognizing;
-    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? '<p>让 AI 根据全曲生成分段练习建议。</p><button class="btn sm primary" id="planCreate">' + UI.icon('sparkle') + '生成练习建议</button>' : '识别完成后会自动生成。'}</div></div>`;
+    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? '<p>让 AI 根据全曲生成分段练习建议。</p><button class="btn sm primary" id="planCreate" data-ai>' + UI.icon('sparkle') + '生成练习建议</button>' : '识别完成后会自动生成。'}</div></div>`;
     if (can) $('planCreate').onclick = e => explain(e.currentTarget);
     return;
   }
-  const staleNote = p.stale ? `<div class="notice warn"><span class="dot warn"></span><div class="n-body">谱子改过，这些建议可能已过时。</div><div class="n-acts"><button class="btn sm" id="planRefresh">${UI.icon('refresh')}重新生成</button></div></div>` : '';
+  const staleNote = p.stale ? `<div class="notice warn"><span class="dot warn"></span><div class="n-body">谱子改过，这些建议可能已过时。</div><div class="n-acts"><button class="btn sm" id="planRefresh" data-ai>${UI.icon('refresh')}重新生成</button></div></div>` : '';
   const steps = (p.steps || []).map((st, i) => {
     const r = planRange(st.bars, n);
     const link = r ? `<button class="btn sm" data-a="${r.a}" data-z="${r.z}">${UI.icon('repeat', 13)}循环这段</button>` : '';
@@ -260,31 +283,29 @@ function renderPlan() {
 }
 
 // ---------------------------------------------------------------------
-// 曲子信息（调弦页下面）
+// 曲子信息：调弦页下面的调弦、变调夹和拍号；顶栏曲名的对话框（曲名、艺人）
 // ---------------------------------------------------------------------
 function fillMeta(s) {
   const m = s.meta || {}, v = get('view');
   const editable = s.editable_meta || ['title'];
-  $('mTitle').value = s.title || m.title || '';
-  $('mArtist').value = m.artist || '';
   if (m.tuning) m.tuning.forEach((x, i) => { $('mT' + (i + 1)).value = showNote(x); });
   $('mCapo').value = v ? v.capo : m.capo || 0;
   $('mTs').value = (m.time_signature || [4, 4]).join('/');
   const settings = editable.includes('tuning');
-  $('mArtistLbl').hidden = !editable.includes('artist');
   document.querySelectorAll('.meta-setting').forEach(el => { el.hidden = !settings; });
-  $('metaHead').textContent = editable.length > 1 ? '曲子信息' : '曲名';
+  $('metaSave').hidden = !settings;
+  $('titleEditBtn').hidden = false;
   // 改不了调弦等设定的原因：GP / MusicXML 来自原文件；图片曲子还没读出谱头，或者正在识别
   $('metaMsg').textContent = settings ? '音名写法如 D2、F#3。'
     : isScore(s) ? '调弦、变调夹和拍号以原文件为准。'
-    : !Object.keys(s.meta || {}).length ? '还没读出谱头，现在只能改曲名。'
+    : !Object.keys(s.meta || {}).length ? '还没读出谱头，读出来以后可以改。'
     : `正在${s.activity && s.activity.kind === 'refine' ? '精修' : '识别'}，完成后可以改调弦、变调夹和拍号。`;
 }
+/** 调弦页：保存调弦、变调夹和拍号（曲名、艺人在顶栏曲名的对话框里改） */
 async function saveMeta() {
   const s = get('song');
   const editable = s.editable_meta || ['title'];
-  const body = { title: $('mTitle').value };
-  if (editable.includes('artist')) body.artist = $('mArtist').value.trim();
+  const body = {};
   if (editable.includes('tuning')) body.tuning = [1, 2, 3, 4, 5, 6].map(i => tuningInput($('mT' + i).value));
   if (editable.includes('capo')) body.capo = parseInt($('mCapo').value || '0', 10);
   if (editable.includes('time_signature')) body.time_signature = $('mTs').value.split('/').map(x => parseInt(x, 10));
@@ -295,6 +316,36 @@ async function saveMeta() {
   } catch (e) {
     await writeFailed(e, '保存失败：');
   }
+}
+
+// 曲名 / 艺人：点顶栏的曲名（或旁边悬停时出现的铅笔）打开一个小对话框。GP / MusicXML 只能改曲名
+let metaLayer = null;
+function openMetaDlg() {
+  const s = get('song');
+  if (!s || metaLayer) return;
+  const editable = s.editable_meta || ['title'];
+  $('mTitle').value = s.title || (s.meta || {}).title || '';
+  $('mArtist').value = (s.meta || {}).artist || '';
+  $('mArtistLbl').hidden = !editable.includes('artist');
+  metaLayer = UI.layer($('metaDlg'), { modal: true, focus: $('mTitle'), onClose: () => { metaLayer = null; } });
+  $('mTitle').select();
+}
+async function saveTitle(e) {
+  e.preventDefault();
+  const s = get('song'), editable = s.editable_meta || ['title'];
+  const title = $('mTitle').value.trim();
+  if (!title) { $('mTitle').focus(); return; }
+  const body = { title, rev: s.meta_rev };
+  if (editable.includes('artist')) body.artist = $('mArtist').value.trim();
+  await withBusy($('metaDlgSave'), async () => {
+    try {
+      applySong(await put(songUrl('/meta'), body));
+      UI.toast('已保存');
+      if (metaLayer) metaLayer.close();
+    } catch (err) {
+      await writeFailed(err, '保存失败：');
+    }
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -356,7 +407,7 @@ export function initSong() {
   on('view', onView);
   // 只订阅用到的那几项：练完一遍（song.practice）、问答（song.bars.k.qa 会动 song.bars）、打分（song.study）这些写入
   // 不该让顶栏、通知、精修按钮跟着重画
-  on(['song.title', 'song.meta', 'song.source_type', 'view'], () => renderHeader(get('song')));
+  on(['song.title', 'song.meta', 'song.source_type', 'view', 'song.practice.time'], () => renderHeader(get('song')));
   on(['song.activity', 'song.progress', 'song.notice', 'song.status', 'song.failed_rows', 'song.is_score', 'song.bars', 'song.plan', 'song.meta'], () => renderNotices(get('song')));
   on(['song.bars', 'song.practice'], () => renderResume(get('song')));
   on(['song.is_score', 'song.bars', 'song.busy', 'song.activity', 'song.refined'], () => renderRefineBtn(get('song')));
@@ -370,4 +421,9 @@ export function initSong() {
   on(['song.plan', 'song.status', 'song.busy', 'view'], renderPlan);
   on(['song.meta', 'song.title', 'song.editable_meta'], () => fillMeta(get('song')));
   $('metaSave').onclick = () => withBusy($('metaSave'), saveMeta);
+  $('metaForm').addEventListener('submit', saveTitle);
+  $('metaCancel').onclick = () => { if (metaLayer) metaLayer.close(); };
+  $('titleEditBtn').onclick = openMetaDlg;
+  const title = $('songTitle');
+  title.addEventListener('click', () => { if (get('song')) openMetaDlg(); });
 }

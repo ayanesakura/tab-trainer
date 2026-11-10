@@ -14,7 +14,7 @@
   <a class="icon-btn" id="backBtn" href="/" title="返回曲库" aria-label="返回曲库" data-ic="back"></a>
   <div class="crumb">
     <div class="crumb-text">
-      <div class="crumb-line"><h1 class="t" id="songTitle">加载中…</h1></div>
+      <div class="crumb-line"><h1 class="t" id="songTitle">加载中…</h1><button class="icon-btn xs title-edit" id="titleEditBtn" data-ic="edit" title="改曲名 / 艺人" aria-label="改曲名和艺人" aria-haspopup="dialog" hidden></button></div>
       <div class="crumb-sub" id="songSub"></div>
     </div>
   </div>
@@ -22,22 +22,23 @@
     <nav class="seg" id="nav" aria-label="页面">
       <button data-v="practice">练习</button>
       <button data-v="tune">调弦</button>
-      <button data-v="plan">练习建议</button>
+      <button data-v="plan" title="AI 按段落给的练习建议">分段</button>
       <button data-v="glossary">记号说明</button>
     </nav>
   </div>
   <div class="actions">
     <div class="timer" id="timer"></div>
     <button class="btn sm" id="rateBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="ratePop" hidden></button>
-    <button class="icon-btn" id="themeBtn"></button>
   </div>
 </header>
 <!-- 练琴计划：给今天这首打分（只有在计划里的曲子才有“打分”按钮） -->
 <div class="rate-pop" id="ratePop" role="dialog" aria-labelledby="rateTitle" hidden>
   <div class="rp-h"><b id="rateTitle">今天弹得怎么样？</b><span class="hint" id="rateHint"></span></div>
   <div class="rp-row"><span class="rp-lbl" id="rateIssuesLbl">问题</span><div class="chips multi sm" id="rateIssues" role="group" aria-labelledby="rateIssuesLbl"></div></div>
+  <div class="rp-row" id="rateStuckRow"><span class="rp-lbl" id="rateStuckLbl" title="卡在哪几个小节：下次从今天的练琴清单打开时，循环范围先放在这里">卡住</span><div class="chips multi sm" id="rateStuck" role="group" aria-labelledby="rateStuckLbl"></div></div>
   <input class="input" id="rateNote" maxlength="500" placeholder="备注（可不填）" aria-label="备注">
   <div class="rp-btns" id="rateBtns" role="group" aria-label="打分"></div>
+  <div class="rp-foot" id="rateFoot" hidden><button class="btn sm ghost" id="rateSkip">跳过</button></div>
 </div>
 
 <main class="wrap trainer">
@@ -52,11 +53,11 @@
             <button class="play" id="playBtn" aria-label="播放（空格）" title="播放 / 停止（空格）"></button>
             <div class="status" aria-live="polite"><div class="l1" id="statusL1">加载中…</div><div class="l2" id="statusL2"></div></div>
             <div class="t-sep"></div>
-            <div class="grp" role="group" aria-label="速度">
+            <div class="grp speed" role="group" aria-label="速度">
               <button class="icon-btn sm" id="bpmDown" data-ic="minus" title="慢 4 BPM（↓）" aria-label="慢 4 BPM"></button>
-              <input type="range" id="bpm" min="20" max="140" value="50" aria-label="速度（BPM）">
+              <span class="bpm-track"><input type="range" id="bpm" min="20" max="140" value="50" aria-label="速度（BPM）"><i class="bpm-orig" id="bpmOrig" aria-hidden="true" hidden></i></span>
               <button class="icon-btn sm" id="bpmUp" data-ic="plus" title="快 4 BPM（↑）" aria-label="快 4 BPM"></button>
-              <span class="bpm"><b id="bpmVal">50</b> BPM</span>
+              <span class="bpm" id="bpmBox"><b id="bpmVal">50</b> <span id="bpmUnit">BPM</span></span>
             </div>
             <div class="t-sep"></div>
             <div class="grp" role="group" aria-label="循环范围">
@@ -65,14 +66,19 @@
               <button class="icon-btn sm" id="loopNext" data-ic="right" title="下一段（→）" aria-label="下一段"></button>
             </div>
             <div class="grp t-acts">
+              <button class="btn sm ghost clean-btn" id="cleanBtn" data-ic="check" aria-pressed="false" title="这遍干净（Enter）：正在弹的这一遍没出错，弹完时记成干净的一遍（用过以后，没按的遍记成不干净）">干净</button>
               <button class="btn sm ghost" id="demoBarBtn" data-ic="ear" title="把循环换成正在看的这一小节并播放">单练本小节</button>
               <button class="btn sm ghost" id="rhythmBtn" data-ic="tap" aria-pressed="false" aria-controls="rhythmCard" title="只练节奏：不拿琴，跟着示范在键盘上敲出这一段的节奏，每个音判早晚、每遍打分">敲节奏</button>
             </div>
             <div class="grp t-end">
+              <button class="icon-btn sm drawer-btn" id="drawerBtn" data-ic="list" title="小节详情" aria-label="小节详情" aria-expanded="false" aria-controls="side"></button>
               <button class="icon-btn sm" id="moreBtn" data-ic="settings" title="节拍器、预备拍、示范音、音色、谱面跟随" aria-label="播放设置" aria-haspopup="true" aria-expanded="false" aria-controls="morePop"></button>
             </div>
           </div>
-          <div class="chips sections" id="secBtns" role="group" aria-label="按原谱的行选段"></div>
+          <div class="sec-row">
+            <div class="seg sm sec-mode" id="secMode" aria-label="选段方式" hidden><button data-v="rows" title="按原谱的行选段">行</button><button data-v="plan" title="按 AI 分的段落选段（分段页的练习建议）">段落</button></div>
+            <div class="chips sections" id="secBtns" role="group" aria-label="选段"></div>
+          </div>
 
           <div class="more-pop" id="morePop" role="dialog" aria-label="播放设置" hidden>
             <div class="mp-row">
@@ -96,18 +102,19 @@
         <div class="card score-card" id="scoreCard">
           <div class="card-h">
             <span class="card-title" data-ic="music">谱面</span>
+            <span class="badge accent" id="editBadge" hidden>改音中</span>
             <span class="hint" id="trackName"></span>
+            <span class="hint tuning-line" id="tuningLine"></span>
             <div class="grow"></div>
-            <button class="btn sm" id="editModeBtn" data-ic="edit" aria-pressed="false" title="点击谱面上的音符修改弦、品和技巧">改音</button>
+            <button class="btn sm primary" id="editModeBtn" data-ic="check" aria-pressed="false" title="退出改音（改过的都已保存）" hidden>完成</button>
             <div class="seg sm" id="notationSeg" aria-label="谱面样式"><button data-v="both">五线谱 + 六线谱</button><button data-v="tab">只看六线谱</button></div>
-            <button class="btn sm" id="refineBtn" data-ic="sparkle" title="精修整首：AI 逐小节放大核对原谱（约 $0.2 / 小节）" hidden>精修</button>
+            <button class="btn sm" id="refineBtn" data-ic="sparkle" data-ai title="精修整首：AI 逐小节放大核对原谱（约 $0.2 / 小节）" hidden>精修</button>
             <button class="btn sm" id="exportBtn" data-ic="download" title="下载为 Guitar Pro 文件（.gp）">导出 GP</button>
             <span class="help-wrap">
               <button class="icon-btn sm help-btn" id="scoreHelpBtn" aria-label="谱面操作说明" aria-describedby="scoreHelp">?</button>
               <span class="legend help-pop" id="scoreHelp" role="tooltip"></span>
             </span>
           </div>
-          <div class="legend score-legend" id="scoreLegend" hidden></div>
           <div id="score"></div>
           <div class="empty-state" id="scoreEmpty" hidden><b>还没有识别出的小节</b>识别完成后显示。</div>
           <div class="note-pop" id="notePop" role="dialog" aria-labelledby="npTitle" hidden>
@@ -129,38 +136,46 @@
           <div class="card-h">
             <span class="card-title">第 <span id="barNo">1</span> 小节</span>
             <span class="badge warn" id="barReview" hidden>待核对</span>
+            <div class="grow"></div>
+            <button class="btn sm primary" id="barCheckBtn" data-ai hidden>核对</button>
+            <button class="icon-btn sm drawer-close" id="drawerClose" data-ic="x" title="收起（Esc）" aria-label="收起小节详情"></button>
           </div>
           <div class="body">
             <div class="tags" id="barTags"></div>
             <div class="bar-chords" id="barChords" hidden></div>
             <div class="tip" id="tipText"></div>
             <div class="warns" id="tipWarn" hidden></div>
+            <div class="review-row" id="reviewRow" hidden><span class="review-ok" id="reviewHint"></span><button class="btn sm" id="reviewBtn" data-ic="check" title="对照原谱看过，识别是对的">无误</button></div>
             <div class="refine-row" id="refineRow" hidden><div class="refine-diff"><span id="refineDiff"></span></div><div class="refine-acts"><span class="hint" id="refinePrevLine">原来：<span id="refinePrev"></span></span><button class="btn sm ghost" id="undoRefineBtn" data-ic="back" title="恢复成精修之前的读法">撤销精修</button></div></div>
-            <div class="bar-acts"><div class="review-row" id="reviewRow" hidden><span class="review-ok" id="reviewHint"></span><button class="btn sm" id="reviewBtn" data-ic="check" title="对照原谱看过，识别是对的">无误</button></div>
-            <div class="refine-scope" id="refineScope" hidden><div class="refine-scope-btns" id="refineScopeBtns"><button class="btn sm" id="refineBarBtn">精修本小节</button><button class="btn sm" id="refineRowBtn">精修本行</button></div><span class="refine-busy" id="refineBusy" hidden><span class="spinner"></span>精修中…</span><span class="hint" id="refineScopeHint"></span></div></div>
             <button class="paper" id="cropBox" title="点开看这一整行的原谱" hidden><canvas id="crop"></canvas><span class="paper-msg" id="cropMsg" hidden></span><span class="paper-cap">原谱</span></button>
+            <div class="bar-plan" id="barPlan" hidden></div>
+            <div class="practice-line" id="practiceLine"></div>
             <div class="coach">
               <div class="sec-h">问 AI</div>
               <div class="qa-list" id="qaList" hidden></div>
               <div class="ask">
                 <input class="input" id="askInput" maxlength="500" aria-label="问 AI 这一小节" placeholder="如“左手指法怎么安排”">
-                <button class="btn sm" id="askBtn">提问</button>
+                <button class="btn sm" id="askBtn" data-ai>提问</button>
               </div>
             </div>
-            <div class="practice-line" id="practiceLine"></div>
-            <details class="fix" id="fixBox">
-              <summary>识别有误？</summary>
-              <div class="tools">
-                <button class="btn sm" id="editBtn" data-ic="edit">修改本小节</button>
-                <input class="input" id="hintInput" aria-label="重新识别时告诉 AI 哪里不对" placeholder="哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
-                <button class="btn sm" id="reparseBtn" data-ic="refresh">重新识别这一行</button>
+            <!-- 纠错：只对识别出来的曲子（GP / MusicXML 的小节来自原文件，整块不显示）。从便宜到贵：自己改 → AI 核对 → 重新识别整行 -->
+            <section class="fix" id="fixBox" aria-labelledby="fixH">
+              <div class="sec-h" id="fixH">纠错</div>
+              <div class="fix-row">
+                <button class="btn sm" id="barEditBtn" data-ic="edit" title="在谱面上点音符改弦、品、技巧和时值">改音</button>
+                <button class="btn sm" id="editBtn" title="直接改这一小节的数据（JSON）：倚音等复杂的改动">改数据</button>
               </div>
               <div class="editor" id="editor" hidden>
                 <textarea class="input" id="edText" spellcheck="false" aria-label="本小节的数据（JSON）"></textarea>
                 <div class="hint">每行一个事件（音符） <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="字段说明" aria-describedby="edHelp">?</button><span class="help-pop left up" id="edHelp" role="tooltip">dur：到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string：弦（1 最细）；fret：品；tech：h p sl si pm nh ah th roll x vib bend；grace：倚音品位（-1 表示没有）；harm：点弦泛音（th）右手点的品。</span></span></div>
                 <div class="ed-bar"><button class="btn sm primary" id="edSave">保存</button><button class="btn sm ghost" id="edCancel">取消</button><span class="hint" id="edMsg"></span></div>
               </div>
-            </details>
+              <div class="fix-ai" id="fixAi">
+                <input class="input" id="hintInput" aria-label="哪里不对（AI 核对、重新识别时一起告诉 AI）" placeholder="哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
+                <div class="refine-scope" id="refineScope" hidden><span class="fix-lbl">AI 核对</span><span class="refine-scope-btns" id="refineScopeBtns"><button class="btn sm" id="refineBarBtn" data-ai>本小节</button><button class="btn sm" id="refineRowBtn" data-ai>本行</button></span><span class="refine-busy" id="refineBusy" hidden><span class="spinner"></span>核对中…</span><span class="hint" id="refineScopeHint"></span></div>
+                <div class="fix-row"><button class="btn sm ghost" id="reparseBtn" data-ai data-ic="refresh">重新识别整行</button></div>
+              </div>
+            </section>
           </div>
         </div>
 
@@ -170,6 +185,16 @@
             <span class="card-title" id="rhTitle" data-ic="tap">敲节奏</span>
             <span class="hint rh-range" id="rhRange"></span>
             <div class="grow"></div>
+            <span class="help-wrap"><button class="icon-btn sm help-btn" aria-label="敲节奏的按键和练法" aria-describedby="rhHelp">?</button><span class="help-pop rh-help" id="rhHelp" role="tooltip">
+              <b class="lg-h">按键</b>
+              <span><kbd>空格</kbd>开始 / 敲，<kbd>F</kbd><kbd>J</kbd>也能敲，点节奏条也算；<kbd>Esc</kbd>停止</span>
+              <span class="rh-legend"><i class="good"></i>准（±40 ms）<i class="ok"></i>偏<i class="miss"></i>漏</span>
+              <span>口令：1 e &amp; a（十六分）· 1 trip let（三连音）</span>
+              <b class="lg-h">怎么练</b>
+              <span>1. 先用“跟着示范”：每个音响的时候敲一下。</span>
+              <span>2. 能连续几遍 90 分以上，换“听一遍再敲”，再换“只有节拍器”。不靠示范也敲得准，节奏才算记住了。</span>
+              <span>3. 循环哪几个小节、速度用控制条，节拍器和预备拍在播放设置里；从慢速开始。</span>
+            </span></span>
             <button class="icon-btn sm" id="rhClose" data-ic="x" title="退出敲节奏" aria-label="退出敲节奏"></button>
           </div>
           <div class="rh-bar">
@@ -178,11 +203,6 @@
             <button class="btn sm ghost" id="rhCalib" title="用蓝牙耳机，或者觉得判定总是偏早 / 偏晚时校准：跟着咔哒声敲 8 下，测出声音延迟并补偿">校准</button>
           </div>
           <div class="rh-strip" id="rhStrip" title="敲：空格 / F / J，或点这里"><svg id="rhSvg" aria-hidden="true"></svg></div>
-          <div class="legend rh-keys">
-            <span><kbd>空格</kbd>开始 / 敲</span><span><kbd>F</kbd><kbd>J</kbd>也能敲</span><span><kbd>Esc</kbd>停止</span>
-            <span class="rh-legend"><i class="good"></i>准（±40 ms）<i class="ok"></i>偏<i class="miss"></i>漏</span>
-            <span>口令：1 e &amp; a（十六分）· 1 trip let（三连音）</span>
-          </div>
           <div class="rh-result" id="rhResult" aria-live="polite"></div>
         </div>
       </aside>
@@ -203,11 +223,9 @@
       </div>
     </div>
 
-    <div class="section-title" id="metaHead">曲子信息</div>
+    <div class="section-title" id="metaHead">调弦、变调夹和拍号</div>
     <div class="card">
       <div class="meta-grid">
-        <label>曲名<input class="input" id="mTitle"></label>
-        <label id="mArtistLbl">艺人<input class="input" id="mArtist"></label>
         <label class="meta-setting">6 弦（最粗）<input class="input" id="mT6"></label><label class="meta-setting">5 弦<input class="input" id="mT5"></label><label class="meta-setting">4 弦<input class="input" id="mT4"></label>
         <label class="meta-setting">3 弦<input class="input" id="mT3"></label><label class="meta-setting">2 弦<input class="input" id="mT2"></label><label class="meta-setting">1 弦（最细）<input class="input" id="mT1"></label>
         <label class="meta-setting">变调夹（品）<input class="input" id="mCapo" type="number" min="0" max="12"></label>
@@ -217,11 +235,10 @@
     </div>
   </section>
 
-  <!-- ============ 练习建议 ============ -->
+  <!-- ============ 分段（AI 的练习建议） ============ -->
   <section class="view narrow" id="view-plan" hidden>
-    <div class="head"><div><h1>练习建议</h1></div></div>
+    <div class="head"><div><h1 class="plan-h1">分段 <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="怎么练" aria-describedby="planHelp">?</button><span class="help-pop left" id="planHelp" role="tooltip"><span>AI 按段落给的练习建议，点“循环这段”就在练习页循环它。</span><span>弹不顺时：缩到那一小节，降到能连续弹对 3 遍的速度，再慢慢加速。</span></span></span></h1></div></div>
     <div class="stack" id="plan"></div>
-    <div class="notice plan-tip"><span class="dot plain"></span><div class="n-body">弹不顺时：缩到那一小节，降到能连续弹对 3 遍的速度，再慢慢加速。</div></div>
   </section>
 
   <!-- ============ 记号说明 ============ -->
@@ -242,6 +259,18 @@
 </div>
 
 <button class="btn follow-btn" id="followBtn" data-ic="locate" title="滚动到正在播放的小节" hidden>回到播放位置</button>
+
+<!-- 曲名 / 艺人（点顶栏的曲名打开，song.js） -->
+<dialog class="dlg meta-dlg" id="metaDlg" aria-labelledby="metaDlgT">
+  <form method="dialog" id="metaForm">
+    <div class="dlg-b">
+      <div class="dlg-t" id="metaDlgT">曲子信息</div>
+      <label class="meta-f">曲名<input class="input" id="mTitle" maxlength="200" autocomplete="off"></label>
+      <label class="meta-f" id="mArtistLbl">艺人<input class="input" id="mArtist" maxlength="200" autocomplete="off"></label>
+    </div>
+    <div class="dlg-f"><button type="button" class="btn ghost" id="metaCancel">取消</button><button class="btn primary" id="metaDlgSave">保存</button></div>
+  </form>
+</dialog>
 
 <dialog class="dlg orig-dlg" id="origModal" aria-labelledby="origTitle">
   <div class="orig-h">

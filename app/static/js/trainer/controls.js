@@ -3,10 +3,11 @@
 
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
-import { parseBarInput } from './view.js';
+import { parseBarInput, planRange } from './view.js';
 import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref, stored, remember } from './prefs.js';
 import { play, stop, setLoop, setTempo, stepSection, revealLoop, cursorOutOfView, scrollToCursor, TIMBRES } from './player.js';
 import { exportGp } from './gp-export.js';
+import { markClean } from './practice-log.js';
 
 // 跟着曲子走的默认值（加载谱子后按原速调整）；其余播放设置记在本机，见 prefs.js
 const SONG_DEFAULTS = { bpmMax: 140 };
@@ -18,19 +19,36 @@ const busy = () => get('play.playing') || !!get('rhythm.running');
 // 快捷键写在悬停提示里（键盘处理在 keys.js / main.js）
 const PLAY_TIP = '播放（空格）· 回到段首（Home）', STOP_TIP = '停止（空格）· 回到段首（Home）';
 
-function renderSections(v) {
-  const host = $('secBtns');
+// 选段：按原谱的行（view.sections），或者按 AI 分的段落（分段页的练习建议，song.plan.steps）。
+// 选哪种记在本机（tt.secMode）；没有练习建议时只有“行”，开关藏起来。←→ 换段也按现在这种（ui.secs，player.js 的 stepSection）
+const SEC_MODE_KEY = 'tt.secMode';
+let setSecMode = null;
+/** 练习建议的每一步 → [{a, z, title, advice, k}]（读不出小节范围的跳过） */
+function planSections(s, n) {
+  return ((s && s.plan && s.plan.steps) || []).map((st, k) => { const r = planRange(st.bars, n); return r && { a: r.a, z: r.z, title: st.title || '', advice: st.advice || '', k }; }).filter(Boolean);
+}
+function renderSections() {
+  const v = get('view'), host = $('secBtns');
   host.replaceChildren();
-  if (!v || !v.bars.length) return;
-  const add = (label, a, z, all) => {
+  if (!v || !v.bars.length) { $('secMode').hidden = true; set('ui.secs', null); return; }
+  const plan = planSections(get('song'), v.bars.length);
+  const mode = plan.length && get('ui.secMode') === 'plan' ? 'plan' : 'rows';
+  $('secMode').hidden = !plan.length;
+  setSecMode(mode);
+  const add = (label, a, z, all, tip = '', cls = '') => {
     const btn = document.createElement('button');
     btn.textContent = label; btn.dataset.a = a; btn.dataset.z = z;
+    if (cls) btn.className = cls;
     btn.onclick = () => { setLoop(a, z); revealLoop(); };
-    if (!all && v.review.slice(a, z + 1).some(Boolean)) { btn.classList.add('warn'); btn.title = '这段有待核对的小节'; }
+    btn.title = tip;
+    if (!all && v.review.slice(a, z + 1).some(Boolean)) { btn.classList.add('warn'); btn.title = [tip, '这段有待核对的小节'].filter(Boolean).join('\n'); }
     host.appendChild(btn);
   };
   add('全曲', 0, v.bars.length - 1, true); // 放最前面：窄屏时也不会被挤出可见范围
-  v.sections.forEach(g => add(g.a === g.z ? `${g.a + 1}` : `${g.a + 1}–${g.z + 1}`, g.a, g.z));
+  const range = g => (g.a === g.z ? `${g.a + 1}` : `${g.a + 1}–${g.z + 1}`);
+  if (mode === 'plan') plan.forEach(g => add(`${g.k + 1} ${g.title}`.trim(), g.a, g.z, false, `第 ${range(g)} 小节${g.advice ? ` · ${g.advice}` : ''}`, 'plan-sec'));
+  else v.sections.forEach(g => add(range(g), g.a, g.z));
+  set('ui.secs', mode === 'plan' ? plan.map(g => ({ a: g.a, z: g.z })) : null);
   paintLoop();
 }
 /** 控制条上的起止小节（输入框）和段落按钮；拖选过程中（ui.loopPreview）先显示拖到的范围 */
@@ -114,11 +132,21 @@ export function initControls() {
   on(Object.keys(PREF_DEFAULTS).map(k => 'play.' + k), () => remember(PREFS_KEY, serializePrefs(get('play'))));
   on('play.timbre', v => remember('tt.timbre', v));
   bindInputs();
-  const paintBpm = bpm => { $('bpm').value = bpm; $('bpmVal').textContent = bpm; UI.fillRange($('bpm')); };
-  const paintMax = m => { $('bpm').max = m; UI.fillRange($('bpm')); };
-  on('play.bpm', paintBpm);
+  // 速度：数字后面是原速的百分比（“72 · 80%”，悬停看原速），滑块上原速那里有一道刻度；不知道原速就写 BPM
+  const paintBpm = () => {
+    const bpm = get('play.bpm'), orig = get('play.origBpm') || 0, el = $('bpm');
+    el.value = bpm; $('bpmVal').textContent = bpm; UI.fillRange(el);
+    $('bpmUnit').textContent = orig ? `· ${Math.round(bpm / orig * 100)}%` : 'BPM';
+    $('bpmBox').title = orig ? `${bpm} BPM，原速 ${orig}` : `${bpm} BPM`;
+    const o = (orig - +el.min) / (+el.max - +el.min);
+    $('bpmOrig').hidden = !orig || o < 0 || o > 1;
+    $('bpmOrig').style.setProperty('--o', Math.max(0, Math.min(1, o)));
+    $('bpmOrig').title = `原速 ${orig}`;
+  };
+  const paintMax = m => { $('bpm').max = m; paintBpm(); };
+  on(['play.bpm', 'play.origBpm'], paintBpm);
   on('play.bpmMax', paintMax);
-  paintMax(get('play.bpmMax')); paintBpm(get('play.bpm'));
+  paintMax(get('play.bpmMax'));
   // 播放键：alphaTab 在放，或者敲节奏在进行，都显示成“停止”
   const paintPlay = () => {
     const now = busy();
@@ -126,6 +154,7 @@ export function initControls() {
     $('playBtn').innerHTML = UI.icon(now ? 'stop' : 'play');
     $('playBtn').setAttribute('aria-label', now ? '停止（空格）' : '播放（空格）');
     $('playBtn').title = now ? STOP_TIP : PLAY_TIP;
+    $('transport').classList.toggle('playing', now);
   };
   on(['play.playing', 'rhythm.running'], paintPlay);
   paintPlay();
@@ -134,7 +163,16 @@ export function initControls() {
   addEventListener('scroll', () => { if (!followTick) followTick = requestAnimationFrame(() => { followTick = 0; updateFollowBtn(); }); }, { passive: true });
   $('followBtn').onclick = scrollToCursor;
   on(['play.a', 'play.b', 'ui.loopPreview'], () => paintLoop());
-  on('view', renderSections);
+  setSecMode = UI.seg($('secMode'), 'rows', v => { set('ui.secMode', v); remember(SEC_MODE_KEY, v); });
+  set('ui.secMode', stored(SEC_MODE_KEY) === 'plan' ? 'plan' : 'rows');
+  on(['view', 'song.plan', 'ui.secMode'], renderSections);
+  // 选段只有一行、横着滚：竖着的滚轮也拿来横滚（触控板本来就能横滑）
+  $('secBtns').addEventListener('wheel', e => {
+    const el = e.currentTarget;
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || el.scrollWidth <= el.clientWidth) return;
+    e.preventDefault();
+    el.scrollLeft += e.deltaY;
+  }, { passive: false });
 
   $('playBtn').onclick = () => (busy() ? stop() : play());
   $('demoBarBtn').onclick = () => { const bi = get('ui.bar') >= 0 ? get('ui.bar') : get('play.a'); setLoop(bi, bi, !get('play.playing')); if (!get('play.playing')) play(); };
@@ -151,6 +189,8 @@ export function initControls() {
     set('ui.notation', n);
   });
   $('exportBtn').onclick = exportGp;
+  $('cleanBtn').onclick = e => { e.currentTarget.blur(); markClean(); };
+  on('play.clean', v => $('cleanBtn').setAttribute('aria-pressed', String(!!v)));
   $('bpm').oninput = e => setTempo(+e.target.value);
   $('bpmDown').onclick = () => setTempo(get('play.bpm') - 4);
   $('bpmUp').onclick = () => setTempo(get('play.bpm') + 4);
