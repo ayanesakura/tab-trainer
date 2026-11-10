@@ -16,7 +16,8 @@
 - 任务：activity kind = refine（scope = song / bars / row，row = 行号，bars = 范围里的小节 id，pending = 还没核对完的），
   每首曲子同一时间只有一个任务（再点：423，说清楚正在做什么，见 busy_text）；期间照常能练、能改小节和曲名，
   调弦 / 变调夹 / 拍号不能改（核对是按它们做的，见 state.settings_lock_reason）；进度 {stage: 精修, done, total}；
-  全局名额和识别共用（recognize.run_queued），能取消；费用记到曲子上（jobs.UsageMeter）。
+  全局名额和识别共用（jobs.run_queued，每一遍核对单独排队，不会一个小节连着几遍占住名额），能取消；
+  费用记到曲子上（jobs.UsageMeter）。
   整首精修完成时记下 song["refined"] = {at, checked, changed}（只精修了一部分不动它）；结束提示见 _end_notice。
 - 自动精修（设置里 refine = auto，见 config.refine_mode）：识别结束后在同一个任务里接着精修（refine_after）。
 """
@@ -26,11 +27,12 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from collections.abc import Callable
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 
 from PIL import Image
 
-from app import config, jobs, recognize, staleness, state, store, views
+from app import config, jobs, staleness, state, store, views
 from app.config import settings
 from app.errors import Busy, Invalid
 from app.jobs import Cancelled
@@ -215,6 +217,7 @@ def verify(
     cancel: threading.Event | None = None,
     hint: str = "",
     shapes: dict[str, list[int]] | None = None,
+    queued: Callable[[Callable[[], dict]], dict] | None = None,
 ) -> dict:
     """核对一个小节。返回 {out: 模型的回答, events: 要改成的事件（不改是 None）, status, note}：
     - status = unchanged：模型说没问题（或者改出来的和原来一样）；
@@ -224,17 +227,22 @@ def verify(
     - rejected：核对 MAX_READS 遍都没有两遍一样的改动，不改；note 是要加到这个小节“不确定”说明里的话，提醒用户对照原谱。
     改动很少（约 1/20 的小节），确认多花的钱不多，能挡掉偶尔的改坏（评测：模糊的截图上把倚音当成了十六分音符）。
     cancel：确认的几遍之间点了取消就不再核对（Cancelled）。hint：用户写的“哪里不对”（每一遍都告诉模型）。
-    shapes：告诉模型的和弦图（None = 这个小节识别时读出的，见 context_shapes）。"""
+    shapes：告诉模型的和弦图（None = 这个小节识别时读出的，见 context_shapes）。
+    queued：每一遍调用模型怎么执行（refine_bars 给的是排队等全局名额：每一遍单独占名额，几遍之间让出来，
+    一个小节最多 MAX_READS 遍、几分钟，不会一直占着让别的曲子的识别等着）；None = 直接调用。"""
     if shapes is None:
         shapes = context_shapes(bar, None)
     img, span = crop(page, sysinfo, bar["region"])
 
     bad: list[bool] = []  # 每一遍：模型说要改、给出的事件却用不了
 
-    def propose() -> tuple[dict, list[dict] | None]:
-        out = claude.verify_bar(
+    def ask() -> dict:
+        return claude.verify_bar(
             img, meta, span, bar["events"], previous, time_signature, hint=hint, shapes=shapes or None
         )
+
+    def propose() -> tuple[dict, list[dict] | None]:
+        out = queued(ask) if queued else ask()
         bad.append(False)
         if not out.get("changed"):
             return out, None
@@ -449,24 +457,30 @@ def refine_bars(
                 pages[pi] = store.page_image(sid, song["pages"][pi])
             return pages[pi]
 
-    def one(bar: dict, prev: dict | None):
+    def queued(ask):
         def go():
             if cancel.is_set():
                 raise Cancelled()
-            return verify(
-                meter.claude,
-                page(bar["page"]),
-                song["systems"][bar["system"]],
-                bar,
-                song["meta"],
-                prev["events"] if prev else None,
-                bar.get("time_signature"),
-                cancel,
-                hint,
-                context_shapes(bar, prev),
-            )
+            return ask()
 
-        return recognize.run_queued(go, cancel)
+        return jobs.run_queued(go, cancel)
+
+    def one(bar: dict, prev: dict | None):
+        if cancel.is_set():
+            raise Cancelled()
+        return verify(
+            meter.claude,
+            page(bar["page"]),
+            song["systems"][bar["system"]],
+            bar,
+            song["meta"],
+            prev["events"] if prev else None,
+            bar.get("time_signature"),
+            cancel,
+            hint,
+            context_shapes(bar, prev),
+            queued,
+        )
 
     def write(bar: dict, result):
         def apply(s):

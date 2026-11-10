@@ -11,7 +11,7 @@ from fractions import Fraction
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from app import config, jobs, ocr, prompts, staleness, state, store
+from app import config, jobs, ocr, prompts, refine, staleness, state, store
 from app.config import settings
 from app.errors import Busy, Invalid
 from app.jobs import Cancelled
@@ -114,8 +114,6 @@ def _auto_refine(sid: str, cancel: threading.Event, before: set | None) -> None:
     before：识别开始前各小节的 (id, 音符指纹)（_bar_keys），只精修这之后新识别出的小节；None = 整首。"""
     if cancel.is_set() or config.refine_mode() != "auto":
         return
-    from app import refine  # refine 依赖本模块（全局名额）
-
     try:
         only = None
         if before is not None:
@@ -280,24 +278,9 @@ def ocr_disagreements(
 # ---------------------------------------------------------------------------
 # 识别一行
 # ---------------------------------------------------------------------------
-# 所有曲子加起来同时识别几行：信号量在导入时按 settings.max_rows_global 建好，之后改这个设置不生效（测试直接换掉 _system_slots）
-_system_slots = threading.BoundedSemaphore(settings.max_rows_global)
-
-
-def run_queued(fn, cancel: threading.Event | None = None):
-    """排队等全局名额再执行 fn()（识别一行、精修一个小节）；排队期间点了取消就不再执行。"""
-    while not _system_slots.acquire(timeout=0.2):
-        if cancel is not None and cancel.is_set():
-            raise Cancelled()
-    try:
-        return fn()
-    finally:
-        _system_slots.release()
-
-
 def transcribe_queued(*args, cancel: threading.Event | None = None, **kw) -> list[dict]:
     """排队等全局名额再识别一行；排队期间点了取消就不再识别。"""
-    return run_queued(lambda: transcribe_system(*args, cancel=cancel, **kw), cancel)
+    return jobs.run_queued(lambda: transcribe_system(*args, cancel=cancel, **kw), cancel)
 
 
 def transcribe_system(

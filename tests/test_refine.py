@@ -855,3 +855,31 @@ def test_verify_gets_the_chord_diagrams_of_the_bar_and_the_one_before(client, sy
         1: {"C": [0, 1, 0, 2, 3, -1], "G": [3, 0, 0, 0, 2, 3]},  # 第 2 小节：连同上一小节的
         2: {"G": [3, 0, 0, 0, 2, 3]},  # 第 3 小节：上一小节的
     }
+
+
+def test_each_read_takes_its_own_global_slot(client, sync_jobs, monkeypatch):
+    """一个小节最多核对 MAX_READS 遍（几分钟）：每一遍单独排队等全局名额，几遍之间让给排着队的（别的曲子的识别）。"""
+    import threading
+    import time
+
+    sid = _song()
+    target = store.load(sid)["bars"][1]["id"]
+    monkeypatch.setattr(config.settings, "max_rows_global", 1)
+    reads, other = [], []
+
+    def verify(img, meta, span, events, previous, ts):
+        reads.append(1)
+        assert jobs.slots.used == 1  # 这一遍占着唯一的名额
+        if len(reads) == 1:  # 第一遍进行中，另一首曲子要识别一行：排队
+            t = threading.Thread(target=lambda: jobs.run_queued(lambda: other.append(len(reads))))
+            t.start()
+            while not jobs.slots._waiting:
+                time.sleep(0.01)
+        fixed = [{**e, "notes": [{**n, "fret": 10 + len(reads)} for n in e["notes"]]} for e in events]
+        return {"diff": "改", "changed": True, "events": fixed, "uncertain": ""}  # 每遍改法都不一样
+
+    monkeypatch.setattr(FakeClaude, "verify_result", verify)
+    client.post(f"/api/songs/{sid}/refine", json={"bars": [target]})
+    assert len(reads) == refine.MAX_READS
+    assert other == [1]  # 第一遍一结束就轮到它，不用等这个小节核对完
+    assert jobs.slots.used == 0

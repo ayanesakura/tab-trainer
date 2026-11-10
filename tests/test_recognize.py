@@ -121,7 +121,7 @@ def test_systems_share_a_global_limit_across_songs(data_dir, monkeypatch):
     """两首曲子同时识别：同时在识别的行数不超过全局上限。"""
     import time
 
-    monkeypatch.setattr(recognize, "_system_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(config.settings, "max_rows_global", 1)  # 名额按当前设置算，改了马上生效
     real = FakeClaude.transcribe
     active, peak, lock = [0], [0], threading.Lock()
 
@@ -146,14 +146,16 @@ def test_systems_share_a_global_limit_across_songs(data_dir, monkeypatch):
 
 
 def test_cancel_while_waiting_for_a_slot(data_dir, monkeypatch):
-
-    sem = threading.BoundedSemaphore(1)
-    sem.acquire()  # 名额被别的曲子占着
-    monkeypatch.setattr(recognize, "_system_slots", sem)
-    cancel = threading.Event()
-    cancel.set()
-    with pytest.raises(jobs.Cancelled):
-        recognize.transcribe_queued(None, "sid", {}, 0, 1, cancel=cancel)
+    monkeypatch.setattr(config.settings, "max_rows_global", 1)
+    jobs.slots.acquire()  # 名额被别的曲子占着
+    try:
+        cancel = threading.Event()
+        cancel.set()
+        with pytest.raises(jobs.Cancelled):
+            recognize.transcribe_queued(None, "sid", {}, 0, 1, cancel=cancel)
+        assert jobs.slots.used == 1  # 没拿走名额
+    finally:
+        jobs.slots.release()
 
 
 def test_reparse_failed_line_uses_real_bar_numbers(data_dir):

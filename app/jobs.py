@@ -1,5 +1,6 @@
 """后台任务：登记（每首曲子同一时间只有一个任务：整首识别、单行重新识别 / 补页、生成讲解；登记、取消、查询都在一把锁里）、
-启动（start：登记 → 在曲子上标开始 → 后台线程，标开始失败时释放登记），以及把模型用量记到曲子上（UsageMeter）。
+启动（start：登记 → 在曲子上标开始 → 后台线程，标开始失败时释放登记）、
+所有曲子共用的模型调用名额（slots / run_queued），以及把模型用量记到曲子上（UsageMeter）。
 
 任务的状态（status / activity / notice）写在曲子上，见 app/state.py；这里只管进程内“有没有在跑”。
 """
@@ -8,9 +9,11 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from collections.abc import Callable
 
 from app import store
+from app.config import settings
 from app.errors import Busy, NotFound
 from app.model import add_usage
 
@@ -92,6 +95,65 @@ def start(
         raise
     spawn(sid, lambda: run(cancel))
     return cancel
+
+
+# ---------------------------------------------------------------------------
+# 全局名额：所有曲子加起来同时进行几个模型调用（识别一行、精修一个小节的一遍核对）
+# ---------------------------------------------------------------------------
+class Slots:
+    """先来先得的计数名额，上限每次取名额时按 limit() 读（改了 settings.max_rows_global 马上生效，
+    调大时排着队的也会在 0.2 秒内拿到）。先来先得：放下名额又马上再要的（精修一个小节的几遍核对之间）
+    排在已经在等的后面，不会一直占着。"""
+
+    def __init__(self, limit: Callable[[], int]):
+        self._limit = limit
+        self._lock = threading.Lock()
+        self._used = 0
+        self._waiting: deque[threading.Event] = deque()
+
+    @property
+    def used(self) -> int:
+        with self._lock:
+            return self._used
+
+    def _grant(self) -> None:  # 在 _lock 里
+        while self._waiting and self._used < max(1, self._limit()):
+            self._used += 1
+            self._waiting.popleft().set()
+
+    def acquire(self, cancel: threading.Event | None = None) -> None:
+        """拿一个名额；排队期间点了取消就不再等（Cancelled）。"""
+        with self._lock:
+            if not self._waiting and self._used < max(1, self._limit()):
+                self._used += 1
+                return
+            me = threading.Event()
+            self._waiting.append(me)
+        while not me.wait(0.2):
+            with self._lock:
+                self._grant()  # 上限可能调大了
+                if me.is_set():
+                    break
+                if cancel is not None and cancel.is_set():
+                    self._waiting.remove(me)
+                    raise Cancelled()
+
+    def release(self) -> None:
+        with self._lock:
+            self._used -= 1
+            self._grant()
+
+
+slots = Slots(lambda: settings.max_rows_global)
+
+
+def run_queued(fn: Callable[[], object], cancel: threading.Event | None = None):
+    """排队等全局名额再执行 fn()（识别一行、精修的一遍核对）；排队期间点了取消就不再执行。"""
+    slots.acquire(cancel)
+    try:
+        return fn()
+    finally:
+        slots.release()
 
 
 class UsageMeter:
