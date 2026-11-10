@@ -11,7 +11,7 @@ from fractions import Fraction
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from app import config, jobs, ocr, staleness, state, store
+from app import config, jobs, ocr, prompts, staleness, state, store
 from app.config import settings
 from app.errors import Busy, Invalid
 from app.jobs import Cancelled
@@ -579,20 +579,8 @@ def _transcribe_halves(
     ts = start_ts or meta["time_signature"]
     for b in left:
         ts = b.get("ts_change") or ts
-    notes = [context] if context else []
     chord = next((e["chord"] for b in reversed(left) for e in reversed(b["events"]) if e.get("chord")), None)
-    if chord:
-        shapes = {k_: v for b in left for k_, v in (b.get("shapes") or {}).items()}
-        frets = f" (diagram frets for strings 1-6: {shapes[chord]})" if chord in shapes else ""
-        notes.append(
-            f"This image is the right half of a line. The chord still sounding at its left edge is {chord}{frets}: "
-            "x marks before the first chord name in this image belong to it. Return only the bars listed above."
-        )
-    else:
-        notes.append(
-            "This image is the right half of a line; the left half was read separately. "
-            "Return only the bars listed above."
-        )
+    shapes = {k_: v for b in left for k_, v in (b.get("shapes") or {}).items()}
     right = transcribe_system(
         claude,
         sid,
@@ -604,7 +592,7 @@ def _transcribe_halves(
         ts if ts != meta["time_signature"] else None,
         double_check,
         split=False,
-        context=" ".join(notes),
+        context=prompts.right_half_context(context, chord, shapes.get(chord) if chord else None),
         tied_in=_last_frets(left),
     )
     return left + right
@@ -999,13 +987,7 @@ def _rows_to_redo(
             odd = {}
         if not ts_wrong and not odd:
             continue
-        hint = ""
-        if odd:
-            hint = (
-                "The chord diagrams below were read the same way in the other lines of this score; use them "
-                "(and resolve the x marks with them): "
-                + "; ".join(f"{k} = frets for strings 1-6 {v}" for k, v in odd.items())
-            )
+        hint = prompts.shape_consensus_context(odd) if odd else ""
         out.append((si, ts if ts_wrong else used[si], hint))
     return out
 

@@ -61,7 +61,17 @@ def _all_prompts(monkeypatch) -> dict:
         },
         {"n": 4, "time_signature": [3, 4], "events": [{"dur": "3", "notes": []}], "tip": ""},
     ]
-    out = {}
+    out = {
+        # 程序给模型的补充说明（不是单独的调用，拼在识别一行的文字里）
+        "right_half_context": {
+            "chord": prompts.right_half_context("", "Am", [0, 1, 2, 2, 0, -1]),
+            "chord_without_diagram": prompts.right_half_context("先说明", "Am", None),
+            "no_chord": prompts.right_half_context("", None, None),
+        },
+        "shape_consensus_context": prompts.shape_consensus_context(
+            {"C": [0, 1, 0, 2, 3, -1], "G": [3, 0, 0, 0, 2, 3]}
+        ),
+    }
     for name, run in {
         "ping": lambda: c.ping(),
         "read_meta": lambda: c.read_meta(img),

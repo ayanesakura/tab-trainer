@@ -29,19 +29,15 @@ try:  # anthropic SDK 2.x 用的是它自带的 httpx 分支（httpx2），旧�
 except ImportError:  # pragma: no cover
     import httpx as _http
 
+from app import prompts
 from app.errors import Invalid, Upstream
 from app.prompts import (
     EXPLAIN_SCHEMA,
     META_SCHEMA,
-    NOTATION_KEY,
     PLAN_SCHEMA,
     SYSTEM,
-    TRANSCRIBE_RULES,
     TRANSCRIBE_SCHEMA,
     VERIFY_SCHEMA,
-    VERIFY_TASK,
-    bar_text,
-    verify_events,
 )
 
 log = logging.getLogger("tab_trainer.llm")
@@ -49,6 +45,11 @@ log = logging.getLogger("tab_trainer.llm")
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_BASE_URL = "https://api.anthropic.com"
 MAX_EDGE = 2576  # 当前模型支持的最大长边，超过会被缩小
+MAX_UPSCALE = 3.0  # 小图最多放大几倍
+# 发给模型的图至少放大到多宽（见 image_scale）：识别一行（半行识别时图只有几百像素宽）、精修一个小节、问答的小节图
+TRANSCRIBE_MIN_WIDTH = 2400
+VERIFY_MIN_WIDTH = 1600
+COACH_MIN_WIDTH = 900
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 USER_AGENT = "tab-trainer"
 
@@ -129,13 +130,19 @@ def answer_text(msg) -> str:
     return "".join(b.text for b in blocks[last + 1 :] if b.type == "text")
 
 
+def image_scale(w: float, h: float, min_width: int = 0) -> float:
+    """w×h 的图发给模型前的缩放：比 min_width 窄的放大到 min_width（最多 MAX_UPSCALE 倍，数字更清楚），
+    最长边不超过 MAX_EDGE（超过的部分模型那边也会缩小）。"""
+    scale = 1.0
+    if min_width and w < min_width:
+        scale = min(MAX_UPSCALE, min_width / w)
+    return min(scale, MAX_EDGE / max(w, h))
+
+
 def _image_block(img: Image.Image, min_width: int = 0) -> tuple[dict, float]:
     img = img.convert("RGB")
     w, h = img.size
-    scale = 1.0
-    if min_width and w < min_width:
-        scale = min(3.0, min_width / w)  # 小图适当放大，数字更清楚（半行识别时图只有几百像素宽）
-    scale = min(scale, MAX_EDGE / max(w, h))
+    scale = image_scale(w, h, min_width)
     if abs(scale - 1) > 0.01:
         img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
     buf = io.BytesIO()
@@ -498,39 +505,14 @@ class Claude(LLM):
                 self._record_partial(s, kwargs["model"])
                 raise
 
-    # -- 三类调用 -------------------------------------------------------------
+    # -- 各类调用（提示词在 app/prompts.py） ------------------------------------
     def ping(self) -> str:
-        r = self._call(
-            [
-                {
-                    "type": "text",
-                    "text": 'Reply with {"title": "ok", ...} filling other fields with empty values.',
-                }
-            ],
-            META_SCHEMA,
-            effort="low",
-            max_tokens=2000,
-        )
+        r = self._call([{"type": "text", "text": prompts.PING}], META_SCHEMA, effort="low", max_tokens=2000)
         return r.get("title", "")
 
     def read_meta(self, page: Image.Image) -> dict:
         block, _ = _image_block(page)
-        text = (
-            "This is the first page of a guitar score. Read its header and return:\n"
-            "- title / artist / arranger (empty string if absent)\n"
-            "- tuning: 6 note names with octave, for string 1 (highest) to string 6 (lowest), e.g. "
-            '["E4","B3","G3","D3","A2","E2"]. Tuning text such as "DADGAD" or "Tuning=DAC#F#AD" lists strings '
-            "from 6 (lowest) to 1. If no tuning is written, assume standard tuning.\n"
-            "- capo: the capo fret, 0 if none.\n"
-            "- time_signature: [numerator, denominator] of the first bar, e.g. [4, 4].\n"
-            "- tempo: quarter-note BPM if written, else 0.\n"
-            "- notes: in Chinese, anything a player should know (e.g. tuning changes, the written capo looking "
-            "inconsistent with the standard-notation pitches), and the notation conventions this score uses that "
-            "matter for reading every line - for example x marks meaning chord tones of the diagrams above, a "
-            "pattern of x marks labelled once as a slap / percussive hit (拍弦, 打板, 切音) that later lines repeat "
-            "without the label, or what a special symbol means. Empty string if nothing."
-        )
-        return self._call([block, {"type": "text", "text": text}], META_SCHEMA, max_tokens=16000)
+        return self._call([block, {"type": "text", "text": prompts.READ_META}], META_SCHEMA, max_tokens=16000)
 
     def transcribe(
         self,
@@ -547,68 +529,12 @@ class Claude(LLM):
     ) -> dict:
         """start_ts：前面的行里变过拍号时，这一行开头实际的拍号（这张图上看不到那个变拍号）。
         context：程序给的上下文（半行识别时左半结束时的和弦等），不是用户说的话。"""
-        block, scale = _image_block(img, min_width=2400)  # 小截图放大一些：和弦图的圆点、符杠更容易看清
-        ts = meta["time_signature"]
-        bar_len = ts[0] * 4 / ts[1]
-        info = (
-            f"Score info: tuning (string 1 -> 6) {' '.join(meta['tuning'])}; capo {meta['capo']} "
-            f"(copy fret numbers as written). "
+        # 小截图放大一些：和弦图的圆点、符杠更容易看清
+        block, scale = _image_block(img, min_width=TRANSCRIBE_MIN_WIDTH)
+        text = prompts.transcribe_text(
+            meta, first_bar, bar_spans, scale, hint, previous, problems, labeled_strings, start_ts, context
         )
-        if start_ts and start_ts != ts:
-            n_len = start_ts[0] * 4 / start_ts[1]
-            info += (
-                f"The piece starts in {ts[0]}/{ts[1]}, but an earlier line changed the time signature: at the start "
-                f"of this line it is {start_ts[0]}/{start_ts[1]}, so a bar lasts {n_len:g} quarter notes unless "
-                "another time-signature change is written in this image (see below)."
-            )
-        else:
-            info += (
-                f"Time signature at the start of the piece {ts[0]}/{ts[1]}: a bar lasts {bar_len:g} quarter notes "
-                "unless a time-signature change is written (see below)."
-            )
-        lines = [info]
-        if (meta.get("notes") or "").strip():
-            # 首页读谱头时记下的说明（记谱约定、标在别处的拍弦 / 切音等）：每一行单独识别，看不到别的行
-            lines.append(
-                "Notes about this score, written when its first page was read (they apply to every line, including "
-                f"marks that are only labelled once in the score): {meta['notes'].strip()}"
-            )
-        if bar_spans:
-            last = first_bar + len(bar_spans) - 1
-            spans = "; ".join(
-                f"bar {first_bar + i}: x={round(a * scale)}-{round(b * scale)}"
-                for i, (a, b) in enumerate(bar_spans)
-            )
-            lines.append(
-                f"This image is one line (system) of the score with {len(bar_spans)} bars, numbered {first_bar}-{last}. "
-                f"Horizontal extent of each bar in this image (pixels): {spans}. Return exactly these bars."
-            )
-            if labeled_strings:
-                lines.append(
-                    "The small red numbers 1-6 at the left edge of the tab staff were added by the app, not part of "
-                    "the score: they label the six tab lines (1 = top line, 6 = bottom line). Never transcribe them. "
-                    "For every fret number, follow its line to the left to the red label to decide its string, instead "
-                    "of counting lines by eye: a common mistake is putting a number one line too low (string 5 read "
-                    "as string 6), especially bass notes and open strings (0) on the lower lines."
-                )
-        else:
-            lines.append(
-                f"This image is a whole page. Transcribe every bar on it in reading order, numbering from {first_bar}. "
-                "If the page contains no guitar tablature, return an empty list."
-            )
-        if context:
-            lines.append(context)
-        lines.append(TRANSCRIBE_RULES)
-        if previous is not None:
-            lines.append(
-                "Your previous transcription of this image is below, but it has problems:\n- "
-                + "\n- ".join(problems or [])
-                + "\nRe-read the image carefully and return a corrected transcription of all the bars.\n"
-                + json.dumps(previous, ensure_ascii=False)
-            )
-        if hint:
-            lines.append(f"The user reviewed an earlier transcription and says (in Chinese): {hint}")
-        return self._call([block, {"type": "text", "text": "\n\n".join(lines)}], TRANSCRIBE_SCHEMA)
+        return self._call([block, {"type": "text", "text": text}], TRANSCRIBE_SCHEMA)
 
     def verify_bar(
         self,
@@ -624,28 +550,10 @@ class Claude(LLM):
         previous：上一小节的读法（只当上下文）；time_signature：这个小节的拍号（None = 全曲拍号）；
         hint：用户在小节卡片上写的“哪里不对”（空的时候提示词和以前一样）。
         返回 {diff, changed, events, uncertain}。"""
-        block, scale = _image_block(img, min_width=1600)
-        ts = time_signature or meta["time_signature"]
-        length = ts[0] * 4 / ts[1]
+        block, scale = _image_block(img, min_width=VERIFY_MIN_WIDTH)
         a, b = span
-        text = [
-            (
-                f"Score info: tuning (string 1 -> 6) {' '.join(meta['tuning'])}; capo {meta['capo']}. "
-                f"Time signature {ts[0]}/{ts[1]}: this bar lasts {length:g} quarter notes."
-            ),
-            VERIFY_TASK.format(a=round(a * scale), b=round(b * scale)),
-            TRANSCRIBE_RULES,
-            "Current transcription of this bar (events in time order):\n"
-            + json.dumps(verify_events(events), ensure_ascii=False),
-        ]
-        if previous is not None:
-            text.append(
-                "For context only, the previous bar was read as:\n"
-                + json.dumps(verify_events(previous), ensure_ascii=False)
-            )
-        if hint:
-            text.append(f"The user reviewed this bar and says (in Chinese): {hint}")
-        content = [block, {"type": "text", "text": "\n\n".join(text)}]
+        text = prompts.verify_text(meta, (a * scale, b * scale), events, previous, time_signature, hint)
+        content = [block, {"type": "text", "text": text}]
         try:
             # 精修用最高精细度：评测里最难的 25 个错小节改对 24 个、对的 208 个一个没改坏（high 只改对 16 个）
             return self._call(content, VERIFY_SCHEMA, effort=VERIFY_EFFORT, max_tokens=VERIFY_MAX_TOKENS)
@@ -656,18 +564,7 @@ class Claude(LLM):
 
     def explain_bars(self, meta: dict, bars: list[dict]) -> dict:
         """给已经有精确数据的小节（GTP / MusicXML 导入）写练习提示，只发文字。"""
-
-        lines = [bar_text(b) for b in bars]
-        text = (
-            f"Tuning (string 1 -> 6): {' '.join(meta['tuning'])}; capo {meta['capo']}; time signature "
-            f"{meta['time_signature'][0]}/{meta['time_signature'][1]}. Below is exact tablature data for some bars: "
-            + NOTATION_KEY
-            + ".\n"
-            + "\n".join(lines)
-            + "\n\nFor every bar, write a tip in Chinese: 1-4 sentences of practical guidance naming strings and frets "
-            "the way a teacher would (what to play together, what is fretted vs open, which technique and how to do it, "
-            "what is hard and how to practise it). Return one entry per bar with its number."
-        )
+        text = prompts.explain_text(meta, bars)
         return self._call([{"type": "text", "text": text}], EXPLAIN_SCHEMA, effort="medium", max_tokens=32000)
 
     def coach(
@@ -695,53 +592,13 @@ class Claude(LLM):
     ) -> Iterator[str | None]:
         """针对一个小节回答练习问题（指法、技巧、怎么练）：模型直接写文字，边生成边给出片段。
         None 表示前面给出的片段作废、从头再来（见 _stream_call），拼法见 join_text。"""
-        parts = [
-            f"A guitarist is practising {meta.get('title') or 'a piece'} (tuning string 1 -> 6: {' '.join(meta['tuning'])}, "
-            f"capo {meta['capo']}, time signature {meta['time_signature'][0]}/{meta['time_signature'][1]}) and asks about "
-            f"bar {bar['n']}. Tablature data, " + NOTATION_KEY + ":",
-            "This bar: " + bar_text(bar),
-            "Neighbouring bars for context:\n" + "\n".join(bar_text(b) for b in neighbours)
-            if neighbours
-            else "",
-            f"Practice tip already shown for this bar: {bar['tip']}" if bar.get("tip") else "",
-            f"Their practice log for this bar: {practice}" if practice else "",
-            (
-                "The image is this bar cut from the original score; the data above was transcribed from it and "
-                "may contain mistakes - if the image clearly disagrees, say so."
-                if image is not None
-                else ""
-            ),
-        ]
-        for h in history[-4:]:
-            parts.append(f"Earlier question: {h['q']}\nYour answer: {h['a']}")
-        parts.append(
-            f"Their question (in Chinese): {question}\n\nAnswer in Simplified Chinese like a patient guitar teacher: "
-            "concrete fingering (which left-hand finger on which string/fret, right-hand p i m a where useful), what "
-            "to listen for, and a short practice routine if it helps. Refer to notes as 'N 弦 M 品'. Be concise: "
-            "a few short paragraphs or a short list, no headings."
-        )
         content: list = []
         if image is not None:
-            content.append(_image_block(image, min_width=900)[0])
-        content.append({"type": "text", "text": "\n\n".join(p for p in parts if p)})
+            content.append(_image_block(image, min_width=COACH_MIN_WIDTH)[0])
+        text = prompts.coach_text(meta, bar, neighbours, question, history, practice, image is not None)
+        content.append({"type": "text", "text": text})
         return self._stream_call(content, effort="medium", max_tokens=8000)
 
     def practice_plan(self, meta: dict, bars: list[dict]) -> dict:
-        summary = [
-            {
-                "bar": b["n"],
-                "techniques": sorted({t for e in b["events"] for n in e["notes"] for t in n["tech"]}),
-                "tip": b["tip"],
-            }
-            for b in bars
-        ]
-        text = (
-            f"A guitarist is learning this piece: {meta.get('title') or '(untitled)'}, tuning "
-            f"{' '.join(meta['tuning'])}, capo {meta['capo']}. Per-bar notes from the transcription:\n"
-            + json.dumps(summary, ensure_ascii=False)
-            + "\n\nWrite a practice plan in Chinese. overview: 2-3 sentences on what makes this piece hard and how "
-            "to approach it. steps: 4-8 steps in the order to practise, each covering a range of bars written like "
-            '"6-11" (use the bar numbers above; the whole piece as the final step), with a short title and 1-3 '
-            "sentences of concrete advice (which technique to isolate, which bars resemble each other, tempo tips)."
-        )
+        text = prompts.plan_text(meta, bars)
         return self._call([{"type": "text", "text": text}], PLAN_SCHEMA, effort="medium", max_tokens=16000)

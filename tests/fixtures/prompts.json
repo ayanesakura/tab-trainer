@@ -1,4 +1,10 @@
 {
+ "right_half_context": {
+  "chord": "This image is the right half of a line. The chord still sounding at its left edge is Am (diagram frets for strings 1-6: [0, 1, 2, 2, 0, -1]): x marks before the first chord name in this image belong to it. Return only the bars listed above.",
+  "chord_without_diagram": "先说明 This image is the right half of a line. The chord still sounding at its left edge is Am: x marks before the first chord name in this image belong to it. Return only the bars listed above.",
+  "no_chord": "This image is the right half of a line; the left half was read separately. Return only the bars listed above."
+ },
+ "shape_consensus_context": "The chord diagrams below were read the same way in the other lines of this score; use them (and resolve the x marks with them): C = frets for strings 1-6 [0, 1, 0, 2, 3, -1]; G = frets for strings 1-6 [3, 0, 0, 0, 2, 3]",
  "ping": {
   "content": [
    "Reply with {\"title\": \"ok\", ...} filling other fields with empty values."

@@ -3,6 +3,8 @@ app/llm.py 的 Claude 客户端拼请求时用。改这里会改变发给模型�
 
 from __future__ import annotations
 
+import json
+
 from app import model
 from app.music import PROMPT_DIRECTIONS
 
@@ -167,6 +169,211 @@ Repeats and navigation (the app follows them during playback):
 "uncertain": in Chinese, only doubts that could make the player play something wrong - a note, string, fret, technique or rhythm in this bar that you could not read with confidence and that the user should check against the image (say which beat and what you chose). Leave it empty when the notes are clear, including when you only made a routine reading decision. Do not mention: ties, slurs or slaps that are clearly drawn and that you simply followed, parts of a chord diagram on strings that are not played in this bar, exactly where a chord name sits when the chord change is clear from the music, notes you played as written, a reading that follows standard notation conventions, or anything about the melody or lyrics lines."""
 
 
+PING = 'Reply with {"title": "ok", ...} filling other fields with empty values.'
+
+READ_META = (
+    "This is the first page of a guitar score. Read its header and return:\n"
+    "- title / artist / arranger (empty string if absent)\n"
+    "- tuning: 6 note names with octave, for string 1 (highest) to string 6 (lowest), e.g. "
+    '["E4","B3","G3","D3","A2","E2"]. Tuning text such as "DADGAD" or "Tuning=DAC#F#AD" lists strings '
+    "from 6 (lowest) to 1. If no tuning is written, assume standard tuning.\n"
+    "- capo: the capo fret, 0 if none.\n"
+    "- time_signature: [numerator, denominator] of the first bar, e.g. [4, 4].\n"
+    "- tempo: quarter-note BPM if written, else 0.\n"
+    "- notes: in Chinese, anything a player should know (e.g. tuning changes, the written capo looking "
+    "inconsistent with the standard-notation pitches), and the notation conventions this score uses that "
+    "matter for reading every line - for example x marks meaning chord tones of the diagrams above, a "
+    "pattern of x marks labelled once as a slap / percussive hit (拍弦, 打板, 切音) that later lines repeat "
+    "without the label, or what a special symbol means. Empty string if nothing."
+)
+
+LABELED_STRINGS = (
+    "The small red numbers 1-6 at the left edge of the tab staff were added by the app, not part of "
+    "the score: they label the six tab lines (1 = top line, 6 = bottom line). Never transcribe them. "
+    "For every fret number, follow its line to the left to the red label to decide its string, instead "
+    "of counting lines by eye: a common mistake is putting a number one line too low (string 5 read "
+    "as string 6), especially bass notes and open strings (0) on the lower lines."
+)
+
+
+def score_notes(meta: dict) -> str:
+    """首页读谱头时记下的说明（记谱约定、标在别处的拍弦 / 切音等）：每一行、每个小节都是单独发给模型的，
+    看不到别的行。没有说明时是空字符串。"""
+    notes = (meta.get("notes") or "").strip()
+    if not notes:
+        return ""
+    return (
+        "Notes about this score, written when its first page was read (they apply to every line, including "
+        f"marks that are only labelled once in the score): {notes}"
+    )
+
+
+def transcribe_text(
+    meta: dict,
+    first_bar: int,
+    bar_spans: list[tuple[int, int]] | None,
+    scale: float,
+    hint: str = "",
+    previous: dict | None = None,
+    problems: list[str] | None = None,
+    labeled_strings: bool = False,
+    start_ts: list[int] | None = None,
+    context: str = "",
+) -> str:
+    """识别一行（或整页）的文字部分。bar_spans 是原图上的小节区间，scale 是发出去的图相对原图的缩放。
+    其余参数见 llm.Claude.transcribe。"""
+    ts = meta["time_signature"]
+    bar_len = ts[0] * 4 / ts[1]
+    info = (
+        f"Score info: tuning (string 1 -> 6) {' '.join(meta['tuning'])}; capo {meta['capo']} "
+        f"(copy fret numbers as written). "
+    )
+    if start_ts and start_ts != ts:
+        n_len = start_ts[0] * 4 / start_ts[1]
+        info += (
+            f"The piece starts in {ts[0]}/{ts[1]}, but an earlier line changed the time signature: at the start "
+            f"of this line it is {start_ts[0]}/{start_ts[1]}, so a bar lasts {n_len:g} quarter notes unless "
+            "another time-signature change is written in this image (see below)."
+        )
+    else:
+        info += (
+            f"Time signature at the start of the piece {ts[0]}/{ts[1]}: a bar lasts {bar_len:g} quarter notes "
+            "unless a time-signature change is written (see below)."
+        )
+    lines = [info]
+    if notes := score_notes(meta):
+        lines.append(notes)
+    if bar_spans:
+        last = first_bar + len(bar_spans) - 1
+        spans = "; ".join(
+            f"bar {first_bar + i}: x={round(a * scale)}-{round(b * scale)}"
+            for i, (a, b) in enumerate(bar_spans)
+        )
+        lines.append(
+            f"This image is one line (system) of the score with {len(bar_spans)} bars, numbered {first_bar}-{last}. "
+            f"Horizontal extent of each bar in this image (pixels): {spans}. Return exactly these bars."
+        )
+        if labeled_strings:
+            lines.append(LABELED_STRINGS)
+    else:
+        lines.append(
+            f"This image is a whole page. Transcribe every bar on it in reading order, numbering from {first_bar}. "
+            "If the page contains no guitar tablature, return an empty list."
+        )
+    if context:
+        lines.append(context)
+    lines.append(TRANSCRIBE_RULES)
+    if previous is not None:
+        lines.append(
+            "Your previous transcription of this image is below, but it has problems:\n- "
+            + "\n- ".join(problems or [])
+            + "\nRe-read the image carefully and return a corrected transcription of all the bars.\n"
+            + json.dumps(previous, ensure_ascii=False)
+        )
+    if hint:
+        lines.append(f"The user reviewed an earlier transcription and says (in Chinese): {hint}")
+    return "\n\n".join(lines)
+
+
+def right_half_context(context: str, chord: str | None, frets: list[int] | None) -> str:
+    """一行切成两半识别时，右半的补充说明：左半结束时还在响的和弦（右半开头的 x 按它换算；frets 是左半读出的
+    它的和弦图），只返回列出的小节。context：整行本来就有的补充说明。"""
+    notes = [context] if context else []
+    if chord:
+        diagram = f" (diagram frets for strings 1-6: {frets})" if frets is not None else ""
+        notes.append(
+            f"This image is the right half of a line. The chord still sounding at its left edge is {chord}{diagram}: "
+            "x marks before the first chord name in this image belong to it. Return only the bars listed above."
+        )
+    else:
+        notes.append(
+            "This image is the right half of a line; the left half was read separately. "
+            "Return only the bars listed above."
+        )
+    return " ".join(notes)
+
+
+def shape_consensus_context(odd: dict[str, list[int]]) -> str:
+    """按全曲多数行的读法重读一行时的补充说明：这一行读得和多数不一样的和弦图（和弦名 → 1–6 弦品位）。"""
+    return (
+        "The chord diagrams below were read the same way in the other lines of this score; use them "
+        "(and resolve the x marks with them): "
+        + "; ".join(f"{k} = frets for strings 1-6 {v}" for k, v in odd.items())
+    )
+
+
+def explain_text(meta: dict, bars: list[dict]) -> str:
+    """给已有精确数据的小节写练习提示（只发文字）。"""
+    lines = [bar_text(b) for b in bars]
+    return (
+        f"Tuning (string 1 -> 6): {' '.join(meta['tuning'])}; capo {meta['capo']}; time signature "
+        f"{meta['time_signature'][0]}/{meta['time_signature'][1]}. Below is exact tablature data for some bars: "
+        + NOTATION_KEY
+        + ".\n"
+        + "\n".join(lines)
+        + "\n\nFor every bar, write a tip in Chinese: 1-4 sentences of practical guidance naming strings and frets "
+        "the way a teacher would (what to play together, what is fretted vs open, which technique and how to do it, "
+        "what is hard and how to practise it). Return one entry per bar with its number."
+    )
+
+
+def coach_text(
+    meta: dict,
+    bar: dict,
+    neighbours: list[dict],
+    question: str,
+    history: list[dict],
+    practice: str = "",
+    with_image: bool = False,
+) -> str:
+    """小节问答（纯文字回答）。with_image：同时发了这个小节的原谱裁图。"""
+    parts = [
+        f"A guitarist is practising {meta.get('title') or 'a piece'} (tuning string 1 -> 6: {' '.join(meta['tuning'])}, "
+        f"capo {meta['capo']}, time signature {meta['time_signature'][0]}/{meta['time_signature'][1]}) and asks about "
+        f"bar {bar['n']}. Tablature data, " + NOTATION_KEY + ":",
+        "This bar: " + bar_text(bar),
+        "Neighbouring bars for context:\n" + "\n".join(bar_text(b) for b in neighbours) if neighbours else "",
+        f"Practice tip already shown for this bar: {bar['tip']}" if bar.get("tip") else "",
+        f"Their practice log for this bar: {practice}" if practice else "",
+        (
+            "The image is this bar cut from the original score; the data above was transcribed from it and "
+            "may contain mistakes - if the image clearly disagrees, say so."
+            if with_image
+            else ""
+        ),
+    ]
+    for h in history[-4:]:
+        parts.append(f"Earlier question: {h['q']}\nYour answer: {h['a']}")
+    parts.append(
+        f"Their question (in Chinese): {question}\n\nAnswer in Simplified Chinese like a patient guitar teacher: "
+        "concrete fingering (which left-hand finger on which string/fret, right-hand p i m a where useful), what "
+        "to listen for, and a short practice routine if it helps. Refer to notes as 'N 弦 M 品'. Be concise: "
+        "a few short paragraphs or a short list, no headings."
+    )
+    return "\n\n".join(p for p in parts if p)
+
+
+def plan_text(meta: dict, bars: list[dict]) -> str:
+    """根据识别结果写分段练习建议。"""
+    summary = [
+        {
+            "bar": b["n"],
+            "techniques": sorted({t for e in b["events"] for n in e["notes"] for t in n["tech"]}),
+            "tip": b["tip"],
+        }
+        for b in bars
+    ]
+    return (
+        f"A guitarist is learning this piece: {meta.get('title') or '(untitled)'}, tuning "
+        f"{' '.join(meta['tuning'])}, capo {meta['capo']}. Per-bar notes from the transcription:\n"
+        + json.dumps(summary, ensure_ascii=False)
+        + "\n\nWrite a practice plan in Chinese. overview: 2-3 sentences on what makes this piece hard and how "
+        "to approach it. steps: 4-8 steps in the order to practise, each covering a range of bars written like "
+        '"6-11" (use the bar numbers above; the whole piece as the final step), with a short title and 1-3 '
+        "sentences of concrete advice (which technique to isolate, which bars resemble each other, tempo tips)."
+    )
+
+
 def _event_text(e: dict) -> str:
     head = (f"[{e['chord']}] " if e.get("chord") else "") + f"{e['dur']}拍 "
     if e.get("lyrics") and e["lyrics"][0]:
@@ -227,6 +434,38 @@ VERIFY_TASK = (
 )
 
 VERIFY_EVENT_KEYS = ("dur", "notes", "chord", "strum", "lyrics")
+
+
+def verify_text(
+    meta: dict,
+    span: tuple[float, float],
+    events: list[dict],
+    previous: list[dict] | None = None,
+    time_signature: list[int] | None = None,
+    hint: str = "",
+) -> str:
+    """精修一个小节的文字部分。span：小节在发出去的（已放大的）图里的左右边界；其余见 llm.Claude.verify_bar。"""
+    ts = time_signature or meta["time_signature"]
+    length = ts[0] * 4 / ts[1]
+    a, b = span
+    text = [
+        (
+            f"Score info: tuning (string 1 -> 6) {' '.join(meta['tuning'])}; capo {meta['capo']}. "
+            f"Time signature {ts[0]}/{ts[1]}: this bar lasts {length:g} quarter notes."
+        ),
+        VERIFY_TASK.format(a=round(a), b=round(b)),
+        TRANSCRIBE_RULES,
+        "Current transcription of this bar (events in time order):\n"
+        + json.dumps(verify_events(events), ensure_ascii=False),
+    ]
+    if previous is not None:
+        text.append(
+            "For context only, the previous bar was read as:\n"
+            + json.dumps(verify_events(previous), ensure_ascii=False)
+        )
+    if hint:
+        text.append(f"The user reviewed this bar and says (in Chinese): {hint}")
+    return "\n\n".join(text)
 
 
 def verify_events(events: list[dict]) -> list[dict]:
