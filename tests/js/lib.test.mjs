@@ -145,3 +145,24 @@ test('api：poll stop() 之后 now() 重新开始，页面从后台回来照样�
     assert.ok(n > before, '回到前台没有恢复轮询');
   } finally { p.stop(); }
 });
+
+test('doc-title：计时器的前缀和页面名分开设，曲子更新改页面名时不冲掉前缀', async () => {
+  const had = 'document' in globalThis, old = globalThis.document;
+  globalThis.document = { title: '吉他谱练习器' };
+  try {
+    const t = await import('../../app/static/js/lib/doc-title.js');
+    assert.equal(t.composeTitle('', '曲'), '曲');
+    assert.equal(t.composeTitle('0:05', '曲'), '0:05 · 曲');
+    t.setTitlePrefix('0:01'); // 还没设页面名：用原来的标题
+    assert.equal(document.title, '0:01 · 吉他谱练习器');
+    t.setTitleBase('晴天 · 吉他谱练习器'); // 轮询到新的曲子数据：只换页面名
+    assert.equal(document.title, '0:01 · 晴天 · 吉他谱练习器');
+    t.setTitlePrefix('0:02');
+    t.setTitleBase('晴天 · 吉他谱练习器');
+    assert.equal(document.title, '0:02 · 晴天 · 吉他谱练习器');
+    t.setTitlePrefix(''); // 停了计时
+    assert.equal(document.title, '晴天 · 吉他谱练习器');
+  } finally {
+    if (had) globalThis.document = old; else delete globalThis.document;
+  }
+});

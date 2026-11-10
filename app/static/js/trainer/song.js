@@ -13,6 +13,7 @@ import { alphaTab, setLoop, setTempo, setPlayerHooks, revealLoop, stop } from '.
 import { notice } from './notices.js';
 import { stored, remember } from './prefs.js';
 import { refineConfirm, NO_REFINE, refineScopeLabel } from '../lib/refine.js';
+import { setTitleBase } from '../lib/doc-title.js';
 
 
 // ---------------------------------------------------------------------
@@ -100,7 +101,7 @@ export async function refresh() {
 function renderHeader(s) {
   const m = s.meta || {}, v = get('view');
   const title = s.title || m.title || '未命名';
-  document.title = title + ' · 吉他谱练习器';
+  setTitleBase(title + ' · 吉他谱练习器'); // 计时器的前缀另外拼上（doc-title.js）
   // 太长会被截断：悬停看全名；来源（图片 / GP …）也只放在悬停提示里，顶栏不再单独占一个标签
   const src = SOURCES[s.source_type];
   $('songTitle').textContent = title; $('songTitle').title = src ? `${title}（来源：${src}）` : title;
