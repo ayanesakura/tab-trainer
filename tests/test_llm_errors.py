@@ -74,4 +74,4 @@ def test_connection_dropped_mid_stream_is_retried_and_explained(monkeypatch):
         == "和模型服务的连接中断了，请稍后重试（网络不稳定时可以检查网络或 Base URL）。"
     )
     for e in (_http.ReadError("x"), _http.ReadTimeout("x")):
-        assert llm._transient(e) and "连接中断" in llm.friendly(e)
+        assert llm._dropped_mid_stream(e) and "连接中断" in llm.friendly(e)

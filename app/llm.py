@@ -88,18 +88,17 @@ STREAM_RETRIES = 2
 STREAM_RETRY_WAIT = 3.0  # 秒，第 n 次重试前等 n 倍
 
 
-def _transient(e: Exception) -> bool:
-    """值得重试的临时错误：连接断开（包括回复传到一半断开——SDK 不包装，抛的是 httpx 的传输错误）、
-    流里的 api_error / overloaded_error、5xx 和 429。认证、权限、参数错误等重试也没用。"""
-    if isinstance(e, (anthropic.APIConnectionError, _http.TransportError)):
+def _dropped_mid_stream(e: Exception) -> bool:
+    """回复传到一半出的临时错误：连接断开、读超时（SDK 不包装，抛的是 httpx 的传输错误），或流里收到的
+    api_error / overloaded_error（状态码是 200）。只有这些由 _stream 再试：建立连接时的 429 / 5xx / 连不上
+    SDK 自己已经重试过（max_retries），再试一轮会让一次调用变成十几个请求。认证、权限、参数错误等重试也没用。"""
+    if isinstance(e, _http.TransportError):
         return True
-    if not isinstance(e, anthropic.APIStatusError):
+    if not isinstance(e, anthropic.APIStatusError) or e.status_code != 200:
         return False
-    if e.status_code in (429, 500, 502, 503, 504, 529):
-        return True
     body = e.body if isinstance(e.body, dict) else {}
     err = body.get("error") if isinstance(body.get("error"), dict) else body
-    return e.status_code == 200 and err.get("type") in ("api_error", "overloaded_error")
+    return err.get("type") in ("api_error", "overloaded_error")
 
 
 def answer_text(msg) -> str:
@@ -406,7 +405,7 @@ class Claude(LLM):
             try:
                 return (yield from self._text_once(kwargs, fallbacks))
             except (anthropic.APIStatusError, anthropic.APIConnectionError, _http.TransportError) as e:
-                if attempt == STREAM_RETRIES or not _transient(e):
+                if attempt == STREAM_RETRIES or not _dropped_mid_stream(e):
                     raise
                 log.warning(
                     "request_id=%s transient error mid-stream, retry %d: %s", request_id_of(e), attempt + 1, e
@@ -452,12 +451,13 @@ class Claude(LLM):
 
     def _stream(self, kwargs: dict, fallbacks: bool | None = None):
         """流式请求。SDK 自带的重试只管建立连接；回复传到一半出错（网关断线、服务过载，流里收到的 error 事件，
-        状态码是 200）不会重试，整行识别就失败了。这类临时错误这里再试两次。"""
+        状态码是 200）不会重试，整行识别就失败了。这类临时错误这里再试两次（建立连接时的错误 SDK 已经重试过，
+        不再重来，见 _dropped_mid_stream）。"""
         for attempt in range(STREAM_RETRIES + 1):
             try:
                 return self._stream_once(kwargs, fallbacks)
             except (anthropic.APIStatusError, anthropic.APIConnectionError, _http.TransportError) as e:
-                if attempt == STREAM_RETRIES or not _transient(e):
+                if attempt == STREAM_RETRIES or not _dropped_mid_stream(e):
                     raise
                 log.warning(
                     "request_id=%s transient error mid-stream, retry %d: %s", request_id_of(e), attempt + 1, e

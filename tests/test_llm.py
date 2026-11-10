@@ -132,7 +132,8 @@ def test_transient_mid_stream_errors_are_retried(monkeypatch):
         content=[SimpleNamespace(type="text", text='{"ok": 1}')],
     )
     lost = {"type": "error", "error": {"type": "api_error", "message": "connection lost mid-reply"}}
-    fails = [_status_error(200, lost), _status_error(529, {"error": {"type": "overloaded_error"}})]
+    busy = {"type": "error", "error": {"type": "overloaded_error", "message": "overloaded mid-reply"}}
+    fails = [_status_error(200, lost), _status_error(200, busy)]
 
     def stream_once(kwargs, fallbacks=None):
         if fails:
@@ -165,6 +166,35 @@ def test_transient_mid_stream_errors_are_retried(monkeypatch):
     with pytest.raises(anthropic.APIStatusError):
         c._call([], {})
     assert len(calls) == 1
+
+
+def test_errors_the_sdk_already_retried_are_not_retried_again(monkeypatch):
+    """建立连接时的 429 / 529 / 5xx、连不上：SDK 自己已经按 max_retries 重试过，这里不再整轮重来（否则一次调用
+    最多会发十几个请求）。只有回复传到一半断开才由 _stream 再试。"""
+    import anthropic
+    import httpx
+
+    from app import llm
+
+    monkeypatch.setattr(llm, "STREAM_RETRY_WAIT", 0)
+    c = Claude(LLMConfig(api_key="sk-test"))
+    req = httpx.Request("POST", "http://127.0.0.1:3425/v1/messages")
+    for err in (
+        _status_error(429, {"error": {"type": "rate_limit_error"}}),
+        _status_error(529, {"error": {"type": "overloaded_error"}}),
+        _status_error(503, {"error": {"type": "api_error"}}),
+        anthropic.APIConnectionError(request=req),
+    ):
+        calls = []
+
+        def once(kwargs, fallbacks=None, err=err, calls=calls):
+            calls.append(1)
+            raise err
+
+        monkeypatch.setattr(c, "_stream_once", once)
+        with pytest.raises(type(err)):
+            c._call([], {})
+        assert len(calls) == 1, err
 
 
 # ---------------------------------------------------------------------------
