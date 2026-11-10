@@ -367,3 +367,11 @@ def test_json_calls_count_usage_of_a_reply_broken_mid_stream(monkeypatch):
     with pytest.raises(_http.RemoteProtocolError):
         c._call([], {})
     assert c.usage["input_tokens"] == 5 * (llm.STREAM_RETRIES + 1) and c.usage["cost_usd"] > 0
+
+
+def test_json_calls_use_the_fallback_models_answer():
+    """服务端换兜底模型：回复里先是原模型写了一半的文字，再是 fallback 块和兜底模型的回答，只解析后者。"""
+    c = Claude(LLMConfig(api_key="sk-test"))
+    _mock_client(c, lambda req: _sse_response(_reply(['{"half": ', '{"ok": 2}'], fallback_at=1)))
+    assert c._call([], {}) == {"ok": 2}
+    assert c.usage["cost_usd"] == pytest.approx((5 * 2 + 7 * 10) / 1e6)  # 按兜底模型（Sonnet）的价格

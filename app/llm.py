@@ -102,6 +102,14 @@ def _transient(e: Exception) -> bool:
     return e.status_code == 200 and err.get("type") in ("api_error", "overloaded_error")
 
 
+def answer_text(msg) -> str:
+    """回复里的回答文字。服务端换了兜底模型时，内容依次是原模型写了一半被放弃的文字、一个 fallback 块、
+    兜底模型从头写的回答：只取最后一个 fallback 块之后的（和流式的 _text_once 遇到 fallback 从头再拼一样）。"""
+    blocks = list(msg.content)
+    last = max((i for i, b in enumerate(blocks) if b.type == "fallback"), default=-1)
+    return "".join(b.text for b in blocks[last + 1 :] if b.type == "text")
+
+
 def _image_block(img: Image.Image, min_width: int = 0) -> tuple[dict, float]:
     img = img.convert("RGB")
     w, h = img.size
@@ -348,7 +356,7 @@ class Claude(LLM):
             msg = self._stream(kwargs, fallbacks=False)
         self._record_usage(msg, kwargs["model"])
         rid = self._finish(msg)
-        text = next((b.text for b in msg.content if b.type == "text"), "")
+        text = answer_text(msg)
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
