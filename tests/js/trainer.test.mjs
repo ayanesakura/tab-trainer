@@ -258,3 +258,46 @@ test('精修这个小节 / 这一行：预估文字和进行中的范围', () =>
   assert.equal(refineScopeLabel({ scope: 'song', bars: ids }, ids), '整首');
   assert.equal(refineScopeLabel({ kind: 'refine' }, ids), '整首'); // 早先的任务没有范围
 });
+
+test('tempoAverage：一遍里换了速度，按时间加权平均（快结束才调快不会把整遍记成新速度）', async () => {
+  const { tempoSpan, tempoChange, tempoAverage } = await import('../../app/static/js/trainer/view.js');
+  const s = tempoSpan(0, 60);
+  assert.equal(tempoAverage(s, 10000), 60);
+  tempoChange(s, 9000, 120); // 9 秒 60、最后 1 秒 120
+  assert.equal(tempoAverage(s, 10000), 66);
+  const z = tempoSpan(5, 80);
+  assert.equal(tempoAverage(z, 5), 80); // 还没走时间：就是当前速度
+  tempoChange(z, 5, 100); // 一开始就换：完全按新的
+  assert.equal(tempoAverage(z, 15), 100);
+});
+
+test('hooks：只认登记过的名字，重复注册会警告，invoke 返回提供者的结果', async () => {
+  const { createHooks } = await import('../../app/static/js/trainer/hooks.js');
+  const warned = [];
+  const h = createHooks(['a', 'b'], m => warned.push(m));
+  assert.equal(h.has('a'), false);
+  assert.equal(h.invoke('a', 1), undefined); // 没人挂：什么都不做
+  const off = h.provide('a', x => x + 1);
+  assert.equal(h.invoke('a', 1), 2);
+  assert.deepEqual(warned, []);
+  h.provide('a', x => x * 10);
+  assert.equal(warned.length, 1);
+  assert.equal(h.invoke('a', 2), 20);
+  off(); // 已经被换掉的那个取消：不影响现在的
+  assert.equal(h.invoke('a', 3), 30);
+  assert.throws(() => h.provide('c', () => {}), /未知的钩子/);
+  assert.throws(() => h.invoke('typo'), /未知的钩子/);
+});
+
+test('click：播放和敲节奏共用的节拍器 / 预备拍音量换算', async () => {
+  const c = await import('../../app/static/js/trainer/click.js');
+  const p = { metro: true, metroVol: 70, countIn: true };
+  assert.equal(c.metronomeLevel(p), 0.7);
+  assert.equal(c.metronomeLevel({ ...p, metro: false }), 0);
+  assert.equal(c.countInLevel({ ...p, metroVol: 10 }), 0.5); // 预备拍不低于一半
+  assert.equal(c.countInLevel({ ...p, countIn: false }), 0);
+  assert.equal(c.metronomeGain(p), 0.7 * c.GAIN); // 设给 alphaTab 的
+  assert.equal(c.clickGain(0.7, true), 0.7 * c.GAIN); // 敲节奏的重拍和 alphaTab 一样响
+  assert.ok(c.clickGain(0.7, false) < c.clickGain(0.7, true));
+  assert.equal(c.audibleLevel({ metroVol: 0 }), 0.5);
+});

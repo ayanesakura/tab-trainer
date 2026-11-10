@@ -276,3 +276,119 @@ def test_count_in_before_every_section_loop(trainer):
     b.js("tt.set('play.countIn', false); true")
     assert b.js("tt.api.isLooping") is True
     assert not b.errors, b.errors
+
+
+def test_tempo_change_near_the_end_of_a_pass_is_time_weighted(trainer):
+    """一遍快弹完时才调快：这一遍记的是按时间加权的平均速度，不是新的速度（不然“最快 BPM”会虚高）。"""
+    b = trainer()
+    b.js("""(() => { window.__posts = []; const f = window.fetch;
+      window.fetch = (u, o) => { if (String(u).endsWith('/practice')) __posts.push(JSON.parse(o.body)); return f(u, o); };
+      return true; })()""")
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(120); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    time.sleep(1.5)  # 120 BPM 一小节 2 秒：快弹完了
+    b.js("tt.setTempo(240); true")
+    b.wait_for("__posts.some(p => p.loops === 1)", timeout=5)
+    p = b.js("__posts.find(p => p.loops === 1)")
+    b.js("tt.stop(); true")
+    assert 120 <= p["bpm"] < 200, p
+    assert not b.errors, b.errors
+
+
+def test_at_adapter_smoke(trainer):
+    """at-adapter.js 里每个碰 alphaTab 内部结构的函数，对着真实加载好的谱子都调一遍（升级 alphaTab 后先跑这个）。"""
+    b = trainer()
+    b.wait_for("!!(tt.api.tracks && tt.api.boundsLookup) && tt.view && tt.view.bars.length === 6")
+    b.wait_for("tt.at.playedBars(tt.api).length === 6")
+    r = b.js("""(() => { const at = tt.at, api = tt.api, root = document.getElementById('score');
+      const box = at.barBox(api, root, 1), row = at.scoreRow(api, root, 0);
+      const played = at.playedBars(api), sec = at.sectionTicks(api, 1, 2);
+      return {
+        box: !!box && box.w > 0 && box.h > 0, noBox: at.barBox(api, root, 99),
+        row: row && [row.i, row.a, row.b >= 0], noRow: at.scoreRow(api, root, 99),
+        rows: [at.rowOfBar(api, 0), at.rowOfBar(api, 5)], noRowOf: at.rowOfBar(api, -1),
+        lyrics: Array.isArray(at.lyricSpots(api, root)),
+        played: played.map(p => p.bar), last: at.lastPlayedBar(api),
+        sec: sec && [sec.start === played[1].start, sec.end === played[2].end],
+        barStart: at.barStartTick(api, 3, null) === played[3].start,
+        ctx: !!at.audioContext(api) && typeof at.audioContext(api).currentTime === 'number',
+        sfEvent: at.onSoundFontLoadFailed(api, () => {}),
+        chords: Array.isArray(at.scoreChords(api.score)),
+        beats: at.trackBeats(api.tracks[0]).length > 0,
+      }; })()""")
+    assert r["box"] and r["noBox"] is None
+    assert r["row"] == [0, 0, True] and r["noRow"] is None
+    assert r["rows"] == [0, 1] and r["noRowOf"] == -1
+    assert r["lyrics"] and r["chords"] and r["beats"] and r["sfEvent"] and r["ctx"]
+    assert r["played"] == [0, 1, 2, 3, 4, 5] and r["last"]["bar"] == 5
+    assert r["sec"] == [True, True] and r["barStart"]
+    # 播放范围：设一段、和现在一样就不再设、清回全曲；谱面高亮
+    r = b.js("""(() => { const at = tt.at, api = tt.api, p = at.playedBars(api);
+      const want = { start: p[1].start, end: p[2].end };
+      const first = at.setPlaybackRange(api, want), again = at.setPlaybackRange(api, want), got = at.playbackRange(api);
+      at.highlightBars(api, 1, 2); at.highlightBars(api, 0, 5, true);
+      const back = tt.setLoop(0, 5); return [first, again, got.start === want.start && got.end === want.end, at.playbackRange(api)]; })()""")
+    assert r == [True, False, True, None]
+    # 音色：换成尼龙弦再还原（导出 GP 用）
+    r = b.js("""(() => { const at = tt.at, s = tt.api.score;
+      at.applyTimbre(s, 24); const a = at.currentProgram(s);
+      at.applyTimbre(s, 24, true); const orig = at.currentProgram(s);
+      at.applyTimbre(s, 25); return [a, orig, at.currentProgram(s)]; })()""")
+    assert r[0] == 24 and r[2] == 25 and 24 <= r[1] <= 31
+    # 播放光标：开始播放以后有
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); tt.play(); true")
+    b.wait_for("tt.state.playing && !!tt.at.cursorBar(document.getElementById('score'))")
+    b.js("tt.stop(); true")
+    # 节拍器的声音：用 alphaTab 自己的合成器渲染（敲节奏的节拍器用它）
+    b.js(
+        "window.__click = null; tt.at.renderMetronomeClick(tt.api, 48000).then(x => { window.__click = x ? x.length : 0; }); true"
+    )
+    b.wait_for("window.__click !== null", timeout=10)
+    assert b.js("window.__click") > 1000
+    assert not b.errors, b.errors
+
+
+def test_switching_to_an_earlier_section_during_playback_with_count_in(trainer):
+    """开着预备拍、播放中换到前面的段：预备拍从新的段首数（以前记成了旧位置，预备拍一直“数不完”）；
+    预备拍里停下，位置在新的段首（以前放回旧位置、被夹到段尾），再播放照常数预备拍，不会马上“弹完一遍”。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', true); tt.setLoop(4, 5); tt.setTempo(240); tt.play(); true")
+    b.wait_for(
+        "tt.get('play.phase') === 'playing' && tt.api.tickPosition > tt.api.playbackRange.startTick + 480",
+        timeout=10,
+    )
+    b.js("tt.setTempo(60); tt.setLoop(0, 1); true")  # 60 BPM：预备拍 4 秒
+    start, end = b.js("[tt.api.playbackRange.startTick, tt.api.playbackRange.endTick]")
+    b.wait_for("tt.get('play.phase') === 'countIn'", timeout=3)
+    assert b.js("tt.machine.from") == start
+    assert b.js("tt.state.playing")
+    time.sleep(0.6)
+    assert b.js("tt.get('play.phase')") == "countIn" and b.js("tt.state.loops") == 0
+    b.js("tt.stop(); true")
+    b.wait_for("tt.get('play.phase') === 'idle'", timeout=5)
+    time.sleep(0.3)
+    assert start <= b.js("tt.api.tickPosition") < end
+    b.js("tt.play(); true")
+    time.sleep(0.8)
+    assert b.js("tt.get('play.phase')") == "countIn" and b.js("tt.state.loops") == 0
+    b.js("tt.stop(); true")
+    b.wait_for("tt.get('play.phase') === 'idle'", timeout=5)
+    assert not b.errors, b.errors
+
+
+def test_switching_timbre_while_playing_keeps_playing(trainer):
+    """播放中换钢弦 / 尼龙弦：重新生成 MIDI 以后接着放（以前停下就不再继续）。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 5); tt.setTempo(100); tt.play(); true")
+    b.wait_for("tt.get('play.phase') === 'playing'")
+    time.sleep(0.5)
+    b.js("""document.querySelector('#timbreSeg [data-v="nylon"]').click(); true""")
+    b.wait_for("tt.at.currentProgram(tt.api.score) === 24")
+    time.sleep(1.0)
+    assert b.js("tt.state.playing") and b.js("tt.get('play.phase')") == "playing"
+    t1 = b.js("tt.api.tickPosition")
+    time.sleep(0.5)
+    assert b.js("tt.api.tickPosition") > t1
+    b.js("""tt.stop(); document.querySelector('#timbreSeg [data-v="steel"]').click(); true""")
+    b.wait_for("!tt.state.playing")
+    assert not b.errors, b.errors

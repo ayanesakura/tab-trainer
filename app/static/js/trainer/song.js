@@ -9,9 +9,12 @@ import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.
 import { SOURCES } from '../vocab.js';
 import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
-import { alphaTab, setLoop, setTempo, setPlayerHooks, revealLoop, stop } from './player.js';
+import { alphaTab, setLoop, setTempo, revealLoop, stop } from './player.js';
+import { provide } from './hooks.js';
 import { notice } from './notices.js';
+import { stored, remember } from './prefs.js';
 import { refineConfirm, NO_REFINE, refineScopeLabel } from '../lib/refine.js';
+import { setTitleBase } from '../lib/doc-title.js';
 
 
 // ---------------------------------------------------------------------
@@ -99,7 +102,7 @@ export async function refresh() {
 function renderHeader(s) {
   const m = s.meta || {}, v = get('view');
   const title = s.title || m.title || '未命名';
-  document.title = title + ' · 吉他谱练习器';
+  setTitleBase(title + ' · 吉他谱练习器'); // 计时器的前缀另外拼上（doc-title.js）
   // 太长会被截断：悬停看全名；来源（图片 / GP …）也只放在悬停提示里，顶栏不再单独占一个标签
   const src = SOURCES[s.source_type];
   $('songTitle').textContent = title; $('songTitle').title = src ? `${title}（来源：${src}）` : title;
@@ -205,9 +208,9 @@ function renderNotices(s) {
 
   // AI 读谱头时写的备注：关掉后同一段备注不再显示（备注变了才重新出现）
   const m = s.meta || {}, noteKey = 'tt.noteHidden.' + SONG_ID;
-  notice('metaNote', m.notes && localStorage.getItem(noteKey) !== m.notes ? {
+  notice('metaNote', m.notes && stored(noteKey) !== m.notes ? {
     // 备注常常很长：默认只显示一行，点一下（或 Tab 到它按回车 / 空格）展开 / 收起（样式 .n-fold，事件在 initSong 里接）
-    kind: '', html: `<span class="n-fold" role="button" tabindex="0" aria-expanded="false" title="展开 / 收起"><b>备注</b>${esc(m.notes)}</span>`, onDismiss: () => localStorage.setItem(noteKey, m.notes),
+    kind: '', html: `<span class="n-fold" role="button" tabindex="0" aria-expanded="false" title="展开 / 收起"><b>备注</b>${esc(m.notes)}</span>`, onDismiss: () => remember(noteKey, m.notes),
   } : null);
 }
 
@@ -347,14 +350,16 @@ function onView(v) {
 }
 
 export function initSong() {
-  setPlayerHooks({
-    scoreLoaded: onScoreLoaded,
-    error: msg => { const s = get('song'); if (s && isScore(s) && !s.bars.length) reportImportError(msg); else UI.toast('谱面出错：' + msg, 'err', 6000); },
-  });
+  provide('score.loaded', onScoreLoaded);
+  provide('score.error', msg => { const s = get('song'); if (s && isScore(s) && !s.bars.length) reportImportError(msg); else UI.toast('谱面出错：' + msg, 'err', 6000); });
   on(['song.bars', 'song.meta', 'song.pages', 'song.source_type', 'song.track', 'song.id'], () => set('view', deriveView(get('song'))));
   on('view', onView);
-  on(['song', 'view'], () => renderHeader(get('song')));
-  on('song', s => { renderNotices(s); renderResume(s); renderRefineBtn(s); });
+  // 只订阅用到的那几项：练完一遍（song.practice）、问答（song.bars.k.qa 会动 song.bars）、打分（song.study）这些写入
+  // 不该让顶栏、通知、精修按钮跟着重画
+  on(['song.title', 'song.meta', 'song.source_type', 'view'], () => renderHeader(get('song')));
+  on(['song.activity', 'song.progress', 'song.notice', 'song.status', 'song.failed_rows', 'song.is_score', 'song.bars', 'song.plan', 'song.meta'], () => renderNotices(get('song')));
+  on(['song.bars', 'song.practice'], () => renderResume(get('song')));
+  on(['song.is_score', 'song.bars', 'song.busy', 'song.activity', 'song.refined'], () => renderRefineBtn(get('song')));
   $('refineBtn').onclick = e => startRefine(e.currentTarget);
   const fold = f => f.setAttribute('aria-expanded', String(f.getAttribute('aria-expanded') !== 'true'));
   $('notices').addEventListener('click', e => { const f = e.target.closest('.n-fold'); if (f) fold(f); });

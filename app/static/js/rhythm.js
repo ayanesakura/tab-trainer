@@ -53,11 +53,13 @@ export function windows(onsets, Q, spq, maxWin = MAX_WIN) {
   });
 }
 
-// 一下敲击对应哪个音：还没敲过、在判定窗口内、离得最近的那个。notes: [{ T, win, err, missed }]；找不到返回 -1
+// 一下敲击对应哪个音：还没敲过、在判定窗口内、离得最近的那个。notes: [{ T, win, err, missed }]；找不到返回 -1。
+// 已经判成“漏”的音（missed）照样能配上：判漏是定时器按当时的时钟做的，主线程卡了一下时，定时器可能先于按键事件运行，
+// 把一个其实按时敲到了的音先判成漏。敲击的时间戳落在窗口里就算敲到了（调用方把 missed 清掉）
 export function matchTap(notes, t) {
   let best = -1, bd = Infinity;
   notes.forEach((nt, i) => {
-    if (nt.err != null || nt.missed) return;
+    if (nt.err != null) return;
     const d = Math.abs(t - nt.T);
     if (d <= nt.win && d < bd) { bd = d; best = i; }
   });

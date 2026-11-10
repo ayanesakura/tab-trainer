@@ -4,7 +4,13 @@
 import { get, set, on, store } from './store.js';
 import { $, UI, SONG_ID } from './dom.js';
 import * as player from './player.js';
-import { initPlayer, play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, refreshScoreTheme, getApi } from './player.js';
+import { initPlayer, play, stop, setLoop, setTempo, stepSection, toLoopStart, applyAudio, onBeatClick, cursorOutOfView, refreshScoreTheme, getApi, machineState, revealLoop } from './player.js';
+import { addShortcuts, initKeys, route as keyRoute } from './keys.js';
+import { initControls } from './controls.js';
+import { initLyrics } from './lyrics.js';
+import { initReviewMarks } from './review-marks.js';
+import { exportGp } from './gp-export.js';
+import * as atAdapter from './at-adapter.js';
 import { initFretboard } from './fretboard.js';
 import { initBarCard } from './bar-card.js';
 import { initOrig } from './orig.js';
@@ -15,10 +21,11 @@ import { initSong, startLoading, refresh, songGone } from './song.js';
 import { initTuner } from './tuner.js';
 import { initFollow, followDelta, followDebug } from './follow.js';
 import { initGlossary } from './glossary.js';
-import { initRhythm, rhythmKey, rhythmDebug } from './rhythm-drill.js';
+import { initRhythm, rhythmDebug } from './rhythm-drill.js';
 import { initStudy } from './study.js';
 import { ac } from './audio.js';
 import { DERIVE_VERSION } from '../score.js';
+import { stored, remember } from './prefs.js';
 
 // ---------------------------------------------------------------------
 // 视图切换（顶栏：练习 / 调弦 / 练习建议 / 记号说明）
@@ -36,24 +43,24 @@ function showView(v) {
 }
 
 // ---------------------------------------------------------------------
-// 键盘：空格 播放 / 停止；← → 上一段 / 下一段；↑ ↓ 快 / 慢 4 BPM。
-// 在文字输入框里、有浮层（改音面板、原谱弹窗、“更多”）时不响应；滑块、按钮用过之后照样能用空格。
-// 敲节奏进行中：空格 / F / J 是敲击、Esc 停止（rhythmKey 先看，处理了就不再往下走）；没在敲时空格照常“开始”（play 交给敲节奏）。
+// 键盘（判断条件和唯一的监听在 keys.js）：空格 播放 / 停止；← → 上一段 / 下一段；↑ ↓ 快 / 慢 4 BPM；
+// Home 回到段首（播放中就从段首重新开始）；M 节拍器开 / 关。滑块、按钮用过之后照样能用空格（按完让它失焦）。
+// 敲节奏进行中的空格 / F / J / Esc、改音的 ⌘Z、原谱弹窗里的 ←→ 由各自的模块登记，排在这一组前面。
 // ---------------------------------------------------------------------
-const typing = el => el && el.closest && el.closest('textarea, select, [contenteditable], input:not([type=range]):not([type=checkbox])');
 function initShortcuts() {
-  document.addEventListener('keydown', e => {
-    if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey || UI.hasLayer() || get('ui.view') !== 'practice') return;
-    if (rhythmKey(e)) return;
-    const k = {
-      Space: () => (get('play.playing') ? stop() : play()), ArrowLeft: () => stepSection(-1), ArrowRight: () => stepSection(1),
-      ArrowUp: () => setTempo(get('play.bpm') + 4), ArrowDown: () => setTempo(get('play.bpm') - 4),
-    }[e.code];
-    if (!k) return;
-    e.preventDefault();
-    if (e.target.blur && e.target !== document.body) e.target.blur(); // 免得空格再“按”一次刚点过的按钮
-    k();
+  const blur = e => { if (e.target.blur && e.target !== document.body) e.target.blur(); }; // 免得空格再“按”一次刚点过的按钮
+  const act = fn => e => { blur(e); fn(); };
+  addShortcuts({
+    name: 'transport', order: 50,
+    keys: {
+      Space: act(() => (get('play.playing') ? stop() : play())),
+      ArrowLeft: act(() => stepSection(-1)), ArrowRight: act(() => stepSection(1)),
+      ArrowUp: act(() => setTempo(get('play.bpm') + 4)), ArrowDown: act(() => setTempo(get('play.bpm') - 4)),
+      Home: act(() => { toLoopStart(); revealLoop(); }),
+      KeyM: act(() => { const v = !get('play.metro'); set('play.metro', v); UI.toast(v ? '节拍器：开' : '节拍器：关', 'info', 1200); }),
+    },
   });
+  initKeys();
 }
 
 // ---------------------------------------------------------------------
@@ -80,7 +87,8 @@ function initMore() {
 function initDock() {
   let open = true;
   // 没设过的话：屏幕够高才默认展开（矮屏幕上先把地方留给谱面）
-  try { const v = localStorage.getItem('tt.fb'); open = v ? v === '1' : innerHeight >= 900; } catch { open = innerHeight >= 900; }
+  const v = stored('tt.fb');
+  open = v ? v === '1' : innerHeight >= 900;
   const paint = v => {
     $('fbBody').hidden = !v;
     $('fbToggle').setAttribute('aria-expanded', v);
@@ -92,7 +100,7 @@ function initDock() {
   paint(open);
   const toggle = () => {
     set('ui.fb', !get('ui.fb'));
-    try { localStorage.setItem('tt.fb', get('ui.fb') ? '1' : '0'); } catch { /* 只在这次打开时生效 */ }
+    remember('tt.fb', get('ui.fb') ? '1' : '0');
   };
   $('fbToggle').onclick = toggle;
   // 停靠条的高度给布局用（侧栏高度、页面底部留白、“回到播放位置”按钮的位置）
@@ -119,7 +127,10 @@ window.tt = {
   get ac() { return ac; },
   get editor() { return editorState; },
   DERIVE_VERSION,
-  play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, setEditMode, openNotePop, refresh, player,
+  get machine() { return machineState(); },
+  keyRoute, toLoopStart,
+  play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, setEditMode, openNotePop, refresh, player, exportGp,
+  at: atAdapter,
   rhythm: rhythmDebug,
   followDelta, follow: followDebug,
 };
@@ -129,6 +140,9 @@ window.tt = {
 // ---------------------------------------------------------------------
 initViews();
 initPlayer();
+initControls();
+initLyrics();
+initReviewMarks();
 initFollow();
 initFretboard();
 initBarCard();

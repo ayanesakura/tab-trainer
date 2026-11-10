@@ -54,8 +54,10 @@ test('matching picks the nearest unhit note inside its window', () => {
   assert.equal(matchTap(notes, 1.5), -1); // 离谁都远：多敲
   notes[0].err = 0.01;
   assert.equal(matchTap(notes, 1.02), -1); // 已经敲过的音不再配
+  // 主线程卡住时判漏的定时器可能先于按键事件运行：时间戳落在窗口里的敲击仍然配给这个音（tapAt 再把 missed 清掉）
   notes[2].missed = true;
-  assert.equal(matchTap(notes, 2), -1);
+  assert.equal(matchTap(notes, 2.15), 2);
+  assert.equal(matchTap(notes, 2.25), -1); // 窗口外：照样是漏 + 多敲
 });
 
 test('grading and summary', () => {

@@ -1047,3 +1047,156 @@ def test_choosing_a_section_scrolls_it_into_view(trainer):
       return s.top + r.y + r.h; })()""")
     assert bottom <= b.js("innerHeight")
     assert not b.errors, b.errors
+
+
+def test_rating_survives_later_song_updates(server, trainer):
+    """打了分以后曲子的其他部分变了（练完一遍写练习记录、问答、轮询）：打分按钮不变回“打分”。
+    以前 on('song') 每次都把（旧的）song.study 抄回打分状态，下一遍练完按钮就复原了。"""
+    sid = server["image"]
+    req = urllib.request.Request(
+        f"{server['base']}/api/songs/{sid}/study",
+        data=json.dumps({"in_plan": True}).encode(),
+        method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req)
+    try:
+        b = trainer()
+        b.wait_for("!document.getElementById('rateBtn').hidden")
+        b.js("document.getElementById('rateBtn').click(); true")
+        b.wait_for("!document.getElementById('ratePop').hidden")
+        b.js("document.querySelector('#rateBtns .r3').click(); true")
+        b.wait_for("document.getElementById('rateBtn').classList.contains('rated')")
+        # 练完一遍：practice-log 把新的练习记录写进 song.practice（别的 song.* 写入也一样）
+        b.js("tt.set('song.practice', { ...(tt.song.practice || {}), total_seconds: 12345 }); true")
+        b.js("tt.set('song.bars.0.qa', [{ q: '问', a: '答', at: '' }]); true")
+        assert b.js("document.getElementById('rateBtn').classList.contains('rated')")
+        assert b.js("tt.song.study.rated_today") == 3
+        b.js("tt.refresh(); true")  # 轮询到的也是打过分的状态
+        time.sleep(0.5)
+        assert b.js("document.getElementById('rateBtn').classList.contains('rated')")
+        assert not b.errors, b.errors
+    finally:
+        req = urllib.request.Request(
+            f"{server['base']}/api/songs/{sid}/study",
+            data=json.dumps({"in_plan": False}).encode(),
+            method="PUT",
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req)
+
+
+def test_original_image_popup_survives_the_song_getting_shorter(trainer):
+    """原谱弹窗开着时曲子变短（重新识别、删页）：看的小节没了就关掉弹窗，不报错。"""
+    b = trainer()
+    b.wait_for("!!(tt.api.tracks && tt.api.tracks[0].staves[0].bars.length === 6 && tt.api.boundsLookup)")
+    b.js("tt.onBeatClick(tt.api.tracks[0].staves[0].bars[5].voices[0].beats[0]); true")
+    b.wait_for("!document.getElementById('cropBox').hidden")
+    b.js("document.getElementById('cropBox').click(); true")
+    assert b.js("document.getElementById('origTitle').textContent") == "原谱 · 第 6 小节"
+    b.js("const s = tt.song; tt.set('song', { ...s, bars: s.bars.slice(0, 2) }); true")
+    b.wait_for("!document.getElementById('origModal').open", timeout=3)
+    assert b.js("tt.get('ui.orig')") == -1
+    b.js("window.dispatchEvent(new Event('resize')); document.dispatchEvent(new Event('tt-images')); true")
+    assert not b.errors, b.errors
+
+
+def test_arrow_keys_on_a_focused_control_belong_to_the_control(trainer):
+    """焦点在速度滑块上按 ←→：只改速度（滑块自己的），不换段；在顶栏标签页上按 →：切页面，回到练习页时也不换段。"""
+    b = trainer()
+    label = "['loopA', 'loopB'].map(id => document.getElementById(id).value).join('–')"
+    assert b.js(label) == "1–6"
+    bpm = b.js("tt.state.bpm")
+    b.js("document.getElementById('bpm').focus(); true")
+    b.key("ArrowRight", vk=39)
+    assert b.js(label) == "1–6"
+    assert b.js("tt.state.bpm") == bpm + 1  # 浏览器自带：滑块加一格
+    b.key("ArrowLeft", vk=37)
+    assert b.js(label) == "1–6" and b.js("tt.state.bpm") == bpm
+    # 顶栏标签页：从最后一页（记号说明）按 → 绕回练习页
+    b.js("location.hash = '#glossary'; true")
+    b.wait_for("tt.get('ui.view') === 'glossary'")
+    b.js("document.querySelector('#nav [data-v=\"glossary\"]').focus(); true")
+    b.key("ArrowRight", vk=39)
+    b.wait_for("tt.get('ui.view') === 'practice'")
+    assert b.js(label) == "1–6"
+    # 焦点离开控件以后：←→ 照常换段
+    b.js("document.activeElement.blur(); true")
+    b.key("ArrowRight", vk=39)
+    assert b.js(label) == "1–3"
+    assert not b.errors, b.errors
+
+
+def test_home_returns_to_the_range_start_and_m_toggles_the_metronome(trainer):
+    """Home：回到循环范围的开头（播放中就从段首重新开始）；M：节拍器开 / 关。两个都写在按钮的悬停提示里。"""
+    b = trainer()
+    b.js(
+        "document.activeElement.blur(); tt.set('play.countIn', false); tt.setLoop(3, 5); tt.setTempo(200); true"
+    )
+    start = b.js("tt.api.playbackRange.startTick")
+    b.js("tt.play(); true")
+    b.wait_for(f"tt.state.playing && tt.api.tickPosition > {start} + 1500", timeout=10)
+    b.key("Home", vk=36)
+    b.wait_for(f"tt.api.tickPosition < {start} + 1000", timeout=3)
+    assert b.js("tt.state.playing") and b.js("tt.state.loops") == 0
+    assert b.js("tt.get('ui.bar')") == 3
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
+    # 停着：光标放到段首
+    b.js(
+        "tt.onBeatClick(tt.api.tracks[0].staves[0].bars[5].voices[0].beats[0]); document.activeElement.blur(); true"
+    )
+    b.wait_for(f"tt.api.tickPosition > {start} + 1000")
+    b.key("Home", vk=36)
+    b.wait_for(f"Math.abs(tt.api.tickPosition - {start}) <= 2")
+    metro = b.js("tt.state.metro")
+    b.key("m", code="KeyM", vk=77, text="m")
+    assert b.js("tt.state.metro") is (not metro)
+    assert b.js("tt.api.metronomeVolume") == (0 if metro else b.js("tt.state.metroVol") / 100 * 1.2)
+    b.key("m", code="KeyM", vk=77, text="m")
+    assert b.js("tt.state.metro") is metro
+    assert "Home" in b.js("document.getElementById('playBtn').title")
+    assert "M" in b.js("document.getElementById('metro').closest('label').title")
+    assert not b.errors, b.errors
+
+
+def test_undo_and_edit_mode_only_on_the_practice_view(server, trainer, image_song_restore):
+    """⌘Z 只在练习页、没有浮层时撤销改音；离开练习页就退出改音模式。"""
+    b = trainer()
+    b.js("""(() => { tt.setEditMode(true);
+      const beat = tt.api.score.tracks[0].staves[0].bars[2].voices[0].beats.find(x => x.notes.length);
+      tt.openNotePop(beat, beat.notes[0]); document.getElementById('npFret').value = '7'; return true; })()""")
+    b.key("Enter", vk=13)
+    b.wait_for("!tt.editor.saving && tt.editor.undo === 1")
+    b.js("document.activeElement.blur(); true")
+    # 有浮层（“更多”弹层）开着：不撤销
+    b.js("document.getElementById('moreBtn').click(); true")
+    b.wait_for("!document.getElementById('morePop').hidden")
+    b.key("z", code="KeyZ", vk=90, modifiers=UNDO_MOD)
+    time.sleep(0.3)
+    assert b.js("tt.editor.undo") == 1
+    b.key("Escape", vk=27)
+    # 切到调弦页：退出改音模式，⌘Z 也不撤销
+    b.js("location.hash = '#tune'; true")
+    b.wait_for("tt.get('ui.view') === 'tune'")
+    assert b.js("tt.get('ui.editMode')") is False
+    b.key("z", code="KeyZ", vk=90, modifiers=UNDO_MOD)
+    time.sleep(0.3)
+    assert b.js("tt.editor.undo") == 1
+    # 回到练习页、重新打开改音：可以撤销
+    b.js("location.hash = '#practice'; true")
+    b.wait_for("tt.get('ui.view') === 'practice'")
+    b.js("tt.setEditMode(true); document.activeElement.blur(); true")
+    b.key("z", code="KeyZ", vk=90, modifiers=UNDO_MOD)
+    b.wait_for("!tt.editor.saving && tt.editor.undo === 0")
+    b.js("tt.setEditMode(false); true")
+    assert not b.errors, b.errors
+
+
+@pytest.fixture
+def image_song_restore(server):
+    """改了图片曲子的测试：结束后把小节恢复原样（其他测试也用这首）。"""
+    sid, store = server["image"], server["store"]
+    raw = store.load(sid)["bars"]
+    yield
+    store.update(sid, lambda s: s.update(bars=raw))

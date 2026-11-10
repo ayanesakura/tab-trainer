@@ -26,12 +26,13 @@
   - 可以循环任意小节，按原谱的每一行一键选段；
   - 自动跟随：播放时光标走到看不见的行，谱面自己滚过去（手动滚动后停几秒，不和你抢；可以在“更多”里关掉）；
   - 节拍器、预备拍、音量、自动跟随这些设置记在本机，所有曲子共用；
+  - 键盘：空格 播放 / 停止，← → 上一段 / 下一段，↑ ↓ 快 / 慢 4 BPM，Home 回到段首（播放中就从段首重新开始），M 开关节拍器；焦点在速度滑块、顶栏标签页这些控件上时方向键归控件；
   - 指板实时显示正在弹和下一个要弹的位置；
   - 显示当前小节的原谱截图，方便对照；
   - 调弦表（含参考音）和麦克风调音器，调弦、变调夹、拍号都跟着曲子走；
   - AI 根据全曲生成的分段练习建议；
   - **问 AI**：在小节详情里直接问这一小节的问题（“左手怎么安排指法”“这个泛音总弹不响怎么办”），AI 会结合这个小节的数据、前后小节、原谱截图和你的练习记录回答，问答会保存下来；
-  - **敲节奏**：控制条里点“敲节奏”，不拿琴、只练节奏：跟着示范（或只有节拍器）用空格 / F / J 键敲出循环段里每个音的时间。每个音按早晚上色（±40 ms 内算准），每遍打分，并指出问题：整体偏早还是偏晚、快慢稳不稳、哪个位置总是错。有三种练法：跟着示范、听一遍再敲、只有节拍器。音符下面标着口令（1 e & a、1 trip let）。节拍器和示范音由页面自己用 WebAudio 排程，敲击和声音用同一个音频时钟比较；用蓝牙耳机时可以先“校准”，补偿声音延迟。
+  - **敲节奏**：控制条里点“敲节奏”，不拿琴、只练节奏：跟着示范（或只有节拍器）用空格 / F / J 键敲出循环段里每个音的时间。每个音按早晚上色（±40 ms 内算准），每遍打分，并指出问题：整体偏早还是偏晚、快慢稳不稳、哪个位置总是错。有三种练法：跟着示范、听一遍再敲、只有节拍器。音符下面标着口令（1 e & a、1 trip let）。节拍器和示范音由页面自己用 WebAudio 排程，敲击和声音用同一个音频时钟比较（和 alphaTab 共用一个 AudioContext）；节拍器的声音是 alphaTab 合成器渲染出来的同一个咔哒，音量、预备拍规则和播放时一样（`click.js`）；用蓝牙耳机时可以先“校准”，补偿声音延迟。
   - **练习记录**：每循环完一遍自动记下速度和用时，小节详情里显示“循环几遍、最快多少 BPM、上次什么时候”；打开曲子时提示上次练到哪里，一键接着练。
 - **曲库**：
   - 按曲名、艺人、标签搜索，按标签筛选，按最近添加 / 最近练习 / 曲名排序；
@@ -267,13 +268,13 @@ uv run python -m app.evaluate eval-xxx --yes
   - `GET /api/study/calendar?days=371`（1–800）→ `{days: [{day, minutes, ratings（评了几首）}]（只有有动静的日子，早的在前）, goal, today}`；`GET /api/study/day/{day}` → `{day, minutes, sessions, songs: [{id, title, seconds, rating: {rating, issues, note, bpm} | null}], intervals: [[开始, 结束]]（合并、裁剪后的）}`，日期格式不对 400。
 - 问 AI：`POST /api/songs/{id}/bars/{bar_id}/ask/stream`（`{question}`）回答边生成边发，响应是 NDJSON（一行一个事件）：`{"type": "delta", "text"}` 是回答的一段，`{"type": "reset"}` 表示前面的作废、从头再来（模型服务重试或换了兜底模型），最后一行是 `{"type": "done", "answer", "qa"}`（已经存进这个小节，`qa` 是它最新的问答列表）或 `{"type": "error", "detail"}`。问题不合格、曲子 / 小节不存在、没配 key 在开始之前照常返回 400 / 404。回答在服务端的单独线程里生成，浏览器中途断开也会写完、存下、记上费用；只存完整的回答。`POST .../ask` 是等回答写完才返回 `{answer, qa}` 的旧接口。
 
-前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。曲库页是 `js/index.js`（事件和 DOM）+ `js/library-view.js`（纯函数：一行曲子的 HTML、状态 / 练习 / 花费说明、筛选排序，`tests/js/library.test.mjs` 直接测）。曲库页的“练琴”视图是 `js/study.js`（今日进度、今日清单、练琴日历和某一天的明细、计划排序 / 暂停 / 移出、补记、设置页的“练琴”三项）+ `js/study-view.js`（纯函数：时长 / 日期文案、清单和计划的一行、曲库行的计划徽章、进度环、日历网格，`tests/js/study.test.mjs` 直接测）；地址里没写视图时打开上次看的练琴或曲库（`localStorage` 的 `tt.home`）。计时器两页共用 `js/lib/study-timer.js`（计时在服务端，页面只显示；别的标签页改了用 `BroadcastChannel('tt-study')` 通知）。练习页的 `js/trainer/study.js` 管顶栏的计时器和“打分”弹层（只有在计划里的曲子才显示；打分状态在 store 的 `study`，不放在 `song` 下面，免得谱面重新派生），从今日清单进来（`?from=today`）时返回按钮回到练琴页。
+前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。曲库页是 `js/index.js`（事件和 DOM）+ `js/library-view.js`（纯函数：一行曲子的 HTML、状态 / 练习 / 花费说明、筛选排序，`tests/js/library.test.mjs` 直接测）。曲库页的“练琴”视图是 `js/study.js`（今日进度、今日清单、练琴日历和某一天的明细、计划排序 / 暂停 / 移出、补记、设置页的“练琴”三项）+ `js/study-view.js`（纯函数：时长 / 日期文案、清单和计划的一行、曲库行的计划徽章、进度环、日历网格，`tests/js/study.test.mjs` 直接测）；地址里没写视图时打开上次看的练琴或曲库（`localStorage` 的 `tt.home`）。计时器两页共用 `js/lib/study-timer.js`（计时在服务端，页面只显示；别的标签页改了用 `BroadcastChannel('tt-study')` 通知）。练习页的 `js/trainer/study.js` 管顶栏的计时器和“打分”弹层（只有在计划里的曲子才显示；打分状态就是 `song.study`，只订阅这一项，打完分用 `setLocal` 写回，谱面不会因此重新派生），从今日清单进来（`?from=today`）时返回按钮回到练琴页。
 
 练习页从 `js/trainer/main.js` 进入，按功能拆成模块。模块之间的规矩：**`song.js` 和 `player.js` 是可以直接调用的服务模块，其余模块之间只通过 store 通信**（订阅 `ui.bar`、`play.*` 等路径），不互相 import 对方的函数。具体：
-- `store.js`：一个小 store（`song` 后端数据、`view` 派生结构、`play` 播放状态和设置、`ui` 界面状态、`rhythm` 敲节奏），按路径 `set` / `get` / `on`，值没变不通知；`dom.js`：`$` / `UI` / `songUrl` / `setButton` / `svgEl` 这些 DOM 小工具；`page-images.js`：原谱页面图片的共用缓存（加载好发 `tt-images` 事件）。
-- 服务模块：`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `setTempo` / `setStatus` / `barBox`；`setPlayerHooks` 让曲子、改谱、敲节奏把各自的处理挂进来，`holdBarWhile` 让侧栏在编辑器开着或正在输入问题时不跟着播放切小节，播放模块不反过来依赖它们）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息；对外 `refresh` / `applySong` / `conflict`）。
+- `store.js`：一个小 store（`song` 后端数据、`view` 派生结构、`play` 播放状态和设置、`ui` 界面状态、`rhythm` 敲节奏），按路径 `set` / `get` / `on`，值没变不通知；订阅父路径（如 `on('song')`）时任何子路径变了都会收到，所以各模块只订阅真正用到的子路径（`song.bars`、`song.meta`、`song.study`……），也不把 `song` 里的东西抄一份到别处（抄的那份会过期）；`dom.js`：`$` / `UI` / `songUrl` / `setButton` / `svgEl` 这些 DOM 小工具；`keys.js`：唯一的键盘监听，各模块用 `addShortcuts` 登记自己的一组快捷键（播放、敲节奏、改音的 ⌘Z、原谱弹窗的 ←→），输入框、控件焦点、浮层、当前页面、`defaultPrevented` 这些判断统一在这里做；`page-images.js`：原谱页面图片的共用缓存（加载好发 `tt-images` 事件）。
+- 服务模块：`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `toLoopStart` / `setTempo` / `setStatus` / `barBox`；播放状态全在 `play-machine.js` 的状态机里——停着 / 预备拍 / 在放 / 两遍之间重新开始 / 全曲弹完 / 重新生成 MIDI / 谱子重新加载，一个纯函数 `step(状态, 事件) → {新状态, 要做的事}`，`tests/js/play-machine.test.mjs` 直接测，store 的 `play.phase` 是现在的阶段；曲子、改谱、敲节奏通过 `hooks.js` 的钩子（`provide` / `invoke`，重复注册会警告）把各自的处理挂进来，`holdBarWhile` 让侧栏在编辑器开着或正在输入问题时不跟着播放切小节，播放模块不反过来依赖它们；alphaTab 的内部结构只在 `at-adapter.js` 里碰，`test_player.py` 的 `test_at_adapter_smoke` 对着真实谱子逐个调一遍；控制条在 `controls.js`，歌词、待核对框、导出 GP 分别在 `lyrics.js` / `review-marks.js` / `gp-export.js`）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息；对外 `refresh` / `applySong` / `conflict`）。
 - 纯函数（Node 测试直接用）：`view.js`（`deriveView(song)`、段落、换段、练习记录文案等）、`prefs.js`（本机记住的播放设置：读的时候逐项检查，坏值用默认值）。
-- 功能模块：`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅状态）、`follow.js`（自动跟随：光标所在行看不见时自己滚过去，用户手动滚动后停几秒）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）、`rhythm-drill.js`（敲节奏：节奏条、WebAudio 排程的节拍器和示范音、敲击打分；状态在 store 的 `rhythm` 切片，播放键 / 空格 / 换段通过 `player.js` 的钩子交给它）。
+- 功能模块：`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅状态）、`follow.js`（自动跟随：光标所在行看不见时自己滚过去，用户手动滚动后停几秒）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）、`rhythm-drill.js`（敲节奏：节奏条、WebAudio 排程的节拍器和示范音、敲击打分；状态在 store 的 `rhythm` 切片，播放键 / 空格 / 换段通过 `hooks.js` 的钩子交给它）。
 
 页面上 `window.tt` 是给端到端测试和调试用的句柄。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`），也负责认出中文 GP3–5 文件的 GBK 乱码（练习页和 `scripts/make_eval_song.py` 遇到时按 GBK 重新读）。`js/rhythm.js` 是敲节奏的打分逻辑（要敲的点和口令、配对、打分、诊断；不碰 DOM 和音频，`tests/js/rhythm.test.mjs` 直接测）。
 

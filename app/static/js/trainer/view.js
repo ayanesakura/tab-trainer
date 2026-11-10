@@ -128,6 +128,22 @@ export function parseBarInput(text, n) {
 }
 export const loopLabel = (a, b, n) => (!n ? '—' : a === b ? `第 ${a + 1} 小节` : `第 ${a + 1}–${b + 1} 小节`);
 
+/**
+ * 一段练习（一遍、或停下 / 换段前的零头）里的速度：按时间加权的平均值（取整）。
+ * 中途换了速度时，每个速度按它用了多久算权重——快结束时才调快，不会把整遍都记成新的速度（最快 BPM 也就不会虚高）。
+ * tempoSpan(t, bpm) 开始；tempoChange(span, t, bpm) 换速度；tempoAverage(span, t) 到 t 为止的平均速度。t 的单位随意（毫秒 / 秒）
+ */
+export const tempoSpan = (t, bpm) => ({ t0: t, t, bpm, acc: 0 });
+export function tempoChange(span, t, bpm) {
+  span.acc += span.bpm * Math.max(0, t - span.t);
+  span.t = Math.max(span.t, t);
+  span.bpm = bpm;
+}
+export function tempoAverage(span, t) {
+  const total = t - span.t0, acc = span.acc + span.bpm * Math.max(0, t - span.t);
+  return Math.round(total > 0 ? acc / total : span.bpm);
+}
+
 const mins = s => (s < 60 ? '不到 1 分钟' : `${Math.round(s / 60)} 分钟`);
 /** 小节详情里的练习记录一行 */
 export function practiceText(p) {

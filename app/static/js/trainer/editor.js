@@ -5,7 +5,9 @@ import { $, UI, setButton, songUrl } from './dom.js';
 import { put, post, withBusy } from '../lib/api.js';
 import { DUR_CHOICES, durToTicks, eventIndexAt, retimeEvent } from '../score.js';
 import { TECH_NAME, STRINGS, INSTRUMENT } from '../vocab.js';
-import { stop, setPlayerHooks, holdBarWhile } from './player.js';
+import { stop, holdBarWhile } from './player.js';
+import { provide } from './hooks.js';
+import { addShortcuts } from './keys.js';
 import { refresh, applySong, conflict, isLocked, lockedToast } from './song.js';
 
 // ---------------------------------------------------------------------
@@ -237,7 +239,7 @@ async function deleteNotePop() {
 export const editorState = { get saving() { return saving; }, get undo() { return undoStack.length; }, get undoBars() { return undoStack.map(u => u.barId); }, get undoRevs() { return undoStack.map(u => u.rev); }, get np() { return np; } };
 
 export function initEditor() {
-  setPlayerHooks({ editClick: queueEditClick });
+  provide('score.editClick', queueEditClick);
   holdBarWhile(() => editorBarId !== null); // 编辑器开着时侧栏一切小节，编辑器就关了，没保存的内容会丢
   $('editBtn').onclick = () => {
     const bar = curBar();
@@ -313,22 +315,23 @@ export function initEditor() {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); saveNotePop(); }
   });
   $('score').addEventListener('mousedown', e => { pointer.x = e.clientX; pointer.y = e.clientY; }, true);
-  document.addEventListener('keydown', e => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey && get('ui.editMode') && !np && !(e.target.closest && e.target.closest('input, textarea'))) { e.preventDefault(); undoEdit(); }
-  });
+  // ⌘Z / Ctrl+Z 撤销：只在练习页、改音模式里、没有浮层（改音面板也是浮层）、不在输入框里（这些判断在 keys.js）
+  addShortcuts({ name: 'undo', order: 10, mod: true, when: () => !!get('ui.editMode') && !np, keys: { z: e => (e.shiftKey ? false : (undoEdit(), true)) } });
+  // 离开练习页（调弦、练习建议…）就退出改音模式：回来时谱面上点一下是播放，不会意外改音
+  on('ui.view', v => { if (v !== 'practice' && get('ui.editMode')) setEditMode(false); });
 
   $('scoreHelp').innerHTML = LEGEND_PLAY;
   on('ui.editMode', paintEditMode);
   paintEditMode(false);
-  on(['ui.bar', 'song'], updateBarTools);
+  on(['ui.bar', 'song.bars', 'song.systems', 'song.busy'], updateBarTools);
   // 正在改的小节被删掉或内容变了才关面板；别的刷新（比如后台轮询）不打断
   on('song.bars', bars => {
     if (!np) return;
     const k = bars.findIndex(b => b.id === np.barId);
     if (k < 0 || JSON.stringify(bars[k].events) !== JSON.stringify(np.snap)) closeNotePop(); else np.bi = k;
   });
-  on('song', s => {
-    const can = !!(s && s.can_edit_bars);
+  on('song.can_edit_bars', v => {
+    const can = !!v;
     $('fixBox').hidden = !can;
     $('editModeBtn').hidden = !can;
     if (!can && get('ui.editMode')) setEditMode(false);

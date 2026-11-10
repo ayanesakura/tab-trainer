@@ -9,8 +9,8 @@ import { esc, icon } from './html.js';
 import * as api from './api.js';
 import { toast, prompt } from '/static/ui.js';
 import { fmtClock, fmtMin } from '../study-view.js';
+import { setTitlePrefix } from './doc-title.js';
 
-const TITLE_PREFIX = /^\d+:\d{2}(:\d{2})? · /;
 const LONG = 3 * 3600; // 超过 3 小时才结束：多半是忘了停，问一下记多少分钟
 let channel = null;
 try { channel = new BroadcastChannel('tt-study'); } catch { /* 不支持就只在页面重新可见时同步 */ }
@@ -37,9 +37,8 @@ export function mountTimer(el, { onChange } = {}) {
     const t = el.querySelector('.timer-pill .t');
     if (el._shape === shapeOf() && t) t.textContent = fmtClock(seconds());
     else { el.innerHTML = html; el._shape = shapeOf(); }
-    // 浏览器标签上也显示正在计时的时间（练习页的标题是曲名，只加 / 去掉前缀）
-    const plain = document.title.replace(TITLE_PREFIX, '');
-    document.title = timer && timer.running ? `${fmtClock(seconds())} · ${plain}` : plain;
+    // 浏览器标签上也显示正在计时的时间（只管前缀，页面名由页面自己设，见 doc-title.js）
+    setTitlePrefix(timer && timer.running ? fmtClock(seconds()) : '');
   }
   const shapeOf = () => (timer ? (timer.running ? 'run' : 'pause') : 'idle');
   function set(t) {

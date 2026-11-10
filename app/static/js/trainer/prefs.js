@@ -3,6 +3,11 @@
 // 读的时候逐项检查：旧版本、手改坏的值不会把页面弄坏，不对的那一项用默认值。纯函数，不碰 DOM（有 node 测试）。
 
 export const PREFS_KEY = 'tt.playPrefs';
+
+// 本机存取（localStorage）：隐私模式、存满了、Node 测试里没有 localStorage 时都不报错——读不到是 null，写不进就只在这次打开时生效。
+// 练习页记在本机的东西（播放设置、音色、敲节奏的练法和延迟补偿、指板折叠、谱面样式……）都走这两个函数
+export const stored = k => { try { return localStorage.getItem(k); } catch { return null; } };
+export const remember = (k, v) => { try { localStorage.setItem(k, v); } catch { /* 只在这次打开时生效 */ } };
 export const PREF_DEFAULTS = { metro: true, metroVol: 70, countIn: true, demo: true, gtVol: 80, follow: true };
 const RANGES = { metroVol: [0, 100], gtVol: [0, 100] };
 
