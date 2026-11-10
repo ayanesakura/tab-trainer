@@ -86,7 +86,7 @@ export function initFollow() {
   const pause = () => { if (get('play.playing')) pausedUntil = Date.now() + PAUSE_MS; };
   addEventListener('wheel', pause, { passive: true });
   addEventListener('touchmove', pause, { passive: true });
-  addEventListener('keydown', e => { if (['PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) pause(); });
+  addEventListener('keydown', e => { if (!e.defaultPrevented && ['PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) pause(); }); // Home 被快捷键用了（回到段首）就不是滚动
   addEventListener('mousedown', e => { if (e.clientX >= document.documentElement.clientWidth) pause(); }); // 拖滚动条
   $('followBtn').addEventListener('click', () => { pausedUntil = 0; }); // 点了“回到播放位置”：恢复跟随
 }

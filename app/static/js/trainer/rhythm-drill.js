@@ -11,13 +11,14 @@
 //     成绩、练法、延迟补偿是这个模块自己的状态。
 //   - player.js 不导入这里：initRhythm 在 hooks.js 上挂 drill.start / stop / loopChanged，
 //     player 的 play / stop / setLoop 在 rhythm.on / rhythm.running 时交给它。
-//   - 键盘：main.js 的快捷键先问 rhythmKey(e)（同一个监听、同样的 UI.hasLayer / 输入框判断），处理了就不再往下走。
+//   - 键盘：在 keys.js 登记一组（敲着的时候才管），排在播放快捷键前面。
 
 import * as core from '../rhythm.js';
 import { get, set, on } from './store.js';
 import { $, UI, esc, setButton, svgEl } from './dom.js';
 import { stop as stopPlayback, setLoop, setStatus, IDLE_HINT } from './player.js';
 import { provide } from './hooks.js';
+import { addShortcuts } from './keys.js';
 import { ac, initAudio, playEvent, stopAllVoices, setGuitarVolume } from './audio.js';
 import { loopLabel } from './view.js';
 import { stored, remember } from './prefs.js';
@@ -411,17 +412,12 @@ function renderResult() {
 }
 
 // ---------------------------------------------------------------------
-// 键盘（main.js 的快捷键先调这里）：敲节奏进行中，空格 / F / J 是敲击、Esc 停止。处理了返回 true。
-// 调用前 main.js 已经排除了输入框、修饰键、浮层和别的视图。
+// 键盘（keys.js 的一组，排在播放快捷键前面）：敲节奏进行中，空格 / F / J 是敲击、Esc 停止。
+// 输入框、修饰键、浮层、别的视图这些判断 keys.js 统一做。
 // ---------------------------------------------------------------------
-export function rhythmKey(e) {
-  if (!isOn() || !RH.run) return false;
-  if (e.code === 'Escape') { e.preventDefault(); stopRun(); return true; }
-  if (!TAP_KEYS.has(e.code)) return false;
-  e.preventDefault();
+function tapKey(e) {
   if (e.target.blur && e.target !== document.body) e.target.blur(); // 免得空格再“按”一次刚点过的按钮
   if (!e.repeat) tap(e.timeStamp); // 按下的那一刻就算（不等抬起）
-  return true;
 }
 
 /** 给 e2e 测试和调试用（window.tt.rhythm） */
@@ -438,6 +434,7 @@ export function initRhythm() {
   provide('drill.start', () => start());
   provide('drill.stop', stopRun);
   provide('drill.loopChanged', loopChanged);
+  addShortcuts({ name: 'rhythm', order: 20, when: () => isOn() && !!RH.run, keys: { Escape: () => stopRun(), Space: tapKey, KeyF: tapKey, KeyJ: tapKey } });
   $('rhythmBtn').onclick = () => toggle(!isOn());
   $('rhClose').onclick = () => toggle(false);
   $('rhCalib').onclick = () => { if (RH.run && RH.run.calib) stopRun(); else start(true); paintCalib(); };

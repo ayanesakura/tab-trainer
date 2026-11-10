@@ -4,6 +4,7 @@ import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
 import { images } from './page-images.js';
 import { needsReview, isScore } from './view.js';
+import { addShortcuts } from './keys.js';
 
 let origLayer = null;
 const hasOrig = bi => { const s = get('song'), v = get('view'); return !!(s && v && !isScore(s) && v.regions[bi]); };
@@ -60,11 +61,8 @@ export function initOrig() {
   $('origPrev').onclick = () => step(-1);
   $('origNext').onclick = () => step(1);
   const modal = $('origModal');
-  document.addEventListener('keydown', e => {
-    if (get('ui.orig') < 0) return;
-    const k = { ArrowLeft: () => step(-1), ArrowRight: () => step(1) }[e.key];
-    if (k) { e.preventDefault(); e.stopPropagation(); k(); }
-  });
+  // ←→ 换小节：弹窗是浮层，只有它在最上面时才归它（keys.js；浮层开着时播放的 ←→ 换段不会响应）
+  addShortcuts({ name: 'orig', order: 0, layer: true, when: () => get('ui.orig') >= 0 && !!origLayer && UI.topLayer() && UI.topLayer().el === modal, keys: { ArrowLeft: () => step(-1), ArrowRight: () => step(1) } });
   on('ui.orig', (bi, old) => {
     if (bi >= 0 && old < 0) origLayer = UI.layer(modal, { modal: true, focus: $('origClose'), onClose: () => { origLayer = null; set('ui.orig', -1); } });
     if (bi < 0 && origLayer) origLayer.close();
