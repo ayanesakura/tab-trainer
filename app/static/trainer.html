@@ -71,7 +71,10 @@
               <button class="icon-btn sm" id="moreBtn" data-ic="settings" title="节拍器、预备拍、示范音、音色、谱面跟随" aria-label="播放设置" aria-haspopup="true" aria-expanded="false" aria-controls="morePop"></button>
             </div>
           </div>
-          <div class="chips sections" id="secBtns" role="group" aria-label="按原谱的行选段"></div>
+          <div class="sec-row">
+            <div class="seg sm sec-mode" id="secMode" aria-label="选段方式" hidden><button data-v="rows" title="按原谱的行选段">行</button><button data-v="plan" title="按 AI 分的段落选段（分段页的练习建议）">段落</button></div>
+            <div class="chips sections" id="secBtns" role="group" aria-label="选段"></div>
+          </div>
 
           <div class="more-pop" id="morePop" role="dialog" aria-label="播放设置" hidden>
             <div class="mp-row">

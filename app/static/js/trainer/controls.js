@@ -126,6 +126,7 @@ export function initControls() {
     $('playBtn').innerHTML = UI.icon(now ? 'stop' : 'play');
     $('playBtn').setAttribute('aria-label', now ? '停止（空格）' : '播放（空格）');
     $('playBtn').title = now ? STOP_TIP : PLAY_TIP;
+    $('transport').classList.toggle('playing', now);
   };
   on(['play.playing', 'rhythm.running'], paintPlay);
   paintPlay();
@@ -135,6 +136,13 @@ export function initControls() {
   $('followBtn').onclick = scrollToCursor;
   on(['play.a', 'play.b', 'ui.loopPreview'], () => paintLoop());
   on('view', renderSections);
+  // 选段只有一行、横着滚：竖着的滚轮也拿来横滚（触控板本来就能横滑）
+  $('secBtns').addEventListener('wheel', e => {
+    const el = e.currentTarget;
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || el.scrollWidth <= el.clientWidth) return;
+    e.preventDefault();
+    el.scrollLeft += e.deltaY;
+  }, { passive: false });
 
   $('playBtn').onclick = () => (busy() ? stop() : play());
   $('demoBarBtn').onclick = () => { const bi = get('ui.bar') >= 0 ? get('ui.bar') : get('play.a'); setLoop(bi, bi, !get('play.playing')); if (!get('play.playing')) play(); };

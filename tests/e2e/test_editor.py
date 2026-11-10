@@ -20,11 +20,22 @@ def test_notices_keep_order_regardless_of_arrival(trainer):
       const ids = ['progress', 'offline', 'error', 'resume', 'explain', 'metaNote'];
       ids.forEach(id => notice(id, null));
       for (const id of ['metaNote', 'resume', 'offline', 'explain', 'progress']) notice(id, { kind: 'info', html: id });
-      const got = [...document.getElementById('notices').children].map(x => x.dataset.id);
+      const host = document.getElementById('notices'), more = host.querySelector('.n-more');
+      const got = [...host.querySelectorAll('[data-id]')].map(x => x.dataset.id);
+      // 几条通知只显示第一条，“+N”展开
+      const shown = () => [...host.querySelectorAll('[data-id]')].filter(x => x.offsetParent).map(x => x.dataset.id);
+      const folded = [shown(), more.textContent, host.lastElementChild === more];
+      more.click();
+      const open = [shown().length, more.textContent];
+      ['offline', 'explain', 'progress', 'metaNote'].forEach(id => notice(id, null));
+      const one = [more.hidden, shown()];
       ids.forEach(id => notice(id, null));
-      return got;
+      return { got, folded, open, one };
     })""")
-    assert order == ["progress", "offline", "resume", "explain", "metaNote"]
+    assert order["got"] == ["progress", "offline", "resume", "explain", "metaNote"]
+    assert order["folded"] == [["progress"], "+4", True]
+    assert order["open"] == [5, "收起"]
+    assert order["one"] == [True, ["resume"]]
     assert not b.errors, b.errors
 
 

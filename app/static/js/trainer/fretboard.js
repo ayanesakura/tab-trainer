@@ -1,19 +1,31 @@
 // 指板（SVG）：标出正在弹的音（play.note）和下一个音（play.next），品格数字从变调夹算起。
 // 颜色全在 trainer.css 里（.fb-* 类，跟主题走）。停着的时候显示正在看的小节的第一个音。
+// 大小：高度由 CSS 按屏幕高度定（字号跟着高度走），宽度铺满停靠条——viewBox 的宽按停靠条的宽高比算，
+// 宽屏上品格拉开、不在两边留大块空白（太宽时封顶，指板居中）。
 
 import { get, set, on } from './store.js';
 import { svgEl as el } from './dom.js';
 
-const FB = { W: 960, L: 74, R: 14, T: 16, G: 20, MAXF: 17 };
+const FB = { W: 960, H: 146, L: 74, R: 14, T: 16, G: 20, MAXF: 17 };
+const W_MIN = 760, W_MAX = 1500;
 let capo = 0, dyn = null;
 const pfr = r => 1 - Math.pow(2, -r / 12);
 const fx = n => FB.L + (pfr(n + capo) - pfr(capo)) / (pfr(FB.MAXF + capo) - pfr(capo)) * (FB.W - FB.L - FB.R);
 const nx = n => (n === 0 ? FB.L - 16 : (fx(n - 1) + fx(n)) / 2);
 const sy = s => FB.T + (s - 1) * FB.G;
 
+/** 停靠条现在的宽高比 → viewBox 的宽（量不出来时不变） */
+function fitWidth() {
+  const svg = document.getElementById('fb'), w = svg.clientWidth, h = svg.clientHeight;
+  if (!w || !h) return FB.W;
+  return Math.round(Math.max(W_MIN, Math.min(W_MAX, w / h * FB.H)));
+}
+
 function renderBoard(v) {
   const svg = document.getElementById('fb');
   svg.replaceChildren();
+  FB.W = fitWidth();
+  svg.setAttribute('viewBox', `0 0 ${FB.W} ${FB.H}`);
   capo = v.capo;
   el('rect', { x: FB.L, y: FB.T - 8, width: FB.W - FB.L - FB.R, height: 5 * FB.G + 16, rx: 4, class: 'fb-board' }, svg);
   const inlay = (n, s) => { if (n >= 1 && n <= FB.MAXF) el('circle', { cx: nx(n), cy: sy(s), r: 4.5, class: 'fb-inlay' }, svg); };
@@ -64,6 +76,8 @@ const firstNote = (v, bi) => { const e = (v.bars[bi] || []).find(x => x.notes.le
 
 export function initFretboard() {
   on('view', v => { if (v) { renderBoard(v); paintNotes(); } });
+  // 停靠条变宽变窄、展开（从 hidden 变成看得见）：宽高比变了就按新的宽度重画
+  new ResizeObserver(() => { const v = get('view'); if (v && Math.abs(fitWidth() - FB.W) > 8) { renderBoard(v); paintNotes(); } }).observe(document.getElementById('fb'));
   on(['play.note', 'play.next'], paintNotes);
   on('ui.bar', bi => { if (!get('play.playing') && get('view')) set({ 'play.note': firstNote(get('view'), bi), 'play.next': -1 }); });
 }

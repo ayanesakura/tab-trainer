@@ -1200,3 +1200,32 @@ def image_song_restore(server):
     raw = store.load(sid)["bars"]
     yield
     store.update(sid, lambda s: s.update(bars=raw))
+
+
+# ---------------------------------------------------------------------------
+# 界面：谱面的地方、控制条、抽屉、小节卡片
+# ---------------------------------------------------------------------------
+def _open_at(server, b, w, h, sid=None, query=""):
+    _viewport(b, w, h)
+    b.open(f"{server['base']}/trainer?id={sid or server['image']}{query}")
+    b.wait_for("window.tt && tt.state.ready && !!document.querySelector('#score .at-surface')", timeout=40)
+    return b
+
+
+def test_score_gets_most_of_a_1440x900_screen(server, browser):
+    """1440×900 第一次打开：通知合成一行（+N 展开）、选段只有一行、指板收成细栏，谱面至少露出 560 px。"""
+    b = _open_at(server, browser, 1440, 900)
+    b.js("""import('/static/js/trainer/notices.js').then(({ notice }) => {
+      notice('resume', { kind: 'info', html: '上次练到', actions: [{ label: '接着练', primary: true, onClick: () => {} }] });
+      notice('metaNote', { kind: '', html: '备注' }); return true; })""")
+    time.sleep(0.3)
+    assert b.js("document.getElementById('fbBody').hidden")  # 矮屏幕默认收起指板
+    top, dock = b.js(
+        "[document.querySelector('#score .at-surface').getBoundingClientRect().top, document.getElementById('fbDock').getBoundingClientRect().top]"
+    )
+    assert dock - top >= 560, (top, dock)
+    rows = b.js(
+        "new Set([...document.querySelectorAll('#secBtns button')].map(x => Math.round(x.getBoundingClientRect().top))).size"
+    )
+    assert rows == 1
+    assert not b.errors, b.errors

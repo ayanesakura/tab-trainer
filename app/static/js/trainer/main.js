@@ -86,9 +86,9 @@ function initMore() {
 // ---------------------------------------------------------------------
 function initDock() {
   let open = true;
-  // 没设过的话：屏幕够高才默认展开（矮屏幕上先把地方留给谱面）
+  // 没设过的话：屏幕够高才默认展开（1440×900 这类矮屏幕上先把地方留给谱面，收起时只剩一条细栏）
   const v = stored('tt.fb');
-  open = v ? v === '1' : innerHeight >= 900;
+  open = v ? v === '1' : innerHeight >= 1000;
   const paint = v => {
     $('fbBody').hidden = !v;
     $('fbToggle').setAttribute('aria-expanded', v);
