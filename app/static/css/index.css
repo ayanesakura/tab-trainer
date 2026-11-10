@@ -56,6 +56,11 @@
 .list.set { overflow: visible; } /* “?”的说明弹层不能被列表的圆角裁掉（设置行没有底色，不需要裁） */
 .keyline { display: flex; gap: 6px; align-items: center; }
 .keyline .input { width: 280px; }
+.keyline .input[aria-busy="true"] { border-color: var(--accent); }
+#keyState { display: flex; align-items: center; gap: 6px; }
+#keyState .dot { width: 6px; height: 6px; }
+.set .who-help { display: flex; align-items: center; gap: 2px; }
+.set .who-help .name { flex: none; }
 .w-model { width: 170px; }
 .w-url { width: 400px; }
 .test-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-1); }

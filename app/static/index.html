@@ -102,59 +102,63 @@
 
   <!-- ============ 设置 ============ -->
   <section class="view" id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
-    <div class="head"><div><h1>设置</h1><p>改动自动保存。</p></div></div>
+    <div class="head"><div><h1>设置</h1><p>改动自动保存</p></div></div>
 
+    <!-- 每一行只写名字，说明放在悬停提示里（title）；“?”是需要多说几句的（费用、效果） -->
     <div class="section-title">模型</div>
     <div class="list set">
       <div class="row">
-        <div class="who"><label class="name" for="apiKey">Anthropic API key</label><div class="sub" id="keyState">只保存在本机，也可以用环境变量 ANTHROPIC_API_KEY。</div></div>
+        <div class="who" title="只保存在本机（data/config.json），也可以用环境变量 ANTHROPIC_API_KEY。回车或离开输入框时保存。"><label class="name" for="apiKey">Anthropic API key</label><div class="sub" id="keyState" hidden></div></div>
         <div class="ctl keyline">
-          <input class="input" id="apiKey" type="password" placeholder="sk-ant-…" autocomplete="off">
-          <button class="btn" id="saveKey">保存</button>
+          <input class="input" id="apiKey" type="password" placeholder="sk-ant-…" autocomplete="off" title="回车或离开输入框时保存">
           <button class="icon-btn" id="clearKey" title="清除已保存的 key" aria-label="清除已保存的 key" data-ic="trash"></button>
         </div>
       </div>
       <div class="row">
-        <div class="who"><div class="name" id="modelLbl">识别模型</div><div class="sub">Opus 最准，Sonnet 更便宜。</div></div>
+        <div class="who" title="Opus 最准；Sonnet 更便宜，排版干净的谱子差不多一样准"><div class="name" id="modelLbl">识别模型</div></div>
         <div class="ctl">
           <div class="seg sm" id="modelSeg" aria-labelledby="modelLbl"><button data-v="claude-opus-5-5">Opus 5.5</button><button data-v="claude-sonnet-5-5">Sonnet 5.5</button><button data-v="custom">自定义</button></div>
           <input class="input w-model" id="modelCustom" placeholder="模型 ID" aria-label="自定义模型 ID" hidden>
         </div>
       </div>
       <div class="row">
-        <div class="who"><div class="name" id="effortLbl">识别精细度</div><div class="sub">越高越准，也越慢、越贵。</div></div>
+        <div class="who" title="越高越准，也越慢、越贵"><div class="name" id="effortLbl">识别精细度</div></div>
         <div class="ctl"><div class="seg sm" id="effortSeg" aria-labelledby="effortLbl"><button data-v="medium">medium</button><button data-v="high">high</button><button data-v="xhigh">xhigh</button><button data-v="max">max</button></div></div>
       </div>
       <div class="row">
-        <div class="who"><div class="name" id="doubleLbl">双重校对</div><div class="sub">再读一遍、投票，费用约翻倍，一般不用开。 <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="双重校对（详细）" aria-describedby="doubleHelp">?</button><span class="help-pop left" id="doubleHelp" role="tooltip">两遍不一样的小节读第三遍投票，三遍都不一样的标成待核对。“有疑问的行”只重读有警告的行。评测里提升 1–2 个百分点，费用接近 2 倍。</span></span></div></div>
-        <div class="ctl"><div class="seg sm" id="doubleSeg" aria-labelledby="doubleLbl"><button data-v="off">关</button><button data-v="doubts">有疑问的行</button><button data-v="all">每一行</button></div></div>
-      </div>
-      <div class="row">
-        <div class="who"><div class="name" id="refineLbl">精修</div><div class="sub">识别后逐小节放大核对，约 $0.2/小节，改动可撤销。 <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="精修（详细）" aria-describedby="refineHelp">?</button><span class="help-pop left" id="refineHelp" role="tooltip">“自动”在识别完成后精修整首；“手动”在练习页、曲库“…”菜单或小节卡片上点“精修”。</span></span></div></div>
-        <div class="ctl"><div class="seg sm" id="refineSeg" aria-labelledby="refineLbl"><button data-v="manual">手动</button><button data-v="auto">自动</button></div></div>
-      </div>
-      <div class="row">
-        <div class="who"><label class="name" for="baseUrl">Base URL</label><div class="sub">用代理或兼容网关时才需要填。</div></div>
+        <div class="who" title="用代理或兼容网关时才需要填"><label class="name" for="baseUrl">Base URL</label></div>
         <div class="ctl"><input class="input w-url" id="baseUrl" placeholder="https://api.anthropic.com"></div>
       </div>
       <div class="row">
-        <div class="who"><div class="name">测试连接</div><div class="sub">发一个小请求，检查 key、模型和地址。</div></div>
+        <div class="who" title="发一个小请求，检查 key、模型和地址（先保存还没保存的改动）"><div class="name">测试连接</div></div>
         <div class="ctl"><span class="test-state" id="testState" role="status"></span><button class="btn" id="testBtn" data-ic="check">测试</button></div>
+      </div>
+    </div>
+
+    <div class="section-title" title="多花一些钱让 AI 再核对：双重校对在识别时多读几遍，精修在识别后逐小节放大核对">识别后复核</div>
+    <div class="list set">
+      <div class="row">
+        <div class="who who-help"><div class="name" id="doubleLbl">双重校对</div><span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="双重校对：效果和费用" aria-describedby="doubleHelp">?</button><span class="help-pop left" id="doubleHelp" role="tooltip">每行再读一遍，两遍不一样的小节读第三遍投票，三遍都不一样的标成待核对。“有疑问的行”只重读有警告的行。<br>评测里只提高 1–2 个百分点，难的谱子上费用接近 2 倍，一般不用开。</span></span></div>
+        <div class="ctl"><div class="seg sm" id="doubleSeg" aria-labelledby="doubleLbl"><button data-v="off">关</button><button data-v="doubts">有疑问的行</button><button data-v="all">每一行</button></div></div>
+      </div>
+      <div class="row">
+        <div class="who who-help"><div class="name" id="refineLbl">精修</div><span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="精修：效果和费用" aria-describedby="refineHelp">?</button><span class="help-pop left" id="refineHelp" role="tooltip">逐个小节放大，让 AI 对照原谱逐拍核对，两遍改法一样才改，改动可以撤销。评测里最难的 25 个错小节改对了 24 个。<br>约 $0.2 / 小节，一首几十分钟。“自动”在识别完成后精修整首；“手动”在练习页、曲库“…”菜单或小节卡片上点“精修”。</span></span></div>
+        <div class="ctl"><div class="seg sm" id="refineSeg" aria-labelledby="refineLbl"><button data-v="manual">手动</button><button data-v="auto">自动</button></div></div>
       </div>
     </div>
 
     <div class="section-title">练琴</div>
     <div class="list set">
       <div class="row">
-        <div class="who"><div class="name" id="goalLbl">每日目标</div><div class="sub">今日进度环和日历颜色按它算。</div></div>
+        <div class="who" title="练琴页的进度环和日历颜色按它算"><div class="name" id="goalLbl">每日目标</div></div>
         <div class="ctl"><div class="seg sm" id="goalSeg" aria-labelledby="goalLbl"><button data-v="20">20 分钟</button><button data-v="30">30</button><button data-v="45">45</button><button data-v="60">60</button><button data-v="90">90</button></div></div>
       </div>
       <div class="row">
-        <div class="who"><div class="name" id="learnLbl">同时在学</div><div class="sub">在学的曲子少于这个数，才开始下一首新曲。</div></div>
+        <div class="who" title="在学的曲子少于这个数，才开始计划里的下一首新曲"><div class="name" id="learnLbl">同时在学</div></div>
         <div class="ctl"><div class="seg sm" id="learnSeg" aria-labelledby="learnLbl"><button data-v="1">1 首</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button></div></div>
       </div>
       <div class="row">
-        <div class="who"><div class="name" id="revLbl">每天复习</div><div class="sub">到期的多了，按逾期久的先排，其余顺延。</div></div>
+        <div class="who" title="到期的多了，按逾期久的先排，其余顺延到明天"><div class="name" id="revLbl">每天复习</div></div>
         <div class="ctl"><div class="seg sm" id="revSeg" aria-labelledby="revLbl"><button data-v="3">最多 3 首</button><button data-v="5">5</button><button data-v="8">8</button><button data-v="0">不限</button></div></div>
       </div>
     </div>
@@ -166,7 +170,7 @@
         <div class="ctl"><div class="seg sm" id="themeSeg" aria-labelledby="themeLbl"><button data-v="system">跟随系统</button><button data-v="light">浅色</button><button data-v="dark">深色</button></div></div>
       </div>
       <div class="row">
-        <div class="who"><div class="name" id="paletteLbl">配色</div><div class="sub">暖色三套是米白纸底。</div></div>
+        <div class="who" title="暖色三套是米白纸底"><div class="name" id="paletteLbl">配色</div></div>
         <div class="ctl"><div class="seg sm palette-seg" id="paletteSeg" aria-labelledby="paletteLbl"></div></div>
       </div>
     </div>

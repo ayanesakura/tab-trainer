@@ -327,14 +327,18 @@ def test_practice_line_escapes_backend_text(server, browser):
 def test_enter_while_composing_does_not_submit(server, browser):
     # 输入法选词时按回车只是确认候选词，不能提交（曲名、API key）
     b = browser
+    b._run(b._send("Page.addScriptToEvaluateOnNewDocument", source=SETTINGS_FAKE % 200))
     b.open(server["base"] + "/")
     b.wait_for("!!document.getElementById('title')")
     b.js("""window.__clicks = [];
-      for (const id of ['uploadBtn', 'saveKey']) document.getElementById(id).click = () => window.__clicks.push(id);
+      document.getElementById('uploadBtn').click = () => window.__clicks.push('uploadBtn');
+      document.getElementById('apiKey').value = 'sk-ant-typed';
       for (const id of ['title', 'apiKey']) for (const isComposing of [true, false])
         document.getElementById(id).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing, bubbles: true }));
       true""")
-    assert b.js("window.__clicks") == ["uploadBtn", "saveKey"]
+    assert b.js("window.__clicks") == ["uploadBtn"]
+    b.wait_for("__calls.length === 1")
+    assert b.js("__calls") == ['PUT {"api_key":"sk-ant-typed"}']  # 回车保存 key 只发了一次
     assert not b.errors, b.errors
 
 
@@ -595,27 +599,41 @@ def test_api_key_kept_on_failed_save_and_saved_before_test(server, browser):
     # 不调用真的模型：PUT /api/settings 和测试接口都在页面里拦下
     b = browser
     b._run(b._send("Page.addScriptToEvaluateOnNewDocument", source=SETTINGS_FAKE % 400))
+    b._run(b._send("Emulation.setFocusEmulationEnabled", enabled=True))  # 无界面时也触发 focus / blur
     b.open(server["base"] + "/#settings")
     b.wait_for("!document.getElementById('view-settings').hidden")
+    assert b.js("document.getElementById('saveKey')") is None  # 和其他设置一样自动保存，没有“保存”按钮
     idle = "!document.getElementById('{}').hasAttribute('aria-busy')"
-    b.js(
-        "document.getElementById('apiKey').value = 'sk-ant-typed'; document.getElementById('saveKey').click(); true"
-    )
-    b.wait_for(f"__calls.length === 1 && {idle.format('saveKey')}")
-    assert b.js("document.getElementById('apiKey').value") == "sk-ant-typed"  # 保存失败：不用再粘贴
+    key = "document.getElementById('apiKey')"
+    # 离开输入框时保存
+    b.js(f"{key}.focus(); {key}.value = 'sk-ant-typed'; {key}.blur(); true")
+    b.wait_for(f"__calls.length === 1 && {idle.format('apiKey')}")
+    assert b.js(f"{key}.value") == "sk-ant-typed"  # 保存失败：不用再粘贴
+    b.js(f"{key}.focus(); {key}.blur(); true")  # 同一个 key 失败过：失去焦点不再自动重试
+    assert b.js("__calls.length") == 1
     # “测试”：先保存填了的 key；保存失败就不测
     b.js("document.getElementById('testBtn').click(); true")
     b.wait_for(f"__calls.length === 2 && {idle.format('testBtn')}")
     assert b.js("__calls") == ['PUT {"api_key":"sk-ant-typed"}'] * 2
-    # 保存成功：先保存再测试，框清空
+    # 保存成功：先保存再测试，框清空，打码的 key 显示出来
     b.js("__putStatus = 200; __calls.length = 0; document.getElementById('testBtn').click(); true")
     b.wait_for("document.getElementById('testState').textContent.includes('连接正常')")
     assert b.js("__calls") == ['PUT {"api_key":"sk-ant-typed"}', "TEST"]
-    assert b.js("document.getElementById('apiKey').value") == ""
+    assert b.js(f"{key}.value") == ""
+    assert "sk-ant…test" in b.js(f"{key}.placeholder")
+    assert "sk-ant…test" in b.js("document.getElementById('keyState').textContent")
     # 没有没保存的改动：直接测试
     b.js("__calls.length = 0; document.getElementById('testBtn').click(); true")
     b.wait_for(f"__calls.includes('TEST') && {idle.format('testBtn')}")
     assert b.js("__calls") == ["TEST"]
+    # 回车也保存（有轻提示），焦点留在输入框里
+    b.js(f"__calls.length = 0; {key}.focus(); {key}.value = 'sk-ant-new'; true")
+    b.key("Enter", vk=13)
+    b.wait_for(f"__calls.length === 1 && {key}.value === '' && {idle.format('apiKey')}")
+    assert b.js("document.querySelector('.toast').textContent") == "API key 已保存"
+    assert b.js(f"document.activeElement === {key}")
+    b.js(f"{key}.blur(); true")  # 已经保存了：失去焦点不再发
+    assert b.js("__calls.length") == 1
     assert not b.errors, b.errors
 
 

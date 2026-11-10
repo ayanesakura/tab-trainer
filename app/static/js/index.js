@@ -489,9 +489,11 @@ function showSettings(c) {
   settings = c;
   const hasKey = !!(c.api_key_masked || c.env_key);
   UI.notice($('keyNotice'), hasKey ? null : { kind: 'warn', html: '还没设置 API key，识别原谱前请先到 <a href="#settings">设置</a> 填写。（导入 Guitar Pro / MusicXML 不需要。）' });
-  $('keyState').innerHTML = c.api_key_masked ? `已保存：<code>${esc(c.api_key_masked)}</code>`
-    : c.env_key ? '正在使用环境变量 <code>ANTHROPIC_API_KEY</code>。'
-    : '只保存在本机，也可以用环境变量 <code>ANTHROPIC_API_KEY</code>。';
+  // 现在用的是哪个 key：打码显示在输入框的占位符里（填了新的就在失去焦点 / 回车时保存）
+  $('apiKey').placeholder = c.api_key_masked ? `已保存 ${c.api_key_masked}` : c.env_key ? '用的是环境变量 ANTHROPIC_API_KEY' : 'sk-ant-…';
+  $('keyState').innerHTML = c.api_key_masked ? `<span class="dot ok"></span>已保存 <code>${esc(c.api_key_masked)}</code>`
+    : c.env_key ? '<span class="dot ok"></span>用环境变量 <code>ANTHROPIC_API_KEY</code>' : '';
+  $('keyState').hidden = !$('keyState').innerHTML;
   $('clearKey').hidden = !c.api_key_masked;
   const custom = !PRESETS.includes(c.model);
   setModelSeg(custom ? 'custom' : c.model);
@@ -515,30 +517,43 @@ const setEffortSeg = UI.seg($('effortSeg'), 'high', v => save({ effort: v }));
 const setDoubleSeg = UI.seg($('doubleSeg'), 'off', v => save({ double_check: v }, v === 'off' ? '已关闭双重校对' : '已打开双重校对'));
 const setRefineSeg = UI.seg($('refineSeg'), 'manual', v => save({ refine: v }, v === 'auto' ? '识别完会自动精修' : '精修改成手动'));
 $('baseUrl').onchange = () => save({ base_url: $('baseUrl').value });
-$('saveKey').onclick = () => api.withBusy($('saveKey'), async () => {
+// API key 和其他设置一样自动保存：回车或离开输入框时保存（成功后清空输入框，打码的 key 显示在占位符和说明行里）。
+// 同一个 key 正在保存时不重复发；保存失败时留着（不用再粘贴一次），失去焦点不再自动重试同一个 key，回车或“测试”会再试
+let keySaving = null, keyFailed = '';
+function saveKey({ retry = false } = {}) {
   const k = $('apiKey').value.trim();
-  if (!k) { toast('先填写 key', 'err'); $('apiKey').focus(); return; }
-  if (await save({ api_key: k }, 'API key 已保存')) $('apiKey').value = ''; // 保存失败时留着，不用再粘贴一次
-});
-$('apiKey').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) $('saveKey').click(); };
+  if (!k) return Promise.resolve(true);
+  if (keySaving && keySaving.k === k) return keySaving.p;
+  if (!retry && k === keyFailed) return Promise.resolve(false);
+  const p = (async () => {
+    $('apiKey').setAttribute('aria-busy', 'true');
+    const ok = await save({ api_key: k }, 'API key 已保存');
+    $('apiKey').removeAttribute('aria-busy');
+    keyFailed = ok ? '' : k;
+    if (ok && $('apiKey').value.trim() === k) $('apiKey').value = '';
+    return ok;
+  })();
+  keySaving = { k, p };
+  p.finally(() => { if (keySaving && keySaving.p === p) keySaving = null; });
+  return p;
+}
+$('apiKey').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); saveKey({ retry: true }); } };
+$('apiKey').addEventListener('blur', () => saveKey());
 $('clearKey').onclick = async () => {
   if (await UI.confirm('清除后识别原谱前要重新填写。', { title: '清除已保存的 API key？', ok: '清除', danger: true })) save({ clear_api_key: true }, '已清除');
 };
 // 填了还没保存的 key、改了的 Base URL / 自定义模型名（测试测的是服务器上保存的设置）
 function unsavedSettings() {
-  const body = {}, k = $('apiKey').value.trim(), url = $('baseUrl').value, model = $('modelCustom').value.trim();
-  if (k) body.api_key = k;
+  const body = {}, url = $('baseUrl').value, model = $('modelCustom').value.trim();
   if (settings && url.trim() !== settings.base_url) body.base_url = url;
   if (settings && !$('modelCustom').hidden && model && model !== settings.model) body.model = model;
   return body;
 }
 $('testBtn').onclick = () => api.withBusy($('testBtn'), async () => {
   // 先保存还没保存的改动再测，免得刚粘贴的 key 测出来是“没有 key”；保存失败就不测了
+  if (!await saveKey({ retry: true })) { $('testState').innerHTML = ''; return; }
   const body = unsavedSettings();
-  if (Object.keys(body).length) {
-    if (!await save(body, body.api_key ? 'API key 已保存' : '已保存')) { $('testState').innerHTML = ''; return; }
-    if (body.api_key) $('apiKey').value = '';
-  }
+  if (Object.keys(body).length && !await save(body)) { $('testState').innerHTML = ''; return; }
   $('testState').innerHTML = '<span class="spinner"></span>测试中…';
   try {
     const r = await api.post('/api/settings/test');

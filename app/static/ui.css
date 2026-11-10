@@ -360,7 +360,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
 .badge.rating { height: 18px; padding: 0 6px; flex: none; }
 
 /* ---- 设置行：左边说明，右边控件 ---- */
-.set .row { min-height: 58px; padding: 10px var(--sp-4); }
+.set .row { min-height: 50px; padding: 8px var(--sp-4); } /* 说明都在悬停提示里，一行只有名字和控件 */
 .set .row .name { font-weight: 500; }
 .set .row .sub { white-space: normal; }
 
