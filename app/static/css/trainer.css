@@ -296,11 +296,12 @@ table.tune td b { font-variant-numeric: tabular-nums; }
 .meta-grid label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-1); color: var(--muted); }
 .card-f { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: 10px 14px; border-top: 1px solid var(--line-2); }
 
-/* ---- 练习建议、记号说明 ---- */
+/* ---- 分段（AI 的练习建议）、记号说明 ---- */
 .plan-overview { line-height: 1.7; }
 .plan-row .step { width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 600; font-size: var(--fs-1); flex: none; }
 .plan-row .sub { white-space: normal; line-height: 1.6; color: var(--fg-2); margin-top: 3px; }
-.plan-tip { margin-top: var(--sp-3); }
+.plan-h1 { display: flex; align-items: center; gap: var(--sp-2); }
+.plan-h1 .help-wrap { font-family: var(--font); letter-spacing: 0; } /* 只有 h1 用衬线字 */
 .empty-state p { margin: 2px 0 var(--sp-3); }
 /* 曲子不存在 / 加载失败（song.js 的 songGone）：只留顶栏和一句说明 */
 body.song-gone main > .view, body.song-gone #nav, body.song-gone .fb-dock { display: none; }

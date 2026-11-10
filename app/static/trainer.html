@@ -22,14 +22,13 @@
     <nav class="seg" id="nav" aria-label="页面">
       <button data-v="practice">练习</button>
       <button data-v="tune">调弦</button>
-      <button data-v="plan">练习建议</button>
+      <button data-v="plan" title="AI 按段落给的练习建议">分段</button>
       <button data-v="glossary">记号说明</button>
     </nav>
   </div>
   <div class="actions">
     <div class="timer" id="timer"></div>
     <button class="btn sm" id="rateBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="ratePop" hidden></button>
-    <button class="icon-btn" id="themeBtn"></button>
   </div>
 </header>
 <!-- 练琴计划：给今天这首打分（只有在计划里的曲子才有“打分”按钮） -->
@@ -217,11 +216,10 @@
     </div>
   </section>
 
-  <!-- ============ 练习建议 ============ -->
+  <!-- ============ 分段（AI 的练习建议） ============ -->
   <section class="view narrow" id="view-plan" hidden>
-    <div class="head"><div><h1>练习建议</h1></div></div>
+    <div class="head"><div><h1 class="plan-h1">分段 <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="怎么练" aria-describedby="planHelp">?</button><span class="help-pop left" id="planHelp" role="tooltip"><span>AI 按段落给的练习建议，点“循环这段”就在练习页循环它。</span><span>弹不顺时：缩到那一小节，降到能连续弹对 3 遍的速度，再慢慢加速。</span></span></span></h1></div></div>
     <div class="stack" id="plan"></div>
-    <div class="notice plan-tip"><span class="dot plain"></span><div class="n-body">弹不顺时：缩到那一小节，降到能连续弹对 3 遍的速度，再慢慢加速。</div></div>
   </section>
 
   <!-- ============ 记号说明 ============ -->
