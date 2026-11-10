@@ -134,7 +134,12 @@ function updateSelectBar() {
   $('selectAll').indeterminate = shown > 0 && shown < all.length;
   $('exportBtn').disabled = !selected.size;
   $('planAddBtn').disabled = !lastSongs.some(s => selected.has(s.id) && !s.study);
-  $('planAddBtn').title = selected.size && $('planAddBtn').disabled ? '选中的曲子都已经在计划里' : '按列表顺序排到练琴计划的最后';
+  $('planAddBtn').title = selected.size && $('planAddBtn').disabled ? '选中的曲子都已经在计划里' : '按列表顺序排到计划的最后';
+  // 平时是“归档”，只看归档的曲子时是“取消归档”
+  const arch = $('archiveBtn'), un = lib.archived;
+  arch.lastChild.textContent = un ? '取消归档' : '归档';
+  arch.title = un ? '放回曲库，计划里的曲子重新排进今日' : '从曲库列表收起来，也不排进今日；数据、计划位置、练习记录都留着';
+  arch.disabled = !lastSongs.some(s => selected.has(s.id) && selectable(s) && !!s.archived === un);
 }
 $('selectBtn').onclick = () => setSelecting(true);
 $('selectCancel').onclick = () => setSelecting(false);
@@ -151,7 +156,23 @@ $('planAddBtn').onclick = () => api.withBusy($('planAddBtn'), async () => {
   const n = await addMany(list);
   if (n) { toast(`已加入计划 ${n} 首`); setSelecting(false); }
 });
+$('archiveBtn').onclick = () => api.withBusy($('archiveBtn'), async () => {
+  const un = lib.archived, list = lastSongs.filter(s => selected.has(s.id) && selectable(s) && !!s.archived === un);
+  if (await setArchived(list, !un)) setSelecting(false);
+});
 addEventListener('keydown', e => { if (e.key === 'Escape' && selecting && !UI.hasLayer()) setSelecting(false); });
+
+// 归档 / 取消归档（一首或多首）：归档的曲子默认不在列表里，也不排进今日；数据、计划位置、练习记录都留着。→ 是否全部成功
+async function setArchived(list, archived) {
+  let n = 0;
+  for (const s of list) {
+    try { await api.post(`/api/songs/${encodeURIComponent(s.id)}/archive`, { archived }); n++; } catch (e) { toast(e.message, 'err', 4000); break; }
+  }
+  if (n) toast(archived ? `已归档 ${n === 1 && list.length === 1 ? `“${list[0].title}”` : `${n} 首`}，在“已归档”里能找到` : `已取消归档 ${n === 1 && list.length === 1 ? `“${list[0].title}”` : `${n} 首`}`);
+  songsPoll.now();
+  refreshStudy({ calendar: false });
+  return n === list.length;
+}
 
 // ---------------- 曲库列表（一行的 HTML、状态说明、排序等纯函数在 library-view.js） ----------------
 
@@ -198,9 +219,10 @@ let savedSort = null;
 try { savedSort = localStorage.getItem(SORT_KEY); } catch { /* 读不了就用默认排序 */ }
 // 翻到第几页、按哪个标签筛选记在这条浏览记录里（history.state）：从练习页按“后退”回来还在原来那一页
 const saved = (history.state && history.state.lib) || {};
-const lib = { q: '', tag: typeof saved.tag === 'string' ? saved.tag : '', sort: SORTS.includes(savedSort) ? savedSort : 'practiced', page: Number(saved.page) || 1 };
+// archived：只看归档的曲子（平时归档的不显示），和页码、标签一样记在这条浏览记录里
+const lib = { q: '', tag: typeof saved.tag === 'string' ? saved.tag : '', sort: SORTS.includes(savedSort) ? savedSort : 'practiced', page: Number(saved.page) || 1, archived: saved.archived === true };
 function remember() {
-  try { history.replaceState({ ...(history.state || {}), lib: { page: lib.page, tag: lib.tag } }, ''); } catch { /* 记不下就算了 */ }
+  try { history.replaceState({ ...(history.state || {}), lib: { page: lib.page, tag: lib.tag, archived: lib.archived } }, ''); } catch { /* 记不下就算了 */ }
 }
 function setPage(n) { lib.page = n; remember(); }
 // 换了搜索词、标签、排序：回到第一页
@@ -211,6 +233,7 @@ UI.seg($('sortSeg'), lib.sort, v => {
 });
 $('search').oninput = e => refilter({ q: e.target.value.trim().toLowerCase() });
 $('tagFilter').onclick = e => { const b = e.target.closest('button'); if (b) refilter({ tag: b.dataset.tag }); };
+$('archFilter').onclick = () => refilter({ archived: !lib.archived });
 const visibleSongs = () => filterSongs(lastSongs, lib);
 $('pager').onclick = e => {
   const b = e.target.closest('button[data-page]');
@@ -228,17 +251,27 @@ $('pager').onclick = e => {
   const top = ($('libTools').hidden ? $('songs') : $('libTools')).getBoundingClientRect().top;
   if (top < 0) ($('libTools').hidden ? $('songs') : $('libTools')).scrollIntoView({ block: 'start' });
 };
+// “已归档 N”：没有归档的曲子时不显示（正在看归档的、又都取消了：回到平时的列表）
+function renderArchFilter() {
+  const n = lastSongs.filter(s => s.archived).length, btn = $('archFilter');
+  if (!n && lib.archived) { lib.archived = false; lib.page = 1; remember(); }
+  btn.hidden = !n;
+  btn.setAttribute('aria-pressed', String(lib.archived));
+  setHTML(btn, `${icon('archive', 12)}已归档 ${n}`);
+}
 function renderTagFilter() {
-  const tags = [...new Set(lastSongs.flatMap(s => s.tags || []))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  const tags = [...new Set(lastSongs.filter(s => !!s.archived === lib.archived).flatMap(s => s.tags || []))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
   if (lib.tag && !tags.includes(lib.tag)) { lib.tag = ''; lib.page = 1; remember(); }
   setHTML($('tagFilter'), tags.length ? ['', ...tags].map(t => `<button data-tag="${esc(t)}" aria-pressed="${t === lib.tag}">${t ? esc(t) : '全部'}</button>`).join('') : '');
   $('tagFilter').hidden = !tags.length;
 }
 function renderSongs() {
+  // 先更新筛选条：归档的都取消了、标签没了时它们会改 lib，下面按改过的筛
+  renderArchFilter();
+  renderTagFilter();
   const songs = visibleSongs(), box = $('songs');
   if (selecting) updateSelectBar();
   $('libTools').hidden = !lastSongs.length;
-  renderTagFilter();
   box.removeAttribute('aria-busy');
   // 删掉了最后一页上的曲子、筛选后变少了：停在还有曲子的最后一页
   const pg = paginate(songs, lib.page);
@@ -321,6 +354,7 @@ function openMore(btn) {
     image && { label: '整首重新识别', icon: 'refresh', onClick: () => reparse(s) },
     image && s.bars > 0 && { label: '精修整首', icon: 'sparkle', onClick: () => refineSong(s) },
     { label: '导出曲子包', icon: 'upload', onClick: () => exportSongs([id]) },
+    { label: s.archived ? '取消归档' : '归档', icon: 'archive', onClick: () => setArchived([s], !s.archived) },
     'sep',
     { label: '删除', icon: 'trash', danger: true, onClick: () => remove(s) },
   ]);

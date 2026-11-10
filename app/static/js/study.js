@@ -85,7 +85,9 @@ function renderQueue(t) {
   const aside = [later && `${later} 首复习顺延`, waiting && `${waiting} 首新曲排队`].filter(Boolean).join(' · ');
   setHTML($('queueAside'), esc(aside));
   let html;
-  if (!c.in_plan) {
+  if (!c.in_plan && c.archived) {  // 归档的不算在计划里
+    html = emptyHTML('ok', '计划里的曲子都归档了', '在下面的计划或曲库的“已归档”里取消归档，就会排回今日。');
+  } else if (!c.in_plan) {
     html = emptyHTML('', '计划里还没有曲子', '在曲库点“选择”勾几首，或在每首的“…”菜单里加入。', '<a class="btn sm primary" href="#library">去曲库</a>');
   } else if (!q.length && !done.length) {
     html = emptyHTML('ok', '今天没有要练的', c.paused === c.in_plan ? '计划里的曲子都暂停了。' : '复习的曲子还没到期，可以自由练习。');
@@ -175,7 +177,8 @@ export function renderPlan(songs) {
 function paintPlan() {
   const list = planSongs(), n = list.length;
   const paused = list.filter(s => s.study.paused).length;
-  setHTML($('planAside'), n ? esc(`共 ${n} 首，按顺序学${paused ? ` · 暂停 ${paused}` : ''}`) : '');
+  const archived = list.filter(s => s.archived).length;
+  setHTML($('planAside'), n ? esc([`共 ${n} 首，按顺序学`, paused && `暂停 ${paused}`, archived && `归档 ${archived}`].filter(Boolean).join(' · ')) : '');
   if (!n) { setHTML($('plan'), '<div class="empty-state"><b>还没有曲子</b>在曲库里把想练的曲子加进来，按顺序一首首学。</div>'); return; }
   const shown = S.planOpen || n <= PLAN_FOLD + 1 ? list : list.slice(0, PLAN_FOLD);
   const inToday = new Set(((S.today && S.today.queue) || []).map(x => x.id));
@@ -208,11 +211,16 @@ $('plan').addEventListener('click', e => {
 function planMenu(btn, s) {
   if (!s) return;
   UI.menu(btn, [
-    s.study.paused ? { label: '继续', icon: 'play', onClick: () => setStudy(s, { paused: false }, '已继续') } : { label: '暂停', icon: 'pause', onClick: () => setStudy(s, { paused: true }, '已暂停，不再排进今日清单') },
+    s.archived && { label: '取消归档', icon: 'archive', onClick: () => unarchive(s) },
+    !s.archived && (s.study.paused ? { label: '继续', icon: 'play', onClick: () => setStudy(s, { paused: false }, '已继续') } : { label: '暂停', icon: 'pause', onClick: () => setStudy(s, { paused: true }, '已暂停，不再排进今日') }),
     { label: '移到最前', icon: 'up', onClick: () => toFront(s) },
     'sep',
     { label: '移出计划', icon: 'x', danger: true, onClick: () => setStudy(s, { in_plan: false }, '已移出计划（打分记录还在）') },
   ]);
+}
+async function unarchive(s) {
+  try { await api.post(`/api/songs/${encodeURIComponent(s.id)}/archive`, { archived: false }); toast(`已取消归档“${s.title}”`); } catch (e) { toast(e.message, 'err', 4000); }
+  changed();
 }
 async function toFront(s) {
   const ids = planSongs().map(x => x.id).filter(x => x !== s.id);

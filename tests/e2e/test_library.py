@@ -735,3 +735,107 @@ def test_library_pages(server, browser):
             with contextlib.suppress(urllib.error.HTTPError):  # 上面已经删掉的：404
                 _api(server, f"/api/songs/{sid}", "DELETE")
         browser.js("localStorage.removeItem('tt.libSort'); true")
+
+
+def test_settings_rows_are_terse(server, browser):
+    # 设置的每一行只有名字和控件，说明在悬停提示里；双重校对和精修放在“识别后复核”下面，“?”里写效果和费用
+    b = browser
+    b.open(server["base"] + "/#settings")
+    b.wait_for("!document.getElementById('view-settings').hidden")
+    subs = b.js("[...document.querySelectorAll('#view-settings .set .sub')].filter(x => !x.hidden).length")
+    assert subs == 0
+    who = "document.getElementById('{}').closest('.row').querySelector('.who').title"
+    assert "环境变量" in b.js(who.format("apiKey")) and "离开输入框" in b.js(who.format("apiKey"))
+    assert "进度环" in b.js(who.format("goalSeg"))
+    titles = b.js("[...document.querySelectorAll('#view-settings .section-title')].map(x => x.textContent)")
+    assert titles == ["模型", "识别后复核", "练琴", "外观"]
+    group = "document.querySelectorAll('#view-settings .list.set')[1]"
+    assert b.js(f"!!{group}.querySelector('#doubleSeg') && !!{group}.querySelector('#refineSeg')")
+    assert "2 倍" in b.js("document.getElementById('doubleHelp').textContent")
+    assert "$0.2" in b.js("document.getElementById('refineHelp').textContent")
+    # 曲库：识别要多久写在上传框的悬停提示里，不再是列表下面的一行字
+    b.js("location.hash = 'library'; true")
+    assert b.js("document.querySelector('.foot-hint')") is None
+    assert "1–3 分钟" in b.js("document.getElementById('drop').title")
+    assert not b.errors, b.errors
+
+
+def _post(server, path, body):
+    return json.loads(
+        _api(server, path, "POST", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    )
+
+
+def test_archive_hides_songs_and_filter_shows_them(server, browser):
+    # 归档：“…”菜单 / 选择模式里归档，默认不显示；“已归档 N”只看归档的（记在浏览记录里），淡色显示；不排进今日，计划里淡色留在原位
+    img, gp = server["image"], server["gp"]
+    rows = "[...document.querySelectorAll('#songs .song-row')].map(r => r.dataset.id)"
+    b = browser
+    try:
+        _api(
+            server,
+            f"/api/songs/{gp}/study",
+            "PUT",
+            b'{"in_plan": true}',
+            {"Content-Type": "application/json"},
+        )
+        b.open(server["base"] + "/")
+        b.wait_for(f"!!document.querySelector('[data-more=\"{gp}\"]')")
+        assert b.js("document.getElementById('archFilter').hidden") is True  # 没有归档的曲子：不显示
+        b.js(f"document.querySelector('[data-more=\"{gp}\"]').click(); true")
+        b.js(
+            "[...document.querySelectorAll('.menu button')].find(x => x.textContent === '归档').click(); true"
+        )
+        b.wait_for(f"!{rows}.includes('{gp}')")
+        assert "已归档" in b.js("document.querySelector('.toast').textContent")
+        assert b.js("document.getElementById('archFilter').textContent") == "已归档 1"
+        # 今日不排归档的；计划里还在，淡色，写明不排进今日
+        today = json.loads(_api(server, "/api/study/today"))
+        assert (
+            gp not in [x["id"] for x in today["queue"] + today["done"]] and today["counts"]["archived"] == 1
+        )
+        b.js("location.hash = 'study'; true")
+        b.wait_for(f"!!document.querySelector('#plan .plan-row.archived[data-id=\"{gp}\"]')")
+        assert "不排进今日" in b.js(
+            f"document.querySelector('#plan .plan-row[data-id=\"{gp}\"] .sub').textContent"
+        )
+        assert "计划里的曲子都归档了" in b.js("document.getElementById('queue').textContent")
+        # 选择模式里批量归档
+        b.js("location.hash = 'library'; true")
+        b.js("document.getElementById('selectBtn').click(); true")
+        b.js(f"document.querySelector('.song-row[data-id=\"{img}\"] .who').click(); true")
+        assert b.js("document.getElementById('archiveBtn').textContent") == "归档"
+        b.js("document.getElementById('archiveBtn').click(); true")
+        b.wait_for(f"!{rows}.includes('{img}') && document.getElementById('selectBar').hidden")
+        b.wait_for("document.getElementById('archFilter').textContent === '已归档 2'")
+        # 只看归档的：淡色；刷新后还在这个视图里
+        b.js("document.getElementById('archFilter').click(); true")
+        assert sorted(b.js(rows)) == sorted([img, gp])
+        assert b.js("document.getElementById('archFilter').getAttribute('aria-pressed')") == "true"
+        assert b.js(
+            "[...document.querySelectorAll('#songs .song-row')].every(r => r.classList.contains('archived'))"
+        )
+        b.js("location.reload(); true")
+        b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{img}\"]')")
+        assert sorted(b.js(rows)) == sorted([img, gp])
+        # 归档视图里的选择：批量“取消归档”
+        b.js(
+            "document.getElementById('selectBtn').click(); document.getElementById('selectAll').click(); true"
+        )
+        assert b.js("document.getElementById('archiveBtn').textContent") == "取消归档"
+        b.js("document.getElementById('archiveBtn').click(); true")
+        # 都取消了：“已归档”收起来，回到平时的列表
+        b.wait_for("document.getElementById('archFilter').hidden")
+        b.wait_for(f"{rows}.includes('{img}') && {rows}.includes('{gp}')")
+        assert not json.loads(_api(server, f"/api/songs/{gp}"))["archived"]
+        assert not b.errors, b.errors
+    finally:
+        for sid in (img, gp):
+            _post(server, f"/api/songs/{sid}/archive", {"archived": False})
+        _api(
+            server,
+            f"/api/songs/{gp}/study",
+            "PUT",
+            b'{"in_plan": false}',
+            {"Content-Type": "application/json"},
+        )

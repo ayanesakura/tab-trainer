@@ -122,6 +122,10 @@ test('sortSongs / filterSongs：排序、搜索、标签', () => {
   assert.ok(t.indexOf('b') < t.indexOf('a')); // 曲名里的数字按大小：第2首在第10首前面
   assert.deepEqual(ids(filterSongs(list, { q: 'tommy', sort: 'created' })), ['c']);
   assert.deepEqual(ids(filterSongs(list, { tag: '指弹' })), ['b']);
+  // 归档的平时不显示，archived: true 时只看归档的
+  const arch = [...list, song({ id: 'z', title: 'Amy 2', archived: true })];
+  assert.deepEqual(ids(filterSongs(arch, { sort: 'created' })), ['a', 'c', 'b']);
+  assert.deepEqual(ids(filterSongs(arch, { archived: true })), ['z']);
   assert.deepEqual(ids(list), ['a', 'b', 'c']); // filterSongs 不改原数组
 });
 

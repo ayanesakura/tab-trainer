@@ -55,8 +55,8 @@
     <div class="head">
       <div><h1>曲库</h1></div>
       <div class="head-actions">
-        <button class="btn sm" id="importBtn" data-ic="download" title="导入曲子包（.zip），可以一次选多个">导入曲子包</button>
-        <button class="btn sm" id="selectBtn" data-ic="check" title="多选曲子：打包导出，或一起加入练琴计划">选择</button>
+        <button class="btn sm" id="importBtn" data-ic="download" title="导入曲子包（.zip），可以一次选多个；曲库里已有的会跳过">导入</button>
+        <button class="btn sm" id="selectBtn" data-ic="check" title="多选曲子：打包导出、加入计划或归档">选择</button>
         <input type="file" id="bundleFile" multiple accept=".zip,application/zip" hidden>
       </div>
     </div>
@@ -65,7 +65,7 @@
 
     <div class="stack lib-stack">
       <div>
-        <div class="drop" id="drop" role="button" tabindex="0" aria-labelledby="dropT" aria-describedby="dropHint">
+        <div class="drop" id="drop" role="button" tabindex="0" aria-labelledby="dropT" aria-describedby="dropHint" title="原谱图片 / PDF 用 AI 识别（30–40 小节约需 1–3 分钟）；Guitar Pro、MusicXML 直接导入，不花钱">
           <span class="big" data-ic="upload"></span>
           <span><span class="t" id="dropT">添加曲子</span><br><span class="hint" id="dropHint">拖入或点击选择：原谱图片 / PDF、Guitar Pro、MusicXML、曲子包</span></span>
         </div>
@@ -75,7 +75,7 @@
           <div class="upload-bar">
             <input class="input" id="title" placeholder="曲名（可不填）" aria-label="曲名（可不填）">
             <button class="btn ghost" id="clearPick">取消</button>
-            <button class="btn primary" id="uploadBtn" data-ic="sparkle">上传并识别</button>
+            <button class="btn primary" id="uploadBtn" data-ic="sparkle" title="30–40 小节的原谱识别约需 1–3 分钟，期间可以离开这页">上传并识别</button>
           </div>
         </div>
       </div>
@@ -84,19 +84,21 @@
         <label class="chk"><input type="checkbox" id="selectAll"><span id="selectCount">已选 0 首</span></label>
         <span class="grow"></span>
         <button class="btn ghost sm" id="selectCancel">取消</button>
-        <button class="btn sm" id="planAddBtn" data-ic="target" disabled title="按列表顺序排到练琴计划的最后">加入计划</button>
-        <button class="btn primary sm" id="exportBtn" data-ic="upload" disabled>导出曲子包</button>
+        <button class="btn sm" id="archiveBtn" data-ic="archive" disabled>归档</button>
+        <button class="btn sm" id="planAddBtn" data-ic="target" disabled title="按列表顺序排到计划的最后">加入计划</button>
+        <button class="btn primary sm" id="exportBtn" data-ic="upload" disabled title="打包成一个曲子包（.zip）">导出</button>
       </div>
       <div class="lib-tools" id="libTools" hidden>
         <input class="input search" id="search" type="search" placeholder="搜索曲名、艺人、标签" aria-label="搜索曲子">
         <div class="chips multi sm" id="tagFilter" role="group" aria-label="按标签筛选"></div>
-        <span class="grow"></span>
-        <span class="hint" id="sortLbl">排序</span>
-        <div class="seg sm" id="sortSeg" aria-labelledby="sortLbl"><button data-v="practiced">最近练习</button><button data-v="created">最近添加</button><button data-v="title">曲名</button></div>
+        <span class="lib-right">
+          <button class="chip sm arch-filter" id="archFilter" aria-pressed="false" title="只看归档的曲子（归档的不在列表里、不排进今日，数据都留着）" hidden></button>
+          <span class="hint" id="sortLbl">排序</span>
+          <div class="seg sm" id="sortSeg" aria-labelledby="sortLbl"><button data-v="practiced">最近练习</button><button data-v="created">最近添加</button><button data-v="title">曲名</button></div>
+        </span>
       </div>
       <div class="list" id="songs" aria-label="曲子列表" aria-busy="true"><div class="empty-state"><div class="spinner center"></div></div></div>
       <nav class="pager" id="pager" aria-label="曲库翻页" hidden></nav>
-      <div class="hint foot-hint">30–40 小节的原谱识别约需 1–3 分钟。</div>
     </div>
   </section>
 

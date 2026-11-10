@@ -1,6 +1,5 @@
 /* 曲库页（index.html）的样式；共用部分和颜色、字号等变量在 /static/ui.css */
 .lib-stack { margin-top: var(--sp-3); }
-.foot-hint { margin: 0 var(--sp-1); }
 .spinner.center { margin: 0 auto; }
 .err-text { color: var(--red); }
 .ok-text { color: var(--green); }
@@ -33,12 +32,19 @@
 .song-row .pick { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex: none; margin-right: 2px; }
 .song-row.on { background: var(--accent-soft); }
 .song-row.on .sub, .song-row.on .state { color: var(--fg-2); } /* 淡强调色底上 --muted 不到 4.5:1 */
+/* 归档的曲子：曲名、图标淡下去（文字仍是 --muted，对比度够） */
+.song-row.archived .title { color: var(--muted); }
+.song-row.archived .src-ic { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--faint); }
 
 /* 曲库工具条：搜索、标签筛选、排序 */
 .lib-tools { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .lib-tools .search { width: 220px; }
+/* 右边一组（已归档、排序）：标签多了被挤到下一行时也靠右 */
+.lib-tools .lib-right { margin-left: auto; display: inline-flex; align-items: center; gap: var(--sp-2); }
 .lib-tools .chips button { border: 1px solid var(--line); background: var(--card); color: var(--fg-2); }
 .lib-tools .chips button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.lib-tools .arch-filter { border: 1px solid var(--line); background: var(--card); color: var(--fg-2); }
+.lib-tools .arch-filter[aria-pressed="true"] { border-color: var(--accent); }
 
 /* 选择模式（导出曲子包） */
 /* 翻页条（曲库列表下面，超过一页才显示） */

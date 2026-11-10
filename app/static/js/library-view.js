@@ -150,10 +150,11 @@ export function sortSongs(list, sort) {
   } else list.sort(byCreated);
   return list;
 }
-/** 搜索（q 已转小写，匹配曲名、艺人、标签）+ 标签筛选 + 排序，返回新数组 */
-export function filterSongs(songs, { q = '', tag = '', sort = 'practiced' } = {}) {
+/** 搜索（q 已转小写，匹配曲名、艺人、标签）+ 标签筛选 + 排序，返回新数组。
+ * archived：false（默认）只看没归档的，true 只看归档的 */
+export function filterSongs(songs, { q = '', tag = '', sort = 'practiced', archived = false } = {}) {
   const hit = s => [s.title, s.artist, ...(s.tags || [])].some(x => (x || '').toLowerCase().includes(q));
-  return sortSongs(songs.filter(s => (!tag || (s.tags || []).includes(tag)) && (!q || hit(s))), sort);
+  return sortSongs(songs.filter(s => !!s.archived === !!archived && (!tag || (s.tags || []).includes(tag)) && (!q || hit(s))), sort);
 }
 
 // ---------------- 翻页 ----------------
