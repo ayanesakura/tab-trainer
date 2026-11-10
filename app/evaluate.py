@@ -18,13 +18,16 @@ import logging
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
-from app import config, recognize, refine, store
+from app import config, recognize, refine, review, store
 from app.errors import NotFound
 from app.llm import Claude, LLMConfig, friendly, price_of
 from app.music import warn_code_of
+from app.systems import plan_page_systems, should_split
+from app.transcribe import RowOptions, transcribe_system
 
 log = logging.getLogger("tab_trainer.evaluate")
 
@@ -134,11 +137,20 @@ def rows_to_eval(truth: dict, systems: list[int] | None) -> list[int]:
 
 
 def start_ts(truth: dict, si: int) -> list[int] | None:
-    """第 si 行开头生效的拍号：前面各行最后一个小节的拍号（这一行自己第 1 小节写的变拍号不算，模型在图上看得到；
-    和应用里一样，见 recognize._row_start_ts）。和全曲拍号一样时返回 None（应用里这时不特别告诉模型）。"""
-    prev = [b for b in truth["bars"] if b["system"] < si]
-    ts = (prev[-1].get("time_signature") if prev else None) or truth["meta"]["time_signature"]
-    return None if ts == truth["meta"]["time_signature"] else ts
+    """第 si 行开头生效的拍号：前面各行最后一个小节的拍号（这一行自己第 1 小节写的变拍号不算，模型在图上看得到）。
+    和应用里同一个算法（review.row_start_ts）；标准答案（GP 转换的）每个小节都有算好的拍号、没有 ts_change，
+    所以每个小节都按“写明了自己的拍号”走一遍。和全曲拍号一样时返回 None（应用里这时不特别告诉模型）。"""
+    meta_ts = truth["meta"]["time_signature"]
+    bars = [{"system": b["system"], "ts_change": b.get("time_signature") or meta_ts} for b in truth["bars"]]
+    ts = review.row_start_ts(bars, truth["meta"], si)
+    return None if ts == meta_ts else ts
+
+
+def row_options(double: str, split: bool | None) -> RowOptions:
+    """评测时识别一行的选项：和应用里一样（recognize.options 的开关），双重校对、切半按命令行指定。"""
+    return replace(
+        recognize.options(), double_check=double, split=recognize.SPLIT_ROWS if split is None else split
+    )
 
 
 def estimate(
@@ -149,7 +161,7 @@ def estimate(
     双重校对 all 每行至少读两遍、最多三遍，doubts 一到三遍。"""
     do_split = recognize.SPLIT_ROWS if split is None else split
     base = sum(
-        2 if do_split and si < len(truth["systems"]) and recognize._should_split(truth["systems"][si]) else 1
+        2 if do_split and si < len(truth["systems"]) and should_split(truth["systems"][si]) else 1
         for si in sys_idx
     )
     reads = {"off": (1, 1), "doubts": (1, 3), "all": (2, 3)}[double]
@@ -169,7 +181,7 @@ def relayout_truth(sid: str, truth: dict) -> int:
         by_page.setdefault(s["page"], []).append(i)
     n = 0
     for pi, idx in by_page.items():
-        new = recognize.plan_page_systems(sid, truth["pages"][pi], pi)
+        new = plan_page_systems(sid, truth["pages"][pi], pi)
         old = [truth["systems"][i] for i in idx]
         if len(new) != len(old) or any(
             len(a.get("spans") or []) != len(b.get("spans") or []) for a, b in zip(old, new, strict=True)
@@ -219,6 +231,7 @@ def run(
     by_sys: dict[int, list[dict]] = {}
     for b in truth["bars"]:
         by_sys.setdefault(b["system"], []).append(b)
+    opts = row_options(double, split)
 
     def one(si: int):
         first = by_sys[si][0]["n"] if by_sys.get(si) else 1
@@ -226,16 +239,7 @@ def run(
             # 这一行开头的拍号按标准答案给（整首识别时由前面各行的结果带过来，见 recognize.run_parse）
             return (
                 si,
-                recognize.transcribe_system(
-                    claude,
-                    sid,
-                    truth,
-                    si,
-                    first,
-                    start_ts=start_ts(truth, si),
-                    double_check=double,
-                    split=split,
-                ),
+                transcribe_system(claude, sid, truth, si, first, start_ts=start_ts(truth, si), opts=opts),
                 None,
             )
         except Exception as e:  # noqa: BLE001 - 单行失败照样出报告
@@ -299,7 +303,7 @@ def run(
                 "broke": sum(1 for r in rows if r["cmp"]["exact"] and not r["cmp_refined"]["exact"]),
                 "errors": sum(1 for r in rows if r["refine_error"]),
                 # 模型提出的改动：再核对后确认了几个、几遍对不上没改几个（refine.CONFIRM_CHANGES）
-                "confirm_changes": refine.CONFIRM_CHANGES,
+                "confirm_changes": refine.options().confirm,
                 "confirmed": sum(r["refine_status"] == "confirmed" for r in rows),
                 "rejected": sum(r["refine_status"] == "rejected" for r in rows),
                 "bar_exact_before": round(before / n, 4) if n else 0.0,
@@ -311,7 +315,7 @@ def run(
         "model": cfg.model,
         "effort": cfg.effort,
         "double_check": double,
-        "split": recognize.SPLIT_ROWS if split is None else split,
+        "split": opts.split,
         "relayout_rows": replaced if relayout else None,
         "systems": sys_idx,
         "bar_count_mismatch": {
@@ -348,6 +352,7 @@ def run_refine(
     只核对要评分的小节（有 eval_bars 时）；用单独的模型客户端，费用分开记。
     返回 ({(行号, 行内序号): {events（没改是 None）, diff, status（见 refine.verify）, error}}, {cost_usd, usage, seconds})。"""
     claude = Claude(cfg)
+    verify_opts = refine.options()
     meta = truth["meta"]
     by_sys: dict[int, list[dict]] = {}
     for b in truth["bars"]:
@@ -386,6 +391,7 @@ def run_refine(
                 prev["events"] if prev else None,
                 ts,
                 shapes=refine.context_shapes(b, prev),
+                opts=verify_opts,
             )
         except Exception as e:  # noqa: BLE001 - 一个小节失败照样出报告
             return (si, k), {"events": None, "diff": "", "status": "error", "error": friendly(e)}
@@ -525,7 +531,7 @@ def main() -> None:
         "--split",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="太宽的行切成两半识别（recognize._should_split）；默认和应用里一样（recognize.SPLIT_ROWS）",
+        help="太宽的行切成两半识别（systems.should_split）；默认和应用里一样（recognize.SPLIT_ROWS）",
     )
     ap.add_argument(
         "--refine",

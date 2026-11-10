@@ -1,46 +1,58 @@
-"""识别图片 / PDF 谱子：读谱头 → 版面检测 → 逐行调用 Claude 识别（本机 OCR 校对、有问题返修一次）→ 练习建议。"""
+"""识别图片 / PDF 谱子的任务：读谱头 → 版面（app/systems.py）→ 逐行识别（app/transcribe.py：本机 OCR 校对、有问题返修）
+→ 复核变拍号和和弦图（app/review.py）→ 练习建议；整首重新识别、单行重新识别、补页的新行、重试失败的行。
+
+这里只管编排：排队等全局名额（jobs.run_queued）、几行并行、每行结束写回、任务的开始和结束。
+识别的选项（双重校对、切半、OCR 校对、标弦号）在任务开始时定好一次（options），之后各行都按它。
+"""
 
 from __future__ import annotations
 
 import logging
 import threading
-from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
-from fractions import Fraction
 
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-
-from app import config, jobs, ocr, prompts, refine, staleness, state, store
+from app import config, jobs, ocr, refine, review, staleness, state, store
 from app.config import settings
 from app.errors import Busy, Invalid
 from app.jobs import Cancelled
-from app.layout import detect_page
-from app.llm import LLM, LLMError, friendly, request_id_of
+from app.llm import LLM, friendly, request_id_of
 from app.model import is_score, notes_key
-from app.music import (
-    PLACEHOLDER_MSG,
-    apply_time_signatures,
-    bar_length,
-    check_bar,
-    clean_events,
-    clean_repeats,
-    clean_shapes,
-    clean_time_signature,
-    new_bar_id,
-    normalize_meta,
-    parse_dur,
-    rest_bar,
-    warn,
-)
+from app.music import apply_time_signatures, normalize_meta
+from app.ocrcheck import ocr_disagreements, tied_in
+from app.systems import WHOLE_PAGE_BARS, label_strings, plan_page_systems, plan_systems, tab_lines
+from app.transcribe import RowOptions, transcribe_system
+
+# 别的模块、脚本和测试按 recognize.xxx 用的名字
+__all__ = [
+    "RowOptions",
+    "label_strings",
+    "ocr_disagreements",
+    "plan_page_systems",
+    "plan_systems",
+    "tab_lines",
+    "transcribe_system",
+]
 
 log = logging.getLogger("tab_trainer.recognize")
 
-LABEL_STRINGS = True  # 在裁剪图上标弦号（见 label_strings）
-OCR_CHECK = True  # 用本机数字识别校对 AI 读出的弦和品（见 app/ocr.py、ocr_disagreements）
-# 太宽的行切成两半识别（见 _should_split / _transcribe_halves）。评测：难的指弹行两次平均 94.7%（不切三次平均 90.6%），
-# 合成弹唱谱 99%（不切约 98%）；费用多约 23%，耗时不变
+# 识别的开关（任务开始时读，见 options；测试可以直接改）
+LABEL_STRINGS = True  # 在裁剪图上标弦号（见 systems.label_strings）
+OCR_CHECK = True  # 用本机数字识别校对 AI 读出的弦和品（见 app/ocr.py、app/ocrcheck.py）
+# 太宽的行切成两半识别（见 systems.should_split / transcribe._transcribe_halves）。评测：难的指弹行两次平均 94.7%
+# （不切三次平均 90.6%），合成弹唱谱 99%（不切约 98%）；费用多约 23%，耗时不变
 SPLIT_ROWS = True
+
+
+def options() -> RowOptions:
+    """这次识别任务的选项：上面的开关、ocr.MARKS_IN_BLOCK 和设置里的双重校对，读一次，之后各行都按它
+    （任务进行中改设置不会让同一首曲子前后几行按不同的方式识别）。"""
+    return RowOptions(
+        double_check=config.double_check(),
+        split=SPLIT_ROWS,
+        ocr_check=OCR_CHECK,
+        label_strings=LABEL_STRINGS,
+        ocr_marks=ocr.MARKS_IN_BLOCK,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -138,719 +150,16 @@ def _fail_unfinished_rows(s: dict, why: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 版面
-# ---------------------------------------------------------------------------
-def plan_systems(sid: str, song: dict) -> list[dict]:
-    return [s for pi, page in enumerate(song["pages"]) for s in plan_page_systems(sid, page, pi)]
-
-
-def plan_page_systems(sid: str, page: dict, pi: int) -> list[dict]:
-    """一页上的谱行（裁剪范围、小节位置、弦线）。检测不到六线谱时整页算一行。"""
-    lay = detect_page(store.page_image(sid, page))
-    if not lay["systems"]:
-        return [
-            {"page": pi, "crop": [0, page["width"], 0, page["height"]], "spans": None, "status": "pending"}
-        ]
-    systems = []
-    for s in lay["systems"]:
-        pad = 12
-        x0 = max(0, s["x0"] - 70)  # 带上行首的谱号 / 小节号
-        crop = [x0, min(page["width"], s["x1"] + pad), s["top"], s["bottom"]]
-        systems.append(
-            {"page": pi, "crop": crop, "spans": s["bars"], "lines": s["lines"], "status": "pending"}
-        )
-    return systems
-
-
-def tab_lines(sid: str, song: dict, sysinfo: dict) -> list[float] | None:
-    """这一行六线谱 6 根弦线在裁剪图里的纵坐标。旧曲子没存，就对整页重新检测，取落在裁剪范围里的那一行。"""
-    x0, x1, y0, y1 = sysinfo["crop"]
-    lines = sysinfo.get("lines")
-    if not lines:
-        page = song["pages"][sysinfo["page"]]
-        for s in detect_page(store.page_image(sid, page))["systems"]:
-            if y0 <= s["lines"][0] and s["lines"][-1] <= y1 and s["x0"] < x1 and x0 < s["x1"]:
-                lines = s["lines"]
-                break
-    return [y - y0 for y in lines] if lines else None
-
-
-def label_strings(img: Image.Image, lines: list[float], x_start: float) -> Image.Image:
-    """在六线谱左边每根弦线旁标上红色的弦号 1–6。模型数线时容易把低音弦的数字往下错一根，
-    直接看图对照弦号比数线可靠（只告诉它坐标没有用，评测里错误照旧）。"""
-    img = img.convert("RGB").copy()
-    sp = (lines[-1] - lines[0]) / 5
-    size = max(9, round(sp * 0.85))
-    try:
-        font = ImageFont.load_default(size=size)
-    except TypeError:  # 老版本 Pillow
-        font = ImageFont.load_default()
-    d = ImageDraw.Draw(img)
-    x = max(1, x_start - size * 1.6)
-    for i, y in enumerate(lines):
-        d.text((x, y), str(i + 1), fill=(220, 30, 30), font=font, anchor="lm")
-    return img
-
-
-# ---------------------------------------------------------------------------
-# 本机 OCR 校对
-# ---------------------------------------------------------------------------
-def _note_names(bag) -> str:
-    return "、".join(f"{s}弦{f}品" + (f"×{n}" if n > 1 else "") for (s, f), n in sorted(bag.items()))
-
-
-def ocr_disagreements(
-    bars: list[dict],
-    ocr_bars: list[list[tuple[int, int]]],
-    chord_sheet: bool = False,
-    tied_in: dict[int, int] | None = None,
-) -> dict[int, tuple]:
-    """逐小节比较 AI 结果和本机数字识别读到的（弦, 品）。返回 {小节序号: (只有 OCR 读到的, 只有 AI 写了的)}。
-
-    - OCR 在这个小节什么都没读到：不判断（可能是没读出来，不代表没有音）；
-    - 死音（谱上写 x）OCR 不读，不比较；倚音的小数字 OCR 会读到，算进去；
-    - 人工泛音旁边标的“品位 + 12”（如 2<14>）、点弦泛音点的品（如 5<22> 的 22）OCR 会多读一个，允许；
-    - 整行一致率不到一半，或 OCR 只读对了 AI 写的音的不到 60%：多半是 OCR 在这种排版上读不准，整行都不判断。
-    tied_in：图上第一个小节之前每根弦最后一个音的品位（右半行接左半的音、一行接上一行的音；{} = 前面没有音）。
-    None = 不知道（各行并行识别，上一行还没结果）：第一个小节 AI 这边没有对不上的音时，OCR 多读的音每根弦
-    放过一个（可能是接上一行的延续音），和后面小节的规则一样；但 AI 在小节开头这根弦上已经写了新音的不放过：
-    延续音占着小节开头的这根弦，那里不会同时起一个新音，多出来的只能是小节中间漏掉的音。
-    """
-    pairs = []
-    ai_total = 0  # 整行 AI 写的音（不含闷音）
-    last_fret: dict[int, int] = dict(
-        tied_in or {}
-    )  # 每根弦上最后一个音的品位（判断跨小节线、写成括号的延续音）
-    for i, (bar, seen) in enumerate(zip(bars, ocr_bars, strict=False)):
-        tied_ok = set(last_fret.items())
-        unknown_tie = i == 0 and tied_in is None
-        ai: Counter = Counter()
-        harmonic_marks: Counter = Counter()
-        first = bar["events"][0]["notes"] if bar["events"] else []
-        struck_at_start = {n["string"] for n in first if "x" not in n["tech"]}
-        for e in bar["events"]:
-            for n in e["notes"]:
-                if "x" in n["tech"]:
-                    continue
-                ai[(n["string"], n["fret"])] += 1
-                ai_total += 1
-                last_fret[n["string"]] = n["fret"]
-                if n.get("grace", -1) >= 0:
-                    ai[(n["string"], n["grace"])] += 1
-                if "ah" in n["tech"]:
-                    harmonic_marks[(n["string"], n["fret"] + 12)] += 1
-                if n.get("harm"):  # 点弦泛音：谱上 <19> 这样的点弦位置 OCR 也会读到，不是另一个音
-                    harmonic_marks[(n["string"], n["harm"])] += 1
-        got = Counter(seen) - harmonic_marks
-        # 两位数的两个数字隔得稍远时 OCR 会读成两个音（11 → 1、1）：AI 写的两位数能由这几位拼出来就算一致
-        for (st, f), k in list((ai - got).items()):
-            parts = Counter((st, int(d)) for d in str(f)) if f >= 10 else None
-            for _ in range(k):
-                if parts and not (parts - (got - ai)):
-                    got -= parts
-                    got[(st, f)] += 1
-        # 连音线跨过小节线延续的音，谱上常写成“(5)”，OCR 会读到，但它不是新起拍：上一小节这根弦的最后一个音
-        # 就是这个品位、而且 AI 这边没有对不上的音（读错弦是两边各多一个，延续音只是 OCR 多一个），就不算多出来的
-        if not (ai - got):
-            loose: set[int] = set()  # 不知道上一行时，已经放过一个的弦
-            for key, k in list((got - ai).items()):
-                if key in tied_ok:
-                    got[key] -= k
-                elif unknown_tie and key[0] not in loose and key[0] not in struck_at_start:
-                    got[key] -= 1
-                    loose.add(key[0])
-            got += Counter()  # 去掉计数为 0 的
-        if got:
-            pairs.append((i, ai, got))
-    agree = sum(sum((ai & got).values()) for _, ai, got in pairs)
-    total = sum(max(sum(ai.values()), sum(got.values())) for _, ai, got in pairs)
-    if not total or (not chord_sheet and agree / total < 0.5):
-        return {}
-    # OCR 在整行里只读对了 AI 结果的一小部分（斜体 / 手写风格的数字、很糊的截图）：它在这种排版上靠不住，
-    # 这时的“不一致”多半是 OCR 读错，提示给模型反而会把对的改错。GP 等软件导出的谱子每行都在 78% 以上
-    # 弹唱谱的 × 是按和弦图换算的，OCR 本来就看不到：改看 OCR 读到的数字里有多少和 AI 对得上
-    ocr_total = sum(sum(got.values()) for _, _, got in pairs)
-    if (agree < 0.7 * ocr_total) if chord_sheet else (agree < 0.6 * ai_total):
-        return {}
-    return {i: (got - ai, ai - got) for i, ai, got in pairs if got != ai}
-
-
-# ---------------------------------------------------------------------------
-# 识别一行
+# 逐行识别（整首、补页的新行、重试失败的行共用；单行重新识别只有一行，直接调 transcribe_queued）
 # ---------------------------------------------------------------------------
 def transcribe_queued(*args, cancel: threading.Event | None = None, **kw) -> list[dict]:
-    """排队等全局名额再识别一行；排队期间点了取消就不再识别。"""
+    """排队等全局名额再识别一行（参数同 transcribe.transcribe_system）；排队期间点了取消就不再识别。"""
     return jobs.run_queued(lambda: transcribe_system(*args, cancel=cancel, **kw), cancel)
 
 
-def transcribe_system(
-    claude: LLM,
-    sid: str,
-    song: dict,
-    si: int,
-    first_bar: int,
-    hint: str = "",
-    cancel: threading.Event | None = None,
-    start_ts: list[int] | None = None,
-    double_check: str | None = None,
-    split: bool | None = None,
-    context: str = "",
-    tied_in: dict[int, int] | None = None,
-) -> list[dict]:
-    """识别一行。double_check：off / doubts（第一遍有警告或“不确定”才再读）/ all，见 config.double_check_mode；
-    None = 按设置。split：一行太宽时切成左右两半分别识别（None = 按 SPLIT_ROWS，见 _should_split）。
-    context：程序给模型的补充说明（不是用户的话）；tied_in：见 ocr_disagreements（见 _tied_in）。"""
-    if double_check is None:
-        double_check = config.double_check()
-    sysinfo = song["systems"][si]
-    if (SPLIT_ROWS if split is None else split) and _should_split(sysinfo):
-        return _transcribe_halves(
-            claude, sid, song, si, first_bar, hint, cancel, start_ts, double_check, context, tied_in
-        )
-    page = song["pages"][sysinfo["page"]]
-    x0, x1, y0, y1 = sysinfo["crop"]
-    img = store.page_image(sid, page).crop((x0, y0, x1, y1))
-    spans = [(a - x0, b - x0) for a, b in sysinfo["spans"]] if sysinfo["spans"] else None
-    lines = tab_lines(sid, song, sysinfo) if spans else None
-    ocr_bars = None
-    if spans and lines and OCR_CHECK:
-        try:
-            ocr_bars = ocr.read_system(np.asarray(img.convert("L")), lines, spans)
-        except Exception as e:  # noqa: BLE001 - 校对只是锦上添花，出错就跳过
-            log.warning("song=%s system=%d ocr failed: %s", sid, si, e)
-    labeled = bool(lines and LABEL_STRINGS)
-    if labeled:
-        img = label_strings(img, lines, spans[0][0])
-    meta = song["meta"]
-
-    def run(previous=None, problems=None):
-        if cancel is not None and cancel.is_set():
-            raise Cancelled()
-        raw = claude.transcribe(
-            img,
-            meta,
-            first_bar,
-            spans,
-            hint=hint,
-            previous=previous,
-            problems=problems,
-            labeled_strings=labeled,
-            start_ts=start_ts,
-            **({"context": context} if context else {}),
-        )
-        bars, issues, lengths = [], [], []
-        # 弹唱谱：这一行印出来的和弦图（和弦名 → 1–6 弦品位）。有和弦图时谱上的 x 按和弦换算成了品位，
-        # 本机 OCR 只读数字、看不到这些音，“AI 写了、OCR 没读到”不再算不一致
-        shapes = clean_shapes({str(c.get("name")): c.get("frets") for c in raw.get("chords") or []})
-        # 当前生效的拍号：这一行开头的（前面几行变过拍号时由调用方给出），遇到这一行里写的变拍号就换
-        cur_ts = start_ts if start_ts and start_ts != meta["time_signature"] else None
-        for i, b in enumerate(raw.get("bars", [])):
-            change = clean_time_signature(b.get("time_signature") or [])
-            cur_ts = change or cur_ts
-            ctx = {"time_signature": cur_ts} if cur_ts and cur_ts != meta["time_signature"] else {}
-            try:
-                events = clean_events(b.get("events", []))
-            except ValueError as e:
-                events = []
-                issues.append(("other", f"第 {first_bar + i} 小节数据格式错误：{e}"))
-            probs = check_bar(events, meta, bar=ctx)
-            # issues：(警告 code, 发给模型返修的文字)
-            issues += [
-                (p["code"], f"第 {first_bar + i} 小节：{p['msg']}")
-                for p in check_bar(events, meta, info=False, bar=ctx)
-            ]
-            if events:
-                lengths.append(sum((parse_dur(e["dur"]) for e in events), Fraction(0)))
-            bar = {
-                "events": events,
-                "tip": b.get("tip", ""),
-                "uncertain": b.get("uncertain", ""),
-                "warn": probs,
-                **clean_repeats(b),
-            }
-            if change:
-                bar["ts_change"] = change
-            used = {e["chord"]: shapes[e["chord"]] for e in events if e.get("chord") in shapes}
-            if used:
-                bar["shapes"] = used
-            if not events:
-                bar.update(events=rest_bar(meta, ctx), placeholder=True)
-                bar["warn"] = [warn("placeholder", PLACEHOLDER_MSG)]
-            bars.append(bar)
-        if (
-            not cur_ts
-            and len(bars)
-            >= 2  # 只有 1 个小节（短的末行、1 小节的半行）看不出“整行一样长”，按普通的时值问题返修
-            and len(lengths) == len(bars)
-            and len(set(lengths)) == 1
-            and lengths[0] != bar_length(meta)
-        ):
-            # 整行每个小节一样长、只是和全曲拍号对不上，这一行又没写变拍号：可能是前面几行变了拍号（各行分开识别，
-            # 模型看不到），也可能是整行时值读错了。不要逼模型凑拍数，让它自己判断
-            n = lengths[0]
-            msg = (
-                f"这一行每个小节都是 {float(n):g} 拍，而全曲拍号每小节 {float(bar_length(meta)):g} 拍。"
-                "如果是谱子在前面的行里变了拍号（这一行的节奏本来就是这样），时值保持不变，"
-                "在这一行第一个小节的 time_signature 写上实际拍号；如果是时值读错了，就改正时值。"
-            )
-            issues = [x for x in issues if x[0] != "length"] + [("other", msg)]
-        if spans and len(bars) != len(spans):
-            issues.append(("other", f"应有 {len(spans)} 个小节，返回了 {len(bars)} 个"))
-        elif ocr_bars:
-            found = ocr_disagreements(bars, ocr_bars, chord_sheet=bool(shapes), tied_in=tied_in)
-            for i, (only_ocr, only_ai) in found.items():
-                if shapes:
-                    only_ai = []
-                    if not only_ocr:
-                        continue
-                parts = []
-                if only_ocr:
-                    parts.append(f"本地数字识别在图上读到 {_note_names(only_ocr)}，你的结果里没有")
-                if only_ai:
-                    parts.append(f"你写的 {_note_names(only_ai)} 它没读到")
-                issues.append(
-                    (
-                        "ocr_mismatch",
-                        f"第 {first_bar + i} 小节："
-                        + "；".join(parts)
-                        + "（它只读品位数字，也可能读错：请对照图片核对这几个位置，图上确实如此再改）",
-                    )
-                )
-                bars[i]["_ocr"] = (only_ocr, only_ai)
-        return raw, bars, issues
-
-    def rank(bars, issues) -> tuple[bool, int]:
-        # 小节数对的优先（小节数不对时 OCR 不比，问题数显得少），再看问题少的
-        return (bool(spans) and len(bars) != len(spans), len(issues))
-
-    def read_once() -> tuple[list[dict], list]:
-        """读一遍这一行：有问题返修一次；返修后小节数还不对就从头再读一次。"""
-        raw, bars, issues = run()
-        if issues:
-            texts = [t for _, t in issues]
-            log.info("request_id=%s song=%s system=%d retry: %s", claude.last_request_id, sid, si, texts)
-            try:
-                _raw2, bars2, issues2 = run(previous=raw, problems=texts)
-            except Cancelled:
-                raise
-            except Exception as e:  # noqa: BLE001 - 返修出错（过载、断线）：用第一次的结果，警告照常标在小节上
-                log.warning("request_id=%s song=%s system=%d retry failed: %s", request_id_of(e), sid, si, e)
-            else:
-                if rank(bars2, issues2) <= rank(bars, issues):
-                    bars, issues = bars2, issues2
-        if spans and len(bars) != len(spans):
-            # 返修后小节数还是不对（模型漏了 / 合并了整小节，比读错一个音严重得多）：不带上次的结果重新读一遍，取问题少的
-            log.info(
-                "request_id=%s song=%s system=%d bar count still wrong, rereading",
-                claude.last_request_id,
-                sid,
-                si,
-            )
-            try:
-                _raw3, bars3, issues3 = run()
-            except Cancelled:
-                raise
-            except Exception as e:  # noqa: BLE001 - 重读出错：用前面的结果
-                log.warning("request_id=%s song=%s system=%d reread failed: %s", request_id_of(e), sid, si, e)
-            else:
-                if rank(bars3, issues3) < rank(bars, issues):
-                    bars, issues = bars3, issues3
-        return bars, issues
-
-    bars, _ = read_once()
-    doubtful = any(
-        any(w.get("code") not in _INFO_ONLY for w in b.get("warn") or [])
-        or b.get("_ocr")
-        or str(b.get("uncertain") or "").strip()
-        for b in bars
-    )
-    if (
-        spans
-        and len(bars) == len(spans)
-        and (double_check == "all" or (double_check == "doubts" and doubtful))
-    ):
-        bars = _double_check(bars, read_once, len(spans), sid, si)
-    if (
-        not bars and spans
-    ):  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
-        raise LLMError("模型没有读出这一行的小节，请重新识别这一行", getattr(claude, "last_request_id", None))
-    # 检测不到六线谱、整页当一行的（spans 为 None）：模型说这一页没有六线谱（封面、歌词页）就是 0 个小节，这一行照常算完成
-
-    out = []
-    for b in bars:
-        only = b.pop("_ocr", None)
-        if only:
-            only_ocr, only_ai = only
-            msg = "本地数字识别和 AI 结果不一致"
-            if only_ocr:
-                msg += f"：谱上读到 {_note_names(only_ocr)}"
-            if only_ai:
-                msg += f"{'，' if only_ocr else '：'}AI 写的是 {_note_names(only_ai)}"
-            b["warn"] = [*b["warn"], warn("ocr_mismatch", msg + "。请对照原谱核对")]
-    # 小节数和检测到的小节线对得上，才按位置给每个小节它自己的区域；对不上（多了 / 漏了小节）时第 k 个小节不一定是
-    # 第 k 个区间，按位置分会让精修拿别的小节的图去核对（refine.refinable 也会挡掉这样的行），都给整行的区域
-    exact = bool(spans) and len(bars) == len(spans)
-    for i, b in enumerate(bars):
-        if exact:
-            a, c = sysinfo["spans"][i]
-            region = [max(0, a - 8), min(page["width"], c + 8), y0, y1]
-        else:
-            region = [x0, x1, y0, y1]
-        out.append({"id": new_bar_id(), "system": si, "page": sysinfo["page"], "region": region, **b})
-    return out
-
-
-def _should_split(sysinfo: dict) -> bool:
-    """这一行切成两半能不能明显看得更清楚：整行发给模型时受最长边限制放不大（宽的行、高分辨率截图），
-    切开以后每半能多放大 1.4 倍以上；至少 2 个小节。"""
-    spans = sysinfo.get("spans") or []
-    if len(spans) < 2:
-        return False
-    x0, x1, y0, y1 = sysinfo["crop"]
-    w, h = x1 - x0, y1 - y0
-
-    def scale(width: float) -> float:
-        return min(3.0, 2400 / width, 2576 / max(width, h))
-
-    return scale(w / 2 + 40) >= 1.4 * scale(w)
-
-
-def _transcribe_halves(
-    claude: LLM,
-    sid: str,
-    song: dict,
-    si: int,
-    first_bar: int,
-    hint: str,
-    cancel: threading.Event | None,
-    start_ts: list[int] | None,
-    double_check: str,
-    context: str = "",
-    tied_in: dict[int, int] | None = None,
-) -> list[dict]:
-    """把一行切成左右两半，先识别左半，再带上左半结束时的拍号和和弦识别右半（右半开头延续的和弦，
-    图上可能看不到它的和弦图）。图小了一半，能放大得更多，密集的符杠、小数字更容易看清。"""
-    sysinfo = song["systems"][si]
-    spans = sysinfo["spans"]
-    k = (len(spans) + 1) // 2
-    x0, x1, y0, y1 = sysinfo["crop"]
-    lines = sysinfo.get("lines") or []
-    sp = (lines[-1] - lines[0]) / 5 if len(lines) == 6 else 12
-    cut = spans[k][0]
-    halves = [
-        {**sysinfo, "crop": [x0, min(x1, int(cut + sp)), y0, y1], "spans": spans[:k]},
-        {**sysinfo, "crop": [max(x0, int(cut - sp * 2.5)), x1, y0, y1], "spans": spans[k:]},
-    ]
-
-    def sub(half: dict) -> dict:
-        systems = list(song["systems"])
-        systems[si] = half
-        return {**song, "systems": systems}
-
-    left = transcribe_system(
-        claude,
-        sid,
-        sub(halves[0]),
-        si,
-        first_bar,
-        hint,
-        cancel,
-        start_ts,
-        double_check,
-        split=False,
-        context=context,
-        tied_in=tied_in,
-    )
-    meta = song["meta"]
-    ts = start_ts or meta["time_signature"]
-    for b in left:
-        ts = b.get("ts_change") or ts
-    chord = next((e["chord"] for b in reversed(left) for e in reversed(b["events"]) if e.get("chord")), None)
-    shapes = {k_: v for b in left for k_, v in (b.get("shapes") or {}).items()}
-    right = transcribe_system(
-        claude,
-        sid,
-        sub(halves[1]),
-        si,
-        first_bar + len(left),
-        hint,
-        cancel,
-        ts if ts != meta["time_signature"] else None,
-        double_check,
-        split=False,
-        context=prompts.right_half_context(context, chord, shapes.get(chord) if chord else None),
-        tied_in=_last_frets(left),
-    )
-    return left + right
-
-
-def _tied_in(song: dict, si: int) -> dict[int, int] | None:
-    """第 si 行开头之前每根弦最后一个音的品位（给 OCR 校对认行首的延续音）：第一行前面没有音；
-    上一行还没有结果（各行并行识别）时不知道，返回 None。"""
-    if si == 0:
-        return {}
-    prev = [b for b in song.get("bars") or [] if b.get("system") == si - 1]
-    return _last_frets(prev) if prev else None
-
-
-def _last_frets(bars: list[dict]) -> dict[int, int]:
-    """每根弦上最后一个音的品位（闷音不算）。"""
-    out: dict[int, int] = {}
-    for b in bars:
-        for e in b["events"]:
-            for n in e["notes"]:
-                if "x" not in n["tech"]:
-                    out[n["string"]] = n["fret"]
-    return out
-
-
-def _bar_key(bar: dict) -> tuple:
-    """比较两遍识别是否一致：每个起拍的时间、弦、品和技巧（点弦泛音连同点的品），以及小节总长
-    （最后一个音的时值不同也算不一样）。"""
-    t, out = Fraction(0), []
-    for e in bar["events"]:
-        if e["notes"]:
-            out.append(
-                (
-                    t,
-                    tuple(
-                        sorted(
-                            (n["string"], n["fret"], tuple(sorted(n["tech"])), n.get("harm", 0))
-                            for n in e["notes"]
-                        )
-                    ),
-                )
-            )
-        t += parse_dur(e["dur"])
-    return (*out, t)
-
-
-# 只是提醒、读对了也会有的警告（五连音之类不在播放网格上）：doubts 模式不为它再读一遍
-_INFO_ONLY = frozenset({"off_grid"})
-# 读错的明显迹象：两遍读法不一样又没有多数时，选没有这些警告的那遍
-_BAD_READ = frozenset({"length", "placeholder", "empty", "string_range", "ocr_mismatch"})
-
-
-def _bad_signs(bar: dict) -> int:
-    return sum(1 for w in bar.get("warn") or [] if w.get("code") in _BAD_READ) + bool(bar.get("_ocr"))
-
-
-def _double_check(first: list[dict], read_once, n: int, sid: str, si: int) -> list[dict]:
-    """双重校对：再独立读一遍；两遍不一样的小节读第三遍当裁判，和哪一遍一样就用哪一遍。
-    三遍都不一样的小节用第一遍的结果，标上“不确定”，提醒对照原谱。（评测：同一批难的小节，单遍三次 85%–93%，
-    双重校对一次 91%：能减少偶尔的读错，提升不稳定；费用约 2 倍）"""
-    try:
-        second, _ = read_once()
-    except Cancelled:
-        raise
-    except Exception as e:  # noqa: BLE001 - 第二遍失败：用第一遍
-        log.warning("song=%s system=%d double check failed: %s", sid, si, e)
-        return first
-    if len(second) != n:
-        return first
-    diff = [i for i in range(n) if _bar_key(first[i]) != _bar_key(second[i])]
-    if not diff:
-        return first
-    log.info("song=%s system=%d double check: bars %s differ, reading a third time", sid, si, diff)
-    try:
-        third, _ = read_once()
-    except Cancelled:
-        raise
-    except Exception as e:  # noqa: BLE001
-        log.warning("song=%s system=%d third read failed: %s", sid, si, e)
-        third = []
-    out = list(first)
-    for i in diff:
-        k3 = _bar_key(third[i]) if len(third) == n else None
-        if k3 is not None and k3 == _bar_key(second[i]):
-            out[i] = second[i]
-        elif k3 is None or k3 != _bar_key(first[i]):
-            # 没有多数：用明显问题少的那遍（一样多时用第一遍），标上“不确定”
-            pick = second[i] if _bad_signs(second[i]) < _bad_signs(first[i]) else first[i]
-            if k3 is None:
-                note = "两次识别这个小节结果不一样（第三次没读出来），请对照原谱核对。"
-            else:
-                note = "三次识别这个小节结果都不一样，请对照原谱核对。"
-            out[i] = {**pick, "uncertain": " ".join(x for x in (pick.get("uncertain", ""), note) if x)}
-    return out
-
-
-def _replace_system_bars(s: dict, si: int, bars: list[dict]) -> None:
-    """用新识别的小节替换第 si 行原来的小节，再按行和行内顺序重新编号。
-    和原来这一行的小节按内容 + 位置对上的，沿用 id、问答（练习记录按 id 自然保留），见 staleness.reconcile_bars。"""
-    staleness.reconcile_bars(s, [b for b in s["bars"] if b["system"] == si], bars, staleness.ROW)
-    for k, bar in enumerate(bars):
-        bar["_order"] = k
-    s["bars"] = [b for b in s["bars"] if b["system"] != si] + bars
-    s["bars"].sort(key=lambda b: (b["system"], b.get("_order", 0)))
-    for i, bar in enumerate(s["bars"]):
-        bar["n"] = i + 1
-        bar.pop("_order", None)
-
-
-# ---------------------------------------------------------------------------
-# 整首
-# ---------------------------------------------------------------------------
-def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
-    """识别整首。
-
-    第一次识别（还没有小节）：一行识别完就写进曲子，练习页能边识别边看。
-    重新识别已有结果的曲子：新结果先放在内存里，原来的小节、调弦、手改、提示和练习记录都不动；
-    每一行都成功才一次性替换。有行失败、被取消或服务中断，原来的结果原样保留。
-    """
-    cancel = cancel or threading.Event()
-    claude = config.new_llm()
-    meter = jobs.UsageMeter(claude)  # 每行完成就把新增的用量记上（中途失败也不漏记）
-    try:
-        _run_parse(sid, cancel, claude, meter)
-    finally:  # 失败 / 取消时还没记上的（读谱头、没跑完的行）：已经发出去的请求也花了钱
-        meter.flush(sid)
-
-
-def _run_parse(sid: str, cancel: threading.Event, claude: LLM, meter: jobs.UsageMeter) -> None:
-    song = store.load(sid)
-    restage = bool(song.get("bars"))
-    store.update(sid, lambda s: _begin_parse(s, "读取谱头"))
-    head = claude.read_meta(store.page_image(sid, song["pages"][0]))
-    # 用户手改过的艺人、调弦、变调夹、拍号以用户的为准
-    meta = normalize_meta({**head, **(song.get("meta_user") or {})}, song.get("title", ""))
-    if not restage:
-        store.patch(sid, meta=meta)
-    store.patch(sid, progress={"stage": "分析版面", "done": 0, "total": 0})
-
-    if cancel.is_set():
-        raise Cancelled()
-    systems = plan_systems(sid, song)
-    work = {**song, "meta": meta, "systems": systems, "bars": []}  # 重新识别时新结果攒在这里
-    if not restage:
-        store.patch(sid, systems=systems, bars=[])
-    store.patch(sid, progress={"stage": "逐行识别", "done": 0, "total": len(systems)})
-
-    def on_row(si, bars, err):
-        # 失败 / 取消的行只标状态、不动小节：按变拍号重做的行失败时，第一遍识别出的小节还留着
-        status = "error" if err else "done"
-        if bars is not None:
-            _replace_system_bars(work, si, [dict(b) for b in bars])
-        work["systems"][si].update(status=status, error=err)
-
-        def apply(s):
-            if not restage:
-                if bars is not None:
-                    _replace_system_bars(s, si, bars)
-                    apply_time_signatures(s["bars"], s["meta"])
-                s["systems"][si].update(status=status, error=err)
-            s["progress"]["done"] += 1
-            meter.charge(s)
-
-        meter.update(sid, apply)
-
-    used, errors = _recognize_rows(
-        claude, sid, work, [(i, None) for i in range(len(systems))], cancel, on_row
-    )
-    if _fix_header_time_signature(work, song.get("meta_user") or {}):
-        # 谱头的拍号读错了：改成第 1 小节上写的。后面按旧拍号识别的行，下面按“开头实际拍号”重做；
-        # 第 1 行自己是按图上的拍号读的，不用重做
-        meta = work["meta"]
-        used[0] = meta["time_signature"]
-        if not restage:
-            store.update(sid, lambda s: _fix_header_time_signature(s, song.get("meta_user") or {}))
-
-    # 各行是并行识别的，前面某行写的变拍号后面的行看不到，模型会把小节硬凑成全曲拍号（每小节一样长，查不出来）。
-    # 按第一遍的结果算出每行开头实际的拍号，和识别时用的不同的行带上它再识别一次（没有变拍号的曲子不多花钱）。
-    # 重新识别已经有行失败：结果注定不会采用，不再为重做花钱
-    redo: list[tuple[int, list[int], str]] = []
-    if not cancel.is_set() and not (restage and errors):
-        if restage:  # 原来的结果没动，没有要锁的行
-            redo = _rows_to_redo(work["bars"], meta, used, skip_edited=False)
-            if redo:
-                store.patch(sid, progress=_redo_progress(redo))
-        elif _rows_to_redo(work["bars"], meta, used, skip_edited=False):  # 先看一眼：没有要重做的就不写
-
-            def begin_redo(s):
-                _lock_redo(s, used, redo)
-
-            store.update(sid, begin_redo)
-    if redo:
-        log.info("song=%s rerun rows (time signature / chord diagrams): %s", sid, redo)
-        errors += _recognize_rows(claude, sid, work, redo, cancel, on_row)[1]
-
-    if cancel.is_set():
-        raise Cancelled()
-    if restage and errors:
-        raise RestageFailed("；".join(errors))
-    if not work["bars"]:
-        if restage:
-            raise RestageFailed("没有识别出任何小节")
-        _end_parse(sid, "error", ("error", "；".join(errors) or "没有识别出任何小节（可能不是六线谱）"))
-        return
-    apply_time_signatures(work["bars"], work["meta"])
-    note = None
-    if restage:
-
-        def swap(s):
-            # 一次性换成新结果（曲名只存在 song.title，不受谱头影响）。新旧小节按内容对上，对上的保留 id、问答、练习记录和手改
-            # 识别期间用户改的谱头（只可能是艺人：调弦等识别时不能改）同样以用户的为准
-            work["meta"] = normalize_meta(
-                {**work["meta"], **(s.get("meta_user") or {})}, work["meta"]["title"]
-            )
-            changed = staleness.setting_changed(s.get("meta") or {}, work["meta"])
-            metas = (s.get("meta") or {}, work["meta"])
-            # 精修改过的小节：这个小节识别得和精修之前一样就保留精修的改正，否则不保留（见 reconcile_bars）
-            dropped = staleness.reconcile_bars(s, s["bars"], work["bars"], staleness.RESTAGE, changed, metas)
-            s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"])
-            if dropped.refines:  # 上次精修整首的结果（改了几个）不再是现在的样子
-                s.pop("refined", None)
-            return dropped
-
-        dropped: list[staleness.Dropped] = []
-        store.update(sid, lambda s: dropped.append(swap(s)))
-        lost = [
-            f"{n} 个{what}的小节和新结果对不上，{why}"
-            for n, what, why in (
-                (dropped[0].edits, "手改过", "改动没有保留"),
-                (dropped[0].refines, "精修改过", "精修的改动没有保留，可以再精修"),
-            )
-            if n
-        ]
-        if lost:
-            note = "重新识别完成；有 " + "；".join(lost) + "。"
-
-    try:
-        _finish_parse(sid, claude, meter, len(systems), restage, "；".join(errors) or note)
-    except Exception as e:
-        if restage:  # 新结果已经换上了，原来的结果不在了
-            raise Swapped(friendly(e)) from e
-        raise
-
-
-def _finish_parse(
-    sid: str, claude: LLM, meter: jobs.UsageMeter, n: int, restage: bool, msg: str | None
-) -> None:
-    """所有行都识别完、写好之后：生成练习建议，标成完成。"""
-    song = store.load(sid)
-    store.patch(sid, progress={"stage": "生成练习建议", "done": n, "total": n})
-    seen = {b["id"]: b["events"] for b in song["bars"]}
-    try:
-        plan = claude.practice_plan(song["meta"], song["bars"])
-    except Exception as e:  # noqa: BLE001 - 练习建议失败不影响使用
-        log.warning("request_id=%s song=%s practice plan failed: %s", request_id_of(e), sid, e)
-        plan = None
-
-    def finish(s, meta=song["meta"]):
-        if plan or not restage:  # 重新识别后生成建议失败：留着原来的建议（已标成过时）
-            staleness.store_plan(s, plan, seen, meta)
-        meter.charge(s)
-        state.finish(s, status="ready", notice=("warn", msg) if msg else None, source="parse")
-
-    meter.update(sid, finish)
-
-
-# ---------------------------------------------------------------------------
-# 逐行识别（整首、补页的新行共用；单行重新识别只有一行，直接调 transcribe_queued）
-# ---------------------------------------------------------------------------
 def first_bar_of(song: dict, si: int) -> int:
     """第 si 行的起始小节号：前面各行已有的小节数；前面还没识别出小节的行按检测到的小节数估
-    （识别失败的行、识别完了但没有小节的整页（没有六线谱的页）算 0，还没识别的整页一行按 8 估）。
+    （识别失败的行、识别完了但没有小节的整页（没有六线谱的页）算 0，还没识别的整页一行按 WHOLE_PAGE_BARS 估）。
     只用来告诉模型小节号，写回时统一重新编号。"""
     first = 1
     for k, info in enumerate(song["systems"][:si]):
@@ -858,7 +167,7 @@ def first_bar_of(song: dict, si: int) -> int:
         if n or info.get("status") in ("error", "done"):
             first += n
         else:
-            first += len(info["spans"]) if info.get("spans") else 8
+            first += len(info["spans"]) if info.get("spans") else WHOLE_PAGE_BARS
     return first
 
 
@@ -869,17 +178,20 @@ def _recognize_rows(
     rows: list[tuple],
     cancel: threading.Event,
     on_row,
+    opts: RowOptions | None = None,
 ) -> tuple[dict[int, list[int]], list[str]]:
     """并行识别 rows：(行号, 这一行开头的拍号；None = 按 song 里前面各行写的变拍号推算[, 程序给模型的补充说明（context）])。
     起始小节号和拍号在提交前按 song 算好。每行结束（成功、失败、取消）都在调用线程里调用
-    on_row(行号, 小节 | None, 错误说明 | None)。返回 (每行识别时用的开头拍号, 失败的说明)。"""
+    on_row(行号, 小节 | None, 错误说明 | None)。opts：这次任务的选项（None = 现在的 options()）。
+    返回 (每行识别时用的开头拍号, 失败的说明)。"""
+    opts = opts or options()
     meta_ts = song["meta"]["time_signature"]
     plan = [
         (
             r[0],
             first_bar_of(song, r[0]),
-            r[1] or _row_start_ts(song["bars"], song["meta"], r[0]),
-            _tied_in(song, r[0]),
+            r[1] or review.row_start_ts(song["bars"], song["meta"], r[0]),
+            tied_in(song, r[0]),
             *r[2:3],
         )
         for r in rows
@@ -897,6 +209,7 @@ def _recognize_rows(
                 first,
                 cancel=cancel,
                 start_ts=ts if ts != meta_ts else None,  # 和全曲拍号一样就不用特别告诉模型
+                opts=opts,
                 context=note[0] if note else "",  # 程序给的说明（和弦图读法），不是用户写的提示
                 tied_in=tied,
             ): si
@@ -925,101 +238,261 @@ def _recognize_rows(
     return {si: ts for si, _, ts, *_ in plan}, errors
 
 
-def _fix_header_time_signature(s: dict, meta_user: dict) -> bool:
-    """第 1 小节就写着“变拍号”：其实是读谱头时把拍号读错了（例如 3/4 读成 4/4）。全曲拍号改成它，
-    第 1 小节不再算变拍号。用户手动设过拍号的不动。返回有没有改。"""
-    if "time_signature" in meta_user or not s.get("meta"):
-        return False
-    first = next((b for b in s.get("bars") or [] if b.get("system") == 0), None)
-    ts = (first or {}).get("ts_change")
-    if not ts or ts == s["meta"]["time_signature"]:
-        return False
-    s["meta"] = {**s["meta"], "time_signature": ts}
-    first.pop("ts_change", None)
-    first.pop("time_signature", None)
-    apply_time_signatures(s["bars"], s["meta"])
-    return True
+def _replace_system_bars(s: dict, si: int, bars: list[dict]) -> None:
+    """用新识别的小节替换第 si 行原来的小节，再按行和行内顺序重新编号。
+    和原来这一行的小节按内容 + 位置对上的，沿用 id、问答（练习记录按 id 自然保留），见 staleness.reconcile_bars。"""
+    staleness.reconcile_bars(s, [b for b in s["bars"] if b["system"] == si], bars, staleness.ROW)
+    for k, bar in enumerate(bars):
+        bar["_order"] = k
+    s["bars"] = [b for b in s["bars"] if b["system"] != si] + bars
+    s["bars"].sort(key=lambda b: (b["system"], b.get("_order", 0)))
+    for i, bar in enumerate(s["bars"]):
+        bar["n"] = i + 1
+        bar.pop("_order", None)
 
 
-def _row_start_ts(bars: list[dict], meta: dict, si: int) -> list[int]:
-    """第 si 行开头实际的拍号：按顺序走过前面各行写的变拍号（ts_change）。"""
-    cur = meta["time_signature"]
-    for b in bars:
-        if b["system"] >= si:
-            break
-        cur = b.get("ts_change") or cur
-    return cur
+def _write_row(s: dict, si: int, bars: list[dict] | None, err: str | None) -> None:
+    """一行结束，写进曲子：失败 / 取消的行只标状态、不动小节（按变拍号重做的行失败时，第一遍识别出的小节还留着）。"""
+    if bars is not None:
+        _replace_system_bars(s, si, bars)
+        apply_time_signatures(s["bars"], s["meta"])  # 这一行新写的变拍号会影响后面的行
+    s["systems"][si].update(status="error" if err else "done", error=err)
 
 
-def _rows_to_redo(
-    bars: list[dict],
-    meta: dict,
-    used: dict[int, list[int]],
-    skip_edited: bool = True,
-    ts_only: set[int] | frozenset = frozenset(),
-) -> list[tuple[int, list[int], str]]:
-    """第一遍之后要再识别一次的行：(行号, 开头的拍号, 给模型的提示)。两种情况：
-    - 开头实际的拍号（按前面各行写的变拍号推算）和识别时用的不一样（行首自己写了变拍号的不算，模型看得到）；
-    - 弹唱谱：这一行读出的和弦图和别的行对同一个和弦的读法不一样（多数行一致时以多数为准，
-      常见原因是“3fr.”这类位置标记算错了和弦图），带上多数的读法再识别，谱上的 x 才能换算对。
-    skip_edited：用户改过的行不重做（不覆盖用户的改动）；ts_only：这几行只看拍号。"""
-    consensus = _shape_consensus(bars)
-    out = []
-    for si in sorted(used):
-        row = [b for b in bars if b["system"] == si]
-        if not row or (skip_edited and any(b.get("edited") for b in row)):
-            continue
-        ts = _row_start_ts(bars, meta, si)
-        ts_wrong = ts != used[si] and not row[0].get("ts_change")
-        mine = {k: v for b in row for k, v in (b.get("shapes") or {}).items()}
-        odd = {k: consensus[k] for k, v in mine.items() if k in consensus and v != consensus[k]}
-        if si in ts_only:
-            odd = {}
-        if not ts_wrong and not odd:
-            continue
-        hint = prompts.shape_consensus_context(odd) if odd else ""
-        out.append((si, ts if ts_wrong else used[si], hint))
-    return out
+def _row_writer(sid: str, meter: jobs.UsageMeter, write=_write_row, work: dict | None = None):
+    """每行结束就写回（_recognize_rows 的 on_row）：write(曲子, 行号, 小节, 错误) 写进存盘的曲子（None = 不写，
+    只记进度和用量）；work：同时把结果攒进这个内存里的曲子（整首识别）。"""
+
+    def on_row(si, bars, err):
+        if work is not None:
+            if bars is not None:
+                _replace_system_bars(work, si, [dict(b) for b in bars])
+            work["systems"][si].update(status="error" if err else "done", error=err)
+
+        def apply(s):
+            if write is not None:
+                write(s, si, bars, err)
+            if s.get("progress"):
+                s["progress"]["done"] = min(s["progress"]["total"], s["progress"]["done"] + 1)
+            meter.charge(s)
+
+        meter.update(sid, apply)
+
+    return on_row
 
 
-def _shape_consensus(bars: list[dict]) -> dict[str, list[int]]:
-    """各行对同一个和弦图的读法：超过一半的行（至少两行）读成一样的，就以它为准。"""
-    per_row: dict[tuple[int, str], tuple[int, ...]] = {}
-    for b in bars:
-        for name, frets in (b.get("shapes") or {}).items():
-            per_row[(b.get("system", -1), name)] = tuple(frets)
-    votes: dict[str, Counter] = {}
-    for (_, name), frets in per_row.items():
-        votes.setdefault(name, Counter())[frets] += 1
-    out = {}
-    for name, c in votes.items():
-        frets, n = c.most_common(1)[0]
-        if n >= 2 and n * 2 > sum(c.values()):
-            out[name] = list(frets)
-    return out
-
-
-def _redo_progress(redo: list) -> dict:
-    return {"stage": "复核个别行（变拍号、和弦图）", "done": 0, "total": len(redo)}
-
-
-def _lock_redo(
-    s: dict, used: dict[int, list[int]], redo: list, ts_only: set[int] | frozenset = frozenset()
-) -> None:
-    """挑出要重做的行（填进 redo）并把它们标成识别中，在同一次读-改-写里：中间用户改了的行不会被重做覆盖。"""
-    redo[:] = _rows_to_redo(s["bars"], s["meta"], used, ts_only=ts_only)
-    for si, *_ in redo:
-        s["systems"][si].update(status="parsing", error=None)
-    if redo:
-        s["progress"] = _redo_progress(redo)
-
-
+# ---------------------------------------------------------------------------
+# 整首
+# ---------------------------------------------------------------------------
 class RestageFailed(Exception):
     """重新识别没有全部成功：不替换原来的结果。"""
 
 
 class Swapped(Exception):
     """重新识别的新结果已经换上之后（生成练习建议、收尾时）出的错：原来的结果已经不在了，不能说“保留不变”。"""
+
+
+class _FirstParse:
+    """第一次识别（还没有小节）：读出的谱头、版面和每一行一出来就写进曲子，练习页能边识别边看。"""
+
+    restaging = False
+
+    def __init__(self, sid: str):
+        self.sid = sid
+
+    def header(self, meta: dict) -> None:
+        store.patch(self.sid, meta=meta)
+
+    def layout(self, systems: list[dict]) -> None:
+        store.patch(self.sid, systems=systems, bars=[])
+
+    def write_row(self, s: dict, si: int, bars: list[dict] | None, err: str | None) -> None:
+        _write_row(s, si, bars, err)
+
+    def header_fixed(self, meta_user: dict) -> None:
+        store.update(self.sid, lambda s: review.fix_header_time_signature(s, meta_user))
+
+    def pick_redo(self, work: dict, used: dict, errors: list[str]) -> list:
+        """要按开头实际拍号 / 多数的和弦图重做的行：在存盘的曲子上挑并锁上（期间用户改过的行不重做）。"""
+        redo: list = []
+        if review.rows_to_redo(
+            work["bars"], work["meta"], used, skip_edited=False
+        ):  # 先看一眼：没有要重做的就不写
+
+            def begin_redo(s):
+                review.lock_redo(s, used, redo)
+
+            store.update(self.sid, begin_redo)
+        return redo
+
+    def check(self, errors: list[str]) -> None:
+        """有行失败也照常完成（失败的行可以单独重试）。"""
+
+    def no_bars(self, errors: list[str]) -> None:
+        _end_parse(self.sid, "error", ("error", "；".join(errors) or "没有识别出任何小节（可能不是六线谱）"))
+
+    def commit(self, work: dict) -> str | None:
+        """结果已经逐行写进曲子了。"""
+        return None
+
+    def finish(self, fn) -> None:
+        fn()
+
+
+class _Restage:
+    """重新识别已有结果的曲子：新结果先攒在内存里（work），原来的小节、调弦、手改、提示和练习记录都不动；
+    每一行都成功才一次性替换（commit）。有行失败、被取消或服务中断，原来的结果原样保留（RestageFailed）。"""
+
+    restaging = True
+    write_row = None  # 存盘的曲子上只记进度和用量
+
+    def __init__(self, sid: str):
+        self.sid = sid
+
+    def header(self, meta: dict) -> None:
+        pass
+
+    def layout(self, systems: list[dict]) -> None:
+        pass
+
+    def header_fixed(self, meta_user: dict) -> None:
+        pass
+
+    def pick_redo(self, work: dict, used: dict, errors: list[str]) -> list:
+        if errors:  # 已经有行失败：结果注定不会采用，不再为重做花钱
+            return []
+        redo = review.rows_to_redo(
+            work["bars"], work["meta"], used, skip_edited=False
+        )  # 原来的结果没动，没有要锁的行
+        if redo:
+            store.patch(self.sid, progress=review.redo_progress(redo))
+        return redo
+
+    def check(self, errors: list[str]) -> None:
+        if errors:
+            raise RestageFailed("；".join(errors))
+
+    def no_bars(self, errors: list[str]) -> None:
+        raise RestageFailed("没有识别出任何小节")
+
+    def commit(self, work: dict) -> str | None:
+        """一次性换成新结果，返回要告诉用户的话（手改 / 精修的改动没能保留时）。"""
+
+        def swap(s):
+            # 曲名只存在 song.title，不受谱头影响。新旧小节按内容对上，对上的保留 id、问答、练习记录和手改
+            # 识别期间用户改的谱头（只可能是艺人：调弦等识别时不能改）同样以用户的为准
+            work["meta"] = normalize_meta(
+                {**work["meta"], **(s.get("meta_user") or {})}, work["meta"]["title"]
+            )
+            changed = staleness.setting_changed(s.get("meta") or {}, work["meta"])
+            metas = (s.get("meta") or {}, work["meta"])
+            # 精修改过的小节：这个小节识别得和精修之前一样就保留精修的改正，否则不保留（见 reconcile_bars）
+            dropped = staleness.reconcile_bars(s, s["bars"], work["bars"], staleness.RESTAGE, changed, metas)
+            s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"])
+            if dropped.refines:  # 上次精修整首的结果（改了几个）不再是现在的样子
+                s.pop("refined", None)
+            return dropped
+
+        dropped: list[staleness.Dropped] = []
+        store.update(self.sid, lambda s: dropped.append(swap(s)))
+        lost = [
+            f"{n} 个{what}的小节和新结果对不上，{why}"
+            for n, what, why in (
+                (dropped[0].edits, "手改过", "改动没有保留"),
+                (dropped[0].refines, "精修改过", "精修的改动没有保留，可以再精修"),
+            )
+            if n
+        ]
+        return "重新识别完成；有 " + "；".join(lost) + "。" if lost else None
+
+    def finish(self, fn) -> None:
+        try:
+            fn()
+        except Exception as e:  # 新结果已经换上了，原来的结果不在了
+            raise Swapped(friendly(e)) from e
+
+
+def run_parse(sid: str, cancel: threading.Event | None = None) -> None:
+    """识别整首。第一次识别（还没有小节）见 _FirstParse，重新识别已有结果的曲子见 _Restage。"""
+    cancel = cancel or threading.Event()
+    claude = config.new_llm()
+    meter = jobs.UsageMeter(claude)  # 每行完成就把新增的用量记上（中途失败也不漏记）
+    try:
+        _run_parse(sid, cancel, claude, meter, options())
+    finally:  # 失败 / 取消时还没记上的（读谱头、没跑完的行）：已经发出去的请求也花了钱
+        meter.flush(sid)
+
+
+def _run_parse(
+    sid: str, cancel: threading.Event, claude: LLM, meter: jobs.UsageMeter, opts: RowOptions
+) -> None:
+    song = store.load(sid)
+    out = _Restage(sid) if song.get("bars") else _FirstParse(sid)
+    meta_user = song.get("meta_user") or {}
+    store.update(sid, lambda s: _begin_parse(s, "读取谱头"))
+    head = claude.read_meta(store.page_image(sid, song["pages"][0]))
+    # 用户手改过的艺人、调弦、变调夹、拍号以用户的为准
+    meta = normalize_meta({**head, **meta_user}, song.get("title", ""))
+    out.header(meta)
+    store.patch(sid, progress={"stage": "分析版面", "done": 0, "total": 0})
+
+    if cancel.is_set():
+        raise Cancelled()
+    systems = plan_systems(sid, song)
+    work = {**song, "meta": meta, "systems": systems, "bars": []}  # 新结果攒在这里（重新识别时先不写进曲子）
+    out.layout(systems)
+    store.patch(sid, progress={"stage": "逐行识别", "done": 0, "total": len(systems)})
+
+    on_row = _row_writer(sid, meter, out.write_row, work)
+    used, errors = _recognize_rows(
+        claude, sid, work, [(i, None) for i in range(len(systems))], cancel, on_row, opts
+    )
+    if review.fix_header_time_signature(work, meta_user):
+        # 谱头的拍号读错了：改成第 1 小节上写的。后面按旧拍号识别的行，下面按“开头实际拍号”重做；
+        # 第 1 行自己是按图上的拍号读的，不用重做
+        used[0] = work["meta"]["time_signature"]
+        out.header_fixed(meta_user)
+
+    # 各行是并行识别的，前面某行写的变拍号后面的行看不到，模型会把小节硬凑成全曲拍号（每小节一样长，查不出来）。
+    # 按第一遍的结果算出每行开头实际的拍号，和识别时用的不同的行带上它再识别一次（没有变拍号的曲子不多花钱）
+    redo = [] if cancel.is_set() else out.pick_redo(work, used, errors)
+    if redo:
+        log.info("song=%s rerun rows (time signature / chord diagrams): %s", sid, redo)
+        errors += _recognize_rows(claude, sid, work, redo, cancel, on_row, opts)[1]
+
+    if cancel.is_set():
+        raise Cancelled()
+    out.check(errors)
+    if not work["bars"]:
+        out.no_bars(errors)
+        return
+    apply_time_signatures(work["bars"], work["meta"])
+    note = out.commit(work)
+    out.finish(
+        lambda: _finish_parse(sid, claude, meter, len(systems), out.restaging, "；".join(errors) or note)
+    )
+
+
+def _finish_parse(
+    sid: str, claude: LLM, meter: jobs.UsageMeter, n: int, restage: bool, msg: str | None
+) -> None:
+    """所有行都识别完、写好之后：生成练习建议，标成完成。"""
+    song = store.load(sid)
+    store.patch(sid, progress={"stage": "生成练习建议", "done": n, "total": n})
+    seen = {b["id"]: b["events"] for b in song["bars"]}
+    try:
+        plan = claude.practice_plan(song["meta"], song["bars"])
+    except Exception as e:  # noqa: BLE001 - 练习建议失败不影响使用
+        log.warning("request_id=%s song=%s practice plan failed: %s", request_id_of(e), sid, e)
+        plan = None
+
+    def finish(s, meta=song["meta"]):
+        if plan or not restage:  # 重新识别后生成建议失败：留着原来的建议（已标成过时）
+            staleness.store_plan(s, plan, seen, meta)
+        meter.charge(s)
+        state.finish(s, status="ready", notice=("warn", msg) if msg else None, source="parse")
+
+    meter.update(sid, finish)
 
 
 def _end_restage(sid: str, why: str) -> bool:
@@ -1082,8 +555,9 @@ def reparse_system(
 ) -> None:
     meter = meter or jobs.UsageMeter(config.new_llm())
     cancel = cancel or threading.Event()
+    opts = options()
     song = store.load(sid)
-    start_ts = _row_start_ts(song["bars"], song["meta"], si)  # 前面各行写的变拍号，这一行的图上看不到
+    start_ts = review.row_start_ts(song["bars"], song["meta"], si)  # 前面各行写的变拍号，这一行的图上看不到
     first = first_bar_of(song, si)
     bars = transcribe_queued(
         meter.claude,
@@ -1094,14 +568,13 @@ def reparse_system(
         hint=hint,
         cancel=cancel,
         start_ts=start_ts,
-        tied_in=_tied_in(song, si),
+        opts=opts,
+        tied_in=tied_in(song, si),
     )
 
     def apply(s):
         others = {b["id"]: b.get("time_signature") for b in s["bars"] if b["system"] != si}
-        _replace_system_bars(s, si, bars)  # 这一行变了的小节在这里标进练习建议的 changed_bars
-        apply_time_signatures(s["bars"], s["meta"])  # 这一行新写的变拍号会影响后面的行
-        s["systems"][si].update(status="done", error=None)
+        _write_row(s, si, bars, None)  # 这一行变了的小节在这里标进练习建议的 changed_bars
         if any(b.get("time_signature") != others[b["id"]] for b in s["bars"] if b["id"] in others):
             staleness.invalidate_plan(s)  # 后面各行的拍号跟着变了
         meter.charge(s)
@@ -1109,7 +582,7 @@ def reparse_system(
     meter.update(sid, apply)
     # 这一行是用户要求重新识别的（可能带着提示）：只按拍号复核，不按别的行的和弦图读法再（不带提示）重做一遍
     failed = _redo_after(
-        sid, song, {si: start_ts}, [si], cancel, meter, _row_writer(sid, meter), shapes=False
+        sid, song, {si: start_ts}, [si], cancel, meter, _row_writer(sid, meter), opts, shapes=False
     )
 
     def finish(s):
@@ -1125,24 +598,6 @@ def reparse_system(
     meter.update(sid, finish)
 
 
-def _row_writer(sid: str, meter: jobs.UsageMeter):
-    """识别已有曲子里的行时，每行结束就写回（_recognize_rows 的 on_row）。"""
-
-    def on_row(si, bars, err):
-        def apply(s):
-            if bars is not None:
-                _replace_system_bars(s, si, bars)
-                apply_time_signatures(s["bars"], s["meta"])
-            s["systems"][si].update(status="error" if err else "done", error=err)
-            if s.get("progress"):
-                s["progress"]["done"] = min(s["progress"]["total"], s["progress"]["done"] + 1)
-            meter.charge(s)
-
-        meter.update(sid, apply)
-
-    return on_row
-
-
 def _redo_after(
     sid: str,
     before: dict,
@@ -1151,10 +606,11 @@ def _redo_after(
     cancel,
     meter: jobs.UsageMeter,
     on_row,
+    opts: RowOptions,
     shapes: bool = True,
 ) -> list[str]:
     """已有曲子里的 rows 识别完之后（used：它们识别时开头的拍号；before：识别前的曲子）：
-    - 识别的是第一行：它第 1 小节写的拍号可能说明谱头的拍号读错了（同整首识别，见 _fix_header_time_signature）；
+    - 识别的是第一行：它第 1 小节写的拍号可能说明谱头的拍号读错了（同整首识别，见 review.fix_header_time_signature）；
     - 其他行开头实际的拍号（按现在各行写的变拍号推算）和它们当初识别时的（按 before 推算）不一样了
       （这几行写了 / 去掉了变拍号、改了全曲拍号，补页插进来的新行写了变拍号），按新拍号再识别一次；
     - shapes：rows 自己读出的和弦图和别的行的多数读法不一样时，带上多数的读法重做（补页、重试失败的行）。
@@ -1162,22 +618,24 @@ def _redo_after(
     返回失败的说明。"""
     if 0 in rows and not cancel.is_set():
         fixed = []
-        store.update(sid, lambda s: fixed.append(_fix_header_time_signature(s, s.get("meta_user") or {})))
+        store.update(
+            sid, lambda s: fixed.append(review.fix_header_time_signature(s, s.get("meta_user") or {}))
+        )
         if fixed[0]:  # 第一行自己是按图上的拍号读的，不用重做
             used = {**used, 0: store.load(sid)["meta"]["time_signature"]}
     others = {k for k in range(len(before["systems"])) if k not in used}
-    used = {**{k: _row_start_ts(before["bars"], before["meta"], k) for k in others}, **used}
+    used = {**{k: review.row_start_ts(before["bars"], before["meta"], k) for k in others}, **used}
     # 别的行只看拍号（和弦图的多数读法整首识别时已经处理过）
     ts_only = others if shapes else set(used)
     song = store.load(sid)
     redo: list[tuple[int, list[int], str]] = []
     # 先看一眼：没有要重做的就不写
-    if not cancel.is_set() and _rows_to_redo(song["bars"], song["meta"], used, ts_only=ts_only):
-        store.update(sid, lambda s: _lock_redo(s, used, redo, ts_only=ts_only))
+    if not cancel.is_set() and review.rows_to_redo(song["bars"], song["meta"], used, ts_only=ts_only):
+        store.update(sid, lambda s: review.lock_redo(s, used, redo, ts_only=ts_only))
     if not redo:
         return []
     log.info("song=%s rerun rows after %s (time signature): %s", sid, rows, redo)
-    return _recognize_rows(meter.claude, sid, store.load(sid), redo, cancel, on_row)[1]
+    return _recognize_rows(meter.claude, sid, store.load(sid), redo, cancel, on_row, opts)[1]
 
 
 def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what: str = "新加的页") -> None:
@@ -1189,11 +647,14 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
 
     try:
         meter = jobs.UsageMeter(config.new_llm())
+        opts = options()
         before = store.load(sid)
         on_row = _row_writer(sid, meter)
-        used, errs = _recognize_rows(meter.claude, sid, before, [(si, None) for si in rows], cancel, on_row)
+        used, errs = _recognize_rows(
+            meter.claude, sid, before, [(si, None) for si in rows], cancel, on_row, opts
+        )
         failed += errs
-        failed += _redo_after(sid, before, used, rows, cancel, meter, on_row)
+        failed += _redo_after(sid, before, used, rows, cancel, meter, on_row, opts)
     except Exception as e:  # 建客户端失败之类：没开始的行都标成失败
         rid = request_id_of(e)
         log.exception("request_id=%s song=%s new pages failed", rid, sid)

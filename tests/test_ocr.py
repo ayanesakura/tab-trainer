@@ -164,7 +164,7 @@ def test_high_frets_split_by_ocr_still_agree():
 def test_parse_retries_on_ocr_disagreement_and_warns_if_unresolved(data_dir, monkeypatch):
     monkeypatch.setattr(recognize, "OCR_CHECK", True)
 
-    def fake_ocr(gray, lines, spans):
+    def fake_ocr(gray, lines, spans, **kw):
         # 替身模型每个小节写 4 个 1 弦 i 品；OCR 说第 1 行第 2 小节的 1 弦 1 品其实在 2 弦
         return [[(1, i)] * 4 if i != 1 else [(1, 1)] * 3 + [(2, 1)] for i in range(len(spans))]
 

@@ -1,12 +1,26 @@
 """图片谱子的识别流程（替身模型）：整首、单行重新识别、取消、并发上限。"""
 
+import dataclasses
 import itertools
 import threading
 from collections import Counter
 
 import pytest
 
-from app import config, errors, jobs, music, practice, recognize, songs, state, store
+from app import (
+    config,
+    errors,
+    jobs,
+    music,
+    ocrcheck,
+    practice,
+    recognize,
+    review,
+    songs,
+    state,
+    store,
+    transcribe,
+)
 from tests.fakes import FakeClaude, score_png
 
 
@@ -960,13 +974,13 @@ def test_rows_that_read_a_chord_diagram_differently_are_redone_with_the_majority
         for si, shape in enumerate([good, bad, good])
     ]
     used = {0: [4, 4], 1: [4, 4], 2: [4, 4]}
-    redo = recognize._rows_to_redo(bars, meta, used)
+    redo = review.rows_to_redo(bars, meta, used)
     assert [(si, ts) for si, ts, _ in redo] == [(1, [4, 4])]
     assert "D11 = frets for strings 1-6 [0, 3, 0, 4, 5, -1]" in redo[0][2] and "Em" not in redo[0][2]
     bars[1]["edited"] = True  # 用户改过的行不覆盖
-    assert recognize._rows_to_redo(bars, meta, used) == []
+    assert review.rows_to_redo(bars, meta, used) == []
     # 只有两行、各读各的：没有多数，不重做
-    assert recognize._rows_to_redo(bars[:2], meta, {0: [4, 4], 1: [4, 4]}, skip_edited=False) == []
+    assert review.rows_to_redo(bars[:2], meta, {0: [4, 4], 1: [4, 4]}, skip_edited=False) == []
 
 
 def test_wrong_bar_count_after_the_fix_up_is_read_once_more(data_dir, monkeypatch):
@@ -1015,7 +1029,7 @@ def test_double_check_votes_bars_that_two_reads_disagree_on(data_dir, monkeypatc
     song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
     song["systems"] = recognize.plan_systems(sid, song)
     claude = FakeClaude(None)
-    bars = recognize.transcribe_system(claude, sid, song, 0, 1, double_check="all")
+    bars = recognize.transcribe_system(claude, sid, song, 0, 1, opts=_opts(double_check="all"))
     assert len(reads) == 3
     assert bars[0]["events"][0]["notes"][0]["fret"] == 0  # 第二、三遍一致
     assert bars[1]["events"][0]["notes"][0]["fret"] == 1 and "三次识别" in bars[1]["uncertain"]
@@ -1079,8 +1093,8 @@ def test_double_check_doubts_mode_only_rereads_rows_with_doubts(data_dir, monkey
     song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
     song["systems"] = recognize.plan_systems(sid, song)
     claude = FakeClaude(None)
-    recognize.transcribe_system(claude, sid, song, 0, 1, double_check="doubts")
-    recognize.transcribe_system(claude, sid, song, 1, 4, double_check="doubts")
+    recognize.transcribe_system(claude, sid, song, 0, 1, opts=_opts(double_check="doubts"))
+    recognize.transcribe_system(claude, sid, song, 1, 4, opts=_opts(double_check="doubts"))
     assert reads == [1, 4, 4]  # 第一行没疑问：只读一遍；第二行有：再读一遍（两遍一样，不用第三遍）
 
 
@@ -1103,7 +1117,9 @@ def test_split_row_reads_halves_and_carries_the_chord_into_the_right_half(data_d
     song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
     song["systems"] = recognize.plan_systems(sid, song)
     full_width = song["systems"][0]["crop"][1] - song["systems"][0]["crop"][0]
-    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, split=True, double_check="off")
+    bars = recognize.transcribe_system(
+        FakeClaude(None), sid, song, 0, 1, opts=_opts(split=True, double_check="off")
+    )
     assert len(bars) == 3
     firsts = [(f, n) for f, n, _, _ in calls]
     assert (1, 2) in firsts and (3, 1) in firsts
@@ -1129,7 +1145,7 @@ def test_double_check_without_a_majority_prefers_the_read_without_a_length_error
             raise r
         return r
 
-    out = recognize._double_check([bar("1/2")], read_once, 1, "sid", 0)
+    out = transcribe.vote([bar("1/2")], read_once, 1, "sid", 0)
     assert out[0]["events"][-1]["dur"] == "1" and not out[0]["warn"]
     assert "两次识别" in out[0]["uncertain"]
 
@@ -1150,7 +1166,7 @@ def test_ocr_tie_from_the_left_half_is_not_a_disagreement():
             ]
         }
     ]
-    assert recognize._last_frets(left) == {2: 5}
+    assert ocrcheck.last_frets(left) == {2: 5}
 
 
 def test_doubts_mode_rereads_rows_whose_only_doubt_is_an_ocr_mismatch(data_dir, monkeypatch):
@@ -1165,15 +1181,19 @@ def test_doubts_mode_rereads_rows_whose_only_doubt_is_an_ocr_mismatch(data_dir, 
 
     monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
     monkeypatch.setattr(recognize, "OCR_CHECK", True)
-    monkeypatch.setattr(recognize.ocr, "read_system", lambda img, lines, spans: [[(1, 1)] for _ in spans])
     monkeypatch.setattr(
-        recognize, "ocr_disagreements", lambda bars, *a, **kw: {0: (Counter({(1, 1): 1}), Counter())}
+        recognize.ocr, "read_system", lambda img, lines, spans, **kw: [[(1, 1)] for _ in spans]
+    )
+    monkeypatch.setattr(
+        ocrcheck, "ocr_disagreements", lambda bars, *a, **kw: {0: (Counter({(1, 1): 1}), Counter())}
     )
     sid = songs.create_song([("p1.png", score_png())])
     song = store.load(sid)
     song["meta"] = music.normalize_meta({"title": "x", "tuning": music.STANDARD, "time_signature": [4, 4]})
     song["systems"] = recognize.plan_systems(sid, song)
-    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="doubts", split=False)
+    bars = recognize.transcribe_system(
+        FakeClaude(None), sid, song, 0, 1, opts=_opts(double_check="doubts", split=False)
+    )
     assert reads == [1, 1] and bars[0]["warn"][-1]["code"] == "ocr_mismatch"
 
 
@@ -1195,6 +1215,11 @@ def test_chord_diagram_majority_goes_to_the_model_as_context_not_as_the_users_hi
         FakeClaude(None), sid, song, [(0, None, note)], threading.Event(), lambda *a: None
     )
     assert seen and all(h == "" and note in c for h, c in seen)
+
+
+def _opts(**kw) -> transcribe.RowOptions:
+    """识别一行的选项：和应用里任务开始时一样（含测试里关掉的 OCR、切半），再按 kw 改。"""
+    return dataclasses.replace(recognize.options(), **kw)
 
 
 def _planned_song():
@@ -1272,7 +1297,9 @@ def test_single_bar_row_with_wrong_length_gets_the_normal_length_problem(data_di
         return _bars(first_bar, len(spans), lambda i: ["3"])
 
     monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
-    recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="off", split=False)
+    recognize.transcribe_system(
+        FakeClaude(None), sid, song, 0, 1, opts=_opts(double_check="off", split=False)
+    )
     assert problems and all("变了拍号" not in p for p in problems[0])
     assert any("时值合计 3 拍" in p for p in problems[0])
 
@@ -1292,7 +1319,9 @@ def test_retry_with_the_wrong_bar_count_does_not_replace_a_right_count_read(data
         return _bars(first_bar, len(spans) - 1, lambda i: ["1"] * 4)
 
     monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
-    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="off", split=False)
+    bars = recognize.transcribe_system(
+        FakeClaude(None), sid, song, 0, 1, opts=_opts(double_check="off", split=False)
+    )
     assert len(bars) == 3
 
 
@@ -1306,7 +1335,9 @@ def test_doubts_mode_ignores_info_only_warnings(data_dir, monkeypatch):
         return _bars(first_bar, len(spans), lambda i: ["1/5"] * 5 + ["3"])
 
     monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
-    bars = recognize.transcribe_system(FakeClaude(None), sid, song, 0, 1, double_check="doubts", split=False)
+    bars = recognize.transcribe_system(
+        FakeClaude(None), sid, song, 0, 1, opts=_opts(double_check="doubts", split=False)
+    )
     assert reads == [1] and all(w["code"] == "off_grid" for b in bars for w in b["warn"])
 
 
@@ -1356,7 +1387,7 @@ def test_rows_locked_for_a_redo_are_released_when_the_job_fails(data_dir, sync_j
         return real(*a, **kw)
 
     monkeypatch.setattr(recognize, "_recognize_rows", rows)
-    monkeypatch.setattr(recognize, "_rows_to_redo", lambda *a, **kw: [(1, [3, 4], "")])
+    monkeypatch.setattr(review, "rows_to_redo", lambda *a, **kw: [(1, [3, 4], "")])
     recognize.start_retry_failed(sid)
     song = store.load(sid)
     assert song["activity"] is None
@@ -1460,7 +1491,7 @@ def test_tapped_harmonic_marks_are_not_ocr_disagreements_and_the_tap_is_part_of_
     seen = [[(3, 5), (3, 22)]]
     assert recognize.ocr_disagreements([bar(22)], seen, tied_in={}) == {}
     assert recognize.ocr_disagreements([bar(17)], seen, tied_in={}) != {}
-    assert recognize._bar_key(bar(22)) != recognize._bar_key(bar(17))
+    assert transcribe.bar_key(bar(22)) != transcribe.bar_key(bar(17))
 
 
 def test_a_crash_outside_the_row_handlers_does_not_leave_the_song_recognizing(
@@ -1566,3 +1597,36 @@ def test_reparsing_a_row_with_a_hint_is_not_redone_without_it(data_dir, sync_job
     assert [c["hint"] for c in FakeClaude.calls if not c["retry"]] == ["第 2 小节是 D11，按谱上的和弦图"]
     assert all(b["shapes"] == {"D11": bad} for b in s["bars"] if b["system"] == 1)
     assert s["activity"] is None and s["systems"][1]["status"] == "done"
+
+
+def test_options_are_fixed_when_the_job_starts(data_dir, monkeypatch):
+    """识别的选项（双重校对等）在任务开始时定好：识别到一半改了设置，后面的行照旧按开始时的方式识别。"""
+    monkeypatch.setattr(config.settings, "row_concurrency", 1)
+    real = FakeClaude.transcribe
+
+    def transcribe(self, *a, **kw):
+        store.update_config(lambda c: c.update(double_check="all"))  # 第一行识别时用户打开了双重校对
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    assert config.double_check() == "all"
+    # 每行只读一遍（第 1 行替身故意写错时值，返修一次）：第 2 行没有因为改了设置读第二遍
+    assert [c["first_bar"] for c in FakeClaude.calls if not c["retry"]] == [1, 4]
+    assert recognize.options().double_check == "all"  # 下一个任务才按新设置
+
+
+def test_split_decision_uses_the_same_scaling_as_the_image_sent():
+    """切不切半按真正发图时的放大倍数算（llm.image_scale，和 _image_block 同一处）：宽的行切，窄的不切。"""
+    from PIL import Image
+
+    from app import llm, systems
+
+    for w, h in [(3000, 300), (2500, 260), (1200, 200), (900, 150)]:
+        _, scale = llm._image_block(Image.new("RGB", (w, h), "white"), min_width=llm.TRANSCRIBE_MIN_WIDTH)
+        assert scale == pytest.approx(llm.image_scale(w, h, llm.TRANSCRIBE_MIN_WIDTH))
+    spans = [[0, 10], [10, 20]]
+    assert systems.should_split({"crop": [0, 3000, 0, 300], "spans": spans})
+    assert not systems.should_split({"crop": [0, 900, 0, 150], "spans": spans})
+    assert not systems.should_split({"crop": [0, 3000, 0, 300], "spans": spans[:1]})  # 只有 1 个小节

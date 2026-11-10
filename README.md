@@ -204,7 +204,9 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/views.py` | 接口返回的形状：曲子详情（SongView）和曲库列表项，忙不忙 / 能不能改 / 小节锁定 / 待核对都在这里算好（见下面的接口约定） |
 | `app/auth.py` | 局域网访问令牌、Host / Origin 检查 |
 | `app/songs.py` | 曲库：新建（图片 / PDF / GP / MusicXML）、保存浏览器转换的小节（GP 小节是只读的缓存）、手工修改（按小节 `rev` / 谱头 `meta_rev` 的乐观锁）、启动恢复 |
-| `app/recognize.py` | 图片谱子识别：版面 → 逐行调模型（整首、补页的新行、重试失败的行共用一套 `_recognize_rows`）→ OCR 校对 → 返修 → 按前面的变拍号重做 → 练习建议；单行重新识别 |
+| `app/recognize.py` | 图片谱子识别的任务编排：读谱头 → 版面 → 逐行识别（整首、补页的新行、重试失败的行共用一套 `_recognize_rows`，排队等全局名额、每行写回；第一次识别和重新识别整首是两种写法 `_FirstParse` / `_Restage`）→ 复核 → 练习建议；单行重新识别。识别选项（`RowOptions`：双重校对、切半、OCR 校对、标弦号）在任务开始时定一次（`options`） |
+| `app/transcribe.py` | 识别一行：裁图、调模型、检查（时值、小节数、OCR）、返修、双重校对投票、太宽的行切两半 |
+| `app/systems.py`、`app/ocrcheck.py`、`app/review.py` | 谱行（版面 → 裁剪范围 / 小节位置、标弦号、要不要切半）；本机 OCR 和 AI 结果的比对；第一遍之后按变拍号 / 和弦图多数读法挑要重做的行 |
 | `app/pages.py` | 图片 / PDF 曲子的页面管理：补页、删页、调整页序（新页上的行交给 `recognize.recognize_rows_job`） |
 | `app/coach.py` | AI 讲解（补写小节提示、重新生成练习建议）和小节问答 |
 | `app/practice.py` | 练习记录：`practice.jsonl` 追加写，读取时按小节 id 聚合（按文件修改时间缓存；格式不对的行跳过），练习历史 |
@@ -217,7 +219,7 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/text.py` | GP 老格式 GBK 中文乱码的还原（导入时和旧数据升级共用；前端 `score.js` 同一套规则） |
 | `app/music.py` | 调弦、拍号、时值、事件和反复记号的整理与校验、小节警告 `{code, msg}`（纯函数）；常量来自 `app/static/js/vocab.json`（含直接导入的文件扩展名 `score_files`） |
 | `app/config.py` | 运行参数（并发数、上传 / 导入上限等，`config.settings`）和模型设置（读写、打码、建客户端） |
-| `app/jobs.py` | 后台任务登记 / 取消（每首曲子同时一个）；`start`（登记 → 标开始 → 后台跑，标开始失败时释放）；`UsageMeter`（把模型用量记到曲子上，失败 / 取消时补记） |
+| `app/jobs.py` | 后台任务登记 / 取消（每首曲子同时一个）；`start`（登记 → 标开始 → 后台跑，标开始失败时释放；任务抛出没处理的错时把曲子上的任务结束掉）；所有曲子共用的模型调用名额（`slots` / `run_queued`）；`UsageMeter`（把模型用量记到曲子上，失败 / 取消时补记） |
 | `app/errors.py` | 错误类型：Invalid 400 / NotFound 404 / Conflict 409 / Busy 423 / CorruptSong 500 / Upstream 502（`llm.LLMError` 也是） |
 | `app/llm.py` | Claude 客户端：请求、流式重试、用量和费用（`PRICES`、设置页的预设模型）、错误说明 `friendly`；`LLM` 接口 |
 | `app/prompts.py` | 给模型的提示词和 JSON Schema（`tests/test_prompts.py` 是快照：有意改提示词时用 `UPDATE_PROMPTS=1` 重新生成，再核对 diff） |
@@ -235,10 +237,10 @@ uv run python -m app.evaluate eval-xxx --yes
 |---|---|---|
 | 任务登记 `jobs.claim` / `jobs.start` | 进程内，每首曲子一个 | 同一首曲子同时跑两个任务（连点两次、识别时又点讲解）。登记后在 `store.update` 里标上 `activity` 才算开始，标失败就释放 |
 | `activity` + `systems[i].status == "parsing"` | 存盘，`state.py` 解释 | 告诉前端忙不忙、哪些小节不能改（`state.bar_locked`）；服务重启后由 `state.recover` 标成中断 |
-| `store._lock`（全局可重入锁）+ `store.update` | 文件读写 | 读-改-写不互相覆盖。规则：**挑选要改的东西和标上锁必须在同一次 `update` 里**（例如按变拍号重做哪些行：`recognize._lock_redo`），否则中间用户的改动会被覆盖 |
+| `store._lock`（全局可重入锁）+ `store.update` | 文件读写 | 读-改-写不互相覆盖。规则：**挑选要改的东西和标上锁必须在同一次 `update` 里**（例如按变拍号重做哪些行：`review.lock_redo`），否则中间用户的改动会被覆盖 |
 | `bar.rev` / `meta_rev` | 存盘，`model.bump_revs` 维护 | 用户的两次编辑互相覆盖（乐观锁，409）。后台写回不会让它们过期 |
 | 写回前比较快照（`seen`） | `coach._explain_chunks`、`staleness.store_plan` | 后台按旧内容写的提示 / 练习建议，不能写到等待期间已经被改过的小节上 |
-| 全局信号量 `recognize._system_slots` | 进程内 | 所有曲子加起来同时识别的行数（连续上传多首时不会成倍地发请求、跑 OCR） |
+| 全局名额 `jobs.slots`（`jobs.run_queued`） | 进程内 | 所有曲子加起来同时进行的模型调用（识别一行、精修的一遍核对；连续上传多首时不会成倍地发请求、跑 OCR）。上限每次按 `settings.max_rows_global` 读，先来先得 |
 
 删除曲子在锁里先把目录改名，之后后台任务的写回一律得到 `NotFound`（`jobs.spawn` 只记一笔），不会把目录重新建出来。模型用量由 `jobs.UsageMeter` 随结果一起写回，失败 / 取消时在 `finally` 里补记。
 

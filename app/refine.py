@@ -29,6 +29,7 @@ import math
 import threading
 from collections.abc import Callable
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 from PIL import Image
 
@@ -51,6 +52,18 @@ CONFIRM_CHANGES = True
 # 一个小节最多核对几遍（含第一遍）。探查（每个小节核对 5 遍）：模型提出的改动每次都一模一样、而且都对，
 # 分歧只在“提出改动”和“说没问题”之间（如 改 / 没问题 / 没问题 / 改 / 改）：只核对三遍会把对的改动放弃掉
 MAX_READS = 5
+
+
+@dataclass(frozen=True)
+class VerifyOptions:
+    """核对一个小节的选项：一次精修任务开始时按上面两个开关定好（options），之后每个小节都按它。"""
+
+    confirm: bool = True  # CONFIRM_CHANGES
+    max_reads: int = 5  # MAX_READS
+
+
+def options() -> VerifyOptions:
+    return VerifyOptions(confirm=CONFIRM_CHANGES, max_reads=MAX_READS)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +231,7 @@ def verify(
     hint: str = "",
     shapes: dict[str, list[int]] | None = None,
     queued: Callable[[Callable[[], dict]], dict] | None = None,
+    opts: VerifyOptions | None = None,
 ) -> dict:
     """核对一个小节。返回 {out: 模型的回答, events: 要改成的事件（不改是 None）, status, note}：
     - status = unchanged：模型说没问题（或者改出来的和原来一样）；
@@ -229,7 +243,9 @@ def verify(
     cancel：确认的几遍之间点了取消就不再核对（Cancelled）。hint：用户写的“哪里不对”（每一遍都告诉模型）。
     shapes：告诉模型的和弦图（None = 这个小节识别时读出的，见 context_shapes）。
     queued：每一遍调用模型怎么执行（refine_bars 给的是排队等全局名额：每一遍单独占名额，几遍之间让出来，
-    一个小节最多 MAX_READS 遍、几分钟，不会一直占着让别的曲子的识别等着）；None = 直接调用。"""
+    一个小节最多 MAX_READS 遍、几分钟，不会一直占着让别的曲子的识别等着）；None = 直接调用。
+    opts：确认几遍（None = 现在的 options()）。"""
+    opts = opts or options()
     if shapes is None:
         shapes = context_shapes(bar, None)
     img, span = crop(page, sysinfo, bar["region"])
@@ -263,10 +279,10 @@ def verify(
         return {"out": first[0], "events": None, "status": "invalid", "note": ""}
     if first[1] is None:
         return {"out": first[0], "events": None, "status": "unchanged", "note": ""}
-    if not CONFIRM_CHANGES:
+    if not opts.confirm:
         return {"out": first[0], "events": first[1], "status": "accepted", "note": ""}
     runs = [first]
-    while len(runs) < MAX_READS:
+    while len(runs) < opts.max_reads:
         if cancel is not None and cancel.is_set():
             raise Cancelled()
         runs.append(propose())
@@ -445,6 +461,7 @@ def refine_bars(
     （并从 activity.pending 里去掉）。tally 累计 checked / changed / doubtful（几遍核对对不上、标成待核对的）/ failed / error
     （取消时调用方照样能拿到已完成的部分）。explicit、hint 见 _run。取消：Cancelled。"""
     song = store.load(sid)
+    opts = options()  # 这次精修的选项：定好一次，每个小节都按它
     bars = song["bars"]
     index = {b["id"]: i for i, b in enumerate(bars)}
     work = [(bars[index[i]], bars[index[i] - 1] if index[i] > 0 else None) for i in ids if i in index]
@@ -480,6 +497,7 @@ def refine_bars(
             hint,
             context_shapes(bar, prev),
             queued,
+            opts,
         )
 
     def write(bar: dict, result):

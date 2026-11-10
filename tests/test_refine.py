@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import config, jobs, main, model, recognize, refine, songs, state, store, views
+from app import config, jobs, main, model, recognize, refine, songs, state, store, transcribe, views
 from app.model import notes_key
 from tests.fakes import FakeClaude, derived_bars, score_png
 
@@ -569,7 +569,7 @@ def test_a_row_whose_bar_count_differs_from_the_bar_lines_is_not_refined(data_di
 def test_split_rows_get_regions_per_half(data_dir, monkeypatch):
     """切成两半识别的行：每半按自己的小节线分区域；一半的小节数对不上，这一行整行都不精修（总数对不上）。"""
     monkeypatch.setattr(recognize, "SPLIT_ROWS", True)
-    monkeypatch.setattr(recognize, "_should_split", lambda sysinfo: True)
+    monkeypatch.setattr(transcribe, "should_split", lambda sysinfo: True)
     sid = _song()
     s = store.load(sid)
     assert all(refine.refinable(s, b) for b in s["bars"])
@@ -883,3 +883,28 @@ def test_each_read_takes_its_own_global_slot(client, sync_jobs, monkeypatch):
     assert len(reads) == refine.MAX_READS
     assert other == [1]  # 第一遍一结束就轮到它，不用等这个小节核对完
     assert jobs.slots.used == 0
+
+
+def test_verify_options_can_be_given_without_touching_module_switches(data_dir):
+    """核对的选项（要不要确认、最多几遍）可以直接给，不用改模块开关：不确认时第一遍提出的改动直接采用；
+    确认时两遍一样才改，最多 max_reads 遍。"""
+    from PIL import Image
+
+    calls = []
+
+    class Claude:
+        def verify_bar(self, img, meta, span, events, *a, **kw):
+            calls.append(1)
+            fixed = [{**e, "notes": [{**n, "fret": 10 + len(calls)} for n in e["notes"]]} for e in events]
+            return {"diff": "改", "changed": True, "events": fixed, "uncertain": ""}  # 每遍改法都不一样
+
+    page = Image.new("RGB", (400, 200), "white")
+    note = {"string": 1, "fret": 1, "tech": [], "grace": -1, "bend": 0}
+    bar = {"id": "b", "region": [100, 300, 0, 200], "events": [{"dur": "4", "notes": [note]}]}
+    meta = {"tuning": ["E4", "B3", "G3", "D3", "A2", "E2"], "capo": 0, "time_signature": [4, 4]}
+    args = (page, {"crop": [0, 400, 0, 200]}, bar, meta, None)
+    r = refine.verify(Claude(), *args, opts=refine.VerifyOptions(confirm=False))
+    assert r["status"] == "accepted" and len(calls) == 1
+    calls.clear()
+    r = refine.verify(Claude(), *args, opts=refine.VerifyOptions(max_reads=2))
+    assert r["status"] == "rejected" and len(calls) == 2
