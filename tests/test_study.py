@@ -9,7 +9,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bundles, main, model, recognize, songs, store, study
+from app import bundles, main, recognize, songs, store, study, viewmodels
 from app.errors import Conflict, Invalid, NotFound
 from tests.fakes import derived_bars
 
@@ -543,10 +543,10 @@ def test_http_plan_rate_and_views(client):
     assert "问题" in r.json()["detail"]
 
     song = client.get(f"/api/songs/{sid}").json()
-    model.SongView.model_validate(song)
+    viewmodels.SongView.model_validate(song)
     assert song["study"]["state"] == "review" and set(song["study"]["preview"]) == {"1", "2", "3", "4"}
     row = client.get("/api/songs").json()[0]
-    model.LibraryItem.model_validate(row)
+    viewmodels.LibraryItem.model_validate(row)
     assert row["study"]["rated_today"] == 3
 
     today = client.get("/api/study/today").json()

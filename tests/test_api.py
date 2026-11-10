@@ -318,11 +318,13 @@ def test_settings_endpoints(client, monkeypatch):
 
 def test_song_view_contract(client):
     """GET /api/songs/{id} 和 /api/songs 给前端的字段（见 README 的接口约定）。"""
-    from app import model
+    from app import model, viewmodels
+
+    assert model.SongView is viewmodels.SongView  # 旧的写法照样能用
 
     sid = _image_song(client)
     v = client.get(f"/api/songs/{sid}").json()
-    model.SongView.model_validate(v)
+    viewmodels.SongView.model_validate(v)
     assert v["rev"] >= 1 and v["busy"] is False and v["recognizing"] is False and v["activity"] is None
     assert v["can_edit_bars"] is True and v["editable_meta"] == [
         "title",
@@ -339,7 +341,7 @@ def test_song_view_contract(client):
     assert "meta_user" not in v and v["meta"]["title"] == v["title"] and "tuning_midi" in v["meta"]
     assert v["practice"] == {"bars": {}, "last": None, "total_seconds": 0}
     row = next(x for x in client.get("/api/songs").json() if x["id"] == sid)
-    model.LibraryItem.model_validate(row)
+    viewmodels.LibraryItem.model_validate(row)
     assert row["busy"] is False and row["needs_review_bars"] == 0 and row["practice"] is None
 
     gp = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
