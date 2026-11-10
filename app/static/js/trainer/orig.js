@@ -22,6 +22,8 @@ function step(d) {
 function draw() {
   const bi = get('ui.orig');
   if (bi < 0) return;
+  // 重新识别、删页以后这个小节可能已经没有了（或者没有原谱区域了）：关掉弹窗，不去读不存在的小节
+  if (!hasOrig(bi) || !get('song').bars[bi]) { set('ui.orig', -1); return; }
   const s = get('song'), v = get('view'), b = s.bars[bi], [p, bx0, bx1, by0, by1] = v.regions[bi], im = images.list[p], c = $('origCanvas'), m = $('origMark');
   const sys = s.systems && s.systems[b.system];
   const [x0, x1, y0, y1] = sys && sys.crop && sys.page === p ? sys.crop : [bx0, bx1, by0, by1]; // 整行；没有行信息时只看这一小节
@@ -68,6 +70,8 @@ export function initOrig() {
     if (bi < 0 && origLayer) origLayer.close();
     draw();
   });
+  // 曲子变了（重新识别、删页、调整页序）：弹窗开着就按新的数据重画（小节没了就关掉）
+  on(['view', 'song.systems'], () => { if (get('ui.orig') >= 0) draw(); });
   document.addEventListener('tt-images', draw);
   document.addEventListener('themechange', draw); // 框和淡化的颜色跟着主题、配色走
   addEventListener('resize', draw);

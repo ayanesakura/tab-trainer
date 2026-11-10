@@ -1084,3 +1084,18 @@ def test_rating_survives_later_song_updates(server, trainer):
             headers={"Content-Type": "application/json"},
         )
         urllib.request.urlopen(req)
+
+
+def test_original_image_popup_survives_the_song_getting_shorter(trainer):
+    """原谱弹窗开着时曲子变短（重新识别、删页）：看的小节没了就关掉弹窗，不报错。"""
+    b = trainer()
+    b.wait_for("!!(tt.api.tracks && tt.api.tracks[0].staves[0].bars.length === 6 && tt.api.boundsLookup)")
+    b.js("tt.onBeatClick(tt.api.tracks[0].staves[0].bars[5].voices[0].beats[0]); true")
+    b.wait_for("!document.getElementById('cropBox').hidden")
+    b.js("document.getElementById('cropBox').click(); true")
+    assert b.js("document.getElementById('origTitle').textContent") == "原谱 · 第 6 小节"
+    b.js("const s = tt.song; tt.set('song', { ...s, bars: s.bars.slice(0, 2) }); true")
+    b.wait_for("!document.getElementById('origModal').open", timeout=3)
+    assert b.js("tt.get('ui.orig')") == -1
+    b.js("window.dispatchEvent(new Event('resize')); document.dispatchEvent(new Event('tt-images')); true")
+    assert not b.errors, b.errors
