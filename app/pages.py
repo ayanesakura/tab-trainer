@@ -53,7 +53,7 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
         except Exception:
             for pgs in added.values():
                 for pg in pgs:
-                    (pages_dir / pg["file"]).unlink(missing_ok=True)
+                    store.page_path(sid, pg["file"]).unlink(missing_ok=True)
             raise
 
         pending: list[int] = []
@@ -103,7 +103,7 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
 
         song = store.update(sid, apply)
         for f in set(files) - set(order):  # 删掉的页：曲子已经不再引用它们
-            (pages_dir / f).unlink(missing_ok=True)
+            store.page_path(sid, f).unlink(missing_ok=True)
         if pending and song["bars"]:
             jobs.spawn(sid, lambda: recognize.recognize_rows_job(sid, pending, cancel))
             started = True
