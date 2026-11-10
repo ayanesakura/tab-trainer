@@ -52,11 +52,14 @@ def mask(key: str) -> str:
 
 
 def public_settings() -> dict:
-    """设置页显示的内容（key 打码）。"""
+    """设置页显示的内容（key 打码）。has_key：现在有没有能用的 key（存的或环境变量的），练习页据此把 AI 按钮置灰；
+    不含 key 本身。"""
     c = store.load_config()
+    env_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     return {
+        "has_key": bool(c.get("api_key")) or env_key,
         "api_key_masked": mask(c.get("api_key", "")),
-        "env_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "env_key": env_key,
         "base_url": c.get("base_url", ""),
         "model": c.get("model") or DEFAULT_MODEL,
         "effort": c.get("effort") or "high",

@@ -292,6 +292,7 @@ def test_settings_endpoints(client, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     s = client.get("/api/settings").json()
     assert s == {
+        "has_key": False,
         "api_key_masked": "",
         "env_key": False,
         "base_url": "",
@@ -303,14 +304,18 @@ def test_settings_endpoints(client, monkeypatch):
     s = client.put(
         "/api/settings", json={"api_key": " sk-ant-1234567890abcdef ", "base_url": "http://gw"}
     ).json()
-    assert s["api_key_masked"] == "…cdef" and s["base_url"] == "http://gw"
+    assert s["api_key_masked"] == "…cdef" and s["base_url"] == "http://gw" and s["has_key"] is True
+    assert "sk-ant" not in str(s)  # 只说有没有，不给 key
     from app import store
 
     assert store.load_config()["api_key"] == "sk-ant-1234567890abcdef"  # 去掉首尾空白，原样存
     assert oct(store.CONFIG.stat().st_mode & 0o777) == "0o600"  # 只有自己能读
     assert client.post("/api/settings/test").json() == {"ok": True}  # 替身模型
     s = client.put("/api/settings", json={"clear_api_key": True, "base_url": None}).json()
-    assert s["api_key_masked"] == "" and s["base_url"] == ""
+    assert s["api_key_masked"] == "" and s["base_url"] == "" and s["has_key"] is False
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+    assert client.get("/api/settings").json()["has_key"] is True  # 环境变量的 key 也算
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
     from app import llm
 
     monkeypatch.setattr(config, "llm_factory", llm.Claude)
