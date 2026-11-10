@@ -252,3 +252,11 @@ def test_practice_record_after_a_torn_line_is_kept(data_dir):
     )
     store.append_practice(sid, {"at": "2026-01-02 10:00", "ids": ["b"], "loops": 2})
     assert [r["ids"] for r in store.read_jsonl(path)] == [["a"], ["b"]]
+
+
+def test_valid_id_rejects_trailing_newline():
+    """re.match + $ 会放过结尾的换行（"abcd\\n"）：用 fullmatch。"""
+    assert store.valid_id("abcd-1234")
+    assert not store.valid_id("abcd\n") and not store.valid_id("abcd-1234\n")
+    with pytest.raises(errors.NotFound):
+        store.song_dir("abcd\n")

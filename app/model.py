@@ -182,7 +182,7 @@ def _real_day(v: str) -> str:
 
 
 def _real_stamp(v: str) -> str:
-    if not re.match(STAMP, v):
+    if not re.fullmatch(STAMP, v):
         raise ValueError(f"时间格式不对：{v[:30]!r}")
     datetime.datetime.fromisoformat(v)
     return v

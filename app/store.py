@@ -33,7 +33,7 @@ CONFIG = DATA / "config.json"
 SCHEMA_VERSION = migrate.SCHEMA_VERSION
 
 _lock = threading.RLock()
-_ID_RE = re.compile(r"^[a-z0-9-]{4,64}$")
+_ID_RE = re.compile(r"[a-z0-9-]{4,64}")  # 用 fullmatch：re.match + $ 会放过结尾的换行
 PRACTICE_FILE = "practice.jsonl"
 STUDY_LOG_FILE = "study.jsonl"  # 练琴计划的自评记录（app/study.py）
 log = logging.getLogger("tab_trainer.store")
@@ -46,7 +46,7 @@ def new_id() -> str:
 
 
 def valid_id(song_id: object) -> bool:
-    return isinstance(song_id, str) and bool(_ID_RE.match(song_id))
+    return isinstance(song_id, str) and bool(_ID_RE.fullmatch(song_id))
 
 
 def song_dir(song_id: str) -> Path:
