@@ -1,9 +1,10 @@
-"""app/jobs.py：全局名额（先来先得、上限跟着设置走）。"""
+"""app/jobs.py：全局名额（先来先得、上限跟着设置走）、任务出了没处理的错时把曲子标成结束。"""
 
 import threading
 import time
 
-from app import config, jobs
+from app import config, jobs, recognize, songs, store
+from tests.fakes import score_png
 
 
 def _wait_for(cond, timeout=3.0):
@@ -64,3 +65,43 @@ def test_cancel_while_queued_gives_up_the_place():
     assert err and not slots._waiting and slots.used == 1
     slots.release()
     assert slots.used == 0
+
+
+def test_a_job_that_crashes_does_not_leave_the_song_busy(data_dir, sync_jobs):
+    """任务收尾时出了没处理的错（读写曲子失败之类）：曲子不能一直显示“识别中”，识别中的行标成失败。"""
+    sid = songs.create_song([("p1.png", score_png())])
+
+    def begin(s):
+        s["systems"] = [{"page": 0, "crop": [0, 10, 0, 10], "spans": None, "status": "parsing"}]
+        s["activity"] = {"kind": "reparse_row", "restaging": False, "systems": [0]}
+
+    def run(cancel):
+        raise OSError("disk full")
+
+    jobs.start(sid, "busy", begin, run)
+    s = store.load(sid)
+    assert s["activity"] is None and not jobs.jobs.running(sid)
+    assert s["systems"][0]["status"] == "error"
+    assert s["notice"]["kind"] == "error" and "disk full" in s["notice"]["msg"]
+
+
+def test_abandon_leaves_finished_songs_alone(data_dir):
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    before = store.load(sid)
+    jobs.abandon(sid, "x")
+    after = store.load(sid)
+    assert (after["notice"], after["status"], after["systems"]) == (
+        before["notice"],
+        before["status"],
+        before["systems"],
+    )
+    jobs.abandon("no-such-song", "x")  # 曲子不在了：只记一笔
+
+
+def test_a_crashed_first_parse_is_marked_failed_in_a_real_thread(data_dir):
+    sid = songs.create_song([("p1.png", score_png())])
+    jobs.start(sid, "busy", lambda s: s.update(status="parsing", activity={"kind": "parse"}), lambda c: 1 / 0)
+    _wait_for(lambda: not jobs.jobs.running(sid))
+    s = store.load(sid)
+    assert s["status"] == "error" and s["activity"] is None and "ZeroDivisionError" in s["notice"]["msg"]

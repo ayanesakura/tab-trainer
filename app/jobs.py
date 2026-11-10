@@ -1,5 +1,5 @@
 """后台任务：登记（每首曲子同一时间只有一个任务：整首识别、单行重新识别 / 补页、生成讲解；登记、取消、查询都在一把锁里）、
-启动（start：登记 → 在曲子上标开始 → 后台线程，标开始失败时释放登记）、
+启动（start：登记 → 在曲子上标开始 → 后台线程，标开始失败时释放登记；任务抛出没处理的错时把曲子标成结束）、
 所有曲子共用的模型调用名额（slots / run_queued），以及把模型用量记到曲子上（UsageMeter）。
 
 任务的状态（status / activity / notice）写在曲子上，见 app/state.py；这里只管进程内“有没有在跑”。
@@ -12,9 +12,10 @@ import threading
 from collections import deque
 from collections.abc import Callable
 
-from app import store
+from app import state, store
 from app.config import settings
 from app.errors import Busy, NotFound
+from app.llm import friendly
 from app.model import add_usage
 
 log = logging.getLogger("tab_trainer.jobs")
@@ -65,17 +66,46 @@ def claim_or_busy(sid: str, message: str) -> threading.Event:
 
 def spawn(sid: str, target: Callable[[], None]) -> None:
     """在后台线程里跑已登记（jobs.claim）的任务，结束后释放登记。target 自己处理并记录错误；
-    曲子在任务进行中被删掉时，写回会抛 NotFound，这里只记一笔。"""
+    曲子在任务进行中被删掉时，写回会抛 NotFound，这里只记一笔。别的没处理的错（收尾时读写曲子失败等）：
+    记下来，并把曲子上还标着的任务结束掉（abandon），不然它会一直显示“识别中”直到重启。"""
 
     def run():
         try:
-            target()
-        except NotFound:
-            log.info("song=%s deleted while its job was running", sid)
+            _guarded(sid, target)
         finally:
             jobs.release(sid)
 
     threading.Thread(target=run, daemon=True).start()
+
+
+def _guarded(sid: str, target: Callable[[], None]) -> None:
+    try:
+        target()
+    except NotFound:
+        log.info("song=%s deleted while its job was running", sid)
+    except Exception as e:
+        log.exception("song=%s job failed", sid)
+        abandon(sid, friendly(e))
+
+
+def abandon(sid: str, why: str) -> None:
+    """任务没有正常结束（没处理的错）：等待 / 识别中的行标成失败，结束 activity，留一条错误提示。
+    曲子已经没有任务标记时不动；写不进去（曲子删了、文件坏了）只记一笔。"""
+
+    def apply(s):
+        a = s.get("activity")
+        if not a and s.get("status") not in ("parsing", "queued"):
+            return
+        for x in s.get("systems") or []:
+            if x.get("status") in ("parsing", "pending"):
+                x.update(status="error", error="任务出错，没有完成")
+        status = "error" if s.get("status") in ("parsing", "queued") else None
+        state.finish(s, status=status, notice=("error", "任务出错：" + why), source=(a or {}).get("kind", ""))
+
+    try:
+        store.update(sid, apply)
+    except Exception as e:  # noqa: BLE001 - 已经在处理一个错误了
+        log.warning("song=%s could not mark the failed job as finished: %s", sid, e)
 
 
 def start(
@@ -93,7 +123,7 @@ def start(
     except Exception:
         jobs.release(sid)
         raise
-    spawn(sid, lambda: run(cancel))
+    spawn(sid, lambda: _guarded(sid, lambda: run(cancel)))
     return cancel
 
 

@@ -1461,3 +1461,35 @@ def test_tapped_harmonic_marks_are_not_ocr_disagreements_and_the_tap_is_part_of_
     assert recognize.ocr_disagreements([bar(22)], seen, tied_in={}) == {}
     assert recognize.ocr_disagreements([bar(17)], seen, tied_in={}) != {}
     assert recognize._bar_key(bar(22)) != recognize._bar_key(bar(17))
+
+
+def test_a_crash_outside_the_row_handlers_does_not_leave_the_song_recognizing(
+    data_dir, sync_jobs, monkeypatch
+):
+    """单行重新识别在自己的错误处理之外出错（开头读曲子失败之类）：任务照样结束，行标成失败，
+    曲子不会一直显示“识别中”。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+
+    def boom(song):
+        raise OSError("读不出 song.json")
+
+    monkeypatch.setattr(recognize, "_bar_keys", boom)
+    recognize.start_reparse(sid, 1)
+    s = store.load(sid)
+    assert s["activity"] is None and not jobs.jobs.running(sid)
+    assert s["systems"][1]["status"] == "error" and "读不出" in s["notice"]["msg"]
+
+
+def test_a_parse_whose_error_handling_fails_still_finishes(data_dir, sync_jobs, monkeypatch):
+    """整首识别失败、收尾写回也失败（磁盘满之类）：最后一道兜底把任务结束掉。"""
+    sid = songs.create_song([("p1.png", score_png())])
+
+    def end_fails(*a):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(recognize, "_end_parse", end_fails)
+    monkeypatch.setattr(FakeClaude, "read_meta", lambda self, page: 1 / 0)
+    assert recognize.start_parse(sid)
+    s = store.load(sid)
+    assert s["activity"] is None and s["status"] == "error" and "disk full" in s["notice"]["msg"]
