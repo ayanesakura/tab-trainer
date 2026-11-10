@@ -24,6 +24,27 @@ def test_env_api_key_and_custom_base_url(monkeypatch):
     assert str(c.client.base_url).startswith("https://example.com/proxy")
 
 
+def test_requests_carry_the_app_user_agent():
+    """网关按 User-Agent 区分调用方：每个请求都带 tab-trainer，不是 SDK 默认的。"""
+    from app.llm import USER_AGENT, _http
+
+    sent = []
+
+    def handler(req):
+        sent.append(req.headers.get("user-agent"))
+        return _sse_response(_reply(["好"]))
+
+    c = Claude(LLMConfig(api_key="sk-test"))
+    c.use_fallbacks = False
+    assert c.client.default_headers.get("User-Agent") == USER_AGENT == "tab-trainer"
+    # 换成假的传输层，其他设置（含 default_headers）照旧
+    c.client = c.client.with_options(
+        http_client=_http.Client(transport=_http.MockTransport(handler)), max_retries=0
+    )
+    list(c.coach_stream(META, BAR, [], "怎么弹", []))
+    assert sent == [USER_AGENT]
+
+
 def test_usage_is_counted_exactly_under_concurrency(monkeypatch):
     import threading
     from types import SimpleNamespace
