@@ -9,7 +9,7 @@
 - 一天的练琴时长 = 秒表的各段 + 练习页里的练习（每首曲子的 practice.jsonl）合起来去掉重叠，裁到这一天里，
   再加上手动补记的分钟数。
 
-和时钟有关的函数都带 now 参数（测试用固定时间）。纯函数（replay / view / build_queue / merge …）只算数据，
+和时钟有关的函数都带 now 参数；不给时取 app.clock（测试可以用 clock.set_now 固定）。纯函数（replay / view / build_queue / merge …）只算数据，
 读写文件的在后面几节。
 """
 
@@ -21,14 +21,14 @@ import uuid
 
 from pydantic import ValidationError
 
-from app import fsrs, practice, store
+from app import clock, fsrs, practice, store
 from app.errors import Conflict, CorruptSong, Invalid, NotFound
 from app.model import STUDY_SETTINGS, StudyRecord, StudySession, StudyTimer, is_score
 
 log = logging.getLogger("tab_trainer.study")
 
 DAY_START_HOUR = 4  # 练琴日从凌晨 4 点开始：半夜 1 点练的还算前一天
-TIME_FMT = "%Y-%m-%d %H:%M:%S"
+TIME_FMT = clock.STAMP_FMT
 NOT_IN_PLAN = "这首曲子不在练琴计划里"
 MIN_TIMER_SECONDS = 60  # 秒表停下时不到 1 分钟的不记（点错了），除非手填了分钟数
 
@@ -39,7 +39,8 @@ Interval = tuple[dt.datetime, dt.datetime]
 # 时间
 # ---------------------------------------------------------------------------
 def current(now: dt.datetime | None = None) -> dt.datetime:
-    return (now or dt.datetime.now()).replace(microsecond=0)
+    """现在：给了 now 用它，否则取 app.clock（和练习记录同一个时钟）。"""
+    return (now or clock.now()).replace(microsecond=0)
 
 
 def practice_day(t: dt.datetime) -> str:
@@ -293,7 +294,8 @@ def session_intervals(session: dict) -> list[Interval]:
 
 
 def app_intervals(records: list[dict]) -> list[Interval]:
-    """练习页的练习记录 → 时间段 [at − seconds, at]（at 是练完的时间，只到分钟）。种子记录（旧版本的聚合）没有时间，不算。"""
+    """练习页的练习记录 → 时间段 [at − seconds, at]（at 是练完的时间，到秒；早先的记录只到分钟）。
+    种子记录（旧版本的聚合）和没记时间的没有时间段，不算（见 practice.undated_seconds）。"""
     out = []
     for r in records:
         end = parse_time(r.get("at"))

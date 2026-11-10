@@ -7,8 +7,15 @@ os.environ["TAB_TRAINER_DATA"] = tempfile.mkdtemp(prefix="tab-trainer-test-")
 
 import pytest
 
-from app import config, jobs, recognize, store
+from app import clock, config, jobs, recognize, store
 from tests.fakes import FakeClaude
+
+
+@pytest.fixture(autouse=True)
+def _real_clock():
+    """测试里用 clock.set_now 固定的时间，测完恢复成系统时间。"""
+    yield
+    clock.set_now(None)
 
 
 @pytest.fixture

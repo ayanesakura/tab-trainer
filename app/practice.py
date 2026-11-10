@@ -1,7 +1,8 @@
 """练习记录：data/songs/<id>/practice.jsonl，一段练习追加一行，不再每次重写 song.json。
 
 一行的格式：
-    {"at": "2026-11-07 20:15", "ids": [<小节 id>...], "loops": 4, "bpm": 60, "seconds": 120}
+    {"at": "2026-11-07 20:15:42", "ids": [<小节 id>...], "loops": 4, "bpm": 60, "seconds": 120}
+（at 是练完的时间；早先的记录只到分钟，照样认）
 旧版本记在 song.json 里的聚合结果，升级时变成第一行“种子”：
     {"seed": true, "bars": {<id>: {loops, seconds, best_bpm, last}}, "last": {a, b, bpm, at}, "total_seconds": ...}
 
@@ -14,8 +15,8 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 
-from app import store
-from app.model import PracticeRecord, PracticeSeed, now
+from app import clock, store
+from app.model import PracticeRecord, PracticeSeed
 
 
 def clean_record(rec: object) -> dict | None:
@@ -48,7 +49,7 @@ def record(song_id: str, bar_ids: list[str], loops: int, bpm: float, seconds: fl
     valid = list(dict.fromkeys(str(i) for i in bar_ids if str(i) in known))  # 保持顺序去重
     if valid:
         rec = {
-            "at": now(),
+            "at": clock.stamp(),  # 到秒：at 是这段练习的结束时间，同一分钟里的几段要分得开（见 study.app_intervals）
             "ids": valid,
             "loops": int(loops),
             "bpm": int(bpm),

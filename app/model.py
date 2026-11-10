@@ -22,11 +22,11 @@ import datetime
 import hashlib
 import json
 import re
-import time
 from typing import Annotated, Any, ClassVar, Literal, get_args, get_origin
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
+from app import clock
 from app.music import (
     DERIVED_WARNS,
     MAX_FRET,
@@ -193,7 +193,7 @@ def valid_source_file(name: object) -> bool:
 # ---------------------------------------------------------------------------
 # 时间格式
 # ---------------------------------------------------------------------------
-# 练习记录的时间：model.now() 写的本地时间 "YYYY-MM-DD HH:MM"（也认带秒的），空串 = 没记时间。
+# 练习记录的时间：本地时间 "YYYY-MM-DD HH:MM:SS"（clock.stamp；早先的只到分钟，也认），空串 = 没记时间。
 # 会显示在曲库里：外来曲子包、手改的文件里别的内容（比如 HTML）这一条记录就不要
 LOCAL_TIME = r"^([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?)?$"
 # 练琴计划（app/study.py）的时间：本地时间 "YYYY-MM-DD HH:MM:SS"（也认不带秒的），必填；练琴日 "YYYY-MM-DD"
@@ -601,7 +601,8 @@ class StudySession(_Rec):
 
 
 def now() -> str:
-    return time.strftime("%Y-%m-%d %H:%M")
+    """只给人看的时间（新建 / 导入、问答、上次精修）"YYYY-MM-DD HH:MM"，取自 app.clock（测试可以换）。"""
+    return clock.minute_stamp()
 
 
 def new_song(sid: str, source_type: str, **fields) -> dict:

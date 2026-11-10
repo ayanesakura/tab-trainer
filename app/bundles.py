@@ -23,7 +23,6 @@ import os
 import re
 import shutil
 import tempfile
-import time
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -32,7 +31,7 @@ from typing import BinaryIO
 from PIL import Image
 from pydantic import ValidationError
 
-from app import migrate, model, practice, songs, state, store, study
+from app import clock, migrate, model, practice, songs, state, store, study
 from app.config import settings
 from app.errors import CorruptSong, Invalid, NotFound
 from app.model import now
@@ -109,7 +108,7 @@ def export_bundle(ids: list[str]) -> tuple[Path, str]:
                 "format": FORMAT,
                 "version": VERSION,
                 "schema_version": store.SCHEMA_VERSION,
-                "exported": time.strftime("%Y-%m-%d %H:%M"),
+                "exported": clock.minute_stamp(),
                 "songs": [{"id": s["id"], "title": song_title(s)} for s in loaded],
             }
             zf.writestr(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=1), zipfile.ZIP_DEFLATED)
@@ -139,7 +138,7 @@ def export_bundle(ids: list[str]) -> tuple[Path, str]:
     if len(loaded) == 1:
         name = f"{song_title(loaded[0])} - 曲子包.zip"
     else:
-        name = f"曲子包 - {len(loaded)} 首 - {time.strftime('%Y%m%d')}.zip"
+        name = f"曲子包 - {len(loaded)} 首 - {clock.now():%Y%m%d}.zip"
     return path, re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name)
 
 

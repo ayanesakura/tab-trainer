@@ -638,3 +638,34 @@ def test_http_order_timer_sessions_settings(client):
     r = client.get("/api/study/calendar", params={"days": 0})
     assert r.status_code == 400 and "天数" in r.json()["detail"]
     assert client.get("/api/study/calendar", params={"days": 801}).status_code == 400
+
+
+def test_practice_records_within_one_minute_are_not_collapsed(data_dir):
+    """练习记录的 at 到秒：同一分钟里练完的两段（各 30 秒、不重叠）合起来是 60 秒，不会因为 at 只到分钟而叠成一段。
+    早先只到分钟的记录照样能读。"""
+    from app import clock, practice
+
+    sid = _song()
+    bar = store.load(sid)["bars"][0]["id"]
+    clock.set_now(dt.datetime(2026, 11, 9, 20, 0, 31))
+    practice.record(sid, [bar], 1, 60, 30)
+    clock.set_now(dt.datetime(2026, 11, 9, 20, 0, 59))
+    practice.record(sid, [bar], 1, 60, 28)
+    recs = practice.records(sid)
+    assert [r["at"] for r in recs] == ["2026-11-09 20:00:31", "2026-11-09 20:00:59"]
+    assert study.seconds_of(study.merge(study.app_intervals(recs))) == 58
+    store.append_practice(sid, {"at": "2026-11-09 19:00", "ids": [bar], "loops": 1, "bpm": 60, "seconds": 60})
+    assert study.seconds_of(study.merge(study.app_intervals(practice.records(sid)))) == 118
+    t = study.today(now=dt.datetime(2026, 11, 9, 21, 0))
+    assert t["minutes"]["total"] == round(118 / 60, 1)
+
+
+def test_study_and_practice_share_one_clock(data_dir):
+    from app import clock
+
+    clock.set_now(dt.datetime(2026, 11, 10, 3, 30))  # 凌晨 4 点前：还算前一个练琴日
+    assert study.current() == dt.datetime(2026, 11, 10, 3, 30)
+    assert study.today()["day"] == "2026-11-09"
+    a = _planned("甲")[0]
+    study.rate(a, 3, [])
+    assert study.ratings(a)[-1]["at"] == "2026-11-10 03:30:00"
