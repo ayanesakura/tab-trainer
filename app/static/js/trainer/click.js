@@ -9,14 +9,16 @@
 export const GAIN = 1.2;
 /** 敲节奏：小节第一拍和其他拍的相对音量 */
 export const ACCENT = 1, WEAK = 0.7;
-/** 渲染不出 alphaTab 的声音时的替代：频率（重拍 / 其他拍）、起音、衰减（秒） */
-export const FALLBACK = { freq: [1760, 1180], attack: 0.002, decay: 0.06 };
+/** 渲染不出 alphaTab 的声音时的替代：正弦波的频率（重拍 / 其他拍）、起音、衰减（秒）、相对增益（正弦波比采样“实”，压低一点） */
+export const FALLBACK = { freq: [1760, 1180], attack: 0.002, decay: 0.06, gain: 0.6 };
 
 const vol = p => (p.metroVol ?? 70) / 100;
 /** 节拍器（每一遍里的拍子）：关着就是 0 */
 export const metronomeLevel = p => (p.metro ? vol(p) : 0);
-/** 预备拍：开着就响，跟着节拍器音量走但不低于一半（节拍器关着、音量拉到底也听得见预备拍） */
-export const countInLevel = p => (p.countIn ? Math.max(0.5, vol(p)) : 0);
+/** 一定要听得见的咔哒（预备拍、敲节奏的延迟校准）：跟着节拍器音量走但不低于一半（节拍器关着、音量拉到底也听得见） */
+export const audibleLevel = p => Math.max(0.5, vol(p));
+/** 预备拍：开着就响 */
+export const countInLevel = p => (p.countIn ? audibleLevel(p) : 0);
 /** 设给 alphaTab 的值 */
 export const metronomeGain = p => metronomeLevel(p) * GAIN;
 export const countInGain = p => countInLevel(p) * GAIN;

@@ -1,9 +1,13 @@
 // 示范音：Karplus-Strong 拨弦合成。
 // 练习时的播放、节拍器都由 alphaTab 负责（player.js）；这里给调弦表的“听”按钮、记号说明的“试听”和敲节奏的示范音
 // （rhythm-drill.js，自己排程，和敲击用同一个音频时钟）发声，麦克风调音器（tuner.js）也共用这里的 AudioContext。
+// AudioContext 和 alphaTab 共用一个（at-adapter.js 的 audioContext：alphaTab 的 WebAudio 输出打开时建的那个），
+// 整页只有一个音频时钟、一条输出；alphaTab 还没建好（谱子加载前就打开了调弦页）时才自己建一个。
 
 import { get } from './store.js';
 import { mtof, noteMidi, T3, STD_MIDI } from './view.js';
+import { getApi } from './player.js';
+import { audioContext } from './at-adapter.js';
 
 const STD_VIEW = { open: Object.fromEntries(STD_MIDI.map((m, i) => [i + 1, m])), capo: 0 };
 
@@ -13,7 +17,8 @@ const panners = {};
 const GT_VOL = () => (get('play.gtVol') ?? 80) / 100;
 export function initAudio() {
   if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
-  ac = new (window.AudioContext || window.webkitAudioContext)();
+  ac = audioContext(getApi()) || new (window.AudioContext || window.webkitAudioContext)();
+  if (ac.state === 'suspended') ac.resume();
   const comp = ac.createDynamicsCompressor();
   comp.threshold.value = -14; comp.ratio.value = 4;
   comp.connect(ac.destination);

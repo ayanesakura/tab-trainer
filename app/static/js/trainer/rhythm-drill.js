@@ -20,6 +20,9 @@ import { stop as stopPlayback, setLoop, setStatus, IDLE_HINT } from './player.js
 import { provide } from './hooks.js';
 import { addShortcuts } from './keys.js';
 import { ac, initAudio, playEvent, stopAllVoices, setGuitarVolume } from './audio.js';
+import { getApi } from './player.js';
+import { renderMetronomeClick } from './at-adapter.js';
+import { clickGain, metronomeLevel, countInLevel, audibleLevel, FALLBACK } from './click.js';
 import { loopLabel } from './view.js';
 import { stored, remember } from './prefs.js';
 
@@ -33,6 +36,14 @@ const TAP_KEYS = new Set(['Space', 'KeyF', 'KeyJ']);
 const LOOKAHEAD = 0.12, PREP = 0.3; // 声音提前多久交给 WebAudio；下一遍提前多久定下来（换速度从下一遍生效）
 const ROW = 86, PAD = 14;
 let clickBus = null, geom = null;
+// 节拍器的声音：用 alphaTab 的合成器渲染一次（和播放时的节拍器一样，见 click.js），没好之前用正弦波代替
+let clickBuf = null, clickLoading = null;
+function loadClick() {
+  if (clickBuf || clickLoading || !ac) return;
+  clickLoading = renderMetronomeClick(getApi(), ac.sampleRate)
+    .then(x => { if (x && ac) { clickBuf = ac.createBuffer(1, x.length, ac.sampleRate); clickBuf.copyToChannel(x, 0); } })
+    .finally(() => { clickLoading = null; });
+}
 const isOn = () => !!get('rhythm.on');
 
 // ---------------------------------------------------------------------
@@ -79,6 +90,7 @@ function paintOn(v) {
   $('rhythmCard').hidden = !v;
   $('rhythmBtn').setAttribute('aria-pressed', String(v));
   if (v) {
+    initAudio(); loadClick(); // 节拍器的声音先渲染好（点按钮是用户操作，这时可以打开音频）
     rebuild(); // 卡片显示出来以后才量得出节奏条的宽度
     setStatus('敲节奏', '空格开始');
   } else setStatus('已停止', IDLE_HINT);
@@ -109,17 +121,26 @@ function heardAdj(perfMs) {
   const run = RH.run;
   return heardNow(perfMs) - (run && !run.calib ? RH.latency / 1000 : 0);
 }
-function click(run, when, accent) {
-  const o = ac.createOscillator(), g = ac.createGain();
-  const mv = (get('play.metroVol') ?? 70) / 100;
-  const vol = (run.calib ? Math.max(0.5, mv) : mv) * (accent ? 0.75 : 0.5);
-  o.frequency.value = accent ? 1760 : 1180;
-  g.gain.setValueAtTime(0, when);
-  g.gain.linearRampToValueAtTime(vol, when + 0.002);
-  g.gain.exponentialRampToValueAtTime(0.001, when + 0.06);
-  o.connect(g); g.connect(clickBus);
-  o.start(when); o.stop(when + 0.07);
-  run.nodes.push(o);
+// 一下咔哒。音量和播放时的节拍器 / 预备拍用同一套换算（click.js）：预备拍按预备拍的音量，每一遍里按节拍器的
+// （节拍器关着就不响），校准那一遍一定要听得见
+function click(run, when, accent, pre) {
+  const p = get('play'), level = run.calib ? audibleLevel(p) : pre ? countInLevel(p) : metronomeLevel(p);
+  if (!level) return;
+  const vol = clickGain(level, accent), g = ac.createGain();
+  let src;
+  if (clickBuf) {
+    src = ac.createBufferSource(); src.buffer = clickBuf;
+    g.gain.value = vol;
+    src.start(when); src.stop(when + clickBuf.duration);
+  } else {
+    src = ac.createOscillator(); src.frequency.value = FALLBACK.freq[accent ? 0 : 1];
+    g.gain.setValueAtTime(0, when);
+    g.gain.linearRampToValueAtTime(vol * FALLBACK.gain, when + FALLBACK.attack);
+    g.gain.exponentialRampToValueAtTime(0.001, when + FALLBACK.decay);
+    src.start(when); src.stop(when + FALLBACK.decay + 0.01);
+  }
+  src.connect(g); g.connect(clickBus);
+  run.nodes.push(src);
 }
 function makePre(run) { // 预备拍：第一小节的拍数，接在上一遍后面（开着预备拍时每一遍前都有）
   const prev = run.loops[run.loops.length - 1], start = prev ? prev.end : run.t0;
@@ -137,7 +158,7 @@ function makeLoop(run) {
   const wins = core.windows(prog.onsets, prog.Q, spq, run.calib ? 0.35 : core.MAX_WIN);
   const notes = prog.onsets.map((o, i) => ({ o, T: start + o.q * spq, win: wins[i], err: null, missed: false }));
   const items = [];
-  if (run.calib || get('play.metro')) for (const b of prog.bars) for (const bt of b.beats) items.push({ t: start + bt.q * spq, click: bt.accent ? 2 : 1 });
+  for (const b of prog.bars) for (const bt of b.beats) items.push({ t: start + bt.q * spq, click: bt.accent ? 2 : 1 }); // 节拍器关着时 click() 不出声
   if (demo) for (const nt of notes) items.push({ t: nt.T, ev: nt.o.ev });
   items.sort((x, y) => x.t - y.t);
   return { kind: 'loop', n, bpm, spq, start, end: start + prog.Q * spq, demo, graded, notes, taps: [], extra: 0, items, next: 0, result: null };
@@ -150,6 +171,7 @@ function start(calib = false) {
   if (!prog || !prog.onsets.length) { UI.toast('这一段没有要弹的音', 'info'); return; }
   initAudio();
   if (!clickBus) { clickBus = ac.createGain(); clickBus.connect(ac.destination); }
+  loadClick();
   setGuitarVolume((get('play.gtVol') ?? 80) / 100);
   const run = RH.run = { calib, prog, bpm: calib ? 80 : 0, loops: [], nodes: [], t0: ac.currentTime + 0.2, shown: null, dirty: true, passed: -1, status: '', count: 0, maxLoops: calib ? 1 : Infinity };
   if (calib) drawStrip(prog);
@@ -184,7 +206,7 @@ function tick() {
   for (const L of loops) {
     while (L.next < L.items.length && L.items[L.next].t < now + LOOKAHEAD) {
       const it = L.items[L.next++], when = Math.max(it.t, now);
-      if (it.click) click(run, when, it.click === 2); else playEvent(it.ev, when);
+      if (it.click) click(run, when, it.click === 2, L.kind === 'pre'); else playEvent(it.ev, when);
     }
   }
   const hn = heardAdj(), slack = run.calib ? 0.4 : core.MAX_WIN + 0.05;
@@ -423,6 +445,7 @@ function tapKey(e) {
 /** 给 e2e 测试和调试用（window.tt.rhythm） */
 export const rhythmDebug = {
   get state() { return RH; },
+  get clickSampled() { return !!clickBuf; }, // 节拍器用的是 alphaTab 渲染的声音
   tapAt, start, stop: stopRun, toggle,
   now: () => heardAdj(), // tapAt 用的时钟
 };

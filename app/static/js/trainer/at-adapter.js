@@ -177,7 +177,12 @@ export async function renderMetronomeClick(api, sampleRate, ms = 160) {
     if (!st || !st.length) return null;
     const mono = new Float32Array(st.length >> 1);
     for (let i = 0; i < mono.length; i++) mono[i] = (st[2 * i] + st[2 * i + 1]) / 2;
-    return mono.some(x => Math.abs(x) > 1e-4) ? mono : null;
+    // 去掉开头的静音（合成器的缓冲）：咔哒要正好在排好的时刻响，敲击是按它判早晚的
+    let peak = 0;
+    for (const x of mono) peak = Math.max(peak, Math.abs(x));
+    if (peak < 1e-4) return null;
+    const at0 = mono.findIndex(x => Math.abs(x) > peak * 0.02);
+    return mono.slice(Math.max(0, at0 - 1));
   } catch {
     return null;
   } finally {

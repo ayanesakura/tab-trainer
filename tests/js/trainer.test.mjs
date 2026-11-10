@@ -288,3 +288,16 @@ test('hooks：只认登记过的名字，重复注册会警告，invoke 返回�
   assert.throws(() => h.provide('c', () => {}), /未知的钩子/);
   assert.throws(() => h.invoke('typo'), /未知的钩子/);
 });
+
+test('click：播放和敲节奏共用的节拍器 / 预备拍音量换算', async () => {
+  const c = await import('../../app/static/js/trainer/click.js');
+  const p = { metro: true, metroVol: 70, countIn: true };
+  assert.equal(c.metronomeLevel(p), 0.7);
+  assert.equal(c.metronomeLevel({ ...p, metro: false }), 0);
+  assert.equal(c.countInLevel({ ...p, metroVol: 10 }), 0.5); // 预备拍不低于一半
+  assert.equal(c.countInLevel({ ...p, countIn: false }), 0);
+  assert.equal(c.metronomeGain(p), 0.7 * c.GAIN); // 设给 alphaTab 的
+  assert.equal(c.clickGain(0.7, true), 0.7 * c.GAIN); // 敲节奏的重拍和 alphaTab 一样响
+  assert.ok(c.clickGain(0.7, false) < c.clickGain(0.7, true));
+  assert.equal(c.audibleLevel({ metroVol: 0 }), 0.5);
+});

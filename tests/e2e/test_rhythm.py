@@ -108,3 +108,17 @@ def test_late_handled_tap_inside_the_window_revokes_a_miss(trainer):
     assert abs(b.js(f"{note0}.err") - 0.01) < 1e-6
     b.js("tt.rhythm.stop(); document.getElementById('rhClose').click(); true")
     assert not b.errors, b.errors
+
+
+def test_rhythm_drill_uses_the_players_click_and_audio_context(trainer):
+    """敲节奏的节拍器用 alphaTab 渲染的节拍器声音（和播放时一样），AudioContext 也和 alphaTab 共用一个。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); document.activeElement.blur(); true")
+    b.js("document.getElementById('rhythmBtn').click(); true")
+    b.wait_for("tt.rhythm.clickSampled", timeout=10)
+    assert b.js("tt.ac === tt.at.audioContext(tt.api)")
+    b.js("tt.setTempo(120); tt.play(); true")
+    b.wait_for("tt.get('rhythm.running')")
+    time.sleep(0.6)
+    b.js("tt.stop(); document.getElementById('rhClose').click(); true")
+    assert not b.errors, b.errors
