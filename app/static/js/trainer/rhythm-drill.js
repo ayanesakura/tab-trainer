@@ -16,14 +16,14 @@
 import * as core from '../rhythm.js';
 import { get, set, on } from './store.js';
 import { $, UI, esc, setButton, svgEl } from './dom.js';
-import { stop as stopPlayback, setLoop, setStatus, IDLE_HINT } from './player.js';
+import { stop as stopPlayback, setLoop, revealLoop, setStatus, IDLE_HINT } from './player.js';
 import { provide } from './hooks.js';
 import { addShortcuts } from './keys.js';
 import { ac, initAudio, playEvent, stopAllVoices, setGuitarVolume } from './audio.js';
 import { getApi } from './player.js';
 import { renderMetronomeClick } from './at-adapter.js';
 import { clickGain, metronomeLevel, countInLevel, audibleLevel, FALLBACK } from './click.js';
-import { loopLabel } from './view.js';
+import { loopLabel, isScore } from './view.js';
 import { stored, remember } from './prefs.js';
 
 const MODES = ['follow', 'listen', 'blind'];
@@ -78,12 +78,29 @@ function rebuild() {
 // ---------------------------------------------------------------------
 // 打开 / 关闭
 // ---------------------------------------------------------------------
+// 打开时循环范围太长（比如全曲 86 小节、七百多个音）：先缩到正在看的那一小节所在的原谱那一行，
+// GP 曲子（没有原谱的行）缩到它附近的 4 个小节，并说一声
+const DRILL_MAX = 8;
+function shrinkForDrill(v) {
+  const { a, b } = get('play'), n = v.bars.length;
+  if (b - a + 1 <= DRILL_MAX) return;
+  const shown = get('ui.bar'), bi = shown >= a && shown <= b ? shown : a;
+  const row = isScore(get('song')) ? null : v.sections.find(g => g.a <= bi && bi <= g.z);
+  let na, nb;
+  if (row && row.z - row.a + 1 <= DRILL_MAX) [na, nb] = [row.a, row.z];
+  else { na = Math.max(0, Math.min(bi - 1, n - 4)); nb = Math.min(n - 1, na + 3); }
+  setLoop(na, nb);
+  revealLoop();
+  UI.toast(`段太长，敲节奏先练${loopLabel(na, nb, n)}`, 'info', 3500);
+}
+
 function toggle(want) {
   if (want === isOn()) return;
   const v = get('view');
   if (want && !(v && v.bars.length)) { UI.toast('曲子还没加载好', 'info'); return; }
   if (!want) stopRun();
   if (want && get('play.playing')) stopPlayback(); // alphaTab 在放就先停下
+  if (want) shrinkForDrill(v);
   set('rhythm.on', want); // 小节卡片、指板停靠条、播放键各自订阅
 }
 function paintOn(v) {

@@ -122,3 +122,37 @@ def test_rhythm_drill_uses_the_players_click_and_audio_context(trainer):
     time.sleep(0.6)
     b.js("tt.stop(); document.getElementById('rhClose').click(); true")
     assert not b.errors, b.errors
+
+
+def test_rhythm_drill_shrinks_a_long_loop(server, trainer):
+    """打开敲节奏时循环范围超过 8 小节：缩到正在看的小节所在的原谱那一行（GP 曲子缩到附近 4 个小节），并提示。"""
+    from tests.e2e.conftest import _seed
+
+    store = server["store"]
+    sid = _seed()
+    # 12 个小节、4 行
+    store.update(
+        sid,
+        lambda s: s.update(
+            bars=[{**x, "id": f"r{i}", "n": i + 1, "system": i // 6} for i, x in enumerate(s["bars"] * 2)]
+        ),
+    )
+    try:
+        b = trainer(sid)
+        b.wait_for("tt.song.bars.length === 12")
+        b.js("tt.setLoop(0, 11); tt.set('ui.bar', 7); document.getElementById('rhythmBtn').click(); true")
+        assert [b.js("tt.state.a"), b.js("tt.state.b")] == [6, 11]
+        assert "第 7–12 小节" in b.js("document.querySelector('.toast').textContent")
+        b.js("tt.rhythm.toggle(false); true")
+        # 不超过 8 小节：不动
+        b.js("tt.setLoop(0, 5); document.getElementById('rhythmBtn').click(); true")
+        assert [b.js("tt.state.a"), b.js("tt.state.b")] == [0, 5]
+        b.js("tt.rhythm.toggle(false); true")
+        # GP 曲子（没有原谱的行）：附近 4 个小节
+        b.js("tt.set('song', {...tt.song, is_score: true}); tt.setLoop(0, 11); tt.set('ui.bar', 7); true")
+        b.js("document.getElementById('rhythmBtn').click(); true")
+        assert [b.js("tt.state.a"), b.js("tt.state.b")] == [6, 9]
+        b.js("tt.rhythm.toggle(false); true")
+        assert not b.errors, b.errors
+    finally:
+        store.delete(sid)
