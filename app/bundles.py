@@ -255,6 +255,8 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
         song = migrate.migrate(song, bid)
         _check_shape(song)  # 先查形状：后面的 recover / strip 都假定字段类型是对的
         state.recover(song)  # 导出时正在识别 / 讲解的，改成“已中断”
+        if bad := model.problems(song):  # 字段之间对不上（小节的页号 / 行号不存在之类）：用的时候会出错
+            raise Invalid(f"song.json 里的数据对不上（{bad[0][:200]}）")
         song["imported"] = now()
         store.write_song(tmp, song)
         if not store.install(tmp, bid):  # 目标已存在（同时导入了同一首）时失败，不会覆盖
@@ -290,47 +292,93 @@ def _clean_jsonl(data: bytes, clean: Callable[[object], dict | None]) -> bytes:
     return ("\n".join(lines) + "\n").encode() if lines else b""
 
 
+def _manifest(zf: zipfile.ZipFile, budget: _Budget) -> list:
+    """读清单，返回曲子列表。格式不对抛 Invalid（类型也查：外来的 version 可能是列表、字符串）。"""
+    try:
+        manifest = json.loads(_read(zf, _entry(zf, MANIFEST, 1024 * 1024, budget, "清单")))
+    except (ValueError, UnicodeDecodeError):
+        raise Invalid("清单不是有效的 JSON") from None
+    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
+        raise Invalid("清单格式不对")
+    version = manifest.get("version", 0)
+    if version is None:
+        version = 0
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise Invalid("清单里的版本号不对")
+    if version > VERSION:
+        raise Invalid("曲子包来自更新版本的 tab-trainer，请先升级再导入")
+    entries = manifest.get("songs")
+    if not isinstance(entries, list) or len(entries) > settings.max_bundle_songs:
+        raise Invalid("清单里的曲子列表无效")
+    return entries
+
+
 def import_bundles(files: list[tuple[str, BinaryIO]]) -> dict:
-    """导入一个或多个曲子包。返回 {"imported": [{"id", "title"}], "skipped": [{"title", "reason", "duplicate"}]}：
-    整个包读不了时 title 是文件名；包里单首有问题只跳过那一首。"""
+    """导入一个或多个曲子包。返回
+    {"imported": [{"id", "title", "bundle"}], "skipped": [{"title", "reason", "duplicate", "bundle"}],
+     "bundles": [{"file", "ok", "imported", "skipped", "error"}]}：
+    整个包读不了时 skipped 里 title 是文件名、bundles 里 ok=false 并写明 error；包里单首有问题只跳过那一首。
+    bundles 按上传顺序，每个包一项：imported / skipped 是这个包里导入 / 跳过了几首。"""
     if not files:
         raise Invalid("没有收到文件")
     budget = _Budget(settings.max_import_bytes)
-    imported, skipped = [], []
+    imported: list[dict] = []
+    skipped: list[dict] = []
+    report: list[dict] = []
     for fname, fobj in files:
+        n_in, n_skip = len(imported), len(skipped)
+        error = _import_file(fname, fobj, budget, imported, skipped)
+        report.append(
+            {
+                "file": fname,
+                "ok": error is None,
+                "imported": len(imported) - n_in,
+                "skipped": len(skipped) - n_skip,
+                "error": error,
+            }
+        )
+    log.info("导入曲子包：%d 首成功，%d 首跳过", len(imported), len(skipped))
+    return {"imported": imported, "skipped": skipped, "bundles": report}
+
+
+def _import_file(fname: str, fobj: BinaryIO, budget: _Budget, imported: list, skipped: list) -> str | None:
+    """导入一个包里的曲子（追加到 imported / skipped）。整个包读不了时返回原因，否则 None。
+    任何意外的错误都只算到这个包（或这一首）上：前面已经导入的不受影响，接口也不会 500。"""
+
+    def whole(reason: str) -> str:
+        skipped.append({"title": fname, "reason": reason, "duplicate": False, "bundle": fname})
+        return reason
+
+    try:
+        zf = zipfile.ZipFile(fobj)
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return whole("不是曲子包（不是 zip 文件）")
+    with zf:
         try:
-            zf = zipfile.ZipFile(fobj)
-        except (zipfile.BadZipFile, OSError):
-            skipped.append({"title": fname, "reason": "不是曲子包（不是 zip 文件）", "duplicate": False})
-            continue
-        with zf:
+            entries = _manifest(zf, budget)
+        except Invalid as e:
+            return whole(f"不是 tab-trainer 曲子包（{e}）")
+        except (zipfile.BadZipFile, OSError, ValueError):
+            return whole("不是 tab-trainer 曲子包")
+        except Exception:  # 外来文件：什么错都只算到这个包上
+            log.exception("导入曲子包：%s 的清单读不出来", fname)
+            return whole("不是 tab-trainer 曲子包")
+        for ent in entries:
+            ent = ent if isinstance(ent, dict) else {}
+            title = str(ent.get("title") or ent.get("id") or fname)[:200]
             try:
-                manifest = json.loads(_read(zf, _entry(zf, MANIFEST, 1024 * 1024, budget, "清单")))
-                if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
-                    raise Invalid("清单格式不对")
-                if int(manifest.get("version") or 0) > VERSION:
-                    raise Invalid("曲子包来自更新版本的 tab-trainer，请先升级再导入")
-                entries = manifest.get("songs")
-                if not isinstance(entries, list) or len(entries) > settings.max_bundle_songs:
-                    raise Invalid("清单里的曲子列表无效")
+                imported.append({**_import_one(zf, ent.get("id"), budget), "bundle": fname})
             except Invalid as e:
                 skipped.append(
-                    {"title": fname, "reason": f"不是 tab-trainer 曲子包（{e}）", "duplicate": False}
+                    {
+                        "title": title,
+                        "reason": str(e),
+                        "duplicate": isinstance(e, _Duplicate),
+                        "bundle": fname,
+                    }
                 )
-                continue
-            except (ValueError, zipfile.BadZipFile, OSError):
-                skipped.append({"title": fname, "reason": "不是 tab-trainer 曲子包", "duplicate": False})
-                continue
-            for ent in entries:
-                ent = ent if isinstance(ent, dict) else {}
-                title = str(ent.get("title") or ent.get("id") or fname)
-                try:
-                    imported.append(_import_one(zf, ent.get("id"), budget))
-                except Invalid as e:
-                    skipped.append({"title": title, "reason": str(e), "duplicate": isinstance(e, _Duplicate)})
-                except Exception as e:  # 外来数据结构不对（检查没覆盖到的）：只跳过这一首，其他的照常导入
-                    log.exception("导入曲子包：%s 无法导入", ent.get("id"))
-                    reason = f"song.json 格式不对（{type(e).__name__}）"
-                    skipped.append({"title": title, "reason": reason, "duplicate": False})
-    log.info("导入曲子包：%d 首成功，%d 首跳过", len(imported), len(skipped))
-    return {"imported": imported, "skipped": skipped}
+            except Exception as e:  # 外来数据结构不对（检查没覆盖到的）：只跳过这一首，其他的照常导入
+                log.exception("导入曲子包：%s 无法导入", ent.get("id"))
+                reason = f"song.json 格式不对（{type(e).__name__}）"
+                skipped.append({"title": title, "reason": reason, "duplicate": False, "bundle": fname})
+    return None

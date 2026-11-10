@@ -441,8 +441,8 @@ class Song(_M):
 
 
 def problems(song: dict) -> list[str]:
-    """song.json 的不变量（写盘前检查）：形状符合 Song，以及字段之间的引用对得上——
-    小节 id 不重复；图片曲子的小节在存在的行上、页号和那一行一致；每一行都在存在的页上。"""
+    """song.json 的不变量（写盘前检查；导入曲子包时不满足就不导入）：形状符合 Song，以及字段之间的引用对得上——
+    小节 id 不重复；图片曲子的小节在存在的页、存在的行上，页号和那一行一致；每一行都在存在的页上。"""
     try:
         Song.model_validate(song)
     except Exception as e:  # noqa: BLE001 - 只报告
@@ -456,6 +456,9 @@ def problems(song: dict) -> list[str]:
         if not 0 <= x["page"] < len(pages):
             out.append(f"第 {si} 行的页号 {x['page']} 不存在")
     for b in [] if is_score(song) else bars:  # GP / MusicXML 的 system 是谱面排版的行，没有 systems
+        if b.get("page") is not None and not 0 <= b["page"] < len(pages):
+            out.append(f"小节 {b.get('id')} 的页号 {b['page']} 不存在")
+            continue
         si = b.get("system")
         if si is None:
             continue
