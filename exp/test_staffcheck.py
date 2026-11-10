@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from app import staffcheck as sc
+from exp import staffcheck as sc
 
 FONT = "/System/Library/Fonts/Helvetica.ttc"
 STD = [64, 59, 55, 50, 45, 40]  # 标准定弦 E4 B3 G3 D3 A2 E2

@@ -5,7 +5,7 @@ import sys
 import numpy as np
 from PIL import ImageDraw
 
-from app import staffcheck as sc
+from exp import staffcheck as sc
 from app import store
 from exp.dataset import song
 from exp.rows import row_geometry

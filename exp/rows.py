@@ -5,7 +5,7 @@ from functools import lru_cache
 import numpy as np
 
 from app import layout, store
-from app import staffcheck as sc
+from exp import staffcheck as sc
 from exp.dataset import song
 
 

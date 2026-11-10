@@ -6,7 +6,7 @@ import json
 import sys
 
 from app import music
-from app import staffcheck as sc
+from exp import staffcheck as sc
 from exp.dataset import SONGS, samples, song
 from exp.rows import row_geometry
 

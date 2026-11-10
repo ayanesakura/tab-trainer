@@ -4,7 +4,7 @@ import collections
 import sys
 
 from app import music
-from app import staffcheck as sc
+from exp import staffcheck as sc
 from exp.dataset import song
 from exp.rows import row_geometry
 
