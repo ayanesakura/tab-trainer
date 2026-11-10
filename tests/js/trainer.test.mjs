@@ -258,3 +258,15 @@ test('精修这个小节 / 这一行：预估文字和进行中的范围', () =>
   assert.equal(refineScopeLabel({ scope: 'song', bars: ids }, ids), '整首');
   assert.equal(refineScopeLabel({ kind: 'refine' }, ids), '整首'); // 早先的任务没有范围
 });
+
+test('tempoAverage：一遍里换了速度，按时间加权平均（快结束才调快不会把整遍记成新速度）', async () => {
+  const { tempoSpan, tempoChange, tempoAverage } = await import('../../app/static/js/trainer/view.js');
+  const s = tempoSpan(0, 60);
+  assert.equal(tempoAverage(s, 10000), 60);
+  tempoChange(s, 9000, 120); // 9 秒 60、最后 1 秒 120
+  assert.equal(tempoAverage(s, 10000), 66);
+  const z = tempoSpan(5, 80);
+  assert.equal(tempoAverage(z, 5), 80); // 还没走时间：就是当前速度
+  tempoChange(z, 5, 100); // 一开始就换：完全按新的
+  assert.equal(tempoAverage(z, 15), 100);
+});

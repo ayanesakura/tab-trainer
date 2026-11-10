@@ -155,7 +155,7 @@ function start(calib = false) {
   run.timer = setInterval(tick, 25);
   tick();
   run.raf = requestAnimationFrame(frame);
-  set('rhythm.running', true); // 播放键显示成停止
+  set({ 'rhythm.calib': calib, 'rhythm.running': true }); // 播放键显示成停止；练习记录（practice-log.js）记敲节奏的时间，校准不算
 }
 function stopRun() {
   const run = RH.run;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import time
 
 import pytest
 
@@ -62,4 +63,33 @@ def test_rhythm_count_in_before_every_loop(trainer):
         assert k1 != k2, seq
     b.js("tt.rhythm.stop(); true")
     b.js("tt.set('play.countIn', false); true")
+    assert not b.errors, b.errors
+
+
+CAPTURE = """(() => { window.__posts = []; const f = window.fetch;
+  window.fetch = (u, o) => { if (String(u).endsWith('/practice')) __posts.push(JSON.parse(o.body)); return f(u, o); };
+  return true; })()"""
+
+
+def test_rhythm_drill_time_is_logged_as_practice(trainer):
+    """敲节奏的时间记成练习时间（kind: rhythm，不算遍数）；延迟校准不算。"""
+    b = trainer()
+    b.js(CAPTURE)
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); document.activeElement.blur(); true")
+    b.js("document.getElementById('rhythmBtn').click(); tt.setTempo(120); tt.play(); true")
+    b.wait_for("tt.get('rhythm.running')")
+    time.sleep(2.6)
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.get('rhythm.running')")
+    b.wait_for("__posts.length === 1")
+    p = b.js("__posts[0]")
+    assert p["kind"] == "rhythm" and p["loops"] == 0 and p["bpm"] == 120, p
+    assert p["bar_ids"] == ["bar1"] and p["seconds"] >= 2, p
+    # 校准：不记
+    b.js("tt.rhythm.start(true); true")
+    time.sleep(2.3)
+    b.js("tt.rhythm.stop(); true")
+    time.sleep(0.3)
+    assert b.js("__posts.length") == 1
+    b.js("document.getElementById('rhClose').click(); true")
     assert not b.errors, b.errors

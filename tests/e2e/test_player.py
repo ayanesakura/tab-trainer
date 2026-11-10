@@ -276,3 +276,20 @@ def test_count_in_before_every_section_loop(trainer):
     b.js("tt.set('play.countIn', false); true")
     assert b.js("tt.api.isLooping") is True
     assert not b.errors, b.errors
+
+
+def test_tempo_change_near_the_end_of_a_pass_is_time_weighted(trainer):
+    """一遍快弹完时才调快：这一遍记的是按时间加权的平均速度，不是新的速度（不然“最快 BPM”会虚高）。"""
+    b = trainer()
+    b.js("""(() => { window.__posts = []; const f = window.fetch;
+      window.fetch = (u, o) => { if (String(u).endsWith('/practice')) __posts.push(JSON.parse(o.body)); return f(u, o); };
+      return true; })()""")
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(120); tt.play(); true")
+    b.wait_for("tt.state.playing")
+    time.sleep(1.5)  # 120 BPM 一小节 2 秒：快弹完了
+    b.js("tt.setTempo(240); true")
+    b.wait_for("__posts.some(p => p.loops === 1)", timeout=5)
+    p = b.js("__posts.find(p => p.loops === 1)")
+    b.js("tt.stop(); true")
+    assert 120 <= p["bpm"] < 200, p
+    assert not b.errors, b.errors
