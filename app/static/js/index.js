@@ -342,6 +342,8 @@ function openMore(btn) {
     return;
   }
   if (s.status === 'corrupt') {
+    // 更新版本存的：数据是好的，删了新版本里也没了——只说明，不给删除
+    if (s.newer) { UI.toast('这首是更新版本的 tab-trainer 存的：升级后就能打开', 'info', 4000); return; }
     UI.menu(btn, [{ label: '删除', icon: 'trash', danger: true, onClick: () => remove(s) }]);
     return;
   }

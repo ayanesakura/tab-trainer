@@ -291,4 +291,8 @@ def test_newer_schema_is_refused_and_never_written_back(data_dir):
     assert path.read_bytes() == before and not (path.parent / "song.json.bak").exists()
     row = next(x for x in views.list_library() if x["id"] == sid)
     assert row["status"] == "corrupt" and "更新版本" in row["notice"]["msg"]
+    assert row["newer"] is True  # 曲库里不提示删除（数据是好的）
+    from app.viewmodels import LibraryItem
+
+    assert LibraryItem.model_validate(row).newer  # 接口返回时不会被丢掉
     store.delete(sid)  # 还是可以删掉

@@ -181,6 +181,9 @@ class LibraryItem(_M):
     title: str
     artist: str = ""
     status: Status | Literal["corrupt"]
+    newer: bool = (
+        False  # status 是 corrupt 时：更新版本的 tab-trainer 存的（数据是好的，升级后就能打开，不提示删除）
+    )
     progress: Progress | None = None
     activity: Activity | None = None
     busy: bool = False

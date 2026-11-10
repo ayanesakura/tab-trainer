@@ -67,7 +67,7 @@ class CorruptSong(AppError, ValueError):
 
 class NewerSchema(CorruptSong):
     """song.json 是更新版本的 tab-trainer 存的（schema_version 比这个版本认识的大）：不读，更不能按旧格式写回去
-    （会悄悄丢掉新版本的字段）。曲库里和数据损坏一样列出来（可以删除），说明要升级。"""
+    （会悄悄丢掉新版本的字段）。曲库里列出来，说明要升级（不提示删除：数据是好的）。"""
 
     def __init__(self, song_id: str, version: int):
         AppError.__init__(self, f"这首曲子是更新版本的 tab-trainer 存的（格式 {version}），请升级后再打开")

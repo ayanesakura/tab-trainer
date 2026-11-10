@@ -413,6 +413,12 @@ def test_clean_pass_marker(trainer):
     b.wait_for("__posts.some(p => p.clean === true)", timeout=6)
     assert b.js("tt.state.clean") is False  # 只管那一遍
     b.wait_for("__posts.some(p => p.clean === false && p.loops === 1)", timeout=6)
+    # 鼠标点过的按钮拿着焦点（不是 :focus-visible）：Enter 还是“这遍干净”，不再“按”一次那个按钮
+    b.js("const pb = document.getElementById('playBtn'); pb.focus({ focusVisible: false }); true")
+    if b.js("document.activeElement.id === 'playBtn' && !document.activeElement.matches(':focus-visible')"):
+        b.key("Enter", vk=13)
+        assert b.js("tt.state.clean") is True
+        assert b.js("tt.get('play.playing')") is True
     b.js("tt.stop(); true")
     assert not b.errors, b.errors
 

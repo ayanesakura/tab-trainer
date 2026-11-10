@@ -48,9 +48,14 @@ function showView(v) {
 // Home 回到段首（播放中就从段首重新开始）；M 节拍器开 / 关；Enter 这遍干净。滑块、按钮用过之后照样能用空格（按完让它失焦）。
 // 敲节奏进行中的空格 / F / J / Esc、改音的 ⌘Z、原谱弹窗里的 ←→ 由各自的模块登记，排在这一组前面。
 // ---------------------------------------------------------------------
+// Enter：键盘 Tab 到按钮、链接上时归它们（照常“按下”）；鼠标点过的按钮也会拿着焦点（没有 :focus-visible），
+// 这时 Enter 还是“这遍干净”，先让按钮失焦，免得再“按”一次刚点过的播放 / 选段
 const cleanKey = e => {
   const t = e.target;
-  if (t && t !== document.body && t.closest && t.closest('button, a[href], summary, [role=button], [tabindex]')) return false;
+  if (t && t !== document.body && t.closest && t.closest('button, a[href], summary, [role=button], [tabindex]')) {
+    if (t.matches && t.matches(':focus-visible')) return false;
+    if (t.blur) t.blur();
+  }
   markClean();
 };
 function initShortcuts() {
@@ -64,7 +69,7 @@ function initShortcuts() {
       ArrowUp: act(() => setTempo(get('play.bpm') + 4)), ArrowDown: act(() => setTempo(get('play.bpm') - 4)),
       Home: act(() => { toLoopStart(); revealLoop(); }),
       KeyM: act(() => { const v = !get('play.metro'); set('play.metro', v); UI.toast(v ? '节拍器：开' : '节拍器：关', 'info', 1200); }),
-      // 这遍干净：焦点在按钮、链接上时 Enter 归它们（照常“按下”）
+      // 这遍干净（见 cleanKey）
       Enter: cleanKey, NumpadEnter: cleanKey,
     },
   });

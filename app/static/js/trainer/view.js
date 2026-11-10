@@ -3,6 +3,7 @@
 
 import { toAlphaTex, durToTicks, tapOffset, TICKS } from '../score.js';
 import { STRINGS, STANDARD, TECH_NAME, WARN_CODES, parseDur } from '../vocab.js';
+import { fmtMin } from '../study-view.js';
 
 export const NN = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 export const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
@@ -144,7 +145,8 @@ export function tempoAverage(span, t) {
   return Math.round(total > 0 ? acc / total : span.bpm);
 }
 
-const mins = s => (s < 60 ? '不到 1 分钟' : s < 3600 ? `${Math.round(s / 60)} 分钟` : `${Math.floor(s / 3600)} 小时${Math.round(s % 3600 / 60) ? ` ${Math.round(s % 3600 / 60)} 分钟` : ''}`);
+// 秒 → “1 小时 5 分钟”：和曲库、练琴页同一个格式（fmtMin），同一首曲子到处显示的一样
+const mins = s => fmtMin((Number(s) || 0) / 60);
 export const durationText = mins;
 /**
  * 小节卡片“本小节”的几行：循环几遍 · 最快；干净几遍 · 最快（用过“这遍干净”才有）；播放了多久 · 上次。
@@ -165,9 +167,9 @@ export function practiceLines(p) {
 /** 整首练了多久（practice.time）：显示的文字和悬停提示（有没有日期的旧记录时说一句）；没练过返回 null */
 export function songTimeText(t) {
   const total = (t && t.total_seconds) || 0;
-  if (total < 60) return null;
+  if (total <= 0) return null;
   const old = (t && t.undated_seconds) || 0;
-  return { text: `练了 ${mins(total)}`, title: `一共练了 ${mins(total)}（同一段时间开着几个页面只算一次）${old >= 60 ? `，其中 ${mins(old)}是旧版本记下的、没有日期` : ''}` };
+  return { text: `练了 ${mins(total)}`, title: `一共练了 ${mins(total)}（同一段时间开着几个页面只算一次）${old > 0 ? `，其中 ${mins(old)}是旧版本记下的、没有日期` : ''}` };
 }
 
 /** 上次练到哪：{a, z, label, bpm, at}，找不到返回 null */

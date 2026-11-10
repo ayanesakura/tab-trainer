@@ -61,7 +61,7 @@ export function latestPracticed(songs) {
 // 下面拼 HTML 的函数里，后端来的字段（包括数字）一律 esc：曲子包、练习记录可能被改过
 export function stateHTML(s) {
   const n = s.notice;
-  if (s.status === 'corrupt') return `<span class="dot err"></span><span class="err-text">${esc(n && n.msg)}（可在“…”菜单删除）</span>`;
+  if (s.status === 'corrupt') return `<span class="dot err"></span><span class="err-text">${esc(n && n.msg)}${s.newer ? '' : '（可在“…”菜单删除）'}</span>`;
   if (s.busy) {
     const p = s.progress || {};
     const pct = p.total ? Math.round(100 * p.done / p.total) : 6;

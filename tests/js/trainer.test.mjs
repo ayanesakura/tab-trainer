@@ -93,7 +93,10 @@ test('practice line, resume and labels', () => {
   const clean = practiceLines({ loops: 5, seconds: 4000, best_bpm: 80, clean: 2, clean_bpm: 76, clean_streak: 2, clean_streak_bpm: 76, last: '今天' });
   assert.deepEqual(clean.lines, ['循环 5 遍 · 最快 80 BPM', '干净 2 遍 · 最快 76 BPM', '播放 1 小时 7 分钟 · 上次 今天']);
   assert.match(clean.title, /最近连续干净 2 遍（76 BPM）/);
-  assert.equal(songTimeText({ total_seconds: 30 }), null);
+  assert.equal(songTimeText({ total_seconds: 0 }), null);
+  assert.equal(songTimeText({ total_seconds: 20 }).text, '练了 不到 1 分钟'); // 和曲库同一个格式
+  assert.equal(songTimeText({ total_seconds: 3590 }).text, '练了 1 小时');
+  assert.equal(songTimeText({ total_seconds: 7170 }).text, '练了 2 小时'); // 以前是“1 小时 60 分钟”
   assert.equal(songTimeText({ total_seconds: 600, undated_seconds: 0 }).text, '练了 10 分钟');
   assert.doesNotMatch(songTimeText({ total_seconds: 600, undated_seconds: 0 }).title, /旧版本/);
   assert.match(songTimeText({ total_seconds: 600, undated_seconds: 120 }).title, /其中 2 分钟是旧版本/);

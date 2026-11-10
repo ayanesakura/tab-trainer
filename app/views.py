@@ -11,7 +11,7 @@ from typing import Any
 
 from app import practice, refine, state, store, study
 from app.confirmed import has_doubts, needs_review, reviewed
-from app.errors import CorruptSong, NotFound
+from app.errors import CorruptSong, NewerSchema, NotFound
 from app.jobs import jobs
 from app.llm import DEFAULT_MODEL, price_of
 from app.model import is_score
@@ -123,9 +123,11 @@ def library_item(s: dict) -> dict:
     }
 
 
-def corrupt_item(sid: str, msg: str) -> dict:
-    """数据坏了的曲子：一首坏了不能让整个曲库打不开，列出来，可以删除。"""
+def corrupt_item(sid: str, msg: str, newer: bool = False) -> dict:
+    """数据坏了的曲子：一首坏了不能让整个曲库打不开，列出来，可以删除。newer：更新版本的 tab-trainer 存的，
+    数据是好的，只是这个版本读不了——不提示删除（删了新版本里也没了），只说要升级。"""
     return {
+        "newer": newer,
         "id": sid,
         "title": sid,
         "status": "corrupt",
@@ -146,6 +148,8 @@ def list_library() -> list[dict]:
     for sid in store.song_ids():
         try:
             out.append(library_item(store.read(sid)))  # 有缓存：没改过的曲子不用重新解析
+        except NewerSchema as e:
+            out.append(corrupt_item(sid, str(e), newer=True))
         except CorruptSong as e:
             out.append(corrupt_item(sid, str(e)))
         except NotFound:  # 刚被删掉（别的 KeyError 之类是数据不对，按下面的坏曲子列出来，能删）
