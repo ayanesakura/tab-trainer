@@ -443,6 +443,41 @@ export function refreshScoreTheme() {
   api.updateSettings(); api.render();
 }
 
+// ---------------------------------------------------------------------
+// 预备拍：状态栏倒数“预备 3…2…1”，每一拍谱面上的光标和底部指板轻轻闪一下（第一拍重一点）。
+// 按 play.countInStart（状态机进入预备拍的时刻）、速度和开始那一小节的拍号算（alphaTab 数一小节：分子个拍，每拍一个分母音符）
+// ---------------------------------------------------------------------
+let ciRaf = 0;
+function meterAt(bi) {
+  const s = get('song'), b = s && s.bars[bi];
+  return (b && b.time_signature) || (s && s.meta && s.meta.time_signature) || [4, 4];
+}
+function pulse(el, strong) {
+  if (!el || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  el.classList.remove('ci-beat', 'ci-strong');
+  void el.offsetWidth; // 重新开始动画
+  el.classList.add('ci-beat');
+  if (strong) el.classList.add('ci-strong');
+}
+function countIn() {
+  cancelAnimationFrame(ciRaf);
+  const shown = get('ui.bar'), { a, b } = get('play');
+  const [num, den] = meterAt(shown >= a && shown <= b ? shown : a);
+  let last = -1;
+  const frame = () => {
+    if (get('play.phase') !== 'countIn') { ['score', 'fbDock'].forEach(id => $(id).classList.remove('ci-beat', 'ci-strong')); return; }
+    const beat = 60 / (get('play.bpm') || 60) * 4 / (den || 4) * 1000;
+    const k = Math.max(0, Math.floor((performance.now() - (get('play.countInStart') || performance.now())) / beat));
+    if (k !== last && k < num) {
+      last = k;
+      setStatus(`预备 ${num - k}…`, `${get('play.bpm')} BPM · 第 ${get('play.loops') + 1} 遍`);
+      pulse($('score'), k === 0); pulse($('fbDock'), k === 0);
+    }
+    ciRaf = requestAnimationFrame(frame);
+  };
+  frame();
+}
+
 /** 状态栏两行（窄的时候会截断：悬停看全文） */
 export function setStatus(l1, l2) { $('statusL1').textContent = l1; $('statusL2').textContent = l2; $('statusL1').parentElement.title = l2 ? `${l1}\n${l2}` : l1; }
 
@@ -459,7 +494,7 @@ export function initPlayer() {
   on('play.timbre', switchTimbre);
   on('play.bpm', bpm => { if (api) api.playbackSpeed = bpm / baseTempo; });
   on('play.playing', (now, was) => { if (!now && was) setStatus('已暂停', IDLE_HINT); });
-  on('play.phase', ph => { if (ph === 'countIn') setStatus(`预备 · ${get('play.bpm')} BPM`, `第 ${get('play.loops') + 1} 遍`); });
+  on('play.phase', ph => { if (ph === 'countIn') countIn(); });
   on('play.ready', r => { if (!r) return; applyAudio(); if (!playing() && !get('rhythm.on')) setStatus('已停止', IDLE_HINT); });
   // 离开练习页（调弦、练习建议…）时停下：播放键和快捷键都只在练习页，切走就停不了了；调弦的麦克风也会听到它。
   // 预备拍、节拍器是同一个播放器，一起停；谱子正在重新加载、本来要接着放的也不放了（状态机的 stop 都管）

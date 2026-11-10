@@ -430,3 +430,20 @@ def test_tempo_shows_the_original_tempo(server, trainer):
     assert f"原速 {orig}" in b.js("document.getElementById('bpmBox').title")
     assert not b.js("document.getElementById('bpmOrig').hidden")
     assert not b.errors, b.errors
+
+
+def test_count_in_counts_down_in_the_status(trainer):
+    """预备拍：状态栏倒数“预备 4…3…”（不是停着的“已停止”），每一拍谱面光标闪一下。"""
+    b = trainer()
+    b.js("""(() => { window.__st = new Set(); window.__pulse = 0; const el = document.getElementById('statusL1');
+      new MutationObserver(() => __st.add(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true });
+      new MutationObserver(() => { if (document.getElementById('score').classList.contains('ci-beat')) __pulse++; })
+        .observe(document.getElementById('score'), { attributes: true, attributeFilter: ['class'] });
+      tt.set('play.countIn', true); tt.setLoop(1, 2); tt.setTempo(120); tt.play(); return true; })()""")
+    b.wait_for("__st.has('预备 4…') && __st.has('预备 3…')", timeout=5)
+    assert b.js("tt.state.phase") == "countIn"
+    assert b.js("__pulse") >= 2
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
+    assert not any("已停止" in x for x in b.js("[...__st]"))
+    assert not b.errors, b.errors

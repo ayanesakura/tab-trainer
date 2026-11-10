@@ -380,7 +380,7 @@ function frame() {
   // 状态
   let st;
   if (run.calib) st = ['延迟校准', L.kind === 'pre' ? '预备…' : '跟着咔哒声敲 8 下'];
-  else if (L.kind === 'pre') st = [`预备 · ${L.bpm} BPM`, `${Math.max(1, Math.ceil((L.end - hn) / L.spq - 1e-6))}…`];
+  else if (L.kind === 'pre') st = [`预备 ${Math.max(1, Math.ceil((L.end - hn) / L.spq - 1e-6))}…`, `${L.bpm} BPM`]; // 和播放的预备拍一样的写法
   else st = [`第 ${L.n} 遍 · ${L.bpm} BPM`, !L.graded ? '这一遍先听，下一遍自己敲' : L.demo ? '跟着示范敲' : '不放示范，自己敲'];
   const key = st.join('|');
   if (key !== run.status) { run.status = key; setStatus(st[0], st[1]); }
