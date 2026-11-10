@@ -75,7 +75,7 @@ def _refine():
 
 
 def song_view(s: dict) -> dict:
-    """GET /api/songs/{id}。s 是 store.load 的结果。"""
+    """GET /api/songs/{id}。s 是 store.load / read 的结果（只读，不改它）。"""
     running = jobs.running(s["id"])
     flags = state.flags(s, running)
     notice = state.public_notice(s)
@@ -165,7 +165,7 @@ def list_library() -> list[dict]:
     out = []
     for sid in store.song_ids():
         try:
-            out.append(library_item(store.load(sid)))
+            out.append(library_item(store.read(sid)))  # 有缓存：没改过的曲子不用重新解析
         except CorruptSong as e:
             out.append(corrupt_item(sid, str(e)))
         except NotFound:  # 刚被删掉（别的 KeyError 之类是数据不对，按下面的坏曲子列出来，能删）

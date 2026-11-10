@@ -30,8 +30,16 @@ STATIC = store.ROOT / "app" / "static"
 log = logging.getLogger("tab_trainer.main")
 
 
+def _another_instance() -> str:
+    return f"\n  另一个 tab-trainer 正在使用数据目录 {store.DATA}，请先关掉它（或用 TAB_TRAINER_DATA 指定别的目录）。\n"
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # 任务登记和存储锁都在进程内：两个实例同时用一个数据目录会重复识别、互相覆盖。main() 启动前已经锁过（同一个进程
+    # 再锁直接成功）；`uvicorn app.main:app --reload` 之类不经过 main 的启动在这里锁，锁不上就不启动（不做下面的恢复）
+    if not store.lock_data_dir():
+        raise RuntimeError(_another_instance())
     service.startup()  # 上次服务关掉时没跑完的任务标成中断；旧格式的曲子存成当前格式
     yield
 
@@ -474,11 +482,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     import uvicorn
 
-    if not store.lock_data_dir():
-        # 任务登记和存储锁都在进程内：两个实例同时用一个数据目录会重复识别、互相覆盖
-        raise SystemExit(
-            f"\n  另一个 tab-trainer 正在使用数据目录 {store.DATA}，请先关掉它（或用 TAB_TRAINER_DATA 指定别的目录）。\n"
-        )
+    if not store.lock_data_dir():  # lifespan 里还会再确认一次（同一个进程再锁直接成功）
+        raise SystemExit(_another_instance())
 
     if a.host in auth.LOOPBACK:
         print(f"\n  tab-trainer 已启动：http://{a.host}:{a.port}\n")

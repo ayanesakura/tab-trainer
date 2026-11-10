@@ -6,22 +6,16 @@
     {"seed": true, "bars": {<id>: {loops, seconds, best_bpm, last}}, "last": {a, b, bpm, at}, "total_seconds": ...}
 
 读取时按小节 id 聚合成接口里 practice 的形状（见 aggregate）。小节被重新识别 / 换音轨后对不上的 id 直接忽略，
-记录本身不删（以后 id 对得上时也不会丢）。解析结果按文件的修改时间和大小缓存。
+记录本身不删（以后 id 对得上时也不会丢）。解析结果由 store.read_records 按文件签名缓存。
 格式不对的行（手改坏的、外来曲子包里的）读取时跳过（见 clean_record），不会让曲子打不开。
 """
 
 from __future__ import annotations
 
-import threading
-from pathlib import Path
-
 from pydantic import ValidationError
 
 from app import store
 from app.model import PracticeRecord, PracticeSeed, now
-
-_cache: dict[Path, tuple[int, int, list[dict]]] = {}
-_cache_lock = threading.Lock()
 
 
 def clean_record(rec: object) -> dict | None:
@@ -37,23 +31,9 @@ def clean_record(rec: object) -> dict | None:
 
 
 def records(song_id: str, song: dict | None = None) -> list[dict]:
-    """这首曲子的全部练习记录（按时间先后）。song 是刚升级、还没存过的旧曲子时，带上内存里的种子。"""
-    path = store.practice_path(song_id)
-    try:
-        st = path.stat()
-        sig = (st.st_mtime_ns, st.st_size)
-    except FileNotFoundError:
-        sig = None
-    out: list[dict] = []
-    if sig is not None:
-        with _cache_lock:
-            hit = _cache.get(path)
-        if hit and hit[:2] == sig:
-            out = hit[2]
-        else:
-            out = [r for r in map(clean_record, store.read_jsonl(path)) if r]
-            with _cache_lock:
-                _cache[path] = (*sig, out)
+    """这首曲子的全部练习记录（按时间先后；store 按文件签名缓存，只读）。song 是刚升级、还没存过的旧曲子时，
+    带上内存里的种子。"""
+    out = store.read_records(song_id, store.PRACTICE_FILE, clean_record)
     seed = clean_record((song or {}).get("_practice_seed"))
     if seed and not any(r.get("seed") for r in out):
         out = [seed, *out]
@@ -63,7 +43,7 @@ def records(song_id: str, song: dict | None = None) -> list[dict]:
 def record(song_id: str, bar_ids: list[str], loops: int, bpm: float, seconds: float) -> dict:
     """记一段练习：循环了哪几个小节（按顺序）、几遍、多少 BPM、多少秒（范围在 schemas.PracticeIn 里检查过）。
     已经不存在的小节 id 不记；一个都不存在就什么都不记。返回聚合后的 practice。"""
-    song = store.load(song_id)
+    song = store.read(song_id)
     known = {b.get("id") for b in song["bars"]}
     valid = list(dict.fromkeys(str(i) for i in bar_ids if str(i) in known))  # 保持顺序去重
     if valid:

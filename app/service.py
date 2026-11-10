@@ -38,14 +38,14 @@ def read_uploads(files: list[tuple[str, int | None, BinaryIO]]) -> list[tuple[st
 def upload(uploads: list[tuple[str, bytes]], title: str) -> str:
     """新建曲子；图片 / PDF 曲子马上开始识别。"""
     sid = songs.create_song(uploads, title)
-    if not is_score(store.load(sid)):
+    if not is_score(store.read(sid)):
         recognize.start_parse(sid)
     return sid
 
 
 def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) -> dict:
     """补页、删页、调整页序（order：已有页的文件名或 "new:k"）。新页上的行在后台识别。"""
-    store.load(sid)
+    store.read(sid)  # 曲子不存在：404
     pages.arrange_pages(sid, order, uploads)
     return song(sid)
 
@@ -62,7 +62,7 @@ def import_bundles(files: list[tuple[str, BinaryIO]]) -> dict:
 # 读
 # ---------------------------------------------------------------------------
 def song(sid: str) -> dict:
-    return views.song_view(store.load(sid))
+    return views.song_view(store.read(sid))
 
 
 def library() -> list[dict]:
@@ -70,12 +70,12 @@ def library() -> list[dict]:
 
 
 def practice_history(sid: str) -> dict:
-    return {"sessions": practice.history(sid, store.load(sid))}
+    return {"sessions": practice.history(sid, store.read(sid))}
 
 
 def source_file(sid: str) -> Path:
     """GP / MusicXML 原文件（练习页取来交给 alphaTab）。文件名按 model.SOURCE_FILE 检查（store.source_path）。"""
-    p = store.source_path(sid, store.load(sid).get("source"))
+    p = store.source_path(sid, store.read(sid).get("source"))
     if not p.is_file():
         raise NotFound("这首曲子没有原文件")
     return p
@@ -93,7 +93,7 @@ def page_file(sid: str, name: str) -> Path:
 # 任务
 # ---------------------------------------------------------------------------
 def reparse_all(sid: str) -> None:
-    if is_score(store.load(sid)):
+    if is_score(store.read(sid)):
         raise Invalid("Guitar Pro / MusicXML 曲子不需要识别")
     config.check_llm_ready()
     if not recognize.start_parse(sid):
@@ -113,14 +113,14 @@ def refine_song(sid: str, bars: list[str] | None = None, system: int | None = No
 
 
 def reparse_row(sid: str, si: int, hint: str) -> None:
-    s = store.load(sid)
+    s = store.read(sid)
     if not 0 <= si < len(s.get("systems") or []):
         raise NotFound("这一行不存在")
     recognize.start_reparse(sid, si, hint.strip())
 
 
 def cancel(sid: str) -> None:
-    store.load(sid)
+    store.read(sid)  # 曲子不存在：404
     if not jobs.cancel(sid):
         raise Conflict("没有正在进行的识别")
 

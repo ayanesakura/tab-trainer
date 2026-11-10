@@ -358,6 +358,7 @@ def test_corrupt_study_file_is_moved_aside(data_dir):
         "settings": {"goal_minutes": 45, "max_learning": 2, "max_reviews": 5},
         "timer": None,
         "sessions": [],
+        "next_order": 0,
     }
     assert not path.exists() and list(data_dir.glob("study.corrupt-*.json"))
     # 能读的文件里个别坏值：用默认值 / 跳过那一条

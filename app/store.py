@@ -6,6 +6,13 @@
 写入：先写临时文件并 fsync，再把旧文件改名成 .bak、临时文件改名成正式文件。断电或崩溃时最多丢最后一次修改；
 读取时正式文件坏了（截断、不是合法 JSON）就用 .bak。两份都坏的曲子抛 CorruptSong（曲库里显示成“数据损坏”，可以删除）。
 每次保存 rev +1（保存计数）；update 顺便维护按对象的版本号 bar.rev / meta_rev（见 model.bump_revs，接口用它们做乐观锁）。删除在锁里先把目录改名（之后的写入一律 NotFound，不会把目录重新建出来）。
+
+锁：每首曲子一把（song_lock，可重入），study.json 和 config.json 各一把（study_lock / config_lock）。读-改-写只锁它改的那个文件，
+改一首曲子不会挡住别的曲子、练琴计划和设置；拿着锁时不要扫整个曲库、调用模型。
+
+读缓存：read(id) 返回读好、升级、补完派生字段的曲子，按 song.json 的 (mtime, 大小, inode) 缓存，多个调用方共用同一个 dict，
+**只读**（要改用 update）；曲库列表、练琴计划、取原文件都用它，不用每次把整个曲库重新解析一遍。jsonl 记录（练习记录、自评）
+也按文件签名缓存（read_records）。写入换了文件（新的 inode），删除时清掉这首的缓存。
 """
 
 from __future__ import annotations
@@ -18,7 +25,8 @@ import shutil
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from PIL import Image
@@ -32,13 +40,76 @@ SONGS = DATA / "songs"
 CONFIG = DATA / "config.json"
 SCHEMA_VERSION = migrate.SCHEMA_VERSION
 
-_lock = threading.RLock()
 _ID_RE = re.compile(r"[a-z0-9-]{4,64}")  # 用 fullmatch：re.match + $ 会放过结尾的换行
 PRACTICE_FILE = "practice.jsonl"
 STUDY_LOG_FILE = "study.jsonl"  # 练琴计划的自评记录（app/study.py）
 log = logging.getLogger("tab_trainer.store")
 
 __all__ = ["CorruptSong", "NotFound"]
+
+
+# ---------------------------------------------------------------------------
+# 锁
+# ---------------------------------------------------------------------------
+_guard = threading.Lock()  # 只保护下面这几个字典本身
+_song_locks: dict[str, threading.RLock] = {}
+_study_lock = threading.RLock()
+_config_lock = threading.RLock()
+
+
+def _lock_of(song_id: str) -> threading.RLock:
+    with _guard:
+        lock = _song_locks.get(song_id)
+        if lock is None:
+            lock = _song_locks[song_id] = threading.RLock()
+        return lock
+
+
+@contextmanager
+def song_lock(song_id: str) -> Iterator[None]:
+    """一首曲子的锁（可重入）：update / save / 追加记录 / 删除都在它里面。要把同一首曲子的几步连成一次（先读再决定写什么）
+    时用它包起来；里面不要扫曲库、不要调用模型。id 不合法抛 NotFound（不为乱七八糟的 id 建锁）。"""
+    if not valid_id(song_id):
+        raise NotFound()
+    with _lock_of(song_id):
+        yield
+
+
+@contextmanager
+def study_lock() -> Iterator[None]:
+    """data/study.json 的锁（可重入），update_study 在它里面。"""
+    with _study_lock:
+        yield
+
+
+@contextmanager
+def config_lock() -> Iterator[None]:
+    """data/config.json 的锁（可重入），update_config 在它里面。"""
+    with _config_lock:
+        yield
+
+
+# ---------------------------------------------------------------------------
+# 读缓存（按文件签名；写入会换掉文件，删除时清掉）
+# ---------------------------------------------------------------------------
+_songs_cache: dict[Path, tuple[tuple[int, int, int], dict]] = {}
+_records_cache: dict[Path, tuple[tuple[int, int, int], list[dict]]] = {}
+
+
+def _sig(path: Path) -> tuple[int, int, int] | None:
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return None
+    return st.st_mtime_ns, st.st_size, st.st_ino
+
+
+def _forget(d: Path) -> None:
+    """清掉曲子目录 d 下的所有缓存。"""
+    with _guard:
+        for cache in (_songs_cache, _records_cache):
+            for k in [k for k in cache if k.parent == d]:
+                del cache[k]
 
 
 def new_id() -> str:
@@ -116,18 +187,44 @@ def _read_json(path: Path) -> dict:
 # song.json
 # ---------------------------------------------------------------------------
 def load(song_id: str) -> dict:
-    """读一首曲子（升级到当前格式、补上派生字段）。不存在抛 NotFound，两份文件都坏了抛 CorruptSong。"""
+    """读一首曲子（升级到当前格式、补上派生字段），每次都是新的 dict，可以随便改。不存在抛 NotFound，两份文件都坏了抛
+    CorruptSong，更新版本存的抛 NewerSchema。只读的话用 read（有缓存）。
+    在这首曲子的锁里读：正在写这首曲子（update 进行中）时等它写完，读到的是写完的结果。"""
+    with song_lock(song_id):
+        return _load(song_id)
+
+
+def _load(song_id: str) -> dict:
+    # 不拿锁也读得到完整的一版：写入是“临时文件 → 改名”，正式文件不会写到一半；两次改名之间正式文件不在时读到的
+    # .bak 是上一版
     path = song_dir(song_id) / "song.json"
-    with _lock:
-        if not path.exists() and not _bak(path).exists():
-            raise NotFound()
-        try:
-            data = _read_json(path)
-        except FileNotFoundError:
-            raise NotFound() from None
-        except (OSError, ValueError) as e:
-            raise CorruptSong(song_id, str(e)) from None
+    if not path.exists() and not _bak(path).exists():
+        raise NotFound()
+    try:
+        data = _read_json(path)
+    except FileNotFoundError:
+        raise NotFound() from None
+    except (OSError, ValueError) as e:
+        raise CorruptSong(song_id, str(e)) from None
     return model.derive(migrate.migrate(data, song_id))
+
+
+def read(song_id: str) -> dict:
+    """和 load 一样，但按 song.json 的文件签名缓存、多个调用方共用：**只读，不要改**（改了会影响别人）。
+    曲库列表、练琴计划、取原文件这类只看不改的地方用它。
+    不拿锁：正在写的曲子读到的是上一版（列曲库不会被某一首曲子的写入挡住）。"""
+    # 签名在读之前取：期间被改了的话存进缓存的签名是旧的，下次一比就会重读
+    path = song_dir(song_id) / "song.json"
+    sig = _sig(path)
+    with _guard:
+        hit = _songs_cache.get(path)
+    if sig is not None and hit and hit[0] == sig:
+        return hit[1]
+    song = _load(song_id)
+    if sig is not None:  # 正式文件不在（两次改名之间、只剩备份）时不缓存
+        with _guard:
+            _songs_cache[path] = (sig, song)
+    return song
 
 
 # 写盘前检查不变量（model.problems）：平时只记错误日志（不能因为一处旧数据让用户存不了），测试里设成 True 直接报错
@@ -144,7 +241,7 @@ def _check(song: dict) -> None:
 
 def save(song: dict, create: bool = False) -> None:
     """保存（rev +1）。create=False 时曲子目录必须已经存在：删掉的曲子不会被后台任务的写回重新建出来。"""
-    with _lock:
+    with song_lock(song["id"]):
         d = song_dir(song["id"])
         if not create and not d.is_dir():
             raise NotFound()
@@ -154,20 +251,20 @@ def save(song: dict, create: bool = False) -> None:
 
 def write_song(d: Path, song: dict) -> None:
     """把曲子写进目录 d（曲子目录，或导入时的临时目录）：去掉派生字段；旧数据升级时
-    原来记在 song.json 里的练习记录转成 practice.jsonl 的第一行。"""
-    with _lock:
-        seed = song.pop("_practice_seed", None)
-        if seed:
-            _write_seed(d, seed)
-        song["schema_version"] = SCHEMA_VERSION
-        _check(song)
-        write_json(d / "song.json", model.strip(song))
+    原来记在 song.json 里的练习记录转成 practice.jsonl 的第一行。写曲子目录时调用方拿着这首的 song_lock（save）；
+    临时目录只有调用方自己在用，不用锁。"""
+    seed = song.pop("_practice_seed", None)
+    if seed:
+        _write_seed(d, seed)
+    song["schema_version"] = SCHEMA_VERSION
+    _check(song)
+    write_json(d / "song.json", model.strip(song))
 
 
 def update(song_id: str, fn: Callable[[dict], None]) -> dict:
     """加锁读-改-写，后台识别线程和接口请求同时改同一首曲子时不会互相覆盖。返回改完的曲子（带派生字段）。
-    内容变了的小节 rev +1、可改谱头变了 meta_rev +1（model.bump_revs）。"""
-    with _lock:
+    内容变了的小节 rev +1、可改谱头变了 meta_rev +1（model.bump_revs）。只锁这一首。"""
+    with song_lock(song_id):
         song = load(song_id)
         before = model.content_snapshot(song)
         fn(song)
@@ -189,12 +286,13 @@ def serialize(song: dict) -> dict:
 
 def delete(song_id: str) -> None:
     """删除一首曲子（数据坏了的也能删）。在锁里先把目录改名：之后同一首的写入都会 NotFound。"""
-    with _lock:
+    with song_lock(song_id):
         d = song_dir(song_id)
         if not d.is_dir():
             raise NotFound()
         trash = SONGS / f".trash-{song_id}-{uuid.uuid4().hex[:6]}"
         os.rename(d, trash)
+        _forget(d)
     shutil.rmtree(trash, ignore_errors=True)
 
 
@@ -216,11 +314,13 @@ def staging_dir() -> Path:
 
 def install(tmp: Path, song_id: str) -> bool:
     """把准备好的临时目录改名成曲子目录。同一个 id 已经存在时返回 False（不覆盖）。"""
-    with _lock:
+    with song_lock(song_id):
+        d = song_dir(song_id)
         try:
-            os.rename(tmp, song_dir(song_id))
+            os.rename(tmp, d)
         except OSError:
             return False
+        _forget(d)  # 同一个 id 删掉后又导入回来：之前的缓存不能再用
     return True
 
 
@@ -286,7 +386,7 @@ def append_study_log(song_id: str, record: dict) -> None:
 
 def _append_jsonl(song_id: str, name: str, record: dict) -> None:
     """往曲子目录里的 jsonl 追加一行并落盘。曲子目录不在了（删掉了）抛 NotFound，不会重新建出来。"""
-    with _lock:
+    with song_lock(song_id):
         d = song_dir(song_id)
         if not d.is_dir():
             raise NotFound()
@@ -320,6 +420,23 @@ def read_jsonl(path: Path) -> list[dict]:
     return out
 
 
+def read_records(song_id: str, name: str, clean: Callable[[object], dict | None]) -> list[dict]:
+    """曲子目录里一个 jsonl（练习记录、自评记录）的全部记录：坏行和 clean 不认的行跳过。按文件签名缓存，
+    同一个文件名每次要用同一个 clean。返回的列表共用、只读。文件不在是 []。"""
+    path = song_dir(song_id) / name
+    sig = _sig(path)
+    if sig is None:
+        return []
+    with _guard:
+        hit = _records_cache.get(path)
+    if hit and hit[0] == sig:
+        return hit[1]
+    out = [r for r in map(clean, read_jsonl(path)) if r]
+    with _guard:
+        _records_cache[path] = (sig, out)
+    return out
+
+
 def _write_seed(d: Path, seed: dict) -> None:
     path = d / PRACTICE_FILE
     if any(r.get("seed") for r in read_jsonl(path)):
@@ -336,7 +453,7 @@ def _write_seed(d: Path, seed: dict) -> None:
 # ---------------------------------------------------------------------------
 def load_config() -> dict:
     """模型设置。文件和备份都坏了时，把坏文件改名留着（里面可能有 key，方便手工找回），按没有设置处理。"""
-    with _lock:
+    with config_lock():
         if not CONFIG.exists() and not _bak(CONFIG).exists():
             return {}
         try:
@@ -352,13 +469,13 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
-    with _lock:
+    with config_lock():
         write_json(CONFIG, cfg, private=True)
 
 
 def update_config(fn: Callable[[dict], None]) -> dict:
     """加锁读-改-写模型设置：两次保存同时到（失焦自动保存 + 点按钮）时，后一个看得到前一个改的字段。"""
-    with _lock:
+    with config_lock():
         cfg = load_config()
         fn(cfg)
         save_config(cfg)
@@ -375,7 +492,7 @@ def study_file() -> Path:
 def load_study() -> dict:
     """练琴计划的数据（原样，没有补默认值）。没有文件是 {}；文件和备份都坏了时把坏文件改名留着，按 {} 处理。"""
     path = study_file()
-    with _lock:
+    with study_lock():
         if not path.exists() and not _bak(path).exists():
             return {}
         try:
@@ -391,31 +508,43 @@ def load_study() -> dict:
 
 
 def update_study(fn: Callable[[dict], None]) -> dict:
-    """加锁读-改-写 study.json（fn 原地修改），返回改完的内容。"""
-    with _lock:
+    """加锁读-改-写 study.json（fn 原地修改），返回改完的内容。fn 里不要读曲子（锁的顺序：曲子的锁在外、study 的在内）。"""
+    with study_lock():
         data = load_study()
         fn(data)
         write_json(study_file(), data)
         return data
 
 
-_lock_file = None
+_lock_files: dict[Path, object] = {}
 
 
 def lock_data_dir() -> bool:
-    """服务启动时调用：锁住数据目录，同一个目录只能有一个 tab-trainer 在跑（进程退出时自动释放）。
+    """锁住数据目录：同一个目录只能有一个 tab-trainer 在跑（进程退出时自动释放）。服务启动时调用（main 和 lifespan 都调：
+    `uvicorn app.main:app --reload` 这样不经过 main 的启动也要锁）；同一个进程对同一个目录再调直接返回 True。
     已经被别的进程锁住时返回 False。不支持文件锁的系统上不做限制。"""
-    global _lock_file
     try:
         import fcntl
     except ImportError:  # Windows
         return True
     DATA.mkdir(parents=True, exist_ok=True)
-    f = open(DATA / ".lock", "w")  # noqa: SIM115 - 进程运行期间一直打开着，锁才有效
-    try:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        f.close()
-        return False
-    _lock_file = f
+    key = DATA.resolve()
+    with _guard:
+        if key in _lock_files:
+            return True
+        f = open(key / ".lock", "w")  # noqa: SIM115 - 进程运行期间一直打开着，锁才有效
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.close()
+            return False
+        _lock_files[key] = f
     return True
+
+
+def unlock_data_dir() -> None:
+    """放开这个进程锁住的数据目录（测试用；服务退出时进程结束自然释放）。"""
+    with _guard:
+        f = _lock_files.pop(DATA.resolve(), None)
+    if f is not None:
+        f.close()  # type: ignore[attr-defined]

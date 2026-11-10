@@ -146,10 +146,31 @@ def test_second_instance_cannot_lock_the_same_data_dir(data_dir):
     )
     r = subprocess.run([sys.executable, "-c", code], check=False, cwd=str(store.ROOT), capture_output=True)
     assert r.returncode == 3, r.stderr
-    store._lock_file.close()
-    store._lock_file = None
+    assert store.lock_data_dir()  # 同一个进程再锁：直接成功
+    store.unlock_data_dir()
     r = subprocess.run([sys.executable, "-c", code], check=False, cwd=str(store.ROOT), capture_output=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_startup_through_lifespan_takes_the_data_dir_lock(data_dir):
+    """`uvicorn app.main:app` 不经过 main()：lifespan 里也要锁数据目录，被别的进程锁着时不启动（也不做启动恢复）。"""
+    code = (
+        "import sys, time; from pathlib import Path; from app import store; "
+        f"store.DATA = Path({str(data_dir)!r}); assert store.lock_data_dir(); "
+        "print('locked', flush=True); time.sleep(30)"
+    )
+    holder = subprocess.Popen([sys.executable, "-c", code], cwd=str(store.ROOT), stdout=subprocess.PIPE)
+    try:
+        assert holder.stdout.readline().strip() == b"locked"
+        with pytest.raises(RuntimeError, match="另一个 tab-trainer"), TestClient(main.app):
+            pass
+    finally:
+        holder.kill()
+        holder.wait()
+    with TestClient(main.app) as c:  # 没人占着：启动时锁上
+        assert c.get("/api/songs", headers={"host": "127.0.0.1"}).status_code == 200
+    assert store.DATA.resolve() in store._lock_files
+    store.unlock_data_dir()
 
 
 def test_every_save_bumps_rev(data_dir):
@@ -260,3 +281,76 @@ def test_valid_id_rejects_trailing_newline():
     assert not store.valid_id("abcd\n") and not store.valid_id("abcd-1234\n")
     with pytest.raises(errors.NotFound):
         store.song_dir("abcd\n")
+
+
+# ---------------------------------------------------------------------------
+# 按曲子的锁、读缓存
+# ---------------------------------------------------------------------------
+def _in_thread(fn):
+    import threading
+
+    out = {}
+    t = threading.Thread(target=lambda: out.update(r=fn()), daemon=True)
+    t.start()
+    t.join(timeout=5)
+    return (not t.is_alive()), out.get("r")
+
+
+def test_locks_are_per_song(data_dir):
+    """一首曲子的锁拿着时，别的曲子、练琴计划、设置照常能读写；同一首要等。"""
+    a, b = _gp("甲"), _gp("乙")
+    with store.song_lock(a):
+        assert _in_thread(lambda: store.patch(b, title="乙2")["title"])[0]
+        assert _in_thread(lambda: store.update_study(lambda d: d.update(x=1)))[0]
+        assert _in_thread(lambda: store.update_config(lambda c: c.update(model="m")))[0]
+        assert _in_thread(lambda: views.list_library())[0]  # 曲库列表不被一首曲子的写入挡住
+        done, _ = _in_thread(lambda: store.patch(a, title="甲2"))
+        assert not done  # 同一首：等锁
+    assert store.load(b)["title"] == "乙2"
+
+
+def test_read_is_cached_until_the_file_changes(data_dir):
+    sid = _gp()
+    first = store.read(sid)
+    assert store.read(sid) is first  # 没改过：同一份
+    store.patch(sid, title="新")
+    again = store.read(sid)
+    assert again is not first and again["title"] == "新"
+    # 别的进程 / 手工改了文件：按文件签名也能发现
+    path = store.song_dir(sid) / "song.json"
+    data = json.loads(path.read_text())
+    data["title"] = "手改"
+    path.write_text(json.dumps(data))
+    assert store.read(sid)["title"] == "手改"
+    store.delete(sid)
+    assert not any(k.parent.name == sid for k in store._songs_cache)
+    with pytest.raises(errors.NotFound):
+        store.read(sid)
+
+
+def test_records_cache_follows_the_file_and_is_dropped_on_delete(data_dir):
+    from app import practice
+
+    sid = _gp()
+    bar = store.load(sid)["bars"][0]["id"]
+    assert practice.records(sid) == []
+    practice.record(sid, [bar], 1, 60, 10)
+    assert len(practice.records(sid)) == 1
+    store.delete(sid)
+    assert not any(k.parent.name == sid for k in store._records_cache)
+
+
+def test_concurrent_plan_adds_get_distinct_orders(data_dir):
+    """同时把几首曲子加进计划：序号各不相同（取号在 study.json 的锁里，扫曲库不拿锁）。"""
+    import threading
+
+    from app import study
+
+    ids = [_gp(f"曲{i}") for i in range(6)]
+    threads = [threading.Thread(target=study.set_plan, args=(sid, True)) for sid in ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    orders = [store.load(sid)["study"]["order"] for sid in ids]
+    assert sorted(orders) == list(range(6))

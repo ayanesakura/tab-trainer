@@ -17,9 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import threading
 import uuid
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -95,10 +93,6 @@ def valid_day(day: object) -> bool:
 # ---------------------------------------------------------------------------
 # 自评记录 study.jsonl
 # ---------------------------------------------------------------------------
-_cache: dict[Path, tuple[int, int, list[dict]]] = {}
-_cache_lock = threading.Lock()
-
-
 def clean_rating(rec: object) -> dict | None:
     """一行自评记录按 model.StudyRecord 检查并整理；格式不对返回 None（这一行不要）。"""
     if not isinstance(rec, dict):
@@ -110,21 +104,8 @@ def clean_rating(rec: object) -> dict | None:
 
 
 def ratings(song_id: str) -> list[dict]:
-    """这首曲子的全部自评（按写入的先后）。解析结果按文件的修改时间和大小缓存。"""
-    path = store.study_log_path(song_id)
-    try:
-        st = path.stat()
-    except FileNotFoundError:
-        return []
-    sig = (st.st_mtime_ns, st.st_size)
-    with _cache_lock:
-        hit = _cache.get(path)
-    if hit and hit[:2] == sig:
-        return hit[2]
-    out = [r for r in map(clean_rating, store.read_jsonl(path)) if r]
-    with _cache_lock:
-        _cache[path] = (*sig, out)
-    return out
+    """这首曲子的全部自评（按写入的先后）。store.read_records 按文件签名缓存，只读。"""
+    return store.read_records(song_id, store.STUDY_LOG_FILE, clean_rating)
 
 
 def last_per_day(log_: list[dict]) -> dict[str, dict]:
@@ -338,7 +319,8 @@ def clean_settings(raw: object) -> dict:
 
 
 def clean_data(raw: object) -> dict:
-    """study.json 的内容整理成 {settings, timer, sessions}：格式不对的秒表当没有，格式不对的练琴记录跳过。"""
+    """study.json 的内容整理成 {settings, timer, sessions, next_order}：格式不对的秒表当没有，格式不对的练琴记录跳过。
+    next_order：下一首加进计划的曲子的序号（见 _next_order）。"""
     raw = raw if isinstance(raw, dict) else {}
     timer = None
     if raw.get("timer") is not None:
@@ -356,7 +338,14 @@ def clean_data(raw: object) -> dict:
         if any(b is None for _, b in rec["segments"]):
             continue
         sessions.append(rec)
-    return {"settings": clean_settings(raw.get("settings")), "timer": timer, "sessions": sessions}
+    nxt = raw.get("next_order")
+    nxt = nxt if isinstance(nxt, int) and not isinstance(nxt, bool) and nxt >= 0 else 0
+    return {
+        "settings": clean_settings(raw.get("settings")),
+        "timer": timer,
+        "sessions": sessions,
+        "next_order": nxt,
+    }
 
 
 def load() -> dict:
@@ -507,7 +496,7 @@ class _Library:
             except (NotFound, OSError, ValueError):  # 刚删掉的；记录文件不是 UTF-8（手改坏了）的这首不算
                 continue
             try:
-                self.songs[sid] = store.load(sid)
+                self.songs[sid] = store.read(sid)  # 有缓存，只读
             except NotFound:
                 continue
             except CorruptSong as e:
@@ -658,11 +647,11 @@ def day_detail(day: str, now: dt.datetime | None = None) -> dict:
 # 写：加入 / 移出 / 暂停、排顺序、自评
 # ---------------------------------------------------------------------------
 def _plan_songs() -> dict[str, dict]:
-    """计划里、读得出来的曲子（排顺序、加入时找最大序号用）。"""
+    """计划里、读得出来的曲子（排顺序、加入时找最大序号用；store.read 的缓存，只读）。不拿任何锁。"""
     out = {}
     for sid in store.song_ids():
         try:
-            s = store.load(sid)
+            s = store.read(sid)
         except (NotFound, CorruptSong):  # 刚删掉的、坏了的在这里不管
             continue
         except Exception:
@@ -673,44 +662,84 @@ def _plan_songs() -> dict[str, dict]:
     return out
 
 
+def _next_order() -> int:
+    """新加进计划的曲子排在最后：比现在计划里最大的序号大。扫曲库不拿锁；取号在 study.json 的锁里，
+    同时加两首也不会拿到同一个序号（计数器 next_order 存在 study.json）。"""
+    biggest = max((int(x["study"].get("order") or 0) for x in _plan_songs().values()), default=-1)
+    out = {}
+
+    def fn(data: dict) -> None:
+        out["n"] = max(data["next_order"], biggest + 1)
+        data["next_order"] = out["n"] + 1
+
+    _update(fn)
+    return out["n"]
+
+
 def set_plan(
     sid: str, in_plan: bool | None = None, paused: bool | None = None, now: dt.datetime | None = None
 ) -> dict:
     """PUT /api/songs/{sid}/study：加入计划（排在最后）/ 移出（自评记录留着）/ 暂停 / 继续。返回 {study}。"""
     t = current(now)
-    with store._lock:  # 找最大序号和写入在同一把锁里：同时加两首不会排到同一个位置
-        s = store.load(sid)
-        st = s.get("study") if isinstance(s.get("study"), dict) else None
-        if in_plan is False:
-            if st is not None:
-                s = store.update(sid, lambda x: x.pop("study", None))
-            return {"study": None}
-        if st is None and not in_plan:
-            if paused is not None:
-                raise Invalid(NOT_IN_PLAN)
-            return {"study": None}
-        new = dict(st or {})
-        if st is None:
-            orders = [int(x["study"].get("order") or 0) for x in _plan_songs().values()]
-            new = {"order": max(orders, default=-1) + 1, "added": fmt(t), "paused": False}
+    s = store.read(sid)
+    st = s.get("study") if isinstance(s.get("study"), dict) else None
+    if in_plan is False:
+        if st is not None:
+            store.update(sid, lambda x: x.pop("study", None))
+        return {"study": None}
+    if st is None and not in_plan:
         if paused is not None:
-            new["paused"] = paused
-        if new != st:
-            s = store.update(sid, lambda x: x.update(study=new))
+            raise Invalid(NOT_IN_PLAN)
+        return {"study": None}
+    order = _next_order() if st is None else None  # 在曲子的锁外面取号（要扫曲库）
+
+    def apply(x: dict) -> None:
+        cur = x.get("study") if isinstance(x.get("study"), dict) else None
+        if cur is None:
+            if not in_plan:  # 刚被别处移出了计划
+                raise Invalid(NOT_IN_PLAN)
+            # 读的时候还在计划里、改的时候已经被移出：重新取号（已经拿着曲子的锁，只看计数器、不扫曲库）
+            n = order if order is not None else _next_order_counter()
+            cur = {"order": n, "added": fmt(t), "paused": False}
+        x["study"] = {**cur, **({"paused": paused} if paused is not None else {})}
+
+    if st is None or (paused is not None and bool(st.get("paused")) != paused):
+        s = store.update(sid, apply)
     return {"study": song_study(s, t)}
 
 
+def _next_order_counter() -> int:
+    """只按 study.json 里的计数器取号（已经拿着曲子的锁时用，不扫曲库）。"""
+    out = {}
+
+    def fn(data: dict) -> None:
+        out["n"] = data["next_order"]
+        data["next_order"] += 1
+
+    _update(fn)
+    return out["n"]
+
+
 def reorder(ids: list[str]) -> None:
-    """PUT /api/study/order：ids 里（计划中的）曲子按给的顺序排在最前，没列出的按原来的先后排在后面。"""
-    with store._lock:
-        plan = _plan_songs()
-        listed = [x for x in dict.fromkeys(ids) if x in plan]
-        rest = sorted(
-            (x for x in plan if x not in listed), key=lambda x: (int(plan[x]["study"].get("order") or 0), x)
-        )
-        for i, sid in enumerate(listed + rest):
-            if plan[sid]["study"].get("order") != i:
-                store.update(sid, lambda s, i=i: s["study"].update(order=i))
+    """PUT /api/study/order：ids 里（计划中的）曲子按给的顺序排在最前，没列出的按原来的先后排在后面。
+    扫曲库不拿锁；每首只在改自己的序号时锁一下（期间被移出计划、删掉的跳过）。"""
+    plan = _plan_songs()
+    listed = [x for x in dict.fromkeys(ids) if x in plan]
+    rest = sorted(
+        (x for x in plan if x not in listed), key=lambda x: (int(plan[x]["study"].get("order") or 0), x)
+    )
+    for i, sid in enumerate(listed + rest):
+        if plan[sid]["study"].get("order") == i:
+            continue
+
+        def apply(s: dict, i: int = i) -> None:
+            if isinstance(s.get("study"), dict):
+                s["study"]["order"] = i
+
+        try:
+            store.update(sid, apply)
+        except NotFound:
+            continue
 
 
 def rate(
@@ -718,7 +747,7 @@ def rate(
 ) -> dict:
     """POST /api/songs/{sid}/study/rate：记下这一遍的自评（同一天再评替换今天的）。返回 {study}。"""
     t = current(now)
-    s = store.load(sid)
+    s = store.read(sid)
     if not isinstance(s.get("study"), dict):
         raise Invalid(NOT_IN_PLAN)
     rec = clean_rating(
