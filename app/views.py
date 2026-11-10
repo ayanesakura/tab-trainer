@@ -69,6 +69,7 @@ def song_view(s: dict) -> dict:
         refine_estimate=refine_estimate(s),
         refine_scopes=refine.scope_estimates(s),
         study=study.song_study(s),
+        archived=bool(s.get("archived")),
     )
     return out
 
@@ -111,6 +112,7 @@ def library_item(s: dict) -> dict:
         "refined": s.get("refined"),
         "refine_estimate": refine_estimate(s),
         "tags": [t for t in s.get("tags") or [] if isinstance(t, str)],
+        "archived": bool(s.get("archived")),
         "practice": p,
         "study": study.song_study(s),
         **cost_summary(s.get("usage")),
@@ -131,6 +133,7 @@ def corrupt_item(sid: str, msg: str) -> dict:
         "practice": None,
         "study": None,
         "tags": [],
+        "archived": False,
     }
 
 

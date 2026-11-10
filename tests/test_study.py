@@ -422,7 +422,7 @@ def test_today_queue_with_real_songs(data_dir):
     first = t["queue"][0]
     assert set(first) == {"id", "title", "artist", "kind", "study", "today_seconds", "playable"}
     assert first["title"] == "甲" and first["playable"] is True and first["today_seconds"] == 0
-    assert t["counts"] == {"learning": 1, "review_due": 1, "new": 0, "in_plan": 3, "paused": 1}
+    assert t["counts"] == {"learning": 1, "review_due": 1, "new": 0, "in_plan": 3, "paused": 1, "archived": 0}
     assert t["streak"] == 1 and t["timer"] is None and t["done"] == []  # 昨天评过、今天还没练
     assert t["settings"] == {"goal_minutes": 45, "max_learning": 2, "max_reviews": 5}
 
@@ -669,3 +669,38 @@ def test_study_and_practice_share_one_clock(data_dir):
     a = _planned("甲")[0]
     study.rate(a, 3, [])
     assert study.ratings(a)[-1]["at"] == "2026-11-10 03:30:00"
+
+
+# ---------------------------------------------------------------------------
+# 归档
+# ---------------------------------------------------------------------------
+def test_archived_songs_leave_today_but_keep_their_data(client):
+    a, b = _planned("甲", "乙")
+    study.rate(a, 3, [], now=at("2026-11-01"))  # 早就到期的复习
+    r = client.post(f"/api/songs/{a}/archive", json={"archived": True})
+    assert r.status_code == 200 and r.json() == {"archived": True}
+    assert json.loads((store.song_dir(a) / "song.json").read_text())["archived"] is True
+    t = study.today(now=T0)
+    assert [x["id"] for x in t["queue"] + t["done"]] == [b]
+    assert t["counts"]["archived"] == 1 and t["counts"]["in_plan"] == 1
+    row = next(x for x in client.get("/api/songs").json() if x["id"] == a)
+    assert row["archived"] is True and row["study"]["order"] == 0  # 计划里的位置、自评都留着
+    assert client.get(f"/api/songs/{a}").json()["archived"] is True
+    assert len(study.ratings(a)) == 1
+    # 曲子包带着归档标记
+    path, _ = bundles.export_bundle([a])
+    store.delete(a)
+    with open(path, "rb") as f:
+        bundles.import_bundles([("x.zip", f)])
+    assert store.load(a)["archived"] is True
+    b_path, _ = bundles.export_bundle([b])
+    store.delete(b)
+    with open(b_path, "rb") as f:
+        bundles.import_bundles([("x.zip", f)])
+    assert "archived" not in json.loads((store.song_dir(b) / "song.json").read_text())  # 没归档的不写 false
+    # 取消归档：回到今天的清单，song.json 里不留这个键
+    assert client.post(f"/api/songs/{a}/archive", json={"archived": False}).json() == {"archived": False}
+    assert "archived" not in json.loads((store.song_dir(a) / "song.json").read_text())
+    assert {x["id"] for x in study.today(now=T0)["queue"]} == {a, b}
+    assert client.post(f"/api/songs/{a}/archive", json={}).status_code == 400
+    assert client.post("/api/songs/nope-0000/archive", json={"archived": True}).status_code == 404

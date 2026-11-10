@@ -422,6 +422,10 @@ class Song(_M):
     derived: Derived | None = None
     refined: Refined | None = None
     study: Study | None = None  # 在练琴计划里才有
+    # 归档：曲库里收起来、不再排进今天的练琴清单，数据（练习记录、自评、计划位置）都留着。存在 song.json 里：
+    # 跟着曲子走（曲子包导出 / 导入自然带上，删曲子一起删），曲库列表读一首曲子就知道，不用再查 study.json。
+    # 没归档时不写这个键（所以默认是 None：导入曲子包补默认值时也不会写出 "archived": false）
+    archived: bool | None = None
 
 
 def problems(song: dict) -> list[str]:

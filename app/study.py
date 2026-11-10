@@ -560,15 +560,18 @@ def _minutes(act: dict, day: str, goal: int) -> dict:
 
 
 def today(now: dt.datetime | None = None) -> dict:
-    """GET /api/study/today：今天的队列、做完的、时长、连续天数、秒表。"""
+    """GET /api/study/today：今天的队列、做完的、时长、连续天数、秒表。归档的曲子不算在计划里（counts.archived 是几首）。"""
     t = current(now)
     day = practice_day(t)
     data = load()
     lib = _Library()
     act = lib.activity(data, t)
     lo, hi = day_bounds(day)
-    items, rated_at = [], {}
+    items, rated_at, archived = [], {}, 0
     for sid, s in lib.plan().items():
+        if s.get("archived"):  # 归档的不排进今天（计划里的位置、自评都留着，取消归档就回来）
+            archived += 1
+            continue
         log_ = lib.logs.get(sid, [])
         meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
         items.append(
@@ -585,6 +588,8 @@ def today(now: dt.datetime | None = None) -> dict:
             rated_at[sid] = today_rec["at"]
     active = {d for d, v in act.items() if v["minutes"] > 0 or v["ratings"]}
     week = [add_days(day, -i) for i in range(7)]
+    queue = build_queue(items, data["settings"], day, rated_at)
+    queue["counts"]["archived"] = archived
     return {
         "day": day,
         "settings": data["settings"],
@@ -592,7 +597,7 @@ def today(now: dt.datetime | None = None) -> dict:
         "streak": streak(active, day),
         "week_minutes": round(sum((act.get(d) or {}).get("minutes", 0.0) for d in week), 1),
         "timer": timer_view(data["timer"], t),
-        **build_queue(items, data["settings"], day, rated_at),
+        **queue,
     }
 
 

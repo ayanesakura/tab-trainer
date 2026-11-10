@@ -146,6 +146,7 @@ class SongView(_M):
     refine_estimate: RefineEstimate | None = None  # 图片曲子：现在精修整首的范围和预估；GP 是 null
     refine_scopes: RefineScopes | None = None  # 图片曲子：精修一个小节 / 一行的预估；GP 是 null
     study: StudyView | None = None  # 不在练琴计划里是 null
+    archived: bool = False  # 归档了（不排进今天的练琴清单）
 
 
 class LibraryPractice(_M):
@@ -182,3 +183,4 @@ class LibraryItem(_M):
     refined: Refined | None = None
     refine_estimate: RefineEstimate | None = None
     study: StudyView | None = None
+    archived: bool = False

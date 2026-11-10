@@ -299,6 +299,12 @@ def put_tags(sid: str, body: schemas.TagsIn):
     return service.set_tags(sid, body.tags)
 
 
+@app.post("/api/songs/{sid}/archive")
+def archive(sid: str, body: schemas.ArchiveIn):
+    """归档 / 取消归档：{archived}。返回 {archived}。归档的曲子不排进今天的练琴清单，数据都留着。"""
+    return service.set_archived(sid, body.archived)
+
+
 @app.post("/api/songs/{sid}/explain")
 def explain(sid: str):
     service.explain(sid)

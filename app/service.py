@@ -169,6 +169,10 @@ def set_tags(sid: str, tags: list[str]) -> dict:
     return {"tags": songs.set_tags(sid, tags)}
 
 
+def set_archived(sid: str, archived: bool) -> dict:
+    return {"archived": songs.set_archived(sid, archived)}
+
+
 def ask_bar(sid: str, bar_id: str, question: str) -> dict:
     return coach.ask_bar(sid, bar_id, question)
 

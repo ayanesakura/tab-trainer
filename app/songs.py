@@ -470,6 +470,18 @@ def edit_meta(sid: str, raw: dict, rev: int | None = None) -> dict:
     return store.update(sid, apply)
 
 
+def set_archived(sid: str, archived: bool) -> bool:
+    """归档 / 取消归档（model.Song.archived）：只是曲库里的一个标记，数据都留着；归档的不排进今天的练琴清单。"""
+
+    def apply(s: dict) -> None:
+        if archived:
+            s["archived"] = True
+        else:
+            s.pop("archived", None)
+
+    return bool(store.update(sid, apply).get("archived"))
+
+
 def set_tags(sid: str, tags: list[str]) -> list[str]:
     """曲库里用来筛选的标签（schemas.TagsIn 已经去掉空白、重复，检查过数量和长度）。"""
     return store.update(sid, lambda s: s.update(tags=list(tags)))["tags"]

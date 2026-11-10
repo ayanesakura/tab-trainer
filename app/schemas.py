@@ -110,6 +110,10 @@ class TagsIn(_Strict):
         return clean
 
 
+class ArchiveIn(_Strict):
+    archived: bool
+
+
 class ReviewIn(_Strict):
     ok: bool = True
     rev: int | None = None
@@ -229,6 +233,7 @@ FIELD_NAMES = {
     "hint": "说明",
     "title": "曲名",
     "tags": "标签",
+    "archived": "归档",
     "tuning": "调弦",
     "capo": "变调夹",
     "time_signature": "拍号",
