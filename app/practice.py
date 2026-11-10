@@ -52,7 +52,7 @@ def record(song_id: str, bar_ids: list[str], loops: int, bpm: float, seconds: fl
             "at": clock.stamp(),  # 到秒：at 是这段练习的结束时间，同一分钟里的几段要分得开（见 study.app_intervals）
             "ids": valid,
             "loops": int(loops),
-            "bpm": int(bpm),
+            "bpm": round(bpm),
             "seconds": round(float(seconds), 1),
         }
         store.append_practice(song_id, rec)

@@ -580,8 +580,16 @@ class StudySession(_Rec):
     kind: Literal["timer", "manual"]
     day: Day
     segments: Segments = Field(default_factory=list)  # 只有 timer 有，都已结束
-    minutes: float = Field(ge=0)  # 秒表忘了停可能很长：按记下的算（停的时候可以改成实际练的分钟数）
+    # 一次最多 MAX_SESSION_MINUTES（和接口的上限一样）：秒表忘了停记下的更长的旧记录读的时候按上限算，不丢
+    minutes: float = Field(ge=0, le=MAX_SESSION_MINUTES)
     note: str = Field("", max_length=500)
+
+    @field_validator("minutes", mode="before")
+    @classmethod
+    def _cap_minutes(cls, v: object) -> object:
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > MAX_SESSION_MINUTES:
+            return MAX_SESSION_MINUTES
+        return v
 
 
 def now() -> str:

@@ -29,6 +29,8 @@ class Settings:
     max_bundle_songs: int = 500
     max_song_json: int = 20 * 1024 * 1024
     max_import_bytes: int = 2 * 1024 * 1024 * 1024  # 一次导入解出来的总大小（也用来挡上传的请求体）
+    # 普通的 JSON 请求体（改小节、自评、排序…）最大多少字节；GP 转换结果按 max_song_json
+    max_json_bytes: int = 2 * 1024 * 1024
     # AI 讲解 / 问答
     explain_chunk: int = 16  # 一次请求讲解几个小节
     qa_keep: int = 20  # 每个小节保留最近几条问答

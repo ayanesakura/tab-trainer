@@ -13,6 +13,7 @@ from app.music import STRINGS, STUDY_ISSUES
 
 MAX_TAGS = 12
 MAX_TAG_LEN = 20
+MAX_TITLE = 200  # 曲名（上传时的表单字段和改谱头共用）
 
 
 class _In(BaseModel):
@@ -54,7 +55,7 @@ class ImportErrorIn(_Strict):
 
 
 class MetaIn(_Strict):
-    title: str | None = Field(None, max_length=200)
+    title: str | None = Field(None, max_length=MAX_TITLE)
     artist: str | None = Field(None, max_length=200)
     tuning: list[str] | None = Field(None, max_length=STRINGS)
     capo: int | None = Field(None, ge=0, le=12)
@@ -83,8 +84,15 @@ class AskIn(_Strict):
 class PracticeIn(_In):
     bar_ids: list[str] = Field(min_length=1, max_length=5000)
     loops: int = Field(0, ge=0, le=10000)
-    bpm: float = Field(gt=0, le=400)  # 前端的速度可能带小数，记录时取整
+    bpm: float = Field(
+        gt=0, le=400
+    )  # 前端的速度可能带小数：四舍五入成整数（存盘的 PracticeRecord.bpm 是整数）
     seconds: float = Field(0, ge=0, le=6 * 3600)
+
+    @field_validator("bpm")
+    @classmethod
+    def _whole_bpm(cls, v: float) -> int:
+        return max(1, round(v))
 
 
 class TagsIn(_Strict):

@@ -9,6 +9,8 @@ from PIL import Image
 from app import config, main, recognize, store
 from tests.fakes import FakeClaude, derived_bars, score_png
 
+GP5 = b"\x18FICHIER GUITAR PRO v5.10"
+
 
 @pytest.fixture
 def client(data_dir, monkeypatch):
@@ -806,3 +808,44 @@ def test_views_and_refine_do_not_import_each_other():
 
     assert "views" not in imports("refine") and "review" in imports("refine")
     assert "refine" in imports("views") and "review" in imports("views")
+
+
+def test_request_limits_match_the_stored_model(client, monkeypatch):
+    """接口的上限和存盘的模型一致：上传时的曲名和改曲名一样最长 200；速度四舍五入成整数（存的是整数）；
+    普通 JSON 请求体有上限（413）。"""
+    r = client.post("/api/songs", files={"files": ("x.gp5", GP5)}, data={"title": "x" * 201})
+    assert r.status_code == 400 and "曲名" in r.json()["detail"]
+    sid = client.post("/api/songs", files={"files": ("x.gp5", GP5)}, data={"title": "x" * 200}).json()["id"]
+    client.put(f"/api/songs/{sid}/derived", json={"bars": derived_bars(2)})
+    bar = client.get(f"/api/songs/{sid}").json()["bars"][0]["id"]
+    client.post(f"/api/songs/{sid}/practice", json={"bar_ids": [bar], "loops": 1, "bpm": 59.6, "seconds": 5})
+    from app import practice
+
+    assert [r["bpm"] for r in practice.records(sid)] == [60]
+
+    monkeypatch.setattr(config.settings, "max_json_bytes", 1000)
+    r = client.put(f"/api/songs/{sid}/tags", json={"tags": ["x" * 2000]})
+    assert r.status_code == 413 and "请求太大" in r.json()["detail"]
+    r = client.put(
+        f"/api/songs/{sid}/tags", content=b"[" + b" " * 2000, headers={"transfer-encoding": "chunked"}
+    )
+    assert r.status_code == 413
+    assert client.put(f"/api/songs/{sid}/tags", json={"tags": ["ok"]}).status_code == 200
+    # GP 转换结果按 song.json 的上限，不受普通 JSON 上限影响
+    assert client.put(f"/api/songs/{sid}/derived", json={"bars": derived_bars(30)}).status_code == 200
+
+
+def test_long_timer_sessions_are_capped_not_dropped(data_dir):
+    """一次练琴最多记 600 分钟（接口和存盘一样）：以前秒表忘了停记下的更长的记录读出来按 600 算，不会被当成坏记录丢掉。"""
+    from app import model, study
+
+    s = model.StudySession.model_validate(
+        {"id": "0123abcd", "kind": "timer", "day": "2026-11-01", "minutes": 900, "segments": []}
+    )
+    assert s.minutes == model.MAX_SESSION_MINUTES
+    store.update_study(
+        lambda d: d.update(
+            sessions=[{"id": "0123abcd", "kind": "manual", "day": "2026-11-01", "minutes": 1200, "note": ""}]
+        )
+    )
+    assert [x["minutes"] for x in study.load()["sessions"]] == [600]

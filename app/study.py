@@ -23,7 +23,7 @@ from pydantic import ValidationError
 
 from app import clock, fsrs, practice, store
 from app.errors import Conflict, CorruptSong, Invalid, NotFound
-from app.model import STUDY_SETTINGS, StudyRecord, StudySession, StudyTimer, is_score
+from app.model import MAX_SESSION_MINUTES, STUDY_SETTINGS, StudyRecord, StudySession, StudyTimer, is_score
 
 log = logging.getLogger("tab_trainer.study")
 
@@ -424,7 +424,8 @@ def timer_action(action: str, minutes: float | None = None, now: dt.datetime | N
             "kind": "timer",
             "day": practice_day(start),
             "segments": segs,
-            "minutes": round(minutes if minutes is not None else total / 60, 2),
+            # 忘了停的秒表最多记 MAX_SESSION_MINUTES（和手填的上限一样）
+            "minutes": round(min(minutes if minutes is not None else total / 60, MAX_SESSION_MINUTES), 2),
             "note": "",
         }
         data["sessions"].append(session)

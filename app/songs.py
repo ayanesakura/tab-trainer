@@ -11,6 +11,7 @@ import logging
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import BinaryIO
 
 from PIL import Image, ImageOps
 
@@ -110,16 +111,43 @@ def _write_new(tmp, song: dict) -> None:
     store.write_song(tmp, song)
 
 
+# ---------------------------------------------------------------------------
+# 上传上限（唯一一处：接口读文件和新建 / 补页都按这里检查）
+# ---------------------------------------------------------------------------
+def _check_count(n: int) -> None:
+    if n > settings.max_files:
+        raise Invalid(f"一次最多上传 {settings.max_files} 个文件")
+
+
+def _check_size(name: str, n: int) -> None:
+    if n > settings.max_file_bytes:
+        raise Invalid(f"“{name}”太大了（单个文件最大 {settings.max_file_bytes // 1024 // 1024} MB）")
+
+
 def check_upload_sizes(uploads: list[tuple[str, bytes]]) -> None:
+    """上传的文件：至少一个、个数、单个文件和总大小都在上限内（config.settings）。"""
     if not uploads:
         raise Invalid("没有收到文件")
-    if len(uploads) > settings.max_files:
-        raise Invalid(f"一次最多上传 {settings.max_files} 个文件")
+    _check_count(len(uploads))
     for name, data in uploads:
-        if len(data) > settings.max_file_bytes:
-            raise Invalid(f"“{name}”太大了（单个文件最大 {settings.max_file_bytes // 1024 // 1024} MB）")
+        _check_size(name, len(data))
     if sum(len(d) for _, d in uploads) > settings.max_total_bytes:
         raise Invalid(f"文件总大小超过 {settings.max_total_bytes // 1024 // 1024} MB")
+
+
+def read_uploads(files: list[tuple[str, int | None, BinaryIO]]) -> list[tuple[str, bytes]]:
+    """接口收到的 (文件名, 声明的大小, 文件对象) → (文件名, 内容)，按上面的上限检查。声明的大小已经超了的不读，
+    每个文件最多读到上限多一个字节（不会把超大的文件整个读进内存）。没有文件是 []（补页时可以不传文件）。"""
+    if not files:
+        return []
+    _check_count(len(files))
+    out = []
+    for name, size, f in files:
+        if size is not None:
+            _check_size(name, size)
+        out.append((name, f.read(settings.max_file_bytes + 1)))
+    check_upload_sizes(out)
+    return out
 
 
 @contextmanager

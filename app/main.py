@@ -1,4 +1,5 @@
-"""FastAPI 服务：只做 HTTP（路由、参数、文件、响应）。业务编排在 app/service.py，返回的形状在 app/views.py。
+"""FastAPI 服务：只做 HTTP（路由、参数、文件、响应），每个路由只调 app/service.py（用例）；返回的形状在 app/views.py。
+store 只用来取数据目录、锁数据目录（进程级的启动检查）。
 
 启动：uv run python -m app.main   （默认 http://127.0.0.1:8765）
 """
@@ -22,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
-from app import auth, config, schemas, service, store
+from app import auth, schemas, service, store
 from app.config import settings
 from app.errors import AppError
 
@@ -60,8 +61,8 @@ async def app_error(_request: Request, e: AppError):
     return JSONResponse({"detail": str(e)}, status_code=e.status)
 
 
-def _files(files: list[UploadFile]) -> list[tuple[str, bytes]]:
-    return service.read_uploads([(f.filename or "upload", f.size, f.file) for f in files])
+def _files(files: list[UploadFile]) -> list[service.Upload]:
+    return [(f.filename or "upload", f.size, f.file) for f in files]
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +101,7 @@ def page_file(sid: str, name: str):
 # ---------------------------------------------------------------------------
 @app.get("/api/settings")
 def get_settings():
-    return config.public_settings()
+    return service.settings_view()
 
 
 @app.put("/api/settings")
@@ -109,12 +110,12 @@ def put_settings(body: schemas.SettingsIn):
         k: getattr(body, k)
         for k in body.model_fields_set & {"base_url", "model", "effort", "double_check", "refine"}
     }
-    return config.update_settings(body.api_key, body.clear_api_key, fields)
+    return service.save_settings(body.api_key, body.clear_api_key, fields)
 
 
 @app.post("/api/settings/test")
 def test_settings():
-    return config.test_connection()
+    return service.test_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -125,14 +126,22 @@ def list_songs():
     return service.library()
 
 
-def _upload_limit(method: str, path: str) -> int | None:
-    """上传接口的请求体上限（字节，多给 1 MB 表单开销）；其他请求不限。"""
-    if method != "POST":
+_WRITES = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _body_limit(method: str, path: str) -> tuple[int, str] | None:
+    """请求体上限（字节）和超了时的说明。上传接口按文件的上限（多给 1 MB 表单开销）；GP 转换结果（小节多）按 song.json
+    的上限；别的写请求都是小的 JSON（settings.max_json_bytes）。读请求不限。"""
+    if method not in _WRITES:
         return None
-    limit = {"/api/songs": settings.max_total_bytes, "/api/import": settings.max_import_bytes}.get(path)
-    if path.startswith("/api/songs/") and path.endswith("/pages"):
-        limit = settings.max_total_bytes
-    return limit
+    mb = 1024 * 1024
+    upload = {"/api/songs": settings.max_total_bytes, "/api/import": settings.max_import_bytes}.get(path)
+    if method == "POST" and path.startswith("/api/songs/") and path.endswith("/pages"):
+        upload = settings.max_total_bytes
+    if method == "POST" and upload:
+        return upload + mb, f"文件总大小超过 {upload // mb} MB"
+    limit = settings.max_song_json if path.endswith("/derived") else settings.max_json_bytes
+    return limit, f"请求太大（超过 {max(1, limit // mb)} MB）"
 
 
 class _TooLarge(Exception):
@@ -140,25 +149,26 @@ class _TooLarge(Exception):
 
 
 class LimitUploadSize:
-    """表单解析之前就挡掉过大的上传（否则 Starlette 会先把整个请求收下来存到临时文件）：
-    有 Content-Length 的直接看它；分块上传（没有 Content-Length）边收边数，超过上限就不再往下读、回 413。"""
+    """解析之前就挡掉过大的请求体（否则 Starlette 会先把整个上传收下来存到临时文件、把整个 JSON 读进内存）：
+    有 Content-Length 的直接看它；分块上传（没有 Content-Length）边收边数，超过上限就不再往下读、回 413。上限见 _body_limit。"""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        limit = (
-            _upload_limit(scope.get("method", ""), scope.get("path", "")) if scope["type"] == "http" else None
+        rule = (
+            _body_limit(scope.get("method", ""), scope.get("path", "")) if scope["type"] == "http" else None
         )
-        if not limit:
+        if not rule:
             return await self.app(scope, receive, send)
-        too_large = JSONResponse({"detail": f"文件总大小超过 {limit // 1024 // 1024} MB"}, 413)
+        limit, why = rule
+        too_large = JSONResponse({"detail": why}, 413)
         headers = dict(scope.get("headers") or [])
         try:
             size = int(headers.get(b"content-length") or 0)
         except ValueError:
             size = 0
-        if size > limit + 1024 * 1024:
+        if size > limit:
             return await too_large(scope, receive, send)
         got, tripped, started = 0, False, False
 
@@ -167,7 +177,7 @@ class LimitUploadSize:
             message = await receive()
             if message["type"] == "http.request":
                 got += len(message.get("body") or b"")
-                if got > limit + 1024 * 1024:
+                if got > limit:
                     tripped = True
                     raise _TooLarge  # 表单解析会把它变成 400：下面按 tripped 改成 413
             return message
@@ -211,7 +221,9 @@ async def cache_headers(request: Request, call_next):
 
 
 @app.post("/api/songs")
-def upload(files: Annotated[list[UploadFile], File()], title: Annotated[str, Form()] = ""):
+def upload(
+    files: Annotated[list[UploadFile], File()], title: Annotated[str, Form(max_length=schemas.MAX_TITLE)] = ""
+):
     # 普通 def：FastAPI 放到线程池里跑，PDF 渲染、PNG 压缩不会卡住其他请求
     return {"id": service.upload(_files(files), title)}
 
