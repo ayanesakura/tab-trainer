@@ -7,7 +7,7 @@ import { TICKS, CHORD_PAD, eventIndexAt, scoreNeedsGbk } from '../score.js';
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
 import { parseBarInput, stepSection as stepCalc, isScore, beatNumber } from './view.js';
-import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref } from './prefs.js';
+import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref, stored, remember } from './prefs.js';
 
 export { alphaTab };
 // 停着时第二行不写快捷键说明（空格、←→、↑↓ 写在各个按钮的悬停提示里），只在播放时显示“第几遍”
@@ -684,8 +684,6 @@ function paintLoop(preview) {
 
 // 跟着曲子走的默认值（加载谱子后按原速调整）；其余播放设置记在本机，见 prefs.js
 const SONG_DEFAULTS = { bpmMax: 140 };
-const stored = k => { try { return localStorage.getItem(k); } catch { return null; } };
-const remember = (k, v) => { try { localStorage.setItem(k, v); } catch { /* 只在这次打开时生效 */ } };
 
 /** 控制条和“更多”弹层里的输入框 ⇄ store 的 play 切片 */
 function bindInputs() {
@@ -790,12 +788,11 @@ export function initPlayer() {
   // 谱面样式：弹唱谱（有和弦名的曲子）默认只看六线谱（五线谱对弹唱没什么用，还占地方），换了就记住；其他曲子默认两种都显示
   const setNotationSeg = UI.seg($('notationSeg'), 'both', v => {
     set('ui.notation', v);
-    if (hasChords(get('song'))) try { localStorage.setItem(CHORD_NOTATION_KEY, v); } catch { /* 隐私模式 */ }
+    if (hasChords(get('song'))) remember(CHORD_NOTATION_KEY, v);
   });
   on('view', v => {
     if (!v || get('ui.notation') || !hasChords(get('song'))) return;
-    let n = 'tab';
-    try { n = localStorage.getItem(CHORD_NOTATION_KEY) === 'both' ? 'both' : 'tab'; } catch { /* 隐私模式 */ }
+    const n = stored(CHORD_NOTATION_KEY) === 'both' ? 'both' : 'tab';
     setNotationSeg(n);
     set('ui.notation', n);
   });

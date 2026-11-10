@@ -19,10 +19,9 @@ import { $, UI, esc, setButton, svgEl } from './dom.js';
 import { stop as stopPlayback, setLoop, setStatus, setPlayerHooks, IDLE_HINT } from './player.js';
 import { ac, initAudio, playEvent, stopAllVoices, setGuitarVolume } from './audio.js';
 import { loopLabel } from './view.js';
+import { stored, remember } from './prefs.js';
 
 const MODES = ['follow', 'listen', 'blind'];
-const stored = k => { try { return localStorage.getItem(k); } catch { return null; } };
-const remember = (k, v) => { try { localStorage.setItem(k, v); } catch { /* 只在这次打开时生效 */ } };
 const RH = {
   run: null, prog: null, key: '', hist: [], errs: [], last: null, shown: null,
   mode: MODES.includes(stored('tt.rhythmMode')) ? stored('tt.rhythmMode') : 'follow',

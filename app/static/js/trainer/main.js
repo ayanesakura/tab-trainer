@@ -19,6 +19,7 @@ import { initRhythm, rhythmKey, rhythmDebug } from './rhythm-drill.js';
 import { initStudy } from './study.js';
 import { ac } from './audio.js';
 import { DERIVE_VERSION } from '../score.js';
+import { stored, remember } from './prefs.js';
 
 // ---------------------------------------------------------------------
 // 视图切换（顶栏：练习 / 调弦 / 练习建议 / 记号说明）
@@ -80,7 +81,8 @@ function initMore() {
 function initDock() {
   let open = true;
   // 没设过的话：屏幕够高才默认展开（矮屏幕上先把地方留给谱面）
-  try { const v = localStorage.getItem('tt.fb'); open = v ? v === '1' : innerHeight >= 900; } catch { open = innerHeight >= 900; }
+  const v = stored('tt.fb');
+  open = v ? v === '1' : innerHeight >= 900;
   const paint = v => {
     $('fbBody').hidden = !v;
     $('fbToggle').setAttribute('aria-expanded', v);
@@ -92,7 +94,7 @@ function initDock() {
   paint(open);
   const toggle = () => {
     set('ui.fb', !get('ui.fb'));
-    try { localStorage.setItem('tt.fb', get('ui.fb') ? '1' : '0'); } catch { /* 只在这次打开时生效 */ }
+    remember('tt.fb', get('ui.fb') ? '1' : '0');
   };
   $('fbToggle').onclick = toggle;
   // 停靠条的高度给布局用（侧栏高度、页面底部留白、“回到播放位置”按钮的位置）

@@ -11,6 +11,7 @@ import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange,
 import { DERIVE_VERSION, deriveSong } from '../score.js';
 import { alphaTab, setLoop, setTempo, setPlayerHooks, revealLoop, stop } from './player.js';
 import { notice } from './notices.js';
+import { stored, remember } from './prefs.js';
 import { refineConfirm, NO_REFINE, refineScopeLabel } from '../lib/refine.js';
 
 
@@ -205,9 +206,9 @@ function renderNotices(s) {
 
   // AI 读谱头时写的备注：关掉后同一段备注不再显示（备注变了才重新出现）
   const m = s.meta || {}, noteKey = 'tt.noteHidden.' + SONG_ID;
-  notice('metaNote', m.notes && localStorage.getItem(noteKey) !== m.notes ? {
+  notice('metaNote', m.notes && stored(noteKey) !== m.notes ? {
     // 备注常常很长：默认只显示一行，点一下（或 Tab 到它按回车 / 空格）展开 / 收起（样式 .n-fold，事件在 initSong 里接）
-    kind: '', html: `<span class="n-fold" role="button" tabindex="0" aria-expanded="false" title="展开 / 收起"><b>备注</b>${esc(m.notes)}</span>`, onDismiss: () => localStorage.setItem(noteKey, m.notes),
+    kind: '', html: `<span class="n-fold" role="button" tabindex="0" aria-expanded="false" title="展开 / 收起"><b>备注</b>${esc(m.notes)}</span>`, onDismiss: () => remember(noteKey, m.notes),
   } : null);
 }
 
