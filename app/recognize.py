@@ -470,7 +470,9 @@ def transcribe_system(
         and (double_check == "all" or (double_check == "doubts" and doubtful))
     ):
         bars = _double_check(bars, read_once, len(spans), sid, si)
-    if not bars and spans:  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
+    if (
+        not bars and spans
+    ):  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
         raise LLMError("模型没有读出这一行的小节，请重新识别这一行", getattr(claude, "last_request_id", None))
     # 检测不到六线谱、整页当一行的（spans 为 None）：模型说这一页没有六线谱（封面、歌词页）就是 0 个小节，这一行照常算完成
 
@@ -1105,7 +1107,10 @@ def reparse_system(
         meter.charge(s)
 
     meter.update(sid, apply)
-    failed = _redo_after(sid, song, {si: start_ts}, [si], cancel, meter, _row_writer(sid, meter))
+    # 这一行是用户要求重新识别的（可能带着提示）：只按拍号复核，不按别的行的和弦图读法再（不带提示）重做一遍
+    failed = _redo_after(
+        sid, song, {si: start_ts}, [si], cancel, meter, _row_writer(sid, meter), shapes=False
+    )
 
     def finish(s):
         _fail_unfinished_rows(s, "已取消" if cancel.is_set() else "没有识别")
@@ -1146,11 +1151,14 @@ def _redo_after(
     cancel,
     meter: jobs.UsageMeter,
     on_row,
+    shapes: bool = True,
 ) -> list[str]:
     """已有曲子里的 rows 识别完之后（used：它们识别时开头的拍号；before：识别前的曲子）：
     - 识别的是第一行：它第 1 小节写的拍号可能说明谱头的拍号读错了（同整首识别，见 _fix_header_time_signature）；
     - 其他行开头实际的拍号（按现在各行写的变拍号推算）和它们当初识别时的（按 before 推算）不一样了
-      （这几行写了 / 去掉了变拍号、改了全曲拍号，补页插进来的新行写了变拍号），按新拍号再识别一次。
+      （这几行写了 / 去掉了变拍号、改了全曲拍号，补页插进来的新行写了变拍号），按新拍号再识别一次；
+    - shapes：rows 自己读出的和弦图和别的行的多数读法不一样时，带上多数的读法重做（补页、重试失败的行）。
+      用户要求重新识别的一行不这样做（False）：重做时不带用户的提示，会把用户要的结果盖掉，还多花一次钱。
     返回失败的说明。"""
     if 0 in rows and not cancel.is_set():
         fixed = []
@@ -1159,11 +1167,13 @@ def _redo_after(
             used = {**used, 0: store.load(sid)["meta"]["time_signature"]}
     others = {k for k in range(len(before["systems"])) if k not in used}
     used = {**{k: _row_start_ts(before["bars"], before["meta"], k) for k in others}, **used}
+    # 别的行只看拍号（和弦图的多数读法整首识别时已经处理过）
+    ts_only = others if shapes else set(used)
     song = store.load(sid)
     redo: list[tuple[int, list[int], str]] = []
-    # 先看一眼：没有要重做的就不写。别的行只看拍号（和弦图的多数读法整首识别时已经处理过）
-    if not cancel.is_set() and _rows_to_redo(song["bars"], song["meta"], used, ts_only=others):
-        store.update(sid, lambda s: _lock_redo(s, used, redo, ts_only=others))
+    # 先看一眼：没有要重做的就不写
+    if not cancel.is_set() and _rows_to_redo(song["bars"], song["meta"], used, ts_only=ts_only):
+        store.update(sid, lambda s: _lock_redo(s, used, redo, ts_only=ts_only))
     if not redo:
         return []
     log.info("song=%s rerun rows after %s (time signature): %s", sid, rows, redo)

@@ -1541,3 +1541,28 @@ def test_a_page_without_tab_is_a_done_row_with_no_bars(data_dir, sync_jobs, monk
     recognize.reparse_system(sid, 0)
     s = store.load(sid)
     assert s["systems"][0]["status"] == "done" and len(s["bars"]) == 6
+
+
+def test_reparsing_a_row_with_a_hint_is_not_redone_without_it(data_dir, sync_jobs, monkeypatch):
+    """用户带着提示重新识别一行：这一行的和弦图和别的行的多数读法不一样，也不再按多数读法（不带提示）重做一遍，
+    用户的意思优先，也不多花一次钱。这一行只看拍号。"""
+    good, bad = [0, 3, 0, 4, 5, -1], [0, 1, 0, 2, 3, -1]
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        out = real(self, img, meta, first_bar, spans, *a, **kw)
+        for b in out["bars"]:
+            b["events"][0]["chord"] = "D11"
+        out["chords"] = [{"name": "D11", "frets": bad if kw.get("hint") else good}]
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p1.png", score_png()), ("p2.png", score_png())])
+    recognize.run_parse(sid)
+    assert len(store.load(sid)["systems"]) == 4
+    FakeClaude.calls.clear()
+    recognize.start_reparse(sid, 1, "第 2 小节是 D11，按谱上的和弦图")
+    s = store.load(sid)
+    assert [c["hint"] for c in FakeClaude.calls if not c["retry"]] == ["第 2 小节是 D11，按谱上的和弦图"]
+    assert all(b["shapes"] == {"D11": bad} for b in s["bars"] if b["system"] == 1)
+    assert s["activity"] is None and s["systems"][1]["status"] == "done"
