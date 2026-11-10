@@ -89,6 +89,8 @@ def test_playback_does_not_scroll_when_follow_is_off(trainer):
     b.js(
         "import('/static/js/trainer/notices.js').then(({ notice }) => { notice('resume', null); return true; })"
     )
+    # 播放第 4 小节时侧栏换成第 4 小节，卡片高度可能不同（曲子很短时侧栏比谱面高，页面跟着变高变矮）：先换过去
+    b.js("tt.setLoop(3, 3); true")
     # 页面加高，滚到最下面：播放光标在视野上方
     b.js("document.body.style.paddingBottom = '4000px'; scrollTo(0, document.body.scrollHeight); true")
     y = b.js("scrollY")
@@ -1281,8 +1283,9 @@ def test_narrow_window_puts_the_bar_card_in_a_drawer(server, browser):
     b.js("document.getElementById('drawerBtn').click(); true")
     b.wait_for(f"!({hidden})")
     assert b.js("document.getElementById('side').contains(document.activeElement)")
-    left = b.js("document.getElementById('side').getBoundingClientRect().left")
-    assert 990 - 400 < left < 990
+    b.wait_for(
+        "(l => 990 - 400 < l && l < 990 - 300)(document.getElementById('side').getBoundingClientRect().left)"
+    )  # 滑进来了
     bpm = b.js("tt.state.bpm")
     b.js("document.activeElement.blur(); true")
     b.key("ArrowUp", vk=38)  # 不是浮层：快捷键照常
