@@ -218,6 +218,7 @@ function tapAt(t) { // t：扣掉延迟补偿后的音频时间（秒，见 hear
   if (best) {
     const nt = best.notes[bi];
     nt.err = t - nt.T;
+    nt.missed = false; // 定时器先判了漏（主线程卡了一下），按键的时间戳其实在窗口里：算敲到了
     best.taps.push({ t, i: bi });
   } else {
     const L = run.loops.find(x => x.kind === 'loop' && x.graded && !x.result && t >= x.start && t < x.end);

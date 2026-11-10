@@ -93,3 +93,18 @@ def test_rhythm_drill_time_is_logged_as_practice(trainer):
     assert b.js("__posts.length") == 1
     b.js("document.getElementById('rhClose').click(); true")
     assert not b.errors, b.errors
+
+
+def test_late_handled_tap_inside_the_window_revokes_a_miss(trainer):
+    """主线程卡住时判漏的定时器先于按键事件运行、把音判成了漏：按键的时间戳在窗口里，仍然算敲到了。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); document.activeElement.blur(); true")
+    b.js("document.getElementById('rhythmBtn').click(); tt.setTempo(60); tt.play(); true")
+    b.wait_for(f"{RH}.run && {RH}.run.loops.some(l => l.kind === 'loop')")
+    note0 = f"{RH}.run.loops.find(l => l.kind === 'loop').notes[0]"
+    b.wait_for(f"{note0}.missed", timeout=5)
+    b.js(f"tt.rhythm.tapAt({note0}.T + 0.01); true")
+    assert b.js(f"{note0}.missed") is False
+    assert abs(b.js(f"{note0}.err") - 0.01) < 1e-6
+    b.js("tt.rhythm.stop(); document.getElementById('rhClose').click(); true")
+    assert not b.errors, b.errors
