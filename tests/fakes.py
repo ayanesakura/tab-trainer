@@ -74,9 +74,10 @@ class FakeClaude(LLM):
     # 精修的替身：默认什么都没改；测试换掉 verify_result（参数同 verify_bar，返回模型的回答）
     verify_result: ClassVar = None
 
-    def verify_bar(self, img, meta, span, events, previous=None, time_signature=None, hint=""):
+    def verify_bar(self, img, meta, span, events, previous=None, time_signature=None, hint="", shapes=None):
         FakeClaude.calls.append(
             {
+                "shapes": shapes,
                 "verify": [e["notes"] for e in events],
                 "previous": previous is not None,
                 "size": img.size,

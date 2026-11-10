@@ -94,6 +94,7 @@ def _all_prompts(monkeypatch) -> dict:
             [{**bars[0]["events"][0], "chord": "Am"}] * 4,
             previous=bars[1]["events"],
             time_signature=[3, 4],
+            shapes={"Am": [0, 1, 2, 2, 0, -1]},
         ),
         "verify_bar_hint": lambda: c.verify_bar(
             Image.new("RGB", (400, 200), "white"),

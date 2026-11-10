@@ -378,7 +378,14 @@ def run_refine(
         sysinfo = truth["systems"][si]
         try:
             r = refine.verify(
-                claude, pages[sysinfo["page"]], sysinfo, b, meta, prev["events"] if prev else None, ts
+                claude,
+                pages[sysinfo["page"]],
+                sysinfo,
+                b,
+                meta,
+                prev["events"] if prev else None,
+                ts,
+                shapes=refine.context_shapes(b, prev),
             )
         except Exception as e:  # noqa: BLE001 - 一个小节失败照样出报告
             return (si, k), {"events": None, "diff": "", "status": "error", "error": friendly(e)}

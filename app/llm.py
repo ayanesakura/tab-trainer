@@ -211,6 +211,7 @@ class LLM(Protocol):
         previous: list[dict] | None = None,
         time_signature: list[int] | None = None,
         hint: str = "",
+        shapes: dict[str, list[int]] | None = None,
     ) -> dict: ...
 
     def explain_bars(self, meta: dict, bars: list[dict]) -> dict: ...
@@ -545,14 +546,18 @@ class Claude(LLM):
         previous: list[dict] | None = None,
         time_signature: list[int] | None = None,
         hint: str = "",
+        shapes: dict[str, list[int]] | None = None,
     ) -> dict:
         """精修：放大一个小节（img 是它连同左右一点邻居的裁剪图，span 是它在图里的左右边界），对照当前读法逐拍核对。
         previous：上一小节的读法（只当上下文）；time_signature：这个小节的拍号（None = 全曲拍号）；
-        hint：用户在小节卡片上写的“哪里不对”（空的时候提示词和以前一样）。
+        hint：用户在小节卡片上写的“哪里不对”（空的时候提示词和以前一样）；shapes：弹唱谱识别时读出的和弦图
+        （和弦名 → 1–6 弦品位）。meta 里的记谱说明（notes）也会带上，和识别一行一样。
         返回 {diff, changed, events, uncertain}。"""
         block, scale = _image_block(img, min_width=VERIFY_MIN_WIDTH)
         a, b = span
-        text = prompts.verify_text(meta, (a * scale, b * scale), events, previous, time_signature, hint)
+        text = prompts.verify_text(
+            meta, (a * scale, b * scale), events, previous, time_signature, hint, shapes
+        )
         content = [block, {"type": "text", "text": text}]
         try:
             # 精修用最高精细度：评测里最难的 25 个错小节改对 24 个、对的 208 个一个没改坏（high 只改对 16 个）

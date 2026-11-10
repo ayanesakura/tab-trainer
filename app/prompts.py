@@ -443,8 +443,11 @@ def verify_text(
     previous: list[dict] | None = None,
     time_signature: list[int] | None = None,
     hint: str = "",
+    shapes: dict[str, list[int]] | None = None,
 ) -> str:
-    """精修一个小节的文字部分。span：小节在发出去的（已放大的）图里的左右边界；其余见 llm.Claude.verify_bar。"""
+    """精修一个小节的文字部分。span：小节在发出去的（已放大的）图里的左右边界；其余见 llm.Claude.verify_bar。
+    和识别一行一样带上首页记下的记谱说明（score_notes）；shapes：弹唱谱识别时读出的和弦图（裁出的小节图上
+    一般看不到和弦图，谱上的 x 要按它换算），说法同 shape_consensus_context。"""
     ts = time_signature or meta["time_signature"]
     length = ts[0] * 4 / ts[1]
     a, b = span
@@ -452,7 +455,17 @@ def verify_text(
         (
             f"Score info: tuning (string 1 -> 6) {' '.join(meta['tuning'])}; capo {meta['capo']}. "
             f"Time signature {ts[0]}/{ts[1]}: this bar lasts {length:g} quarter notes."
-        ),
+        )
+    ]
+    if notes := score_notes(meta):
+        text.append(notes)
+    if shapes:
+        text.append(
+            "The chord diagrams of this score (printed elsewhere on the page, read when the line was transcribed); "
+            "resolve the x marks with them: "
+            + "; ".join(f"{k} = frets for strings 1-6 {v}" for k, v in shapes.items())
+        )
+    text += [
         VERIFY_TASK.format(a=round(a), b=round(b)),
         TRANSCRIBE_RULES,
         "Current transcription of this bar (events in time order):\n"

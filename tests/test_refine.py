@@ -836,3 +836,22 @@ def test_full_re_recognition_keeps_refine_corrections_when_the_reading_is_unchan
     assert _frets(s["bars"][4]) == [3] * 4 and "refine" not in s["bars"][4]
     assert "1 个精修改过的小节和新结果对不上" in s["notice"]["msg"] and "refined" not in s
     assert s["bars"][4]["id"] in refine.pick(s)
+
+
+def test_verify_gets_the_chord_diagrams_of_the_bar_and_the_one_before(client, sync_jobs):
+    """弹唱谱：裁出的小节图上看不到和弦图，核对时把识别时读出的和弦图（上一小节延续过来的和弦也算）告诉模型。"""
+    sid = _song()
+
+    def shapes(s):
+        s["bars"][0]["shapes"] = {"C": [0, 1, 0, 2, 3, -1]}
+        s["bars"][1]["shapes"] = {"G": [3, 0, 0, 0, 2, 3]}
+
+    store.update(sid, shapes)
+    ids = [b["id"] for b in store.load(sid)["bars"][:3]]
+    client.post(f"/api/songs/{sid}/refine", json={"bars": ids})
+    by_fret = {c["verify"][0][0]["fret"]: c["shapes"] for c in _verifies()}  # 第 k 个小节是 1 弦 k-1 品
+    assert by_fret == {
+        0: {"C": [0, 1, 0, 2, 3, -1]},  # 第 1 小节：自己的
+        1: {"C": [0, 1, 0, 2, 3, -1], "G": [3, 0, 0, 0, 2, 3]},  # 第 2 小节：连同上一小节的
+        2: {"G": [3, 0, 0, 0, 2, 3]},  # 第 3 小节：上一小节的
+    }

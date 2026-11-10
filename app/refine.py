@@ -214,6 +214,7 @@ def verify(
     time_signature: list[int] | None = None,
     cancel: threading.Event | None = None,
     hint: str = "",
+    shapes: dict[str, list[int]] | None = None,
 ) -> dict:
     """核对一个小节。返回 {out: 模型的回答, events: 要改成的事件（不改是 None）, status, note}：
     - status = unchanged：模型说没问题（或者改出来的和原来一样）；
@@ -222,13 +223,18 @@ def verify(
     - confirmed：再独立核对（还是对着原来的读法），有两遍提出了一模一样的改动（最多核对 MAX_READS 遍，够了就停）；
     - rejected：核对 MAX_READS 遍都没有两遍一样的改动，不改；note 是要加到这个小节“不确定”说明里的话，提醒用户对照原谱。
     改动很少（约 1/20 的小节），确认多花的钱不多，能挡掉偶尔的改坏（评测：模糊的截图上把倚音当成了十六分音符）。
-    cancel：确认的几遍之间点了取消就不再核对（Cancelled）。hint：用户写的“哪里不对”（每一遍都告诉模型）。"""
+    cancel：确认的几遍之间点了取消就不再核对（Cancelled）。hint：用户写的“哪里不对”（每一遍都告诉模型）。
+    shapes：告诉模型的和弦图（None = 这个小节识别时读出的，见 context_shapes）。"""
+    if shapes is None:
+        shapes = context_shapes(bar, None)
     img, span = crop(page, sysinfo, bar["region"])
 
     bad: list[bool] = []  # 每一遍：模型说要改、给出的事件却用不了
 
     def propose() -> tuple[dict, list[dict] | None]:
-        out = claude.verify_bar(img, meta, span, bar["events"], previous, time_signature, hint=hint)
+        out = claude.verify_bar(
+            img, meta, span, bar["events"], previous, time_signature, hint=hint, shapes=shapes or None
+        )
         bad.append(False)
         if not out.get("changed"):
             return out, None
@@ -264,6 +270,12 @@ def verify(
         f"：{diff}" if diff else "。"
     )
     return {"out": first[0], "events": None, "status": "rejected", "note": note}
+
+
+def context_shapes(bar: dict, prev: dict | None) -> dict[str, list[int]]:
+    """核对一个小节时告诉模型的和弦图（弹唱谱）：上一小节和这个小节识别时读出的（小节开头的 x 可能属于上一小节
+    延续过来的和弦；裁出的小节图上一般看不到和弦图）。"""
+    return {**((prev or {}).get("shapes") or {}), **(bar.get("shapes") or {})}
 
 
 def _agreed(runs: list[tuple[dict, list[dict] | None]]) -> tuple[dict, list[dict]] | None:
@@ -451,6 +463,7 @@ def refine_bars(
                 bar.get("time_signature"),
                 cancel,
                 hint,
+                context_shapes(bar, prev),
             )
 
         return recognize.run_queued(go, cancel)
