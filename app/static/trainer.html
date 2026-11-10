@@ -14,7 +14,7 @@
   <a class="icon-btn" id="backBtn" href="/" title="返回曲库" aria-label="返回曲库" data-ic="back"></a>
   <div class="crumb">
     <div class="crumb-text">
-      <div class="crumb-line"><h1 class="t" id="songTitle">加载中…</h1></div>
+      <div class="crumb-line"><h1 class="t" id="songTitle">加载中…</h1><button class="icon-btn xs title-edit" id="titleEditBtn" data-ic="edit" title="改曲名 / 艺人" aria-label="改曲名和艺人" aria-haspopup="dialog" hidden></button></div>
       <div class="crumb-sub" id="songSub"></div>
     </div>
   </div>
@@ -221,11 +221,9 @@
       </div>
     </div>
 
-    <div class="section-title" id="metaHead">曲子信息</div>
+    <div class="section-title" id="metaHead">调弦、变调夹和拍号</div>
     <div class="card">
       <div class="meta-grid">
-        <label>曲名<input class="input" id="mTitle"></label>
-        <label id="mArtistLbl">艺人<input class="input" id="mArtist"></label>
         <label class="meta-setting">6 弦（最粗）<input class="input" id="mT6"></label><label class="meta-setting">5 弦<input class="input" id="mT5"></label><label class="meta-setting">4 弦<input class="input" id="mT4"></label>
         <label class="meta-setting">3 弦<input class="input" id="mT3"></label><label class="meta-setting">2 弦<input class="input" id="mT2"></label><label class="meta-setting">1 弦（最细）<input class="input" id="mT1"></label>
         <label class="meta-setting">变调夹（品）<input class="input" id="mCapo" type="number" min="0" max="12"></label>
@@ -259,6 +257,18 @@
 </div>
 
 <button class="btn follow-btn" id="followBtn" data-ic="locate" title="滚动到正在播放的小节" hidden>回到播放位置</button>
+
+<!-- 曲名 / 艺人（点顶栏的曲名打开，song.js） -->
+<dialog class="dlg meta-dlg" id="metaDlg" aria-labelledby="metaDlgT">
+  <form method="dialog" id="metaForm">
+    <div class="dlg-b">
+      <div class="dlg-t" id="metaDlgT">曲子信息</div>
+      <label class="meta-f">曲名<input class="input" id="mTitle" maxlength="200" autocomplete="off"></label>
+      <label class="meta-f" id="mArtistLbl">艺人<input class="input" id="mArtist" maxlength="200" autocomplete="off"></label>
+    </div>
+    <div class="dlg-f"><button type="button" class="btn ghost" id="metaCancel">取消</button><button class="btn primary" id="metaDlgSave">保存</button></div>
+  </form>
+</dialog>
 
 <dialog class="dlg orig-dlg" id="origModal" aria-labelledby="origTitle">
   <div class="orig-h">

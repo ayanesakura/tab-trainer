@@ -1,6 +1,6 @@
 // 加载曲子并保持最新：取 /api/songs/<id> 放进 store（set('song')），由它派生 view（deriveView），
 // 页面各部分各自订阅。识别 / 讲解进行中时定时轮询（出错退避重试，不会停）。
-// 也包括：曲名和副标题、通知（进度 / 出错 / 讲解 / AI 备注 / 接着练）、练习建议页、曲子信息的保存、
+// 也包括：曲名和副标题、通知（进度 / 出错 / 讲解 / AI 备注 / 接着练）、分段页、曲名 / 艺人对话框和调弦页的保存、
 // GP / MusicXML 第一次打开时把谱子转换成我们的小节数据。
 
 import { get, set, on } from './store.js';
@@ -270,31 +270,29 @@ function renderPlan() {
 }
 
 // ---------------------------------------------------------------------
-// 曲子信息（调弦页下面）
+// 曲子信息：调弦页下面的调弦、变调夹和拍号；顶栏曲名的对话框（曲名、艺人）
 // ---------------------------------------------------------------------
 function fillMeta(s) {
   const m = s.meta || {}, v = get('view');
   const editable = s.editable_meta || ['title'];
-  $('mTitle').value = s.title || m.title || '';
-  $('mArtist').value = m.artist || '';
   if (m.tuning) m.tuning.forEach((x, i) => { $('mT' + (i + 1)).value = showNote(x); });
   $('mCapo').value = v ? v.capo : m.capo || 0;
   $('mTs').value = (m.time_signature || [4, 4]).join('/');
   const settings = editable.includes('tuning');
-  $('mArtistLbl').hidden = !editable.includes('artist');
   document.querySelectorAll('.meta-setting').forEach(el => { el.hidden = !settings; });
-  $('metaHead').textContent = editable.length > 1 ? '曲子信息' : '曲名';
+  $('metaSave').hidden = !settings;
+  $('titleEditBtn').hidden = false;
   // 改不了调弦等设定的原因：GP / MusicXML 来自原文件；图片曲子还没读出谱头，或者正在识别
   $('metaMsg').textContent = settings ? '音名写法如 D2、F#3。'
     : isScore(s) ? '调弦、变调夹和拍号以原文件为准。'
-    : !Object.keys(s.meta || {}).length ? '还没读出谱头，现在只能改曲名。'
+    : !Object.keys(s.meta || {}).length ? '还没读出谱头，读出来以后可以改。'
     : `正在${s.activity && s.activity.kind === 'refine' ? '精修' : '识别'}，完成后可以改调弦、变调夹和拍号。`;
 }
+/** 调弦页：保存调弦、变调夹和拍号（曲名、艺人在顶栏曲名的对话框里改） */
 async function saveMeta() {
   const s = get('song');
   const editable = s.editable_meta || ['title'];
-  const body = { title: $('mTitle').value };
-  if (editable.includes('artist')) body.artist = $('mArtist').value.trim();
+  const body = {};
   if (editable.includes('tuning')) body.tuning = [1, 2, 3, 4, 5, 6].map(i => tuningInput($('mT' + i).value));
   if (editable.includes('capo')) body.capo = parseInt($('mCapo').value || '0', 10);
   if (editable.includes('time_signature')) body.time_signature = $('mTs').value.split('/').map(x => parseInt(x, 10));
@@ -305,6 +303,36 @@ async function saveMeta() {
   } catch (e) {
     await writeFailed(e, '保存失败：');
   }
+}
+
+// 曲名 / 艺人：点顶栏的曲名（或旁边悬停时出现的铅笔）打开一个小对话框。GP / MusicXML 只能改曲名
+let metaLayer = null;
+function openMetaDlg() {
+  const s = get('song');
+  if (!s || metaLayer) return;
+  const editable = s.editable_meta || ['title'];
+  $('mTitle').value = s.title || (s.meta || {}).title || '';
+  $('mArtist').value = (s.meta || {}).artist || '';
+  $('mArtistLbl').hidden = !editable.includes('artist');
+  metaLayer = UI.layer($('metaDlg'), { modal: true, focus: $('mTitle'), onClose: () => { metaLayer = null; } });
+  $('mTitle').select();
+}
+async function saveTitle(e) {
+  e.preventDefault();
+  const s = get('song'), editable = s.editable_meta || ['title'];
+  const title = $('mTitle').value.trim();
+  if (!title) { $('mTitle').focus(); return; }
+  const body = { title, rev: s.meta_rev };
+  if (editable.includes('artist')) body.artist = $('mArtist').value.trim();
+  await withBusy($('metaDlgSave'), async () => {
+    try {
+      applySong(await put(songUrl('/meta'), body));
+      UI.toast('已保存');
+      if (metaLayer) metaLayer.close();
+    } catch (err) {
+      await writeFailed(err, '保存失败：');
+    }
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -380,4 +408,9 @@ export function initSong() {
   on(['song.plan', 'song.status', 'song.busy', 'view'], renderPlan);
   on(['song.meta', 'song.title', 'song.editable_meta'], () => fillMeta(get('song')));
   $('metaSave').onclick = () => withBusy($('metaSave'), saveMeta);
+  $('metaForm').addEventListener('submit', saveTitle);
+  $('metaCancel').onclick = () => { if (metaLayer) metaLayer.close(); };
+  $('titleEditBtn').onclick = openMetaDlg;
+  const title = $('songTitle');
+  title.addEventListener('click', () => { if (get('song')) openMetaDlg(); });
 }
