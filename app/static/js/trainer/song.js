@@ -196,7 +196,7 @@ function renderNotices(s) {
   const errKey = n ? 'err:' + n.msg : '';
   const scoreFail = isScore(s) && s.status === 'error';
   const failed = !running && !isScore(s) && s.failed_rows > 0 ? s.failed_rows : 0;
-  const retry = failed ? [{ label: `重试失败的 ${failed} 行`, icon: 'refresh', onClick: btn => retryFailed(btn, failed) }] : [];
+  const retry = failed ? [{ label: `重试失败的 ${failed} 行`, icon: 'refresh', ai: true, onClick: btn => retryFailed(btn, failed) }] : [];
   // info：任务做完的说明（精修完成），不是警告
   const head = scoreFail ? '曲谱读取失败：' : n && n.kind === 'error' ? '出错了：' : n && n.kind === 'info' ? '' : '注意：';
   notice('error', n ? (dismissed.has(errKey) ? null : {

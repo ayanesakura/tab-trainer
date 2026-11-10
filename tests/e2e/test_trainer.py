@@ -1090,6 +1090,8 @@ def test_rating_survives_later_song_updates(server, trainer):
         b.js("document.getElementById('rateBtn').click(); true")
         b.wait_for("!document.getElementById('ratePop').hidden")
         b.js("document.querySelector('#rateBtns .r3').click(); true")
+        # 别的测试可能今天已经给这首打过分（按钮本来就是“已打分”）：等这次的分数回来
+        b.wait_for("tt.song.study && tt.song.study.rated_today === 3")
         b.wait_for("document.getElementById('rateBtn').classList.contains('rated')")
         # 练完一遍：practice-log 把新的练习记录写进 song.practice（别的 song.* 写入也一样）
         b.js("tt.set('song.practice', { ...(tt.song.practice || {}), total_seconds: 12345 }); true")

@@ -440,6 +440,9 @@ def test_retry_failed_rows_from_library_and_practice_page(server, browser, train
             "[...document.querySelectorAll('#notices button')].some(x => x.textContent.includes('重试失败的 1 行'))"
         )
         b.js(fake)
+        # 没有 API key 时这个按钮灰掉（点了只说明去设置）：当作有 key
+        b.wait_for("tt.get('ui.hasKey') !== undefined")
+        b.js("tt.set('ui.hasKey', true); true")
         b.js(
             "[...document.querySelectorAll('#notices button')].find(x => x.textContent.includes('重试失败')).click(); true"
         )

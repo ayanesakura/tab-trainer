@@ -56,7 +56,7 @@ function render() {
 function renderHero(t) {
   const m = t.minutes || {}, total = Number(m.total) || 0, goal = Number(m.goal) || t.settings.goal_minutes || 45;
   const left = (t.queue || []).length, done = (t.done || []).length;
-  const msg = total >= goal ? '今天的目标完成了' : total > 0 ? `还差 ${fmtMin(goal - total)}` : '今天还没开始';
+  const msg = total >= goal ? '今天的目标完成了' : total > 0 ? `还差 ${fmtMin(goal - total)}` : done ? '还没记时长' : '今天还没开始'; // 打过分、没计时也没在练习页播放（比如脱开电脑练的）：别说“还没开始”
   const sub = left ? `还有 ${left} 首` : done ? '今日的曲子都练完了' : '';
   const week = fmtShort(t.week_minutes);
   const stat = (v, unit, k, ic, cls = '') => `<div class="stat ${cls}"><div class="v">${esc(v)}<small>${esc(unit)}</small></div><div class="k">${ic ? icon(ic) : ''}${esc(k)}</div></div>`;
