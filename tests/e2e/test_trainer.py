@@ -1347,3 +1347,24 @@ def test_tuning_is_spelled_one_way(trainer):
     assert b.js("document.getElementById('tuningLine').textContent") == "⑥D ⑤A ④C♯ ③F♯ ②A ①D"
     assert "C♯ F♯" in b.js("document.getElementById('songSub').textContent")
     assert not b.errors, b.errors
+
+
+def test_section_chips_switch_between_rows_and_plan_sections(server, trainer):
+    """选段可以按原谱的行或 AI 分的段落（记住选择）；段落的按钮直接循环那一段；没有练习建议时没有这个开关。"""
+    b = trainer()
+    assert not b.js("document.getElementById('secMode').hidden")
+    chips = "[...document.querySelectorAll('#secBtns button')].map(x => x.textContent)"
+    assert b.js(chips) == ["全曲", "1–3", "4–6"]
+    b.js("document.querySelector('#secMode [data-v=plan]').click(); true")
+    assert b.js(chips) == ["全曲", "1 第一行"]
+    assert b.js("localStorage.getItem('tt.secMode')") == "plan"
+    b.js("document.querySelectorAll('#secBtns button')[1].click(); true")
+    assert [b.js("tt.state.a"), b.js("tt.state.b")] == [0, 2]
+    assert b.js("tt.get('ui.secs')") == [{"a": 0, "z": 2}]
+    b = trainer()  # 重新打开：还是按段落
+    assert b.js(chips) == ["全曲", "1 第一行"]
+    b.js("document.querySelector('#secMode [data-v=rows]').click(); true")
+    b = trainer(server["gp"])
+    b.wait_for("tt.song.bars.length === 3")
+    assert b.js("document.getElementById('secMode').hidden")
+    assert not b.errors, b.errors

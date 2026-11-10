@@ -351,11 +351,11 @@ export function toLoopStart() {
   const range = applyLoopRange();
   if (range) dispatch({ type: playing() ? 'restart' : 'seek', tick: range.start });
 }
-/** 上一段 / 下一段 */
+/** 上一段 / 下一段（按控制条上选段的方式：原谱的行，或 AI 分的段落） */
 export function stepSection(dir) {
   const v = get('view'), { a, b } = get('play');
   if (!v) return;
-  const r = stepCalc({ a, b, n: v.bars.length, shown: get('ui.bar'), secs: v.sections }, dir);
+  const r = stepCalc({ a, b, n: v.bars.length, shown: get('ui.bar'), secs: get('ui.secs') || v.sections }, dir); // 选段按段落时按段落换（controls.js）
   if (!r) return;
   if (r.msg) UI.toast(r.msg, 'info'); else { setLoop(r.a, r.b); revealLoop(); }
 }
