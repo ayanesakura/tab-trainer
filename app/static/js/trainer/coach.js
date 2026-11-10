@@ -5,6 +5,7 @@ import { $, UI, esc, setButton, songUrl } from './dom.js';
 import { postStream } from '../lib/api.js';
 import { holdBarWhile } from './player.js';
 import { setLocal } from './song.js';
+import { hasKey, askForKey } from './ai-key.js';
 
 // 正在等的回答（一次只问一个）：{bar: 小节 id, q: 问题, a: 已经收到的回答}
 let pending = null;
@@ -50,6 +51,7 @@ function showPending() {
 async function ask() {
   const bi = get('ui.bar');
   if (bi < 0 || pending) return;
+  if (!hasKey()) { askForKey(); return; } // 回车提问不经过按钮：在这里也拦一下
   const q = $('askInput').value.trim();
   if (!q) { $('askInput').focus(); return; }
   const bar = get('song').bars[bi];

@@ -196,7 +196,7 @@ function renderNotices(s) {
   const errKey = n ? 'err:' + n.msg : '';
   const scoreFail = isScore(s) && s.status === 'error';
   const failed = !running && !isScore(s) && s.failed_rows > 0 ? s.failed_rows : 0;
-  const retry = failed ? [{ label: `重试失败的 ${failed} 行`, icon: 'refresh', onClick: btn => retryFailed(btn, failed) }] : [];
+  const retry = failed ? [{ label: `重试失败的 ${failed} 行`, icon: 'refresh', ai: true, onClick: btn => retryFailed(btn, failed) }] : [];
   // info：任务做完的说明（精修完成），不是警告
   const head = scoreFail ? '曲谱读取失败：' : n && n.kind === 'error' ? '出错了：' : n && n.kind === 'info' ? '' : '注意：';
   notice('error', n ? (dismissed.has(errKey) ? null : {
@@ -212,7 +212,7 @@ function renderNotices(s) {
     kind: '',
     html: ex.fresh ? '让 AI 为每个小节写练习提示，并生成练习建议。'
       : [ex.missing ? `${ex.missing} 个小节还没有提示` : '', ex.planStale ? '练习建议可能已过时（谱子改过）' : ''].filter(Boolean).join('；'),
-    actions: [{ label: ex.fresh ? '让 AI 讲解这首曲子' : '让 AI 补写', icon: 'sparkle', onClick: explain }], // 不是主按钮：通知区最多一个主按钮（接着练）
+    actions: [{ label: ex.fresh ? '让 AI 讲解这首曲子' : '让 AI 补写', icon: 'sparkle', ai: true, onClick: explain }], // 不是主按钮：通知区最多一个主按钮（接着练）
     onDismiss: closable(exKey),
   } : null);
 
@@ -254,11 +254,11 @@ function renderPlan() {
   const p = s.plan, n = v.bars.length;
   if (!p) {
     const can = n && !s.recognizing;
-    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? '<p>让 AI 根据全曲生成分段练习建议。</p><button class="btn sm primary" id="planCreate">' + UI.icon('sparkle') + '生成练习建议</button>' : '识别完成后会自动生成。'}</div></div>`;
+    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? '<p>让 AI 根据全曲生成分段练习建议。</p><button class="btn sm primary" id="planCreate" data-ai>' + UI.icon('sparkle') + '生成练习建议</button>' : '识别完成后会自动生成。'}</div></div>`;
     if (can) $('planCreate').onclick = e => explain(e.currentTarget);
     return;
   }
-  const staleNote = p.stale ? `<div class="notice warn"><span class="dot warn"></span><div class="n-body">谱子改过，这些建议可能已过时。</div><div class="n-acts"><button class="btn sm" id="planRefresh">${UI.icon('refresh')}重新生成</button></div></div>` : '';
+  const staleNote = p.stale ? `<div class="notice warn"><span class="dot warn"></span><div class="n-body">谱子改过，这些建议可能已过时。</div><div class="n-acts"><button class="btn sm" id="planRefresh" data-ai>${UI.icon('refresh')}重新生成</button></div></div>` : '';
   const steps = (p.steps || []).map((st, i) => {
     const r = planRange(st.bars, n);
     const link = r ? `<button class="btn sm" data-a="${r.a}" data-z="${r.z}">${UI.icon('repeat', 13)}循环这段</button>` : '';

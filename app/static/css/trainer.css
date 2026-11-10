@@ -64,6 +64,8 @@
 .bpm-orig { position: absolute; top: 2px; width: 2px; height: 14px; margin-left: -1px; border-radius: 1px; background: var(--muted); pointer-events: none; left: calc(8px + (100% - 16px) * var(--o, 0)); }
 .bpm-orig[hidden] { display: none; }
 #bpmUnit { font-variant-numeric: tabular-nums; }
+/* 没有 API key：调用 AI 的按钮灰掉（还能点：点了说明去哪里填，见 ai-key.js） */
+.no-ai-key [data-ai] { opacity: .45; filter: grayscale(1); cursor: help; }
 /* 这遍干净：按下后这一遍里一直亮着（绿色），弹完记下后复原 */
 .clean-btn[aria-pressed="true"] { background: var(--green-soft); color: var(--green); }
 .loop-label { font-weight: 500; font-variant-numeric: tabular-nums; min-width: 92px; text-align: center; white-space: nowrap; }

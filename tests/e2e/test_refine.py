@@ -14,6 +14,12 @@ from tests.fakes import FakeClaude
 pytestmark = pytest.mark.e2e
 
 
+def _ai_on(b):
+    """e2e 的服务没有 API key，AI 按钮默认灰掉（点了只说明去设置）：当作有 key（模型调用由测试换成假的或拦下）。"""
+    b.wait_for("tt.get('ui.hasKey') !== undefined")
+    b.js("tt.set('ui.hasKey', true); true")
+
+
 def _second_bar_is_wrong(gate: threading.Event):
     """替身模型：只有第 2 小节（3 弦 2 品开头）读错了，应是 7 品。gate 没放开时核对停着，页面上能看到进度。"""
 
@@ -37,6 +43,7 @@ def test_refine_from_the_practice_page(server, trainer, monkeypatch):
     monkeypatch.setattr(FakeClaude, "verify_result", _second_bar_is_wrong(gate))
     try:
         b = trainer(sid)
+        _ai_on(b)
         b.wait_for("!document.getElementById('refineBtn').hidden")
         assert b.js("document.getElementById('refineBtn').textContent.trim()") == "精修"
         b.js("document.getElementById('refineBtn').click()")
@@ -86,6 +93,7 @@ def test_refine_one_bar_and_one_row_from_the_bar_card(server, trainer, monkeypat
     notices = "document.getElementById('notices').textContent"
     try:
         b = trainer(sid)
+        _ai_on(b)
         b.js("tt.set('ui.bar', 1)")
         b.wait_for("!document.getElementById('refineScope').hidden")
         assert b.js(hint) == ""  # 预估只在悬停提示里

@@ -31,7 +31,7 @@ function paintMore() {
 // 决定要不要重画按钮的部分（回调函数每次都是新的，不算；按钮上调用的总是最新一次的回调）
 const shape = spec => JSON.stringify({
   kind: spec.kind || '', spinner: !!spec.spinner, dismiss: !!spec.onDismiss,
-  actions: (spec.actions || []).map(a => [a.label, a.icon || '', !!a.primary]),
+  actions: (spec.actions || []).map(a => [a.label, a.icon || '', !!a.primary, !!a.ai]),
 });
 
 function remove(id) {
@@ -41,7 +41,7 @@ function remove(id) {
   paintMore();
 }
 
-/** spec：UI.notice 的参数 {kind, html, actions, onDismiss}，另外 spinner: true 时圆点换成转圈 */
+/** spec：UI.notice 的参数 {kind, html, actions, onDismiss}，另外 spinner: true 时圆点换成转圈；actions 里 ai: true 的按钮没有 API key 时灰掉 */
 export function notice(id, spec) {
   const host = $('notices');
   if (!spec) { remove(id); return; }
@@ -70,6 +70,8 @@ export function notice(id, spec) {
     actions: (spec.actions || []).map((a, i) => ({ ...a, onClick: btn => cur.spec.actions[i].onClick(btn) })),
     onDismiss: spec.onDismiss && (() => { remove(id); cur.spec.onDismiss(); }),
   });
+  // ai: true 的按钮要调用 AI：标上 data-ai，没有 API key 时灰掉（ai-key.js）
+  (spec.actions || []).forEach((a, i) => { if (a.ai) el.querySelector(`[data-act="${i}"]`).dataset.ai = ''; });
   if (spec.spinner) el.querySelector('.dot').outerHTML = '<span class="spinner" aria-hidden="true"></span>';
   cur.sig = sig; cur.html = html;
   host.hidden = false;

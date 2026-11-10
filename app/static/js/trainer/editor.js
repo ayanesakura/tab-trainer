@@ -35,7 +35,7 @@ function updateBarTools() {
   $('reparseBtn').disabled = !sys || parsing || s.busy;
   setButton($('reparseBtn'), parsing ? '<span class="spinner"></span>正在重新识别…' : UI.icon('refresh') + '重新识别整行');
   const row = s.bars.filter(b => b.system === bar.system).map(b => b.n);
-  if (!$('reparseBtn').classList.contains('ai-off')) $('reparseBtn').title = `最后的办法：让 AI 把第 ${row[0]}–${row[row.length - 1]} 小节这一整行重新识别一遍（会替换这一行的手改、提示和问答；写了“哪里不对”会一起告诉 AI）`;
+  $('reparseBtn').title = `最后的办法：让 AI 把第 ${row[0]}–${row[row.length - 1]} 小节这一整行重新识别一遍（会替换这一行的手改、提示和问答；写了“哪里不对”会一起告诉 AI）`;
 }
 
 // 保存一个小节；记下改之前的内容，⌘Z / Ctrl+Z 可以撤销。

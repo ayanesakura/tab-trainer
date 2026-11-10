@@ -14,6 +14,12 @@ pytestmark = pytest.mark.e2e
 UNDO_MOD = 4 if sys.platform == "darwin" else 2  # ⌘ / Ctrl
 
 
+def _ai_on(b):
+    """e2e 的服务没有 API key，AI 按钮默认灰掉（点了只说明去设置）：当作有 key（模型调用由测试换成假的或拦下）。"""
+    b.wait_for("tt.get('ui.hasKey') !== undefined")
+    b.js("tt.set('ui.hasKey', true); true")
+
+
 def _song(server, sid):
     return json.load(urllib.request.urlopen(f"{server['base']}/api/songs/{sid}"))
 
@@ -297,6 +303,7 @@ def test_background_writes_do_not_cause_false_conflicts(server, trainer):
     sid, store = server["image"], server["store"]
     raw = store.load(sid)["bars"]
     b = trainer()
+    _ai_on(b)
     try:
         # 模拟问 AI：后端存了一次（写 qa，顶层 rev 变了），前端把返回的 qa 并进 store
         store.update(sid, lambda s: s["bars"][0].update(qa=[{"q": "Q", "a": "A", "at": "now"}]))
@@ -384,6 +391,7 @@ def test_ask_ai_answer_streams_in(server, trainer, monkeypatch):
     raw = store.load(sid)["bars"]
     answer = "回答：这里左手怎么按呢"  # 替身每 3 个字一段：4 段
     b = trainer()
+    _ai_on(b)
     try:
         b.js(
             "tt.set('ui.bar', 2); document.getElementById('askInput').value = '这里左手怎么按呢'; "
@@ -414,6 +422,7 @@ def test_ask_ai_answer_streams_in(server, trainer, monkeypatch):
 def test_ask_ai_error_mid_answer_restores_the_question(trainer):
     """回答到一半出错：提示错误，半截回答不留，问题放回输入框。"""
     b = trainer()
+    _ai_on(b)
     b.js("""(() => { const of = window.fetch; window.fetch = (u, init) => String(u).includes('/ask/stream')
       ? Promise.resolve(new Response('{"type":"delta","text":"先用"}\\n{"type":"error","detail":"和模型服务的连接中断了"}\\n', {status: 200}))
       : of(u, init); return true; })()""")
@@ -430,6 +439,7 @@ def test_ask_ai_error_mid_answer_restores_the_question(trainer):
 def test_ask_ai_answer_survives_a_late_poll(server, trainer):
     """回答存好之前发出的读取（轮询）晚回来：不能用旧数据把刚并进来的问答盖掉。"""
     b = trainer()
+    _ai_on(b)
     b.js(f"""(() => {{ const of = window.fetch; window.__held = [];
       window.fetch = (u, i) => {{
         if (String(u).includes('/ask/stream')) return Promise.resolve(new Response(
@@ -455,6 +465,7 @@ def test_ask_ai_answer_survives_a_late_poll(server, trainer):
 def test_refine_hint_is_only_sent_for_its_own_bar(trainer):
     """“哪里不对”的说明只跟着写它的那个小节：精修发出去以后清掉；换到别的小节也清掉，不会带到别的小节上。"""
     b = trainer()
+    _ai_on(b)
     b.js("""(() => { const of = window.fetch; window.__refines = [];
       window.fetch = (u, i) => String(u).endsWith('/refine') && i && i.method === 'POST'
         ? (__refines.push(JSON.parse(i.body)), Promise.resolve(new Response('{}', {status: 200}))) : of(u, i);
@@ -1367,4 +1378,37 @@ def test_section_chips_switch_between_rows_and_plan_sections(server, trainer):
     b = trainer(server["gp"])
     b.wait_for("tt.song.bars.length === 3")
     assert b.js("document.getElementById('secMode').hidden")
+    assert not b.errors, b.errors
+
+
+def test_ai_actions_are_greyed_out_without_an_api_key(trainer):
+    """没有 API key：AI 的按钮灰掉，悬停提示说先去设置里填，点了不发请求、弹出说明（可以去设置）。"""
+    b = trainer()
+    b.wait_for("tt.get('ui.hasKey') === false")  # e2e 的服务没有 key
+    assert b.js("document.documentElement.classList.contains('no-ai-key')")
+    b.js("""(() => { const of = window.fetch; window.__ai = [];
+      window.fetch = (u, i) => { if (/refine|ask|reparse|explain/.test(String(u))) __ai.push(String(u)); return of(u, i); };
+      return true; })()""")
+    b.js("tt.set('ui.bar', 1); true")
+    b.wait_for("!document.getElementById('refineBarBtn').hidden")
+    assert float(b.js("getComputedStyle(document.getElementById('refineBarBtn')).opacity")) < 0.6
+    b.js(
+        "document.getElementById('refineBarBtn').dispatchEvent(new PointerEvent('pointerover', {bubbles: true})); true"
+    )
+    assert b.js("document.getElementById('refineBarBtn').title") == "先在设置里填 API key"
+    b.js("document.getElementById('refineBarBtn').click(); true")
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    assert "API key" in b.js("document.querySelector('.dlg-msg[open]').textContent")
+    b.key("Escape", vk=27)
+    b.js(
+        "document.getElementById('askInput').value = '怎么练'; document.getElementById('askBtn').click(); true"
+    )
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    b.key("Escape", vk=27)
+    time.sleep(0.3)
+    assert b.js("__ai") == []
+    assert all(
+        b.js(f"document.getElementById('{i}').hasAttribute('data-ai')")
+        for i in ("refineBtn", "reparseBtn", "askBtn", "barCheckBtn")
+    )
     assert not b.errors, b.errors

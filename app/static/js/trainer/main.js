@@ -23,6 +23,7 @@ import { initFollow, followDelta, followDebug } from './follow.js';
 import { initGlossary } from './glossary.js';
 import { initRhythm, rhythmDebug } from './rhythm-drill.js';
 import { initStudy } from './study.js';
+import { initAiKey } from './ai-key.js';
 import { ac } from './audio.js';
 import { DERIVE_VERSION } from '../score.js';
 import { stored, remember } from './prefs.js';
@@ -177,6 +178,7 @@ window.tt = {
 // 启动
 // ---------------------------------------------------------------------
 initViews();
+initAiKey();
 initPlayer();
 initControls();
 initLyrics();
