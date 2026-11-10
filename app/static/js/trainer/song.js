@@ -225,18 +225,31 @@ function renderNotices(s) {
 }
 
 let resumeDone = false;
+/** 上次打分时卡住的小节（还在曲子里的）→ 小节下标范围 {a, z}；没有是 null */
+function stuckRange(s) {
+  const idx = ((s.study && s.study.stuck_bars) || []).map(x => s.bars.findIndex(b => b.id === x.id)).filter(i => i >= 0);
+  return idx.length ? { a: Math.min(...idx), z: Math.max(...idx) } : null;
+}
 function renderResume(s) {
   if (resumeDone || !s.bars.length) return;
   resumeDone = true;
+  const params = new URLSearchParams(location.search);
   const r = resumeInfo(s);
-  if (!r) return;
   const go = () => { setLoop(r.a, r.z); revealLoop(); if (r.bpm) setTempo(r.bpm); notice('resume', null); };
-  if (new URLSearchParams(location.search).get('resume') === '1') {
+  if (r && params.get('resume') === '1') {
     // 从曲库的“接着练”进来：直接接着练，地址里去掉 resume（刷新页面不会再跳）
     const u = new URL(location.href); u.searchParams.delete('resume'); history.replaceState(null, '', u);
     go();
     return;
   }
+  // 从今日清单进来、上次打分时勾了卡住的小节：循环范围先放在那几个小节（地址要求接着练时以接着练为准，见上面）
+  const stuckAt = params.get('from') === 'today' ? stuckRange(s) : null;
+  if (stuckAt) {
+    setLoop(stuckAt.a, stuckAt.z); revealLoop();
+    UI.toast(`从上次卡住的第 ${stuckAt.a + 1}${stuckAt.z > stuckAt.a ? `–${stuckAt.z + 1}` : ''} 小节开始`, 'info', 4000);
+    return;
+  }
+  if (!r) return;
   notice('resume', {
     kind: 'info', html: `<span title="${esc(r.at)}">上次练到 <b>${r.label}</b> · ${r.bpm} BPM</span>`,
     actions: [{ label: '接着练', primary: true, onClick: go }], onDismiss: () => {},

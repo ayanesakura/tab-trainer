@@ -1422,3 +1422,102 @@ def test_ai_actions_are_greyed_out_without_an_api_key(trainer):
         for i in ("refineBtn", "reparseBtn", "askBtn", "barCheckBtn")
     )
     assert not b.errors, b.errors
+
+
+def _api(server, path, method="GET", body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        server["base"] + path, data=data, method=method, headers={"Content-Type": "application/json"}
+    )
+    raw = urllib.request.urlopen(req).read()
+    return json.loads(raw) if raw else None
+
+
+@pytest.fixture
+def plan_song(server):
+    """一首新的图片曲子，加进练琴计划；结束后删掉（今天的打分不影响别的测试）。"""
+    from tests.e2e.conftest import _seed
+
+    sid = _seed()
+    _api(server, f"/api/songs/{sid}/study", "PUT", {"in_plan": True})
+    yield sid
+    _api(server, f"/api/songs/{sid}/study", "PUT", {"in_plan": False})
+    server["store"].delete(sid)
+
+
+def test_leaving_from_today_prompts_for_a_rating_once(server, browser, plan_song):
+    """从今日清单进来、今天还没打分：点“返回”先弹出打分（可以跳过），一次打开只拦一次。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id={plan_song}&from=today")
+    b.wait_for("window.tt && tt.song && !document.getElementById('rateBtn').hidden", timeout=40)
+    b.js("document.getElementById('backBtn').click(); true")
+    b.wait_for("!document.getElementById('ratePop').hidden")
+    assert b.js("location.pathname") == "/trainer"
+    assert b.js("document.getElementById('rateTitle').textContent").startswith("走之前")
+    assert not b.js("document.getElementById('rateSkip').closest('[hidden]')")
+    b.key("Escape", vk=27)  # 关掉：留在这里
+    b.wait_for("document.getElementById('ratePop').hidden")
+    b.js("document.getElementById('backBtn').click(); true")  # 第二次不拦
+    b.wait_for("location.hash === '#study'", timeout=10)
+    assert not b.errors, b.errors
+
+
+def test_rating_records_stuck_bars_and_today_starts_there(server, browser, plan_song):
+    """打分弹层的“卡住”默认勾上现在循环的小节，可以去掉；记下的卡住小节下次从今日清单打开时就是循环范围。
+    点“跳过”照样离开，打分后接着离开。"""
+    b = browser
+    b.open(f"{server['base']}/trainer?id={plan_song}")
+    b.wait_for("window.tt && tt.state.ready && !document.getElementById('rateBtn').hidden", timeout=40)
+    b.js("""(() => { window.__rate = null; const of = window.fetch;
+      window.fetch = (u, i) => { if (String(u).endsWith('/study/rate')) __rate = JSON.parse(i.body); return of(u, i); };
+      tt.setLoop(3, 5); return true; })()""")
+    b.js("document.getElementById('rateBtn').click(); true")
+    b.wait_for("!document.getElementById('ratePop').hidden")
+    chips = "[...document.querySelectorAll('#rateStuck button')].map(x => [x.textContent, x.getAttribute('aria-pressed')])"
+    assert b.js(chips) == [["4", "true"], ["5", "true"], ["6", "true"]]
+    assert b.js("document.getElementById('rateFoot').hidden")  # 自己点开的：没有“跳过”
+    b.js(
+        "document.querySelector('#rateStuck [data-bar=bar5]').click(); document.querySelector('#rateBtns .r2').click(); true"
+    )
+    b.wait_for("document.getElementById('rateBtn').classList.contains('rated')")
+    assert b.js("__rate.stuck_bars") == ["bar4", "bar6"]
+    assert [x["id"] for x in _api(server, f"/api/songs/{plan_song}")["study"]["stuck_bars"]] == [
+        "bar4",
+        "bar6",
+    ]
+    # 从今日清单打开：循环范围放在卡住的第 4–6 小节
+    b.open(f"{server['base']}/trainer?id={plan_song}&from=today")
+    b.wait_for("window.tt && tt.state.a === 3 && tt.state.b === 5", timeout=40)
+    assert "从上次卡住的第 4–6 小节开始" in b.js("(document.querySelector('.toast') || {}).textContent || ''")
+    assert not b.js("document.querySelector('#notices [data-id=resume]')")
+    assert not b.errors, b.errors
+
+
+def test_stopping_the_timer_prompts_after_practising(server, browser, plan_song):
+    """不是从今日清单进来：练过 1 分钟以上，结束计时前先提醒打分；“跳过”以后照常结束计时。"""
+    b = browser
+    _api(server, "/api/study/timer", "POST", {"action": "start"})
+    try:
+        b.open(f"{server['base']}/trainer?id={plan_song}")
+        b.wait_for("window.tt && tt.song && !!document.querySelector('#timer [data-act=stop]')", timeout=40)
+        b.js("document.querySelector('#timer [data-act=stop]').click(); true")  # 还没练：不拦
+        b.wait_for("!document.querySelector('#timer [data-act=stop]')", timeout=10)
+        assert b.js("document.getElementById('ratePop').hidden")
+        _api(server, "/api/study/timer", "POST", {"action": "start"})
+        b.open(f"{server['base']}/trainer?id={plan_song}")
+        b.wait_for("window.tt && tt.song && !!document.querySelector('#timer [data-act=stop]')", timeout=40)
+        # 练了 1 分钟以上（播放开始的时刻往前拨）
+        b.js("tt.set('play.playing', true); true")
+        b.js(
+            "performance.now = (n => () => n() + 120000)(performance.now.bind(performance)); tt.set('play.playing', false); true"
+        )
+        b.js("document.querySelector('#timer [data-act=stop]').click(); true")
+        b.wait_for("!document.getElementById('ratePop').hidden")
+        assert b.js("!!document.querySelector('#timer [data-act=stop]')")  # 还没结束
+        b.js("document.getElementById('rateSkip').click(); true")
+        b.wait_for("!document.querySelector('#timer [data-act=stop]')", timeout=10)
+        assert b.js("document.getElementById('ratePop').hidden")
+        assert not b.errors, b.errors
+    finally:
+        if (_api(server, "/api/study/timer") or {}).get("timer"):  # 测试中途失败：别把计时器留着
+            _api(server, "/api/study/timer", "POST", {"action": "stop"})
