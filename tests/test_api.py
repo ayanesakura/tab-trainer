@@ -346,7 +346,12 @@ def test_song_view_contract(client):
     assert b["n"] == 1 and b["locked"] is None and b["edited"] is False and b["needs_review"] is False
     assert not any(k.startswith("_") for x in v["bars"] for k in x) and not any(k.startswith("_") for k in v)
     assert "meta_user" not in v and v["meta"]["title"] == v["title"] and "tuning_midi" in v["meta"]
-    assert v["practice"] == {"bars": {}, "last": None, "total_seconds": 0}
+    assert v["practice"] == {
+        "bars": {},
+        "last": None,
+        "total_seconds": 0,
+        "time": {"total_seconds": 0, "undated_seconds": 0},
+    }
     row = next(x for x in client.get("/api/songs").json() if x["id"] == sid)
     viewmodels.LibraryItem.model_validate(row)
     assert row["busy"] is False and row["needs_review_bars"] == 0 and row["practice"] is None
@@ -416,9 +421,15 @@ def test_background_writes_do_not_invalidate_the_edit_rev(client, sync_jobs, mon
 def test_practice_history_and_last_positions(client):
     sid = _image_song(client)
     ids = [b["id"] for b in client.get(f"/api/songs/{sid}").json()["bars"]]
+    import datetime as dt
+
+    from app import clock
+
+    clock.set_now(dt.datetime(2026, 11, 9, 20, 0, 30))
     client.post(
         f"/api/songs/{sid}/practice", json={"bar_ids": ids[1:4], "loops": 2, "bpm": 60, "seconds": 30}
     )
+    clock.set_now(dt.datetime(2026, 11, 9, 20, 0, 40))
     client.post(
         f"/api/songs/{sid}/practice", json={"bar_ids": [ids[4]], "loops": 0, "bpm": 72.4, "seconds": 5}
     )

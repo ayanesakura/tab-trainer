@@ -6,8 +6,9 @@
   最后一次自评（今天重评就替换今天的）。
 - data/study.json：设置（每天目标分钟数、同时学几首、每天最多复习几首）、秒表、练琴记录（秒表停下的、手动补记的）。
 - 练琴日：凌晨 4 点换日（DAY_START_HOUR），所有按天算的东西（自评、今天的队列、时长、连续天数）都用它。
-- 一天的练琴时长 = 秒表的各段 + 练习页里的练习（每首曲子的 practice.jsonl）合起来去掉重叠，裁到这一天里，
-  再加上手动补记的分钟数。
+- 一天的练琴时长 = 秒表的各段 + 练习页里的练习（每首曲子的 practice.jsonl，敲节奏也算）合起来去掉重叠，裁到这一天里，
+  再加上手动补记的分钟数。没有日期的练习（旧版本的聚合记录）放不进哪一天，只算进总时长（calendar 的 total_minutes）。
+  一首曲子练了多久和曲库里的“累计”是同一个算法（practice.time_of）。
 
 和时钟有关的函数都带 now 参数；不给时取 app.clock（测试可以用 clock.set_now 固定）。纯函数（replay / view / build_queue / merge …）只算数据，
 读写文件的在后面几节。
@@ -24,6 +25,7 @@ from pydantic import ValidationError
 from app import clock, fsrs, practice, store
 from app.errors import Conflict, CorruptSong, Invalid, NotFound
 from app.model import MAX_SESSION_MINUTES, STUDY_SETTINGS, StudyRecord, StudySession, StudyTimer, is_score
+from app.timeline import Interval, clip, merge, parse_time, seconds_of
 
 log = logging.getLogger("tab_trainer.study")
 
@@ -31,8 +33,6 @@ DAY_START_HOUR = 4  # 练琴日从凌晨 4 点开始：半夜 1 点练的还算�
 TIME_FMT = clock.STAMP_FMT
 NOT_IN_PLAN = "这首曲子不在练琴计划里"
 MIN_TIMER_SECONDS = 60  # 秒表停下时不到 1 分钟的不记（点错了），除非手填了分钟数
-
-Interval = tuple[dt.datetime, dt.datetime]
 
 
 # ---------------------------------------------------------------------------
@@ -69,16 +69,6 @@ def days_between(a: str, b: str) -> int:
 
 def fmt(t: dt.datetime) -> str:
     return t.strftime(TIME_FMT)
-
-
-def parse_time(s: object) -> dt.datetime | None:
-    """ "YYYY-MM-DD HH:MM[:SS]" → datetime；格式不对是 None。"""
-    if not isinstance(s, str) or len(s) < 16:
-        return None
-    try:
-        return dt.datetime.fromisoformat(s)
-    except ValueError:
-        return None
 
 
 def valid_day(day: object) -> bool:
@@ -244,25 +234,6 @@ def streak(active: set[str], today: str) -> int:
 # ---------------------------------------------------------------------------
 # 时间段：合并、裁剪、按天分（纯函数）
 # ---------------------------------------------------------------------------
-def merge(intervals: list[Interval]) -> list[Interval]:
-    """去掉重叠（首尾相接的也连成一段），按开始时间排好。长度为 0 的不要。"""
-    out: list[list[dt.datetime]] = []
-    for a, b in sorted(x for x in intervals if x[1] > x[0]):
-        if out and a <= out[-1][1]:
-            out[-1][1] = max(out[-1][1], b)
-        else:
-            out.append([a, b])
-    return [(a, b) for a, b in out]
-
-
-def clip(intervals: list[Interval], lo: dt.datetime, hi: dt.datetime) -> list[Interval]:
-    return [(max(a, lo), min(b, hi)) for a, b in intervals if b > lo and a < hi]
-
-
-def seconds_of(intervals: list[Interval]) -> float:
-    return sum((b - a).total_seconds() for a, b in intervals)
-
-
 def seconds_by_day(merged: list[Interval]) -> dict[str, float]:
     """合并好的时间段按练琴日切开，每天多少秒。"""
     out: dict[str, float] = {}
@@ -304,16 +275,8 @@ def session_intervals(session: dict) -> list[Interval]:
 
 
 def app_intervals(records: list[dict]) -> list[Interval]:
-    """练习页的练习记录 → 时间段 [at − seconds, at]（at 是练完的时间，到秒；早先的记录只到分钟）。
-    种子记录（旧版本的聚合）和没记时间的没有时间段，不算（见 practice.undated_seconds）。"""
-    out = []
-    for r in records:
-        end = parse_time(r.get("at"))
-        secs = float(r.get("seconds") or 0)
-        if r.get("seed") or end is None or secs <= 0:
-            continue
-        out.append((end - dt.timedelta(seconds=secs), end))
-    return out
+    """练习页的练习记录 → 时间段（见 practice.intervals）。"""
+    return practice.intervals(records)
 
 
 # ---------------------------------------------------------------------------
@@ -501,10 +464,13 @@ class _Library:
     def __init__(self) -> None:
         self.songs: dict[str, dict] = {}  # 读得出来的曲子
         self.app: dict[str, list[Interval]] = {}  # 每首曲子练习页里的练习时间段（读不出来的曲子也算）
+        self.undated: dict[str, float] = {}  # 每首曲子没有日期的练习秒数（practice.undated_seconds）
         self.logs: dict[str, list[dict]] = {}  # 每首曲子的自评（移出计划的也在）
         for sid in store.song_ids():
             try:
-                self.app[sid] = app_intervals(practice.records(sid))
+                recs = practice.records(sid)
+                self.app[sid] = practice.intervals(recs)
+                self.undated[sid] = practice.undated_seconds(recs)
                 self.logs[sid] = ratings(sid)
             except (NotFound, OSError, ValueError):  # 刚删掉的；记录文件不是 UTF-8（手改坏了）的这首不算
                 continue
@@ -529,6 +495,18 @@ class _Library:
         if data["timer"]:
             out += _segments(data["timer"]["segments"], now)
         return out
+
+    def song_seconds(self, sid: str) -> float:
+        """一首曲子练了多久（秒）：和 practice.time_of 同一个算法（有日期的合并重叠，加上没日期的）。"""
+        return round(seconds_of(merge(self.app.get(sid, []))) + self.undated.get(sid, 0.0), 1)
+
+    def totals(self, data: dict, now: dt.datetime) -> dict:
+        """有记录以来的练琴总时长（分钟）：秒表 + 练习页的合并去重，加上手动补记，再加上没日期的（旧版本的练习记录）。
+        {total_minutes, undated_minutes}：undated_minutes 已经含在 total_minutes 里（界面上说“含早期未记日期的 N 分钟”）。"""
+        dated = seconds_of(merge(self.all_intervals(data, now))) / 60
+        manual = sum(s["minutes"] for s in data["sessions"] if s["kind"] == "manual")
+        undated = sum(self.undated.values()) / 60
+        return {"total_minutes": round(dated + manual + undated, 1), "undated_minutes": round(undated, 1)}
 
     def activity(self, data: dict, now: dt.datetime) -> dict[str, dict]:
         """每个有动静的练琴日：{minutes（秒表 + 练习页去重后，加上手动补记）, manual, ratings（评了几首）}。"""
@@ -591,6 +569,8 @@ def today(now: dt.datetime | None = None) -> dict:
                 "artist": meta.get("artist", ""),
                 "study": view(s["study"], log_, day, s.get("bars")),
                 "today_seconds": round(seconds_of(clip(merge(lib.app.get(sid, [])), lo, hi)), 1),
+                "total_seconds": lib.song_seconds(sid),  # 一共练了多久（含没日期的）
+                "undated_seconds": round(lib.undated.get(sid, 0.0), 1),
                 "playable": playable(s),
             }
         )
@@ -612,18 +592,20 @@ def today(now: dt.datetime | None = None) -> dict:
 
 
 def calendar(days: int = 371, now: dt.datetime | None = None) -> dict:
-    """GET /api/study/calendar：最近 days 个练琴日（含今天）里有练琴或自评的日子，早的在前。"""
+    """GET /api/study/calendar：最近 days 个练琴日（含今天）里有练琴或自评的日子，早的在前；
+    另有有记录以来的总时长 total_minutes（含没日期的 undated_minutes，见 _Library.totals）。"""
     t = current(now)
     day = practice_day(t)
     data = load()
-    act = _Library().activity(data, t)
+    lib = _Library()
+    act = lib.activity(data, t)
     first = add_days(day, -(days - 1))
     out = [
         {"day": d, "minutes": v["minutes"], "ratings": v["ratings"]}
         for d, v in sorted(act.items())
         if first <= d <= day and (v["minutes"] > 0 or v["ratings"])
     ]
-    return {"days": out, "goal": data["settings"]["goal_minutes"], "today": day}
+    return {"days": out, "goal": data["settings"]["goal_minutes"], "today": day, **lib.totals(data, t)}
 
 
 def day_detail(day: str, now: dt.datetime | None = None) -> dict:

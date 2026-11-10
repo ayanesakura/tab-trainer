@@ -182,8 +182,16 @@ def prepare_ask(sid: str, bar_id: str, question: str):
     return coach.prepare_ask(sid, bar_id, question)
 
 
-def record_practice(sid: str, bar_ids: list[str], loops: int, bpm: int, seconds: float) -> dict:
-    return practice.record(sid, bar_ids, loops, bpm, seconds)
+def record_practice(
+    sid: str,
+    bar_ids: list[str],
+    loops: int,
+    bpm: int,
+    seconds: float,
+    kind: str = "play",
+    clean: bool | None = None,
+) -> dict:
+    return practice.record(sid, bar_ids, loops, bpm, seconds, kind, clean)
 
 
 # ---------------------------------------------------------------------------

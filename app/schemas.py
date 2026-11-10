@@ -88,6 +88,8 @@ class PracticeIn(_In):
         gt=0, le=400
     )  # 前端的速度可能带小数：四舍五入成整数（存盘的 PracticeRecord.bpm 是整数）
     seconds: float = Field(0, ge=0, le=6 * 3600)
+    kind: Literal["play", "rhythm"] = "play"  # rhythm：敲节奏（算练习时间，不算遍数 / 最快速度）
+    clean: bool | None = None  # 用户标了这一遍干净 / 不干净
 
     @field_validator("bpm")
     @classmethod
@@ -234,6 +236,8 @@ FIELD_NAMES = {
     "loops": "遍数",
     "bpm": "速度",
     "seconds": "时长",
+    "kind": "类型",
+    "clean": "干净",
     "hint": "说明",
     "title": "曲名",
     "tags": "标签",

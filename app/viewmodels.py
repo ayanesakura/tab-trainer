@@ -42,10 +42,14 @@ class RefineScopes(_M):
 
 
 class PracticeBar(_M):
-    loops: int = 0
-    seconds: float = 0
+    loops: int = 0  # 跟着谱子练循环了几遍（敲节奏不算）
+    seconds: float = 0  # 练了多少秒（敲节奏也算）
     best_bpm: int = 0
     last: str = ""
+    clean: int = 0  # 标了干净的遍数
+    clean_bpm: int = 0  # 标了干净的最快速度
+    clean_streak: int = 0  # 最近连着干净、速度都是 clean_streak_bpm 的遍数（见 practice._clean）
+    clean_streak_bpm: int = 0  # 最近标过的那一遍的速度
 
 
 class PracticeLast(_M):
@@ -57,10 +61,16 @@ class PracticeLast(_M):
     b_n: int | None = None
 
 
+class PracticeTime(_M):
+    total_seconds: float = 0  # 一共练了多久：有日期的合并重叠 + undated_seconds（practice.time_of）
+    undated_seconds: float = 0  # 其中没有日期的（旧版本的练习记录）
+
+
 class PracticeView(_M):
     bars: dict[str, PracticeBar] = Field(default_factory=dict)
     last: PracticeLast | None = None
-    total_seconds: float = 0
+    total_seconds: float = 0  # 每段记下的秒数直接相加（不去重，旧字段）；练了多久看 time
+    time: PracticeTime = Field(default_factory=PracticeTime)
 
 
 StudyState = Literal["new", "learning", "review"]
@@ -159,7 +169,8 @@ class SongView(_M):
 
 class LibraryPractice(_M):
     last_at: str = ""
-    total_seconds: float = 0
+    total_seconds: float = 0  # 同 PracticeView.total_seconds
+    undated_seconds: float = 0
     last: PracticeLast | None = None
 
 

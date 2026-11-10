@@ -503,6 +503,8 @@ class PracticeRecord(_Rec):
     loops: int = Field(0, ge=0)
     bpm: int = Field(0, ge=0)
     seconds: float = Field(0, ge=0)
+    kind: Literal["play", "rhythm"] = "play"  # rhythm = 敲节奏：算练习时间，不算遍数 / 最快速度 / 干净的遍数
+    clean: bool | None = None  # 用户标了这一遍干净 / 不干净；没标是 None（不写）
 
 
 class SeedBar(_Rec):
@@ -771,6 +773,7 @@ _VIEW_MODELS = frozenset(
         "PracticeBar",
         "PracticeLast",
         "PracticeView",
+        "PracticeTime",
         "StudyState",
         "StudyPreview",
         "StudyLast",

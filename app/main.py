@@ -401,7 +401,9 @@ async def _ask_events(run):
 
 @app.post("/api/songs/{sid}/practice")
 def practice(sid: str, body: schemas.PracticeIn):
-    return service.record_practice(sid, body.bar_ids, body.loops, body.bpm, body.seconds)
+    return service.record_practice(
+        sid, body.bar_ids, body.loops, body.bpm, body.seconds, body.kind, body.clean
+    )
 
 
 @app.get("/api/songs/{sid}/practice/history")
