@@ -470,8 +470,9 @@ def transcribe_system(
         and (double_check == "all" or (double_check == "doubts" and doubtful))
     ):
         bars = _double_check(bars, read_once, len(spans), sid, si)
-    if not bars:  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
+    if not bars and spans:  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
         raise LLMError("模型没有读出这一行的小节，请重新识别这一行", getattr(claude, "last_request_id", None))
+    # 检测不到六线谱、整页当一行的（spans 为 None）：模型说这一页没有六线谱（封面、歌词页）就是 0 个小节，这一行照常算完成
 
     out = []
     for b in bars:
@@ -847,11 +848,15 @@ def _finish_parse(
 # ---------------------------------------------------------------------------
 def first_bar_of(song: dict, si: int) -> int:
     """第 si 行的起始小节号：前面各行已有的小节数；前面还没识别出小节的行按检测到的小节数估
-    （识别失败的行算 0，整页一行的按 8 估）。只用来告诉模型小节号，写回时统一重新编号。"""
+    （识别失败的行、识别完了但没有小节的整页（没有六线谱的页）算 0，还没识别的整页一行按 8 估）。
+    只用来告诉模型小节号，写回时统一重新编号。"""
     first = 1
     for k, info in enumerate(song["systems"][:si]):
         n = sum(1 for b in song["bars"] if b["system"] == k)
-        first += n or (len(info["spans"]) if info.get("spans") else 0 if info.get("status") == "error" else 8)
+        if n or info.get("status") in ("error", "done"):
+            first += n
+        else:
+            first += len(info["spans"]) if info.get("spans") else 8
     return first
 
 

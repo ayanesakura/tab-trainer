@@ -1493,3 +1493,51 @@ def test_a_parse_whose_error_handling_fails_still_finishes(data_dir, sync_jobs, 
     assert recognize.start_parse(sid)
     s = store.load(sid)
     assert s["activity"] is None and s["status"] == "error" and "disk full" in s["notice"]["msg"]
+
+
+def _blank_png() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (800, 1100), "white").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_a_page_without_tab_is_a_done_row_with_no_bars(data_dir, sync_jobs, monkeypatch):
+    """检测不到六线谱的页（封面、歌词页）整页当一行交给模型；模型说这一页没有六线谱（返回 0 个小节）时，
+    这一行算识别完成、没有小节，而不是失败：不然这首曲子永远“有行没识别出来”，重试也只会再花钱失败。"""
+    real = FakeClaude.transcribe
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        if spans is None:
+            FakeClaude.calls.append({"first_bar": first_bar, "retry": False, "hint": "", "page": True})
+            return {"bars": []}
+        return real(self, img, meta, first_bar, spans, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("cover.png", _blank_png()), ("p1.png", score_png())])
+    recognize.run_parse(sid)
+    s = store.load(sid)
+    assert s["systems"][0]["spans"] is None
+    assert [x["status"] for x in s["systems"]] == ["done", "done", "done"]
+    assert s["status"] == "ready" and s["notice"] is None
+    assert [b["n"] for b in s["bars"]] == [1, 2, 3, 4, 5, 6] and {b["system"] for b in s["bars"]} == {1, 2}
+    assert recognize.failed_rows(s) == []
+    assert recognize.first_bar_of(s, 1) == 1  # 没有小节的整页不占小节号
+
+    # 重新识别整首：封面页照样没有小节，不算失败，新结果照常换上
+    assert recognize.start_parse(sid)
+    s = store.load(sid)
+    assert (
+        s["activity"] is None
+        and s["status"] == "ready"
+        and not (s["notice"] or {}).get("msg", "").count("失败")
+    )
+    assert len(s["bars"]) == 6 and s["systems"][0]["status"] == "done"
+
+    # 单独重新识别封面页这一行
+    recognize.reparse_system(sid, 0)
+    s = store.load(sid)
+    assert s["systems"][0]["status"] == "done" and len(s["bars"]) == 6
