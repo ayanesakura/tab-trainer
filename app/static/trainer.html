@@ -183,6 +183,16 @@
             <span class="card-title" id="rhTitle" data-ic="tap">敲节奏</span>
             <span class="hint rh-range" id="rhRange"></span>
             <div class="grow"></div>
+            <span class="help-wrap"><button class="icon-btn sm help-btn" aria-label="敲节奏的按键和练法" aria-describedby="rhHelp">?</button><span class="help-pop rh-help" id="rhHelp" role="tooltip">
+              <b class="lg-h">按键</b>
+              <span><kbd>空格</kbd>开始 / 敲，<kbd>F</kbd><kbd>J</kbd>也能敲，点节奏条也算；<kbd>Esc</kbd>停止</span>
+              <span class="rh-legend"><i class="good"></i>准（±40 ms）<i class="ok"></i>偏<i class="miss"></i>漏</span>
+              <span>口令：1 e &amp; a（十六分）· 1 trip let（三连音）</span>
+              <b class="lg-h">怎么练</b>
+              <span>1. 先用“跟着示范”：每个音响的时候敲一下。</span>
+              <span>2. 能连续几遍 90 分以上，换“听一遍再敲”，再换“只有节拍器”。不靠示范也敲得准，节奏才算记住了。</span>
+              <span>3. 循环哪几个小节、速度用控制条，节拍器和预备拍在播放设置里；从慢速开始。</span>
+            </span></span>
             <button class="icon-btn sm" id="rhClose" data-ic="x" title="退出敲节奏" aria-label="退出敲节奏"></button>
           </div>
           <div class="rh-bar">
@@ -191,11 +201,6 @@
             <button class="btn sm ghost" id="rhCalib" title="用蓝牙耳机，或者觉得判定总是偏早 / 偏晚时校准：跟着咔哒声敲 8 下，测出声音延迟并补偿">校准</button>
           </div>
           <div class="rh-strip" id="rhStrip" title="敲：空格 / F / J，或点这里"><svg id="rhSvg" aria-hidden="true"></svg></div>
-          <div class="legend rh-keys">
-            <span><kbd>空格</kbd>开始 / 敲</span><span><kbd>F</kbd><kbd>J</kbd>也能敲</span><span><kbd>Esc</kbd>停止</span>
-            <span class="rh-legend"><i class="good"></i>准（±40 ms）<i class="ok"></i>偏<i class="miss"></i>漏</span>
-            <span>口令：1 e &amp; a（十六分）· 1 trip let（三连音）</span>
-          </div>
           <div class="rh-result" id="rhResult" aria-live="polite"></div>
         </div>
       </aside>
