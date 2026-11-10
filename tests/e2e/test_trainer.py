@@ -575,7 +575,8 @@ def test_rhythm_drill_scores_taps(trainer):
     assert b.js("document.getElementById('fbDock').hidden")
     assert b.js("document.querySelectorAll('#rhSvg .rh-note').length") == 4  # 第 1 小节四个四分音符
     assert b.js("document.getElementById('rhRange').textContent") == "第 1 小节 · 4 个音"
-    assert "怎么练" in b.js("document.getElementById('rhResult').textContent")
+    assert "空格开始" in b.js("document.getElementById('rhResult').textContent")
+    assert "Esc" in b.js("document.getElementById('rhHelp').textContent")  # 按键说明在“?”里
 
     # 开始（播放键 / 空格开始的是敲节奏，不是 alphaTab）
     b.js("tt.setTempo(120); tt.play(); true")
@@ -1330,4 +1331,19 @@ def test_gp_bar_card_shows_its_plan_section(server, trainer):
     assert [b.js("tt.state.a"), b.js("tt.state.b")] == [1, 2]
     b.js("tt.set('ui.bar', 0); true")
     assert b.js("document.getElementById('barPlan').hidden")
+    assert not b.errors, b.errors
+
+
+def test_tuning_is_spelled_one_way(trainer):
+    """调弦只用一种写法：alphaTab 自己的调弦说明（降号：③=Gb）不画，非标准调弦在谱面标题栏用我们的升号写法写出来。"""
+    b = trainer()
+    assert (
+        b.js("tt.api.settings.notation.elements.get(tt.player.alphaTab.NotationElement.GuitarTuning)")
+        is False
+    )
+    assert b.js("document.getElementById('tuningLine').textContent") == ""  # 标准调弦不写
+    b.js("tt.set('song', {...tt.song, meta: {...tt.song.meta, tuning_midi: [62, 57, 54, 49, 45, 38]}}); true")
+    b.wait_for("document.getElementById('tuningLine').textContent !== ''")
+    assert b.js("document.getElementById('tuningLine').textContent") == "⑥D ⑤A ④C♯ ③F♯ ②A ①D"
+    assert "C♯ F♯" in b.js("document.getElementById('songSub').textContent")
     assert not b.errors, b.errors

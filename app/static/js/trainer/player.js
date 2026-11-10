@@ -94,8 +94,10 @@ function ensureApi() {
   api = new alphaTab.AlphaTabApi($('score'), {
     core: { fontDirectory: AT_BASE + 'font/', includeNoteBounds: true }, // 不开这个 alphaTab 不会触发点击音符事件（试听、改音都靠它）
     display: { scale: 0.9, layoutMode: 'Page', staveProfile: staveProfile(), resources: themeColors() },
-    // 曲名、艺人等页面顶栏已经有了，谱面上不再画（省出一大块地方）；调弦说明保留。alphaTab 署名不受影响
-    notation: { rhythmMode: 'ShowWithBars', elements: { scoreTitle: false, scoreSubTitle: false, scoreArtist: false, scoreAlbum: false, scoreWords: false, scoreMusic: false, scoreWordsAndMusic: false, scoreCopyright: false, effectLyrics: false } }, // 歌词自己画在六线谱下方（lyrics.js）
+    // 曲名、艺人等页面顶栏已经有了，谱面上不再画（省出一大块地方）。alphaTab 署名不受影响。
+    // 调弦说明也不画：alphaTab 按降号拼音名（③=Gb ④=Db），和我们全站的升号写法（F♯ C♯，view.js 的 NN）对不上，
+    // 又不能改它的拼法；非标准调弦由谱面标题栏的 #tuningLine 用我们的写法显示（song.js），标准调弦什么都不写
+    notation: { rhythmMode: 'ShowWithBars', elements: { scoreTitle: false, scoreSubTitle: false, scoreArtist: false, scoreAlbum: false, scoreWords: false, scoreMusic: false, scoreWordsAndMusic: false, scoreCopyright: false, guitarTuning: false, effectLyrics: false } }, // 歌词自己画在六线谱下方（lyrics.js）
     player: {
       playerMode: 'EnabledSynthesizer', soundFont: SF_BASE,
       enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true,

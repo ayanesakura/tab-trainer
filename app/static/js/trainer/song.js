@@ -7,7 +7,7 @@ import { get, set, on } from './store.js';
 import { $, UI, esc, songUrl, SONG_ID } from './dom.js';
 import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.js';
 import { SOURCES } from '../vocab.js';
-import { deriveView, isScore, songSubtitle, songTimeText, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
+import { deriveView, isScore, STD_MIDI, songSubtitle, songTimeText, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
 import { alphaTab, setLoop, setTempo, revealLoop, stop } from './player.js';
 import { provide } from './hooks.js';
@@ -110,6 +110,13 @@ function renderHeader(s) {
   const sub = songSubtitle(s, v), tm = songTimeText((s.practice || {}).time);
   $('songSub').textContent = [sub, tm && tm.text].filter(Boolean).join(' · ');
   $('songSub').title = [sub, tm && tm.title].filter(Boolean).join('\n');
+  // 非标准调弦：谱面标题栏写出每根弦（代替 alphaTab 自己的调弦说明，写法和副标题、指板一致，见 player.js）
+  $('tuningLine').textContent = tuningLine(v);
+}
+const CIRCLED = ['', '①', '②', '③', '④', '⑤', '⑥'];
+function tuningLine(v) {
+  if (!v || !v.bars.length || STD_MIDI.every((m, i) => v.open[i + 1] === m)) return '';
+  return [6, 5, 4, 3, 2, 1].map(k => `${CIRCLED[k]}${v.openName[k]}`).join(' ');
 }
 
 // ---------------------------------------------------------------------
