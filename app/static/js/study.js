@@ -1,5 +1,6 @@
-// 曲库页的“练琴”视图：今日进度（圆环 + 连续天数 / 近 7 天 / 今日曲目）、今日清单、练琴日历和某一天的明细、
-// 计划（调顺序、暂停、移出）、补记、计时器，以及设置页里的“练琴”三项。拼 HTML 的纯函数在 study-view.js。
+// 曲库页的“练琴”视图：今日进度（圆环 + 连续天数 / 近 7 天 / 今日几首）、今日（今天要练的曲子）、日历和某一天的明细、
+// 计划（调顺序、暂停、移出、取消归档）、补记、计时器，以及设置页里的“练琴”三项。拼 HTML 的纯函数在 study-view.js。
+// 用词：“今日” = 今天要练的那几首，“计划” = 排好顺序的全部曲子，“日历” = 每天练了多久。
 // 计划里有哪些曲子、各自的状态来自曲库列表（GET /api/songs 每项的 study），index.js 每次拿到新列表就调 renderPlan。
 
 import { UI, $, esc, icon, toast } from '/static/ui.js';
@@ -46,7 +47,7 @@ function render() {
   $('studyDate').textContent = dayLabel(t.day);
   renderHero(t);
   renderQueue(t);
-  if (S.loaded) paintPlan(); // 计划行的“今天开始 / 排队中”跟着清单变
+  if (S.loaded) paintPlan(); // 计划行的“今天开始 / 排队中”跟着今日变
   renderCalendar();
   syncSettings(t.settings);
 }
@@ -56,7 +57,7 @@ function renderHero(t) {
   const m = t.minutes || {}, total = Number(m.total) || 0, goal = Number(m.goal) || t.settings.goal_minutes || 45;
   const left = (t.queue || []).length, done = (t.done || []).length;
   const msg = total >= goal ? '今天的目标完成了' : total > 0 ? `还差 ${fmtMin(goal - total)}` : '今天还没开始';
-  const sub = left ? `清单还有 ${left} 首` : done ? '清单都练完了' : '';
+  const sub = left ? `还有 ${left} 首` : done ? '今日的曲子都练完了' : '';
   const week = fmtShort(t.week_minutes);
   const stat = (v, unit, k, ic, cls = '') => `<div class="stat ${cls}"><div class="v">${esc(v)}<small>${esc(unit)}</small></div><div class="k">${ic ? icon(ic) : ''}${esc(k)}</div></div>`;
   $('hero').removeAttribute('aria-busy');
@@ -64,21 +65,21 @@ function renderHero(t) {
     <div class="hero-main">
       <div class="hero-msg">${esc(msg)}${sub ? `<span class="hint">${esc(sub)}</span>` : ''}</div>
       <div class="stats">
-        ${stat(t.streak || 0, '天', '连续练琴', 'flame', t.streak > 0 ? 'lit' : '')}
+        ${stat(t.streak || 0, '天', '连续', 'flame', t.streak > 0 ? 'lit' : '')}
         ${stat(week.n, week.unit, '近 7 天', 'calendar')}
-        ${stat(`${done}`, `/ ${done + left} 首`, '今日曲目', 'list')}
+        ${stat(`${done}`, `/ ${done + left} 首`, '今日', 'list')}
       </div>
     </div>`);
 }
 
-// ---------------- 今日清单 ----------------
+// ---------------- 今日 ----------------
 function emptyHTML(kind, title, hint, action = '') {
   return `<div class="study-empty"><span class="big ${kind}">${icon(kind === 'ok' ? 'check' : 'target')}</span>
     <div><b>${esc(title)}</b><span class="hint">${esc(hint)}</span></div><span class="grow"></span>${action}</div>`;
 }
 function renderQueue(t) {
   const q = t.queue || [], done = t.done || [], c = t.counts || {};
-  // 右上角是清单以外的：到期但超出每天上限、顺延的复习，还在排队、没轮到今天的新曲
+  // 右上角是今日以外的：到期但超出每天上限、顺延的复习，还在排队、没轮到今天的新曲
   const kinds = k => q.filter(x => x.kind === k).length;
   const later = Math.max(0, (c.review_due || 0) - kinds('review')), waiting = Math.max(0, (c.new || 0) - kinds('new'));
   const aside = [later && `${later} 首复习顺延`, waiting && `${waiting} 首新曲排队`].filter(Boolean).join(' · ');
@@ -106,8 +107,11 @@ function renderCalendar() {
   const t = S.today, cal = S.cal;
   if (!t || !cal) return;
   const model = calendarModel(cal.days, cal.today || t.day, cal.goal || t.settings.goal_minutes);
-  const sum = fmtShort(model.total);
-  setHTML($('calSum'), model.active ? esc(`近一年练了 ${model.active} 天 · 共 ${sum.n} ${sum.unit}`) : '');
+  // 累计用后端算好的 total_minutes（有记录以来：计时 + 练习页去掉重叠、补记、早期没日期的），和曲库、今日同一个算法
+  const all = Number(cal.total_minutes ?? model.total) || 0, undated = Number(cal.undated_minutes) || 0, sum = fmtShort(all);
+  const tip = [`近一年 ${fmtMin(model.total)}`, `有记录以来 ${fmtMin(all)}`, undated > 0 && `含早期未记日期的 ${fmtMin(undated)}（日历上放不进哪一天）`].filter(Boolean).join('；');
+  $('calSum').title = all > 0 ? tip : '';
+  setHTML($('calSum'), model.active || all > 0 ? esc([model.active && `近一年 ${model.active} 天`, `累计 ${sum.n} ${sum.unit}`].filter(Boolean).join(' · ')) : '');
   const first = !$('cal')._html;
   setHTML($('cal'), calendarHTML(model, S.day));
   if (first) $('cal').scrollLeft = $('cal').scrollWidth; // 窄屏只露出一部分时，先看到最近的几周
@@ -279,7 +283,7 @@ export function initStudy({ onSongs } = {}) {
   setLearn = UI.seg($('learnSeg'), '2', v => saveSettings({ max_learning: +v }, `同时在学最多 ${v} 首`));
   setRev = UI.seg($('revSeg'), '5', v => saveSettings({ max_reviews: +v }, +v ? `每天最多复习 ${v} 首` : '复习不限数量'));
   onAnnounce(() => { if (S.visible) refresh(); });
-  // 页面重新可见（练完一首从练习页回来、过了零点）：重新取今日清单
+  // 页面重新可见（练完一首从练习页回来、过了零点）：重新取今日
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.visible) refresh(); });
   addEventListener('pageshow', e => { if (e.persisted && S.visible) refresh(); });
   refresh(); // 设置页的三项、计时器也要用

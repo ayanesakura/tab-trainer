@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fmtClock, fmtMin, fmtShort, dayLabel, dueText, gapText, studyBadge, itemNotes, queueRowHTML, doneRowHTML, planRowHTML,
-  ringHTML, level, calendarModel, calendarHTML, sessionText, ratingTip, planNext,
+  ringHTML, level, calendarModel, calendarHTML, sessionText, ratingTip, planNext, stuckText, timeTip,
 } from '../../app/static/js/study-view.js';
 import { rowHTML } from '../../app/static/js/library-view.js';
 
@@ -58,10 +58,41 @@ test('今日清单的一行：说明、链接、转义', () => {
   assert.deepEqual(itemNotes(item({ kind: 'new', study: st({ state: 'new' }) })), ['第一次练']);
   // 今天已经在谱子上练过了：不再说“第一次练”
   assert.deepEqual(itemNotes(item({ kind: 'new', study: st({ state: 'new' }), today_seconds: 60 })), ['今天已练 1 分钟']);
+  assert.deepEqual(itemNotes(item({ kind: 'new', study: st({ state: 'new' }), total_seconds: 360 })), []); // 以前练过（累计另外写）
   // 不能练（还在识别）：没有链接
   assert.doesNotMatch(queueRowHTML(item({ playable: false })), /<a /);
   // 曲名、艺人都转义
   assert.match(queueRowHTML(item({ title: '<b>x</b>', artist: 'a&b' })), /&lt;b&gt;x&lt;\/b&gt;[\s\S]*a&amp;b/);
+});
+
+test('卡住的小节：连着的并成一段，多了写“等”，提示里列全', () => {
+  assert.equal(stuckText([]), null);
+  assert.equal(stuckText(null), null);
+  assert.deepEqual(stuckText([{ id: 'b12', n: 12 }]), { text: '卡在第 12 小节', tip: '上次打分时卡住的小节：第 12 小节' });
+  assert.equal(stuckText([{ n: 14 }, { n: 12 }, { n: 13 }]).text, '卡在 12–14 小节');
+  const x = stuckText([{ n: 3 }, { n: 12 }, { n: 13 }, { n: 14 }, { n: 20 }]);
+  assert.equal(x.text, '卡在 3、12–14 等小节');
+  assert.equal(x.tip, '上次打分时卡住的小节：第 3、12–14、20 小节');
+  // 今日和计划里：曲名后面的徽章，链接照旧带 from=today（练习页从卡住的小节开始）
+  const html = queueRowHTML(item({ study: st({ stuck_bars: [{ id: 'b', n: 12 }, { id: 'c', n: 13 }] }) }));
+  assert.match(html, /class="title">华尔兹 C 大调<\/span><span class="badge stuck" title="[^"]*12–13[^"]*">卡在 12–13 小节/);
+  assert.match(html, /&from=today/);
+  assert.match(planRowHTML({ id: 'a', title: 'A', study: st({ stuck_bars: [{ id: 'b', n: 5 }] }) }, 0, 1), /卡在第 5 小节/);
+});
+
+test('一首曲子的累计时长：今日里和曲库同一个数、同一句说明', () => {
+  const html = queueRowHTML(item({ total_seconds: 1500, undated_seconds: 600 }));
+  assert.match(html, /<span class="tot" title="累计 25 分钟：[^"]*含早期未记日期的 10 分钟">累计 25 分钟<\/span>/);
+  assert.equal(timeTip(1500, 600), rowHTML({ id: 's', title: 'x', source_type: 'gp', is_score: true, status: 'ready', bars: 2, practice: { last_at: '2026-11-01 10:00', total_seconds: 1500, undated_seconds: 600 } }).match(/class="practice" title="([^"]*)"/)[1]);
+  assert.doesNotMatch(queueRowHTML(item()), /class="tot"/); // 没练过不写
+});
+
+test('计划里归档的曲子：留在原位、淡下去，写明不排进今日', () => {
+  const html = planRowHTML({ id: 'a', title: 'A', archived: true, study: st({ stuck_bars: [{ id: 'b', n: 5 }] }) }, 0, 2);
+  assert.match(html, /plan-row paused archived/);
+  assert.match(html, /class="kind muted"[^>]*>归档</);
+  assert.match(html, /已归档，不排进今日/);
+  assert.doesNotMatch(html, /卡在/);
 });
 
 test('今天练过的一行：打分徽章和下次', () => {

@@ -3,7 +3,7 @@
 
 import { esc, icon } from './lib/html.js';
 import { SOURCES } from './vocab.js';
-import { studyBadge } from './study-view.js';
+import { studyBadge, fmtMin, timeTip } from './study-view.js';
 
 const SOURCE_ICON = { image: 'image', pdf: 'file', gp: 'score', musicxml: 'score' };
 export const isScore = s => !!s.is_score; // GP / MusicXML（后端给的）：没有原谱页面，不需要识别
@@ -24,12 +24,8 @@ export function ago(at, now = new Date()) {
   if (days < 30) return `${days} 天前`;
   return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1} 月 ${d.getDate()} 日` : `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`;
 }
-export function duration(sec) {
-  const m = Math.round((sec || 0) / 60);
-  if (m < 1) return '不到 1 分钟';
-  if (m < 60) return `${m} 分钟`;
-  return `${Math.floor(m / 60)} 小时${m % 60 ? ` ${m % 60} 分钟` : ''}`;
-}
+// 秒 → “25 分钟”：和练琴页的“今日”用同一个函数（fmtMin），同一首曲子到处显示的数字一样
+export const duration = sec => fmtMin((Number(sec) || 0) / 60);
 // 上次练的范围（小节号从 1 开始；后端已经按当前顺序排好 a_n ≤ b_n，小节被删了是 null）
 export function rangeText(s) {
   const l = s.practice && s.practice.last;
@@ -43,6 +39,22 @@ export function practiceText(s, now = new Date()) {
   if (!p || !p.last_at) return '';
   const range = rangeText(s);
   return [ago(p.last_at, now), range && (range === '全曲' ? '练全曲' : `练到${range}`), p.total_seconds > 0 && `累计 ${duration(p.total_seconds)}`].filter(Boolean).join(' · ');
+}
+/** “累计”的悬停说明（纯文本，和今日里同一句）：total_seconds 是后端去掉重叠后的总时长（和练琴页同一个算法），含早期没记日期的 */
+export function practiceTip(s) {
+  const p = s.practice;
+  if (!p || !(p.total_seconds > 0)) return '';
+  return timeTip(p.total_seconds, p.undated_seconds);
+}
+/** 曲库里只有一首用主色的“接着练”：最近练过的那一首（能练、没归档）。→ id 或 null */
+export function latestPracticed(songs) {
+  let best = null;
+  for (const s of songs || []) {
+    const p = s.practice;
+    if (!p || !p.last_at || !p.last || s.archived || !canPlay(s)) continue;
+    if (!best || String(p.last_at).localeCompare(String(best.practice.last_at)) > 0) best = s;
+  }
+  return best ? best.id : null;
 }
 
 // 需要注意的状态（忙、出错、待核对、警告）；一切正常时返回 ''，小节数放在说明行里。
@@ -95,28 +107,28 @@ export function fixAction(s) {
   return s.failed_rows > 0 ? retryButton(s) : `<button class="btn sm act" data-k="retry" data-retry="${esc(s.id)}">${icon('refresh', 12)}重新识别</button>`;
 }
 
-/** 曲库里一行。selecting：选择模式（勾选导出），selected：已勾选的 id */
-export function rowHTML(s, { selecting = false, selected = new Set() } = {}) {
+/** 曲库里一行。selecting：选择模式（勾选导出），selected：已勾选的 id，primary：这一行的“接着练”用主色（见 latestPracticed） */
+export function rowHTML(s, { selecting = false, selected = new Set(), primary = false } = {}) {
   const play = canPlay(s), href = `/trainer?id=${encodeURIComponent(s.id)}`;
   const pick = selecting && selectable(s), on = pick && selected.has(s.id);
   const src = SOURCES[s.source_type] || '';
   // 每首只占两行：曲名（+ 标签、待核对等徽章），下面一行艺人 · 小节数 · 练习进度；来源、添加时间、AI 花费放在这一行的悬停提示里
-  const prac = practiceText(s);
-  const sub = [esc(s.artist), barsText(s), prac && `<span class="practice">${esc(prac)}</span>`].filter(Boolean).join(' · ');
+  const prac = practiceText(s), ptip = practiceTip(s);
+  const sub = [esc(s.artist), barsText(s), prac && `<span class="practice"${ptip ? ` title="${esc(ptip)}"` : ''}>${esc(prac)}</span>`].filter(Boolean).join(' · ');
   const more = [src && `来源：${src}`, s.created && `添加于 ${esc(s.created)}`, costText(s).replace(/<[^>]+>/g, '')].filter(Boolean).join(' · ');
   const state = stateHTML(s);
   const busyish = s.busy || ['corrupt', 'error', 'cancelled'].includes(s.status); // 进度条 / 出错说明单独一行，徽章跟在曲名后面
   const range = rangeText(s), last = s.practice && s.practice.last;
   const tags = (s.tags || []).length ? `<span class="tags">${s.tags.map(t => `<button class="badge tag" data-tag="${esc(t)}" data-k="tag:${esc(t)}" title="只看“${esc(t)}”">${esc(t)}</button>`).join('')}</span>` : '';
   const title = play && !selecting ? `<a class="title" href="${href}" data-k="open" title="${esc(s.title)}">${esc(s.title)}</a>` : `<span class="title" title="${esc(s.title)}">${esc(s.title)}</span>`;
-  // 只有“接着练”用主色按钮，其他行的操作用普通按钮，曲库里不会一列全是实心按钮
+  // 只有最近练过的那一首（primary）的“接着练”用主色按钮，其他行用浅按钮：曲库里不会一列全是实心按钮
   let action = '';
-  if (play && last) action = `<a class="btn primary sm act" data-k="resume" href="${href}&resume=1" title="${esc(`从${range || '上次的位置'}${last.bpm ? `、${last.bpm} BPM` : ''} 接着练`)}">${icon('repeat', 12)}接着练</a>`;
-  else if (play) action = `<a class="btn sm act" data-k="play" href="${href}">${icon('play', 12)}练习</a>`;
+  if (play && last) action = `<a class="btn ${primary ? 'primary' : 'ghost'} sm act" data-k="resume" href="${href}&resume=1" title="${esc(`从${range || '上次的位置'}${last.bpm ? `、${last.bpm} BPM` : ''} 接着练`)}">${icon('repeat', 12)}接着练</a>`;
+  else if (play) action = `<a class="btn ghost sm act" data-k="play" href="${href}">${icon('play', 12)}练习</a>`;
   else if (!s.busy && (s.status === 'error' || s.status === 'cancelled')) action = fixAction(s); // 没有可练的内容：给出下一步
   // 有识别失败的行、已经有小节可练：重试失败的行放在练习前面（只识别那几行，比整首重新识别便宜）
   if (play && !s.busy && s.failed_rows > 0 && !isScore(s) && !settingsError(s)) action = retryButton(s) + action;
-  return `<div class="row song-row${play || pick ? ' click' : ''}${on ? ' on' : ''}" data-id="${esc(s.id)}" data-play="${play ? 1 : ''}" data-pick="${pick ? 1 : ''}">
+  return `<div class="row song-row${play || pick ? ' click' : ''}${on ? ' on' : ''}${s.archived ? ' archived' : ''}" data-id="${esc(s.id)}" data-play="${play ? 1 : ''}" data-pick="${pick ? 1 : ''}">
     ${selecting ? `<input type="checkbox" class="pick" data-k="pick" aria-label="选择 ${esc(s.title)}" ${on ? 'checked' : ''} ${pick ? '' : 'disabled'}>` : ''}
     <span class="src-ic" title="${esc(src ? `来源：${src}` : '')}">${icon(SOURCE_ICON[s.source_type] || 'music', 18)}</span>
     <div class="who"><div class="name">${title}${studyBadge(s.study)}${tags}${state && !busyish ? `<span class="badges">${state}</span>` : ''}</div>

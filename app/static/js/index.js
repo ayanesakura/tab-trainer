@@ -1,14 +1,12 @@
-// 曲库页：练琴（今日清单、计时、日历、计划，见 study.js）、上传原谱 / GP 文件、曲子列表（识别进度、练习记录、接着练）、
-// 曲子包导出 / 导入、管理原谱页面、设置（API key、模型、主题、练琴）。
+// 曲库页：练琴（今日、计时、日历、计划，见 study.js）、上传原谱 / GP 文件、曲子列表（识别进度、练习记录、接着练、归档）、
+// 曲子包导出 / 导入、管理原谱页面、设置（API key、模型、识别后复核、练琴、外观）。
 // 词表：曲子 = 曲库里的一条；谱面 = 渲染出来的谱；原谱 = 上传的图片 / PDF。
 import { UI, $, esc, icon, toast } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
 import { SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
-import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML } from '/static/js/library-view.js';
+import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML, latestPracticed } from '/static/js/library-view.js';
 import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
 import { initStudy, renderPlan, refresh as refreshStudy, setVisible as setStudyVisible, setStudy, addMany } from '/static/js/study.js';
-
-UI.initShell();
 
 // ---------------- 导航 ----------------
 // 练琴 / 曲库 / 设置。地址里没写时打开上次看的那个（练琴或曲库，记在本机），第一次是曲库
@@ -27,7 +25,7 @@ function route() {
 }
 addEventListener('hashchange', route);
 
-// ---------------- 主题 ----------------
+// ---------------- 外观（明暗、配色只在设置页改，顶栏没有切换按钮） ----------------
 const setThemeSeg = UI.seg($('themeSeg'), UI.getTheme(), v => UI.setTheme(v));
 $('paletteSeg').innerHTML = UI.PALETTES.map(p => `<button data-v="${p.id}"><i class="swatch" style="background:${p.swatch}"></i>${p.name}</button>`).join('');
 const setPaletteSeg = UI.seg($('paletteSeg'), UI.getPalette(), v => UI.setPalette(v));
@@ -162,7 +160,7 @@ addEventListener('keydown', e => { if (e.key === 'Escape' && selecting && !UI.ha
 
 // 只在内容变了的时候改 DOM（轮询每 2.5 秒刷新一次，不能把正在用的按钮、焦点冲掉）
 function setHTML(el, html) { if (el._html !== html) { el.innerHTML = html; el._html = html; } }
-function renderList(box, songs) {
+function renderList(box, songs, primaryId) {
   if (!songs.length) return;
   if (box._html !== undefined) { box.innerHTML = ''; box._html = undefined; } // 原来是空状态 / 加载中
   const active = document.activeElement, activeRow = box.contains(active) ? active.closest('.song-row') : null;
@@ -170,7 +168,7 @@ function renderList(box, songs) {
   const old = new Map([...box.children].map(r => [r.dataset.id, r]));
   let prev = null;
   for (const s of songs) {
-    const html = rowHTML(s, { selecting, selected });
+    const html = rowHTML(s, { selecting, selected, primary: s.id === primaryId });
     let row = old.get(s.id);
     old.delete(s.id);
     if (!row || row._html !== html) {
@@ -246,8 +244,9 @@ function renderSongs() {
   const pg = paginate(songs, lib.page);
   if (pg.page !== lib.page) setPage(pg.page);
   if (!lastSongs.length) setHTML(box, '<div class="empty-state"><b>还没有曲子</b>上传原谱或 Guitar Pro 文件开始。</div>');
+  else if (!songs.length && !lib.archived && !lib.q && !lib.tag) setHTML(box, '<div class="empty-state"><b>曲子都归档了</b>点上面的“已归档”找回来。</div>');
   else if (!songs.length) setHTML(box, '<div class="empty-state"><b>没有符合条件的曲子</b>换个关键词或标签试试。</div>');
-  else renderList(box, pg.items);
+  else renderList(box, pg.items, latestPracticed(lastSongs));
   const pager = pagerHTML(pg, songs.length);
   setHTML($('pager'), pager);
   $('pager').hidden = !pager;
@@ -310,10 +309,10 @@ function openMore(btn) {
   const image = !isScore(s); // GP / MusicXML 没有原谱页面，也不需要识别
   const st = s.study;
   UI.menu(btn, [
-    !st && { label: '加入练琴计划', icon: 'target', onClick: () => setStudy(s, { in_plan: true }, '已加入计划，排在最后') },
-    st && st.paused && { label: '继续练', icon: 'play', onClick: () => setStudy(s, { paused: false }, '已继续') },
-    st && !st.paused && { label: '暂停计划', icon: 'pause', onClick: () => setStudy(s, { paused: true }, '已暂停，不再排进今日清单') },
-    st && { label: '移出练琴计划', icon: 'x', onClick: () => setStudy(s, { in_plan: false }, '已移出计划（打分记录还在）') },
+    !st && { label: '加入计划', icon: 'target', onClick: () => setStudy(s, { in_plan: true }, '已加入计划，排在最后') },
+    st && st.paused && { label: '继续计划', icon: 'play', onClick: () => setStudy(s, { paused: false }, '已继续') },
+    st && !st.paused && { label: '暂停计划', icon: 'pause', onClick: () => setStudy(s, { paused: true }, '已暂停，不再排进今日') },
+    st && { label: '移出计划', icon: 'x', onClick: () => setStudy(s, { in_plan: false }, '已移出计划（打分记录还在）') },
     'sep',
     { label: '重命名', icon: 'edit', onClick: () => rename(s) },
     { label: '编辑标签', icon: 'list', onClick: () => editTags(s) },

@@ -1,7 +1,7 @@
 // 曲库页的纯函数：js/library-view.js。运行：node --test tests/js/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ago, duration, rangeText, practiceText, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay, paginate, pageNumbers, pagerHTML, PAGE_SIZE } from '../../app/static/js/library-view.js';
+import { ago, duration, rangeText, practiceText, practiceTip, latestPracticed, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay, paginate, pageNumbers, pagerHTML, PAGE_SIZE } from '../../app/static/js/library-view.js';
 
 const NOW = new Date(2026, 10, 7, 20, 0); // 2026-11-07 20:00（本地时间）
 const song = (o = {}) => ({ id: 's1', title: '曲子', source_type: 'image', is_score: false, status: 'ready', bars: 8, created: '2026-11-01 10:00', ...o });
@@ -29,6 +29,27 @@ test('rangeText / practiceText：上次练到哪里', () => {
   assert.equal(rangeText(song(last(null, 5))), ''); // 小节被删了
   assert.equal(practiceText(song(last(3, 5)), NOW), '昨天 · 练到第 3–5 小节 · 累计 10 分钟');
   assert.equal(practiceText(song(), NOW), '');
+});
+
+test('practiceTip：累计时长的说明，提到早期没记日期的', () => {
+  assert.equal(practiceTip(song()), '');
+  assert.match(practiceTip(song({ practice: { total_seconds: 1500, undated_seconds: 0 } })), /^累计 25 分钟：.*重叠的只算一次$/);
+  assert.match(practiceTip(song({ practice: { total_seconds: 1500, undated_seconds: 600 } })), /含早期未记日期的 10 分钟$/);
+  // 曲库行里：说明挂在“累计”那一段上
+  const row = rowHTML(song({ practice: { last_at: '2026-11-06 23:00', total_seconds: 1500, undated_seconds: 600, last: null } }));
+  assert.match(row, /class="practice" title="累计 25 分钟：[^"]*含早期未记日期的 10 分钟">[^<]*累计 25 分钟</);
+});
+
+test('latestPracticed：只有最近练过的一首用主色“接着练”', () => {
+  const p = (at, o = {}) => song({ practice: { last_at: at, last: { a_n: 1, b_n: 2 } }, ...o });
+  const list = [p('2026-11-05 10:00', { id: 'a' }), p('2026-11-06 09:00', { id: 'b' }), p('2026-11-07 09:00', { id: 'c', archived: true }),
+    p('2026-11-07 10:00', { id: 'd', status: 'corrupt' }), song({ id: 'e' })];
+  assert.equal(latestPracticed(list), 'b'); // 归档的、坏的不算
+  assert.equal(latestPracticed([song()]), null);
+  assert.match(rowHTML(list[1], { primary: true }), /btn primary sm act" data-k="resume"/);
+  assert.match(rowHTML(list[0]), /btn ghost sm act" data-k="resume"/);
+  assert.match(rowHTML(song()), /btn ghost sm act" data-k="play"/);
+  assert.match(rowHTML(list[2]), /song-row click archived/);
 });
 
 test('stateHTML / barsText：状态说明，后端文字要转义', () => {
@@ -77,7 +98,7 @@ test('fixAction / rowHTML：失败的曲子给下一步，重试失败的行优�
   // 有小节可练又有失败的行：重试在“练习”前面；只有“接着练”是主色按钮
   const row = rowHTML(song({ status: 'error', failed_rows: 1 }));
   assert.ok(row.indexOf('重试失败的 1 行') < row.indexOf('练习') && !/btn primary/.test(row));
-  assert.match(rowHTML(song({ practice: { last: { a_n: 1, b_n: 2, bpm: 60 }, last_at: '2026-11-06 23:00' } })), /btn primary sm act" data-k="resume"/);
+  assert.match(rowHTML(song({ practice: { last: { a_n: 1, b_n: 2, bpm: 60 }, last_at: '2026-11-06 23:00' } }), { primary: true }), /btn primary sm act" data-k="resume"/);
   assert.match(rowHTML(song({ title: '<i>x</i>' })), /title="&lt;i&gt;x&lt;\/i&gt;"/);
   // 选择模式：复选框、选中状态，操作按钮藏起来；坏的曲子不能选
   const sel = rowHTML(song(), { selecting: true, selected: new Set(['s1']) });

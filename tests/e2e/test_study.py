@@ -164,3 +164,76 @@ def test_study_settings(server, browser):
         assert _api(server, "/api/study/today")["settings"]["goal_minutes"] == 30
     finally:
         _api(server, "/api/study/settings", "PUT", {"goal_minutes": 45})
+
+
+def test_stuck_bars_and_total_time(server, browser):
+    # 打分时卡住的小节：今天练过的、计划里的曲名后面写“卡在 … 小节”（提示里列全）；今日里每首的累计时长和曲库同一个数
+    img = server["image"]
+    b = browser
+    try:
+        _api(server, f"/api/songs/{img}/study", "PUT", {"in_plan": True})
+        _api(
+            server,
+            f"/api/songs/{img}/practice",
+            "POST",
+            {"bar_ids": ["bar1"], "loops": 1, "bpm": 60, "seconds": 600},
+        )
+        _api(
+            server,
+            f"/api/songs/{img}/study/rate",
+            "POST",
+            {"rating": 1, "issues": [], "note": "", "stuck_bars": ["bar2", "bar3", "bar5"]},
+        )
+        b.open(server["base"] + "/#study")
+        done = f"document.querySelector('#queue .study-row.done[data-id=\"{img}\"] .stuck')"
+        b.wait_for(f"!!{done}")
+        assert b.js(f"{done}.textContent") == "卡在 2–3、5 小节"
+        assert b.js(f"{done}.title") == "上次打分时卡住的小节：第 2–3、5 小节"
+        plan = f"document.querySelector('#plan .plan-row[data-id=\"{img}\"] .stuck')"
+        b.wait_for(f"!!{plan}")
+        assert b.js(f"{plan}.textContent") == "卡在 2–3、5 小节"
+        # 用词：今日 / 日历 / 计划
+        titles = b.js(
+            "[...document.querySelectorAll('#view-study .section-title > span:first-child')].map(x => x.textContent)"
+        )
+        assert titles == ["今日", "日历", "计划"]
+        # 还没打分的一天（把今天的返回改成“在队列里”）：卡住的小节写在今日的这一行，点开去练习页（from=today）；累计和曲库一样
+        lib_total = next(s for s in _api(server, "/api/songs") if s["id"] == img)["practice"]["total_seconds"]
+        b.js("""(() => { const of = window.fetch; window.fetch = async (u, init) => {
+          const r = await of(u, init);
+          if (!String(u).endsWith('/api/study/today')) return r;
+          const t = await r.json(); t.queue = t.done.map(x => ({ ...x, kind: 'learning' })); t.done = [];
+          t.queue.forEach(x => { x.undated_seconds = 120; });
+          return new Response(JSON.stringify(t), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }; return true; })()""")
+        b.js("tt.study().then(() => true)")
+        row = f"document.querySelector('#queue .study-row:not(.done)[data-id=\"{img}\"]')"
+        b.wait_for(f"!!{row}")
+        assert b.js(f"{row}.querySelector('.stuck').textContent") == "卡在 2–3、5 小节"
+        assert "from=today" in b.js(f"{row}.dataset.href")
+        tot = b.js(f"{row}.querySelector('.tot').textContent")
+        assert tot == f"累计 {round(lib_total / 60)} 分钟"
+        assert "含早期未记日期的 2 分钟" in b.js(f"{row}.querySelector('.tot').title")
+        b.js("location.hash = 'library'; true")
+        lib_text = b.js(f"document.querySelector('.song-row[data-id=\"{img}\"] .practice').textContent")
+        assert tot in lib_text  # 同一首曲子，曲库和今日显示同一个数
+        assert not b.errors, b.errors
+    finally:
+        _leave_plan(server, img)
+
+
+def test_calendar_total_includes_undated(server, browser):
+    # 日历右上角：近一年几天 · 累计（后端的 total_minutes，含早期没日期的），没日期的写在悬停提示里
+    b = browser
+    b.open(server["base"] + "/#study")
+    b.wait_for("!!document.querySelector('#hero .ring')")
+    b.js("""(() => { const of = window.fetch; window.fetch = async (u, init) => {
+      const r = await of(u, init);
+      if (!String(u).includes('/api/study/calendar')) return r;
+      const c = await r.json(); c.total_minutes = 300; c.undated_minutes = 120;
+      return new Response(JSON.stringify(c), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }; return true; })()""")
+    b.js("tt.study().then(() => true)")
+    b.wait_for("document.getElementById('calSum').textContent.includes('累计 5 小时')")
+    assert "含早期未记日期的 2 小时" in b.js("document.getElementById('calSum').title")
+    assert not b.errors, b.errors

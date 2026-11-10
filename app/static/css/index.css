@@ -88,7 +88,7 @@
 /* 设置 · 配色：每个选项前一个色点 */
 .palette-seg .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: 0; box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .2); }
 
-/* 练琴计划的徽章（曲名后面：在学 / 3 天后复习 / 待学 / 暂停） */
+/* 计划的徽章（曲名后面：在学 / 3 天后复习 / 待学 / 暂停） */
 .song-row .plan-badge { height: 18px; padding: 0 6px 0 5px; flex: none; gap: 4px; background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--fg-2); font-weight: 400; }
 .song-row .plan-badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
 .song-row .plan-badge.learn i { background: var(--accent); }

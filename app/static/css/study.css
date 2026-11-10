@@ -1,4 +1,4 @@
-/* 曲库页“练琴”视图：今日进度、今日清单、练琴日历、计划；补记对话框。颜色、字号等变量在 /static/ui.css，
+/* 曲库页“练琴”视图：今日进度、今日、日历、计划；补记对话框。颜色、字号等变量在 /static/ui.css，
    计时器胶囊和打分徽章两页共用，也在 ui.css。 */
 #view-study .section-title { display: flex; align-items: baseline; gap: var(--sp-2); }
 .st-aside { margin-left: auto; font-weight: 400; letter-spacing: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -28,7 +28,7 @@
 .stat .k .ic { width: 12px; height: 12px; }
 .stat.lit .k .ic { color: var(--amber); }
 
-/* ---- 今日清单、计划：每行前面一个阶段标记 ---- */
+/* ---- 今日、计划：每行前面一个阶段标记 ---- */
 .study-row .kind, .plan-row .kind { flex: none; min-width: 38px; height: 22px; padding: 0 6px; border-radius: var(--r-sm); display: inline-grid; place-items: center; font-size: 11.5px; font-weight: 600; background: var(--pill); color: var(--fg-2); }
 .kind.accent { background: var(--accent-soft); color: var(--accent); }
 .kind.ok { background: var(--green-soft); color: var(--green); }
@@ -38,6 +38,8 @@
 .study-row .title, .plan-row .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .study-row.done .title { color: var(--fg-2); }
 .study-row .act { min-width: 64px; }
+/* 卡住的小节：描边徽章，和打分徽章（实色底）区分开 */
+.study-row .badge.stuck, .plan-row .badge.stuck { height: 18px; padding: 0 6px; flex: none; font-weight: 400; background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--fg-2); }
 .list-sep { display: flex; align-items: center; gap: var(--sp-2); padding: 7px 14px; background: var(--card-2); border-top: 1px solid var(--line-2); font-size: var(--fs-1); color: var(--muted); }
 .list-sep:first-child { border-top: 0; }
 .list-sep + .row { border-top: 0; }

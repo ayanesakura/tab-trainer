@@ -285,9 +285,14 @@ def test_practice_line_and_resume_link(server, browser):
     b.wait_for(f"!!{row} && !!{row}.querySelector('.practice')")
     text = b.js(f"{row}.querySelector('.practice').textContent")
     assert "练到第 2–3 小节" in text and "累计 25 分钟" in text
+    # 累计时长的说明（和练琴页同一个算法）挂在悬停提示里
+    assert b.js(f"{row}.querySelector('.practice').title").startswith("累计 25 分钟：")
     assert (
         b.js(f"{row}.querySelector('[data-k=resume]').getAttribute('href')") == f"/trainer?id={img}&resume=1"
     )
+    # 只有最近练过的一首用主色的“接着练”，其他行都是浅按钮
+    assert b.js("document.querySelectorAll('#songs .btn.primary').length") == 1
+    assert b.js(f"{row}.querySelector('[data-k=resume]').classList.contains('primary')") is True
     # 按最近练习排序时练过的排最前
     b.js("document.querySelector('#sortSeg [data-v=practiced]').click(); true")
     assert b.js("document.querySelector('.song-row').dataset.id") == img
