@@ -117,6 +117,37 @@ function initDock() {
   on('rhythm.on', v => { dock.hidden = v; });
 }
 
+// ---------------------------------------------------------------------
+// 窗口窄于 1000px：侧栏（小节卡片 / 敲节奏）是右边滑出的抽屉（ui.drawer）。控制条上的按钮开关，Esc 收起；
+// 打开时焦点移进抽屉，收起时还给按钮；收着的时候抽屉 inert（Tab 不会走进看不见的地方）。
+// 不用 UI.layer：抽屉开着时空格、方向键这些播放快捷键照样要能用（浮层开着时 keys.js 只问浮层自己的那组）
+// ---------------------------------------------------------------------
+function initDrawer() {
+  const narrow = matchMedia('(max-width: 999px)'), side = $('side'), btn = $('drawerBtn');
+  const open = v => set('ui.drawer', !!v && narrow.matches);
+  const paint = v => {
+    document.body.classList.toggle('drawer-open', v);
+    btn.setAttribute('aria-expanded', String(v));
+    side.inert = narrow.matches && !v;
+    if (v) {
+      const first = [...side.querySelectorAll('button, input, [tabindex]')].find(x => !x.disabled && x.offsetParent);
+      if (first) first.focus({ preventScroll: true });
+    } else if (side.contains(document.activeElement)) btn.focus({ preventScroll: true });
+  };
+  on('ui.drawer', paint);
+  paint(false);
+  narrow.addEventListener('change', () => { if (!narrow.matches) open(false); paint(get('ui.drawer')); });
+  btn.onclick = () => open(!get('ui.drawer'));
+  $('drawerClose').onclick = () => open(false);
+  // 敲节奏的卡片也在抽屉里：窄屏上打开敲节奏时抽屉跟着打开
+  on('rhythm.on', v => { if (v) open(true); });
+  addShortcuts({ name: 'drawer', order: 30, when: () => !!get('ui.drawer'), keys: { Escape: () => open(false) } });
+  // 焦点在抽屉里的输入框上时 keys.js 不管按键：Esc 在这里收起
+  side.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && get('ui.drawer') && !UI.hasLayer() && !e.defaultPrevented && !e.isComposing) { e.preventDefault(); open(false); }
+  });
+}
+
 function initViews() {
   setNav = UI.tabs($('nav'), 'practice', v => showView(v));
   addEventListener('hashchange', () => showView(location.hash.slice(1)));
@@ -165,6 +196,7 @@ initGlossary();
 initShortcuts();
 initMore();
 initDock();
+initDrawer();
 showView(location.hash.slice(1));
 
 if (!SONG_ID) { $('songTitle').textContent = '缺少曲子 id，请从曲库进入'; songGone('缺少曲子 id'); }

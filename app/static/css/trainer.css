@@ -38,7 +38,8 @@
 
 /* ---- 控制条（吸顶，一行）+ 分段 chips ---- */
 .transport { container-type: inline-size; position: sticky; top: calc(var(--top-h) + var(--sp-2)); z-index: 20; padding: var(--sp-2) var(--sp-3) 6px; display: flex; flex-direction: column; gap: 6px; box-shadow: var(--shadow-sm); }
-.t-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; } /* 放不下时换行，不会把右边的按钮挤出去 */
+/* 一行不换行：窄了先缩速度滑块和状态文字，再按控制条自己的宽度（容器查询，见文件末尾）把按钮收成图标、去掉次要的部分 */
+.t-row { display: flex; align-items: center; flex-wrap: nowrap; gap: var(--sp-2); min-width: 0; }
 /* 吸顶时控制条和顶栏之间有 8px 缝，滚动的谱面会从缝里露出来：用一条页面底色盖住（没吸顶时盖的是本来就空着的间距） */
 .transport::before { content: ''; position: absolute; left: -12px; right: -12px; bottom: 100%; height: calc(var(--sp-2) + 1px); background: var(--bg); }
 .t-end { margin-left: auto; } /* 播放设置靠右；换行时一起换 */
@@ -49,16 +50,17 @@
 .play .ic { width: 17px; height: 17px; }
 .play.on { background: var(--fg); color: var(--bg); }
 /* 播放时宽度固定（数字跳动时后面的控件不跟着晃）；停着时只占文字的宽度 */
-.status { width: 140px; flex: 0 1 auto; line-height: 1.3; min-width: 0; }
+.status { width: 140px; flex: 0 1 auto; line-height: 1.3; min-width: 52px; }
 .transport:not(.playing) .status { width: auto; max-width: 140px; }
 .status .l1 { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status .l2 { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .grp { display: flex; align-items: center; gap: var(--sp-1); flex: none; }
 .bpm { color: var(--muted); font-size: var(--fs-1); min-width: 62px; white-space: nowrap; }
 .bpm b { color: var(--fg); font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; vertical-align: -1px; } /* 速度是控制条上最常看的数：字号大一档 */
-#bpm { width: 120px; display: block; }
+.grp.speed { flex: 0 1 auto; min-width: 0; }
+#bpm { width: 100%; display: block; }
 /* 原速：滑块上一道小刻度（拇指中心的位置：两头各让出半个拇指 8px） */
-.bpm-track { position: relative; display: block; }
+.bpm-track { position: relative; display: block; flex: 0 1 120px; min-width: 56px; }
 .bpm-orig { position: absolute; top: 2px; width: 2px; height: 14px; margin-left: -1px; border-radius: 1px; background: var(--muted); pointer-events: none; left: calc(8px + (100% - 16px) * var(--o, 0)); }
 .bpm-orig[hidden] { display: none; }
 #bpmUnit { font-variant-numeric: tabular-nums; }
@@ -327,28 +329,27 @@ body.song-gone main > .view, body.song-gone #nav, body.song-gone .fb-dock { disp
 .gone-btns { display: flex; gap: var(--sp-2); justify-content: center; }
 .glossary .sym { flex: none; min-width: 44px; text-align: center; font-size: var(--fs-1); }
 
-/* ---- 窄屏：小节卡片落到谱面下面，控制条换行 ---- */
-/* 控制条一行放不下时，按钮依次只留图标（都有 title）；宽度按控制条自己算，不按窗口 */
-@container (max-width: 995px) { .t-end .btn { font-size: 0; gap: 0; padding: 0 6px; } }
-@container (max-width: 925px) { .t-acts .btn { font-size: 0; gap: 0; padding: 0 6px; } }
-@container (max-width: 790px) { #bpm { width: 84px; } .status { width: 132px; } }
-@container (max-width: 700px) { .t-acts .btn, .t-end .btn { font-size: var(--fs-1); gap: 6px; padding: 0 9px; } } /* 反正要换成两行了：第二行放得下文字 */
+/* ---- 窄的时候 ---- */
+/* 控制条：按控制条自己的宽度（不按窗口）依次把按钮收成图标（都有 title）、缩短滑块、去掉 ± 和分隔线；窗口 1000–1440 都是一行，不会有孤零零换到第二行的按钮 */
+@container (max-width: 940px) { .t-acts .btn { font-size: 0; gap: 0; padding: 0 6px; } }
+@container (max-width: 700px) { .status { max-width: 96px; } .transport:not(.playing) .status { max-width: 96px; } }
+@container (max-width: 640px) { #bpmDown, #bpmUp, .t-sep { display: none; } }
+@container (max-width: 540px) { .t-row { flex-wrap: wrap; } .t-end { margin-left: auto; } }
+.drawer-btn, .drawer-close { display: none; }
 @media (min-width: 1000px) and (max-width: 1199px) { :root { --side-w: 300px; } }
+/* 窗口窄于 1000px：小节卡片改成右边滑出的抽屉（控制条上的按钮开关，Esc 收起），谱面占满宽度 */
 @media (max-width: 999px) {
   .practice-grid { grid-template-columns: minmax(0, 1fr); }
-  .side { position: static; max-height: none; overflow: visible; }
-  .bar-card .card-h { position: static; }
-  .bar-card .body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
-  .bar-card .body > .tags, .bar-card .body > .tip, .bar-card .body > .warns, .bar-card .body > .refine-row, .bar-card .body > .bar-acts, .bar-card .body > .practice-line, .bar-card .body > .fix { grid-column: 1 / -1; }
-  .bar-card .body > .paper { grid-column: 1; }
-  .bar-card .body > .coach { grid-column: 2; border-top: 0; padding-top: 0; }
-  .bar-card .body > .paper[hidden] + .coach { grid-column: 1 / -1; }
+  .drawer-btn, .drawer-close { display: inline-grid; }
+  .side { position: fixed; z-index: 35; top: calc(var(--top-h) + var(--sp-2)); right: var(--sp-2); bottom: calc(var(--dock-h) + var(--sp-2)); width: min(380px, calc(100vw - 32px)); max-height: none;
+    background: var(--card); box-shadow: var(--shadow); transform: translateX(calc(100% + 24px)); visibility: hidden; transition: transform .2s var(--ease), visibility 0s .2s; }
+  body.drawer-open .side { transform: none; visibility: visible; transition: transform .2s var(--ease); }
+  .drawer-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
 }
+@media (prefers-reduced-motion: reduce) { .side { transition: none !important; } }
 @media (max-width: 760px) {
   .transport { position: static; }
   .crumb .t { max-width: 40vw; }
-  .bar-card .body { display: flex; }
-  .t-sep { display: none; }
   .fb-legend { display: none; }
 }
 

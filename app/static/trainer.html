@@ -51,7 +51,7 @@
             <button class="play" id="playBtn" aria-label="播放（空格）" title="播放 / 停止（空格）"></button>
             <div class="status" aria-live="polite"><div class="l1" id="statusL1">加载中…</div><div class="l2" id="statusL2"></div></div>
             <div class="t-sep"></div>
-            <div class="grp" role="group" aria-label="速度">
+            <div class="grp speed" role="group" aria-label="速度">
               <button class="icon-btn sm" id="bpmDown" data-ic="minus" title="慢 4 BPM（↓）" aria-label="慢 4 BPM"></button>
               <span class="bpm-track"><input type="range" id="bpm" min="20" max="140" value="50" aria-label="速度（BPM）"><i class="bpm-orig" id="bpmOrig" aria-hidden="true" hidden></i></span>
               <button class="icon-btn sm" id="bpmUp" data-ic="plus" title="快 4 BPM（↑）" aria-label="快 4 BPM"></button>
@@ -69,6 +69,7 @@
               <button class="btn sm ghost" id="rhythmBtn" data-ic="tap" aria-pressed="false" aria-controls="rhythmCard" title="只练节奏：不拿琴，跟着示范在键盘上敲出这一段的节奏，每个音判早晚、每遍打分">敲节奏</button>
             </div>
             <div class="grp t-end">
+              <button class="icon-btn sm drawer-btn" id="drawerBtn" data-ic="list" title="小节详情" aria-label="小节详情" aria-expanded="false" aria-controls="side"></button>
               <button class="icon-btn sm" id="moreBtn" data-ic="settings" title="节拍器、预备拍、示范音、音色、谱面跟随" aria-label="播放设置" aria-haspopup="true" aria-expanded="false" aria-controls="morePop"></button>
             </div>
           </div>
@@ -132,6 +133,8 @@
           <div class="card-h">
             <span class="card-title">第 <span id="barNo">1</span> 小节</span>
             <span class="badge warn" id="barReview" hidden>待核对</span>
+            <div class="grow"></div>
+            <button class="icon-btn sm drawer-close" id="drawerClose" data-ic="x" title="收起（Esc）" aria-label="收起小节详情"></button>
           </div>
           <div class="body">
             <div class="tags" id="barTags"></div>

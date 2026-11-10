@@ -1229,3 +1229,50 @@ def test_score_gets_most_of_a_1440x900_screen(server, browser):
     )
     assert rows == 1
     assert not b.errors, b.errors
+
+
+def test_control_bar_stays_on_one_row_from_1000_to_1440(server, browser):
+    """窗口 1000–1440：控制条一行放得下（按钮依次收成图标），不会有孤零零换到第二行的按钮，也不超出卡片。"""
+    b = _open_at(server, browser, 1440, 900)
+    check = """(() => { const row = document.querySelector('#transport .t-row'), rr = row.getBoundingClientRect();
+      const cs = [...row.children].filter(x => x.offsetParent).map(x => x.getBoundingClientRect());
+      const mid = cs.map(c => c.top + c.height / 2);
+      return [Math.max(...mid) - Math.min(...mid) <= 12, cs.every(c => c.right <= rr.right + 1)]; })()"""
+    for playing in (False, True):
+        b.js(
+            f"document.getElementById('transport').classList.toggle('playing', {str(playing).lower()}); true"
+        )
+        for w in (1000, 1040, 1100, 1150, 1199, 1200, 1280, 1360, 1440):
+            _viewport(b, w, 900)
+            time.sleep(0.15)
+            assert b.js(check) == [True, True], (w, playing)
+    assert not b.errors, b.errors
+
+
+def test_narrow_window_puts_the_bar_card_in_a_drawer(server, browser):
+    """窗口窄于 1000px：小节卡片是右边滑出的抽屉——按钮打开、焦点移进去，Esc 收起、焦点回到按钮；
+    抽屉开着时播放快捷键照常；打开敲节奏时抽屉跟着打开。"""
+    b = _open_at(server, browser, 990, 800)
+    hidden = "getComputedStyle(document.getElementById('side')).visibility === 'hidden'"
+    b.wait_for(hidden)
+    assert b.js("document.getElementById('side').inert")
+    b.js("document.getElementById('drawerBtn').click(); true")
+    b.wait_for(f"!({hidden})")
+    assert b.js("document.getElementById('side').contains(document.activeElement)")
+    left = b.js("document.getElementById('side').getBoundingClientRect().left")
+    assert 990 - 400 < left < 990
+    bpm = b.js("tt.state.bpm")
+    b.js("document.activeElement.blur(); true")
+    b.key("ArrowUp", vk=38)  # 不是浮层：快捷键照常
+    assert b.js("tt.state.bpm") == bpm + 4
+    b.js("document.getElementById('drawerClose').focus(); true")
+    b.key("Escape", vk=27)
+    b.wait_for(hidden)
+    assert b.js("document.activeElement.id") == "drawerBtn"
+    b.js("document.getElementById('rhythmBtn').click(); true")
+    b.wait_for(f"!({hidden})")
+    assert b.js("tt.get('ui.drawer')")
+    b.js("tt.rhythm.toggle(false); true")
+    _viewport(b, 1200, 800)  # 变宽：不再是抽屉
+    b.wait_for(f"!({hidden}) && !document.getElementById('side').inert")
+    assert not b.errors, b.errors
