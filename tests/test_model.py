@@ -121,3 +121,17 @@ def test_harm_is_only_on_tapped_harmonics():
     assert raw["notes"][0]["grace"] == -1  # 别的默认值照常补
     with pytest.raises(pydantic.ValidationError):
         model.Note.model_validate({**note, "tech": ["th"], "harm": 37})
+
+
+def test_file_names_follow_one_rule():
+    """页面只能是 pN.png、原文件只能是 source.<GP / MusicXML 扩展名>：存储、接口、曲子包都按这一处检查。"""
+    assert model.valid_page_file("p1.png") and model.valid_page_file("p12.png")
+    for bad in ("x.html", "p1.png\n", "../p1.png", "p1.PNG", "p.png", "", None, 3):
+        assert not model.valid_page_file(bad)
+    assert model.valid_source_file("source.gp5") and model.valid_source_file("source.musicxml")
+    for bad in ("source.html", "x.gp5", "source.gp5\n", "../source.gp5"):
+        assert not model.valid_source_file(bad)
+    assert model.page_number("p7.png") == 7 and model.page_number("x.png") is None
+    bad = {"schema_version": 2, "id": "a", "source_type": "image", "status": "ready"}
+    assert model.problems({**bad, "pages": [{"file": "x.html", "width": 1, "height": 1}]})
+    assert model.problems({**bad, "source": "evil.html"})

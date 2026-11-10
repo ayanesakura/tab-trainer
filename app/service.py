@@ -74,16 +74,17 @@ def practice_history(sid: str) -> dict:
 
 
 def source_file(sid: str) -> Path:
-    s = store.load(sid)
-    if not s.get("source"):
+    """GP / MusicXML 原文件（练习页取来交给 alphaTab）。文件名按 model.SOURCE_FILE 检查（store.source_path）。"""
+    p = store.source_path(sid, store.load(sid).get("source"))
+    if not p.is_file():
         raise NotFound("这首曲子没有原文件")
-    return store.song_dir(sid) / s["source"]
+    return p
 
 
 def page_file(sid: str, name: str) -> Path:
-    store.load(sid)
-    p = store.song_dir(sid) / "pages" / name
-    if "/" in name or "\\" in name or name.startswith(".") or not p.is_file():
+    """曲子的一页原图。只认 pN.png（store.page_path），所以接口总是按 image/png 返回。"""
+    p = store.page_path(sid, name)
+    if not p.is_file():
         raise NotFound("页面不存在")
     return p
 

@@ -42,7 +42,6 @@ log = logging.getLogger("tab_trainer.bundles")
 FORMAT = "tab-trainer-bundle"
 VERSION = 1
 MANIFEST = "tab-trainer.json"
-_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 
 
 # ---------------------------------------------------------------------------
@@ -50,15 +49,15 @@ _FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # ---------------------------------------------------------------------------
 def _files(song: dict) -> list[tuple[str, Path]]:
     """曲子目录里要放进包的文件：(包内相对路径, 本机路径)。只取 song.json 里登记过的，备份和临时文件不要。"""
-    d = store.song_dir(song["id"])
+    sid = song["id"]
     out = []
     for p in song.get("pages", []):
         name = p.get("file") if isinstance(p, dict) else None
-        if isinstance(name, str) and _FILE_RE.match(name) and (d / "pages" / name).is_file():
-            out.append((f"pages/{name}", d / "pages" / name))
+        if model.valid_page_file(name) and (path := store.page_path(sid, name)).is_file():
+            out.append((f"pages/{name}", path))
     src = song.get("source")
-    if isinstance(src, str) and _FILE_RE.match(src) and (d / src).is_file():
-        out.append((src, d / src))
+    if model.valid_source_file(src) and (path := store.source_path(sid, src)).is_file():
+        out.append((src, path))
     return out
 
 
@@ -181,8 +180,9 @@ def _read(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
 
 
 def _check_image(data: bytes, name: str) -> None:
+    """页面必须是真的 PNG（练习页按 image/png 取），其他格式（哪怕 Pillow 认得）一律不要。"""
     try:
-        img = Image.open(io.BytesIO(data))
+        img = Image.open(io.BytesIO(data), formats=["PNG"])
         if img.width * img.height > settings.max_pixels:
             raise Invalid(f"页面 {name} 分辨率太大")
         img.verify()
@@ -222,13 +222,12 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
     wanted: list[tuple[str, str]] = []  # (包内路径, 曲子目录里的相对路径)
     for p in pages:
         name = p.get("file") if isinstance(p, dict) else None
-        if not isinstance(name, str) or not _FILE_RE.match(name):
+        if not model.valid_page_file(name):  # 只认 pN.png（model.PAGE_FILE）
             raise Invalid("页面文件名无效")
         wanted.append((base + "pages/" + name, "pages/" + name))
     src = song.get("source")
     if src is not None:
-        ext = songs.score_ext(src) if isinstance(src, str) else None
-        if not ext or not _FILE_RE.match(src):
+        if not model.valid_source_file(src):  # source.<GP / MusicXML 扩展名>（model.SOURCE_FILE）
             raise Invalid("原文件名无效")
         wanted.append((base + src, src))
 

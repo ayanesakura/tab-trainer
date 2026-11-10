@@ -165,6 +165,32 @@ def llm_schema(cls: type[BaseModel]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 曲子目录里的文件名（唯一一处规则：存储、接口、曲子包都按它检查，见 store.page_path / source_path）
+# ---------------------------------------------------------------------------
+# 页面图片一律是 PNG，名字 pN.png（songs.save_pages 存的）；GP / MusicXML 原文件是 source + 认的扩展名
+PAGE_FILE = r"^p[0-9]{1,6}\.png$"
+SCORE_EXTS = tuple(e for exts in SCORE_FILES.values() for e in exts)
+SOURCE_FILE = r"^source(" + "|".join(re.escape(e) for e in SCORE_EXTS) + r")$"
+
+
+def page_file_name(k: int) -> str:
+    return f"p{k}.png"
+
+
+def page_number(name: str) -> int | None:
+    """页面文件名里的序号（p12.png → 12），不是页面文件名是 None。"""
+    return int(name[1:-4]) if valid_page_file(name) else None
+
+
+def valid_page_file(name: object) -> bool:
+    return isinstance(name, str) and re.fullmatch(PAGE_FILE, name) is not None
+
+
+def valid_source_file(name: object) -> bool:
+    return isinstance(name, str) and re.fullmatch(SOURCE_FILE, name) is not None
+
+
+# ---------------------------------------------------------------------------
 # 时间格式
 # ---------------------------------------------------------------------------
 # 练习记录的时间：model.now() 写的本地时间 "YYYY-MM-DD HH:MM"（也认带秒的），空串 = 没记时间。
@@ -284,7 +310,7 @@ class Bar(_M):
 
 
 class Page(_M):
-    file: str
+    file: str = Field(pattern=PAGE_FILE)  # pN.png（见 PAGE_FILE）
     width: int
     height: int
 
@@ -391,7 +417,7 @@ class Song(_M):
     created: str = ""
     imported: str | None = None
     source_type: SourceType
-    source: str | None = None  # GP / MusicXML 原文件名
+    source: str | None = Field(None, pattern=SOURCE_FILE)  # GP / MusicXML 原文件名 source.<扩展名>
     status: Status
     activity: Activity | None = None
     notice: Notice | None = None

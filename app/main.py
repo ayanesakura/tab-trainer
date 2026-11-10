@@ -71,12 +71,20 @@ def trainer():
 
 @app.get("/files/{sid}/source")
 def source_file(sid: str):
-    return FileResponse(service.source_file(sid))
+    """原文件只当下载的字节给（练习页用 fetch 取来交给 alphaTab）：不让浏览器按内容猜类型、当成页面打开。"""
+    path = service.source_file(sid)
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=path.name,
+        content_disposition_type="attachment",
+    )
 
 
 @app.get("/files/{sid}/{name}")
 def page_file(sid: str, name: str):
-    return FileResponse(service.page_file(sid, name))
+    """页面图片：只有 pN.png，类型固定是 image/png（不按扩展名猜）。"""
+    return FileResponse(service.page_file(sid, name), media_type="image/png")
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +192,8 @@ async def cache_headers(request: Request, call_next):
     接口数据一律不缓存（no-store）：前进 / 后退时 Chrome 会直接用 HTTP 缓存里的旧回应、不问服务器，
     从练习页后退回曲库（页面没能从往返缓存恢复、重新加载时）看到的就是旧的“待核对”数量、练习记录。"""
     response = await call_next(request)
+    # 所有响应都不许浏览器按内容猜类型（上传的文件不会被当成 HTML / 脚本执行）
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
     path = request.url.path
     if path in ("/", "/trainer") or path.startswith("/static/"):
         response.headers.setdefault("Cache-Control", "no-cache")

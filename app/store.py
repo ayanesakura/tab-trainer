@@ -224,9 +224,25 @@ def install(tmp: Path, song_id: str) -> bool:
     return True
 
 
+def page_path(song_id: str, name: object) -> Path:
+    """曲子某一页图片的路径。名字不是 pN.png（model.PAGE_FILE）抛 NotFound：路径只在这里拼，
+    接口给的、song.json 里的、曲子包里的文件名都不会拼出别的路径或别的类型的文件。"""
+    if not model.valid_page_file(name):
+        raise NotFound("页面不存在")
+    return song_dir(song_id) / "pages" / str(name)
+
+
+def source_path(song_id: str, name: object) -> Path:
+    """GP / MusicXML 原文件的路径（名字是 source.<扩展名>，model.SOURCE_FILE），名字不对抛 NotFound。"""
+    if not model.valid_source_file(name):
+        raise NotFound("这首曲子没有原文件")
+    return song_dir(song_id) / str(name)
+
+
 def page_image(song_id: str, page: dict) -> Image.Image:
-    """曲子某一页的原图（RGB）。"""
-    return Image.open(song_dir(song_id) / "pages" / page["file"]).convert("RGB")
+    """曲子某一页的原图（RGB）。页面一律存成 PNG，别的格式不解码。"""
+    with Image.open(page_path(song_id, page.get("file")), formats=["PNG"]) as img:
+        return img.convert("RGB")
 
 
 # ---------------------------------------------------------------------------

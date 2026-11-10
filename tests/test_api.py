@@ -35,7 +35,23 @@ def test_upload_rejects_bad_files(client):
     Image.new("RGB", (1, 1), "white").save(tiny, "PNG")
     r = client.post("/api/songs", files={"files": ("p.png", tiny.getvalue())})
     assert r.status_code == 400 and "太小" in r.json()["detail"]
+    # 只按常见图片格式解码：EPS（Pillow 会调用 Ghostscript）之类不认
+    eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 100\nshowpage\n"
+    r = client.post("/api/songs", files={"files": ("p.eps", eps)})
+    assert r.status_code == 400 and "文件无法读取" in r.json()["detail"]
     assert client.started == []
+
+
+def test_upload_accepts_common_image_formats(client):
+    big = Image.open(io.BytesIO(score_png())).convert("RGB")
+    for fmt in ("JPEG", "WEBP", "GIF", "BMP", "TIFF"):
+        buf = io.BytesIO()
+        big.save(buf, fmt)
+        r = client.post("/api/songs", files={"files": (f"p.{fmt.lower()}", buf.getvalue())})
+        assert r.status_code == 200, (fmt, r.text)
+        sid = r.json()["id"]
+        assert [p["file"] for p in store.load(sid)["pages"]] == ["p1.png"]
+        assert (store.song_dir(sid) / "pages" / "p1.png").read_bytes()[:4] == b"\x89PNG"
 
 
 def _image_song(client):
@@ -469,12 +485,21 @@ def test_job_and_file_routes_over_http(data_dir, sync_jobs):
     page = s["pages"][0]["file"]
     r = c.get(f"/files/{sid}/{page}")
     assert r.status_code == 200 and r.content[:4] == b"\x89PNG"
+    assert r.headers["content-type"] == "image/png" and r.headers["x-content-type-options"] == "nosniff"
     assert c.get(f"/files/{sid}/..%2Fsong.json").status_code == 404
     assert c.get(f"/files/{sid}/source").status_code == 404  # 图片曲子没有原文件
+    # 不是 pN.png 的名字一律 404（哪怕文件真的在：不能按扩展名当成别的类型给出去）
+    (store.song_dir(sid) / "pages" / "x.html").write_text("<script>alert(1)</script>")
+    assert c.get(f"/files/{sid}/x.html").status_code == 404
+    assert c.get(f"/files/{sid}/song.json").status_code == 404
 
     gp = c.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
     r = c.get(f"/files/{gp}/source")
     assert r.status_code == 200 and r.content.startswith(b"\x18FICHIER")
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment")
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert c.get("/api/songs").headers["x-content-type-options"] == "nosniff"
     assert c.post(f"/api/songs/{gp}/parse").status_code == 400  # GP 曲子不用识别
     assert c.get(f"/api/songs/{gp}").json()["is_score"]
 

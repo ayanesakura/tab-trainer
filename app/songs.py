@@ -17,7 +17,7 @@ from PIL import Image, ImageOps
 from app import state, store
 from app.config import settings
 from app.errors import STALE_REV, AppError, BarNotFound, Busy, Conflict, Invalid
-from app.model import is_score, new_song, notes_key, touch_bar
+from app.model import SCORE_EXTS, is_score, new_song, notes_key, page_file_name, page_number, touch_bar
 from app.music import (
     GBK_EXT,
     SCORE_FILES,
@@ -48,8 +48,10 @@ from app.text import fix_meta_text
 
 log = logging.getLogger("tab_trainer.songs")
 
-SCORE_EXT = tuple(e for exts in SCORE_FILES.values() for e in exts)
+SCORE_EXT = SCORE_EXTS
 MIN_SIDE = 32  # 图片最短边（像素）：再小就不可能看清谱子
+# 上传的图片只按这些格式解码（Pillow 默认什么都试，包括会调用外部程序的 EPS）；PDF 走 pymupdf
+IMAGE_FORMATS = ("PNG", "JPEG", "WEBP", "GIF", "BMP", "TIFF")
 
 
 def find_bar(song: dict, bar_id: str) -> dict:
@@ -165,12 +167,12 @@ def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
                         raise Invalid(f"“{name}”的页面尺寸太大")
                     with _decoding(name):
                         pix = page.get_pixmap(dpi=dpi)
-                        img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+                        img = Image.open(io.BytesIO(pix.tobytes("png")), formats=["PNG"]).convert("RGB")
                     yield img
         else:
             one_more()
             with _decoding(name):
-                img = Image.open(io.BytesIO(data))  # 只读文件头，还没解码像素
+                img = Image.open(io.BytesIO(data), formats=IMAGE_FORMATS)  # 只读文件头，还没解码像素
                 if img.width * img.height > settings.max_pixels:
                     raise Invalid(f"“{name}”分辨率太大（{img.width}×{img.height}），请缩小后再上传")
                 if min(img.width, img.height) < MIN_SIDE:
@@ -185,19 +187,19 @@ def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
 
 
 def save_pages(uploads: list[tuple[str, bytes]], pages_dir, existing: list[dict] | None = None) -> list[dict]:
-    """把上传的图片 / PDF 存成 pages/pN.png。补页时 existing 是已有的页：编号接着往后排，页数上限算上它们。"""
+    """把上传的图片 / PDF 存成 pages/pN.png（model.page_file_name）。补页时 existing 是已有的页：编号接着往后排，
+    页数上限算上它们。"""
     pages_dir.mkdir(parents=True, exist_ok=True)
     taken = {pg["file"] for pg in existing or []}
-    nums = [int(f[1:-4]) for f in taken if f.startswith("p") and f.endswith(".png") and f[1:-4].isdigit()]
-    k = max(nums, default=0)
+    k = max((n for n in map(page_number, taken) if n is not None), default=0)
     pages = []
     try:
         for img in _page_images(uploads, len(existing or [])):
             k += 1
-            while f"p{k}.png" in taken or (pages_dir / f"p{k}.png").exists():
+            while page_file_name(k) in taken or (pages_dir / page_file_name(k)).exists():
                 k += 1
-            fn = f"p{k}.png"
-            img.save(pages_dir / fn, optimize=True)
+            fn = page_file_name(k)
+            img.save(pages_dir / fn, format="PNG", optimize=True)
             pages.append({"file": fn, "width": img.width, "height": img.height})
     except Exception:
         if existing is not None:  # 补页失败：已经存下的新页删掉（新建曲子时整个目录会被删掉）

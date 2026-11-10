@@ -127,6 +127,15 @@ def _bundle(song: dict, files: dict[str, bytes], manifest: dict | None = None) -
     return buf
 
 
+def _gif_with_script() -> bytes:
+    """一张能解码的 GIF，后面跟着一段 HTML（按 text/html 打开时会执行）。"""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 40), "white").save(buf, "GIF")
+    return buf.getvalue() + b"<script>alert(1)</script>"
+
+
 @pytest.mark.parametrize(
     ("song", "files", "reason"),
     [
@@ -140,6 +149,19 @@ def _bundle(song: dict, files: dict[str, bytes], manifest: dict | None = None) -
         ({"id": "evil-0004", "source": "../source.gp5"}, {}, "原文件名无效"),
         ({"id": "evil-0005", "source": "source.gp5"}, {"songs/evil-0005/source.gp5": b"junk"}, "不是有效"),
         ({"id": "evil-0006", "schema_version": 99}, {}, "更新版本"),
+        # 页面只认 pN.png：别的名字（x.html 会被当成网页）和别的格式（GIF 里藏 <script>）都不要
+        (
+            {"id": "evil-0007", "pages": [{"file": "x.html", "width": 1, "height": 1}]},
+            {"songs/evil-0007/pages/x.html": _gif_with_script()},
+            "页面文件名无效",
+        ),
+        (
+            {"id": "evil-0008", "pages": [{"file": "p1.png", "width": 1, "height": 1}]},
+            {"songs/evil-0008/pages/p1.png": _gif_with_script()},
+            "不是有效的图片",
+        ),
+        ({"id": "evil-0009", "pages": [{"file": "p1.png\n"}]}, {}, "页面文件名无效"),
+        ({"id": "evil-0010", "source": "x.gp5"}, {"songs/evil-0010/x.gp5": GP5}, "原文件名无效"),
     ],
 )
 def test_import_rejects_bad_songs(data_dir, song, files, reason):
