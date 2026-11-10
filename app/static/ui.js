@@ -66,7 +66,8 @@ addEventListener('storage', e => {
   applyTheme(); applyPalette(); themeChanged();
 });
 
-// 顶栏的外观按钮：跟随系统 → 浅色 → 深色 → 跟随系统，图标显示当前设置（不是当前颜色），点几下都能回到“跟随系统”
+// 外观只在设置页（设置 › 外观 › 明暗）改，顶栏不再有切换按钮。下面的 themeButton / initShell 只是兼容：
+// 页面上还有 #themeBtn（比如没更新的练习页）时把它接上（跟随系统 → 浅色 → 深色 → 跟随系统），没有就什么都不做。
 const THEME_NEXT = { system: 'light', light: 'dark', dark: 'system' };
 const THEME_NAME = { system: '跟随系统', light: '浅色', dark: '深色' };
 export function themeButton(btn) {
@@ -81,7 +82,7 @@ export function themeButton(btn) {
   paint();
 }
 
-// 两个页面共同的顶栏：外观按钮
+// 两个页面共同的顶栏（现在没有需要初始化的东西；有旧的外观按钮就接上）
 export function initShell() {
   const btn = $('themeBtn');
   if (btn) themeButton(btn);

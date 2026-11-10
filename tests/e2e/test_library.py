@@ -104,13 +104,15 @@ def test_search_tags_menu_and_theme(server, browser):
         b.js(f"document.querySelector('[data-more=\"{img}\"]').click(); true")
         items = b.js("[...document.querySelectorAll('.menu button')].map(x => x.textContent)")
         assert "管理原谱页面" in items and "精修整首" in items
-        # 外观按钮：跟随系统 → 浅色 → 深色 → 跟随系统；<html data-theme> 总是实际生效的 light / dark
+        # 外观只在设置 › 外观 › 明暗里改（顶栏没有切换按钮）；<html data-theme> 总是实际生效的 light / dark
         b.js("localStorage.setItem('tt-theme', 'system'); true")
-        b.open(server["base"] + "/")
+        b.open(server["base"] + "/#settings")
+        assert b.js("document.getElementById('themeBtn')") is None
+        assert b.js("document.querySelector('.topbar .actions')") is None
         assert b.js("document.documentElement.dataset.theme") in ("light", "dark")
         seen = []
-        for _ in range(3):
-            b.js("document.getElementById('themeBtn').click(); true")
+        for v in ("light", "dark", "system"):
+            b.js(f"document.querySelector('#themeSeg [data-v={v}]').click(); true")
             seen.append(
                 (b.js("localStorage.getItem('tt-theme')"), b.js("document.documentElement.dataset.theme"))
             )
