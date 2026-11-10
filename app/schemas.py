@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.model import DAY, MAX_SESSION_MINUTES, STUDY_SETTINGS, Event
+from app.model import DAY, MAX_BAR_ID, MAX_SESSION_MINUTES, MAX_STUCK_BARS, STUDY_SETTINGS, Event
 from app.music import STRINGS, STUDY_ISSUES
 
 MAX_TAGS = 12
@@ -155,6 +155,10 @@ class StudyRateIn(_Strict):
     issues: list[str] = Field(default_factory=list, max_length=len(STUDY_ISSUES))
     note: str = Field("", max_length=500)
     bpm: int | None = Field(None, ge=0, le=1000)
+    # 卡在哪几个小节（小节 id）：重复的去掉；曲子里没有的 id 记的时候忽略（study.rate）
+    stuck_bars: list[Annotated[str, Field(min_length=1, max_length=MAX_BAR_ID)]] = Field(
+        default_factory=list, max_length=MAX_STUCK_BARS
+    )
 
     @field_validator("issues")
     @classmethod
@@ -246,6 +250,7 @@ FIELD_NAMES = {
     "rating": "自评",
     "issues": "问题",
     "note": "备注",
+    "stuck_bars": "卡住的小节",
     "action": "操作",
     "minutes": "分钟数",
     "day": "日期",

@@ -150,8 +150,9 @@ def replay(rated: list[tuple[str, int]]) -> dict:
     return st
 
 
-def view(study: dict, log_: list[dict], today: str) -> dict:
-    """接口里的 study（见 model.StudyView）：study 是 song.json 里的字段，log_ 是自评记录。"""
+def view(study: dict, log_: list[dict], today: str, bars: list[dict] | None = None) -> dict:
+    """接口里的 study（见 viewmodels.StudyView）：study 是 song.json 里的字段，log_ 是自评记录，bars 是曲子现在的小节
+    （算最近一次自评卡住的小节 stuck_bars：[{id, n}]，已经不在曲子里的 id 不算）。"""
     days = last_per_day(log_)
     rated = [(d, r["rating"]) for d, r in days.items()]
     st = replay(rated)
@@ -175,7 +176,16 @@ def view(study: dict, log_: list[dict], today: str) -> dict:
         "stability": round(st["s"], 3) if st["s"] is not None else None,
         "difficulty": round(st["d"], 3) if st["d"] is not None else None,
         "preview": preview,
+        "stuck_bars": stuck_view(last, bars),
     }
+
+
+def stuck_view(rec: dict | None, bars: list[dict] | None) -> list[dict]:
+    """一次自评卡住的小节 → [{id, n}]（按小节顺序；曲子里已经没有的 id 不要）。"""
+    want = set((rec or {}).get("stuck_bars") or [])
+    if not want:
+        return []
+    return [{"id": b["id"], "n": i + 1} for i, b in enumerate(bars or []) if b.get("id") in want]
 
 
 def _due_in(due: str | None, today: str) -> int | None:
@@ -551,7 +561,7 @@ def song_study(song: dict, now: dt.datetime | None = None) -> dict | None:
     st = song.get("study")
     if not isinstance(st, dict):
         return None
-    return view(st, ratings(song["id"]), practice_day(current(now)))
+    return view(st, ratings(song["id"]), practice_day(current(now)), song.get("bars"))
 
 
 def _minutes(act: dict, day: str, goal: int) -> dict:
@@ -579,7 +589,7 @@ def today(now: dt.datetime | None = None) -> dict:
                 "id": sid,
                 "title": s.get("title") or "未命名",
                 "artist": meta.get("artist", ""),
-                "study": view(s["study"], log_, day),
+                "study": view(s["study"], log_, day, s.get("bars")),
                 "today_seconds": round(seconds_of(clip(merge(lib.app.get(sid, [])), lo, hi)), 1),
                 "playable": playable(s),
             }
@@ -751,13 +761,21 @@ def reorder(ids: list[str]) -> None:
 
 
 def rate(
-    sid: str, rating: int, issues: list[str], note: str = "", bpm: int = 0, now: dt.datetime | None = None
+    sid: str,
+    rating: int,
+    issues: list[str],
+    note: str = "",
+    bpm: int = 0,
+    now: dt.datetime | None = None,
+    stuck_bars: list[str] | None = None,
 ) -> dict:
-    """POST /api/songs/{sid}/study/rate：记下这一遍的自评（同一天再评替换今天的）。返回 {study}。"""
+    """POST /api/songs/{sid}/study/rate：记下这一遍的自评（同一天再评替换今天的）。stuck_bars：卡在哪几个小节
+    （小节 id；曲子里没有的忽略）。返回 {study}。"""
     t = current(now)
     s = store.read(sid)
     if not isinstance(s.get("study"), dict):
         raise Invalid(NOT_IN_PLAN)
+    known = {b.get("id") for b in s.get("bars") or []}
     rec = clean_rating(
         {
             "at": fmt(t),
@@ -766,6 +784,7 @@ def rate(
             "issues": issues,
             "note": note.strip(),
             "bpm": bpm,
+            "stuck_bars": [x for x in stuck_bars or [] if x in known],
         }
     )
     if rec is None:  # schemas.StudyRateIn 检查过，不会到这里

@@ -79,6 +79,11 @@ class StudyLast(_M):
     bpm: int = 0
 
 
+class StuckBar(_M):
+    id: str
+    n: int  # 现在是第几小节（1 起）
+
+
 class StudyView(_M):
     """曲子在练琴计划里的状态（app/study.py 的 view）：按自评记录重放 FSRS 算出来的。"""
 
@@ -95,6 +100,9 @@ class StudyView(_M):
     stability: float | None = None
     difficulty: float | None = None
     preview: dict[str, StudyPreview]  # 今天评 1–4 分别会怎样
+    stuck_bars: list[StuckBar] = Field(
+        default_factory=list
+    )  # 最近一次自评时卡住的小节（还在曲子里的，按小节顺序）
 
 
 class BarView(Bar):

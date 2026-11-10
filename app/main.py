@@ -426,8 +426,8 @@ def put_study(sid: str, body: schemas.StudyIn):
 
 @app.post("/api/songs/{sid}/study/rate")
 def rate_song(sid: str, body: schemas.StudyRateIn):
-    """练完一遍的自评 1–4（同一个练琴日再评替换当天的）。不在计划里 400。返回 {study}。"""
-    return service.rate_song(sid, body.rating, body.issues, body.note, body.bpm)
+    """练完一遍的自评 1–4（同一个练琴日再评替换当天的），可以带 stuck_bars（卡住的小节 id）。不在计划里 400。返回 {study}。"""
+    return service.rate_song(sid, body.rating, body.issues, body.note, body.bpm, body.stuck_bars)
 
 
 @app.get("/api/study/today")

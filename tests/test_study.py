@@ -704,3 +704,39 @@ def test_archived_songs_leave_today_but_keep_their_data(client):
     assert {x["id"] for x in study.today(now=T0)["queue"]} == {a, b}
     assert client.post(f"/api/songs/{a}/archive", json={}).status_code == 400
     assert client.post("/api/songs/nope-0000/archive", json={"archived": True}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 卡住的小节
+# ---------------------------------------------------------------------------
+def test_rating_remembers_stuck_bars(client):
+    a = _planned("甲")[0]
+    bars = [b["id"] for b in store.load(a)["bars"]]
+    body = {"rating": 2, "stuck_bars": [bars[1], "gone-bar", bars[0], bars[1]]}
+    r = client.post(f"/api/songs/{a}/study/rate", json=body)
+    assert r.status_code == 200
+    want = [{"id": bars[0], "n": 1}, {"id": bars[1], "n": 2}]  # 按小节顺序，不认识的 id 不记
+    assert r.json()["study"]["stuck_bars"] == want
+    assert study.ratings(a)[-1]["stuck_bars"] == [bars[1], bars[0]]
+    assert client.get(f"/api/songs/{a}").json()["study"]["stuck_bars"] == want
+    assert next(x for x in client.get("/api/songs").json() if x["id"] == a)["study"]["stuck_bars"] == want
+    t = client.get("/api/study/today").json()
+    assert next(x for x in t["queue"] + t["done"] if x["id"] == a)["study"]["stuck_bars"] == want
+    # 小节后来不在了（重新转换换了 id）：读的时候不算
+    store.update(a, lambda s: s["bars"].pop(0))
+    assert client.get(f"/api/songs/{a}").json()["study"]["stuck_bars"] == [{"id": bars[1], "n": 1}]
+    # 最近一次自评没卡住：清空
+    client.post(f"/api/songs/{a}/study/rate", json={"rating": 3})
+    assert client.get(f"/api/songs/{a}").json()["study"]["stuck_bars"] == []
+    for bad in (
+        {"rating": 3, "stuck_bars": "x"},
+        {"rating": 3, "stuck_bars": [""]},
+        {"rating": 3, "stuck_bars": [1]},
+    ):
+        assert client.post(f"/api/songs/{a}/study/rate", json=bad).status_code == 400, bad
+
+
+def test_old_rating_records_without_stuck_bars_still_read(data_dir):
+    rec = {"at": "2026-11-01 20:00:00", "day": "2026-11-01", "rating": 3}
+    assert study.clean_rating(rec)["stuck_bars"] == []
+    assert study.clean_rating({**rec, "stuck_bars": ["a", 5, "a", "x" * 99]})["stuck_bars"] == ["a"]

@@ -197,8 +197,10 @@ def study_order(ids: list[str]) -> None:
     study.reorder(ids)
 
 
-def rate_song(sid: str, rating: int, issues: list[str], note: str, bpm: int | None) -> dict:
-    return study.rate(sid, rating, issues, note, bpm or 0)
+def rate_song(
+    sid: str, rating: int, issues: list[str], note: str, bpm: int | None, stuck_bars: list[str] | None = None
+) -> dict:
+    return study.rate(sid, rating, issues, note, bpm or 0, stuck_bars=stuck_bars)
 
 
 def study_today() -> dict:

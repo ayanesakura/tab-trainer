@@ -531,6 +531,10 @@ class PracticeSeed(_Rec):
 # ---------------------------------------------------------------------------
 # 练琴计划（见 app/study.py）：study.jsonl 的一行、data/study.json
 # ---------------------------------------------------------------------------
+MAX_STUCK_BARS = 500  # 一次自评最多记几个卡住的小节
+MAX_BAR_ID = 64
+
+
 class StudyRecord(_Rec):
     """练完一遍的自评（study.jsonl 一行）。day 是练琴日（凌晨 4 点换日）。"""
 
@@ -540,6 +544,19 @@ class StudyRecord(_Rec):
     issues: list[str] = Field(default_factory=list)  # vocab.study_issues 的代码
     note: str = Field("", max_length=500)
     bpm: int = Field(0, ge=0)
+    # 这一遍卡在哪几个小节（小节 id，用户在打分时点的）；之后重新识别掉的 id 读的时候不算（见 study.view）
+    stuck_bars: list[str] = Field(default_factory=list)
+
+    @field_validator("stuck_bars", mode="before")
+    @classmethod
+    def _bar_ids(cls, v: object) -> list[str]:
+        """只留像小节 id 的字符串（去重、保持顺序、最多 MAX_STUCK_BARS 个）：外来 / 手改的记录照样能读。"""
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            raise ValueError("stuck_bars 要是列表")  # noqa: TRY004 - pydantic 只把 ValueError 当成校验错误
+        ids = (x for x in v if isinstance(x, str) and 0 < len(x) <= MAX_BAR_ID)
+        return list(dict.fromkeys(ids))[:MAX_STUCK_BARS]
 
     @field_validator("issues", mode="before")
     @classmethod
@@ -758,6 +775,7 @@ _VIEW_MODELS = frozenset(
         "StudyPreview",
         "StudyLast",
         "StudyView",
+        "StuckBar",
         "BarView",
         "SongView",
         "LibraryPractice",
