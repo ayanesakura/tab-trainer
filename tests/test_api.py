@@ -540,7 +540,7 @@ def test_confirmation_is_about_the_notes_not_the_tip(data_dir, sync_jobs):
     """reviewer 的 capo_change_unconfirms_bars_with_tips：改变调夹清掉提示会让 rev +1，以前只有带提示的小节
     因此丢了确认。确认说的是“识别得对不对”，记下当时音符的指纹（reviewed_key），提示变了不影响；
     早先按 rev 记的确认（reviewed_rev）在 rev 没变时照样有效。"""
-    from app import store, views
+    from app import review, store
 
     c = TestClient(main.app, base_url="http://127.0.0.1:8765")
     sid = c.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
@@ -565,9 +565,9 @@ def test_confirmation_is_about_the_notes_not_the_tip(data_dir, sync_jobs):
         b["reviewed_rev"] = b["rev"]
 
     store.update(sid, legacy)
-    assert views.reviewed(store.load(sid)["bars"][0])
+    assert review.reviewed(store.load(sid)["bars"][0])
     store.update(sid, lambda s: s["bars"][0].update(rev=s["bars"][0]["rev"] + 1))
-    assert not views.reviewed(store.load(sid)["bars"][0])
+    assert not review.reviewed(store.load(sid)["bars"][0])
 
 
 def test_double_check_setting_round_trips(client):
@@ -614,9 +614,9 @@ def test_bar_confirmation_survives_rerecognition_but_not_new_warnings(data_dir, 
         c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True, "rev": b["rev"]})
 
     def reviewed():  # 重新识别后不确定说明可能没了（那就不用核对了），这里看确认本身还在不在
-        from app import views
+        from app import review
 
-        return [views.reviewed(b) for b in store.load(sid)["bars"][:4]]
+        return [review.reviewed(b) for b in store.load(sid)["bars"][:4]]
 
     assert reviewed() == [True] * 4
     row = bars[3]["system"]
@@ -785,3 +785,22 @@ def test_unknown_keys_are_rejected_instead_of_meaning_the_whole_song(client, syn
     r = client.post(f"/api/songs/{sid}/practice", json={"bar_ids": [bar], "bpm": 60, "extra": 1})
     assert r.status_code == 200
     assert client.post(f"/api/songs/{sid}/refine", json={"bars": [bar]}).status_code == 200
+
+
+def test_views_and_refine_do_not_import_each_other():
+    """“是否已核对”是领域规则（app/review.py），views 和 refine 都从那里取：两个模块之间没有循环 import。"""
+    import ast
+    from pathlib import Path
+
+    def imports(name):
+        tree = ast.parse((Path(store.ROOT) / "app" / f"{name}.py").read_text(encoding="utf-8"))
+        out = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "app":
+                out |= {a.name for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("app."):
+                out.add(node.module.split(".")[1])
+        return out
+
+    assert "views" not in imports("refine") and "review" in imports("refine")
+    assert "refine" in imports("views") and "review" in imports("views")

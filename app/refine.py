@@ -30,13 +30,14 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 
 from PIL import Image
 
-from app import config, jobs, recognize, staleness, state, store, views
+from app import config, jobs, recognize, staleness, state, store
 from app.config import settings
 from app.errors import Busy, Invalid
 from app.jobs import Cancelled
 from app.llm import LLM, friendly, request_id_of
 from app.model import is_score, notes_key, now
 from app.music import clean_events, same_events
+from app.review import reviewed
 from app.songs import check_rev, find_bar
 
 log = logging.getLogger("tab_trainer.refine")
@@ -88,7 +89,7 @@ def eligible(s: dict, bar: dict, explicit: bool = False, slots: dict | None = No
     """这个小节现在能不能精修（见模块说明）。explicit：用户点了这个小节 / 这一行，手改过、确认过的也核对。"""
     if not refinable(s, bar, slots) or state.row_parsing(s, bar.get("system")):
         return False
-    return explicit or not (bar.get("edited") or views.reviewed(bar))
+    return explicit or not (bar.get("edited") or reviewed(bar))
 
 
 def pick(s: dict, only: set[str] | None = None, recheck: bool = False) -> list[str]:
