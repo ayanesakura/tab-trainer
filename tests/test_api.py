@@ -9,6 +9,8 @@ from PIL import Image
 from app import config, main, recognize, store
 from tests.fakes import FakeClaude, derived_bars, score_png
 
+GP5 = b"\x18FICHIER GUITAR PRO v5.10"
+
 
 @pytest.fixture
 def client(data_dir, monkeypatch):
@@ -35,7 +37,23 @@ def test_upload_rejects_bad_files(client):
     Image.new("RGB", (1, 1), "white").save(tiny, "PNG")
     r = client.post("/api/songs", files={"files": ("p.png", tiny.getvalue())})
     assert r.status_code == 400 and "太小" in r.json()["detail"]
+    # 只按常见图片格式解码：EPS（Pillow 会调用 Ghostscript）之类不认
+    eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 100\nshowpage\n"
+    r = client.post("/api/songs", files={"files": ("p.eps", eps)})
+    assert r.status_code == 400 and "文件无法读取" in r.json()["detail"]
     assert client.started == []
+
+
+def test_upload_accepts_common_image_formats(client):
+    big = Image.open(io.BytesIO(score_png())).convert("RGB")
+    for fmt in ("JPEG", "WEBP", "GIF", "BMP", "TIFF"):
+        buf = io.BytesIO()
+        big.save(buf, fmt)
+        r = client.post("/api/songs", files={"files": (f"p.{fmt.lower()}", buf.getvalue())})
+        assert r.status_code == 200, (fmt, r.text)
+        sid = r.json()["id"]
+        assert [p["file"] for p in store.load(sid)["pages"]] == ["p1.png"]
+        assert (store.song_dir(sid) / "pages" / "p1.png").read_bytes()[:4] == b"\x89PNG"
 
 
 def _image_song(client):
@@ -274,6 +292,7 @@ def test_settings_endpoints(client, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     s = client.get("/api/settings").json()
     assert s == {
+        "has_key": False,
         "api_key_masked": "",
         "env_key": False,
         "base_url": "",
@@ -285,14 +304,18 @@ def test_settings_endpoints(client, monkeypatch):
     s = client.put(
         "/api/settings", json={"api_key": " sk-ant-1234567890abcdef ", "base_url": "http://gw"}
     ).json()
-    assert s["api_key_masked"] == "…cdef" and s["base_url"] == "http://gw"
+    assert s["api_key_masked"] == "…cdef" and s["base_url"] == "http://gw" and s["has_key"] is True
+    assert "sk-ant" not in str(s)  # 只说有没有，不给 key
     from app import store
 
     assert store.load_config()["api_key"] == "sk-ant-1234567890abcdef"  # 去掉首尾空白，原样存
     assert oct(store.CONFIG.stat().st_mode & 0o777) == "0o600"  # 只有自己能读
     assert client.post("/api/settings/test").json() == {"ok": True}  # 替身模型
     s = client.put("/api/settings", json={"clear_api_key": True, "base_url": None}).json()
-    assert s["api_key_masked"] == "" and s["base_url"] == ""
+    assert s["api_key_masked"] == "" and s["base_url"] == "" and s["has_key"] is False
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+    assert client.get("/api/settings").json()["has_key"] is True  # 环境变量的 key 也算
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
     from app import llm
 
     monkeypatch.setattr(config, "llm_factory", llm.Claude)
@@ -302,11 +325,13 @@ def test_settings_endpoints(client, monkeypatch):
 
 def test_song_view_contract(client):
     """GET /api/songs/{id} 和 /api/songs 给前端的字段（见 README 的接口约定）。"""
-    from app import model
+    from app import model, viewmodels
+
+    assert model.SongView is viewmodels.SongView  # 旧的写法照样能用
 
     sid = _image_song(client)
     v = client.get(f"/api/songs/{sid}").json()
-    model.SongView.model_validate(v)
+    viewmodels.SongView.model_validate(v)
     assert v["rev"] >= 1 and v["busy"] is False and v["recognizing"] is False and v["activity"] is None
     assert v["can_edit_bars"] is True and v["editable_meta"] == [
         "title",
@@ -321,9 +346,14 @@ def test_song_view_contract(client):
     assert b["n"] == 1 and b["locked"] is None and b["edited"] is False and b["needs_review"] is False
     assert not any(k.startswith("_") for x in v["bars"] for k in x) and not any(k.startswith("_") for k in v)
     assert "meta_user" not in v and v["meta"]["title"] == v["title"] and "tuning_midi" in v["meta"]
-    assert v["practice"] == {"bars": {}, "last": None, "total_seconds": 0}
+    assert v["practice"] == {
+        "bars": {},
+        "last": None,
+        "total_seconds": 0,
+        "time": {"total_seconds": 0, "undated_seconds": 0},
+    }
     row = next(x for x in client.get("/api/songs").json() if x["id"] == sid)
-    model.LibraryItem.model_validate(row)
+    viewmodels.LibraryItem.model_validate(row)
     assert row["busy"] is False and row["needs_review_bars"] == 0 and row["practice"] is None
 
     gp = client.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
@@ -391,9 +421,15 @@ def test_background_writes_do_not_invalidate_the_edit_rev(client, sync_jobs, mon
 def test_practice_history_and_last_positions(client):
     sid = _image_song(client)
     ids = [b["id"] for b in client.get(f"/api/songs/{sid}").json()["bars"]]
+    import datetime as dt
+
+    from app import clock
+
+    clock.set_now(dt.datetime(2026, 11, 9, 20, 0, 30))
     client.post(
         f"/api/songs/{sid}/practice", json={"bar_ids": ids[1:4], "loops": 2, "bpm": 60, "seconds": 30}
     )
+    clock.set_now(dt.datetime(2026, 11, 9, 20, 0, 40))
     client.post(
         f"/api/songs/{sid}/practice", json={"bar_ids": [ids[4]], "loops": 0, "bpm": 72.4, "seconds": 5}
     )
@@ -469,12 +505,21 @@ def test_job_and_file_routes_over_http(data_dir, sync_jobs):
     page = s["pages"][0]["file"]
     r = c.get(f"/files/{sid}/{page}")
     assert r.status_code == 200 and r.content[:4] == b"\x89PNG"
+    assert r.headers["content-type"] == "image/png" and r.headers["x-content-type-options"] == "nosniff"
     assert c.get(f"/files/{sid}/..%2Fsong.json").status_code == 404
     assert c.get(f"/files/{sid}/source").status_code == 404  # 图片曲子没有原文件
+    # 不是 pN.png 的名字一律 404（哪怕文件真的在：不能按扩展名当成别的类型给出去）
+    (store.song_dir(sid) / "pages" / "x.html").write_text("<script>alert(1)</script>")
+    assert c.get(f"/files/{sid}/x.html").status_code == 404
+    assert c.get(f"/files/{sid}/song.json").status_code == 404
 
     gp = c.post("/api/songs", files={"files": ("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")}).json()["id"]
     r = c.get(f"/files/{gp}/source")
     assert r.status_code == 200 and r.content.startswith(b"\x18FICHIER")
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment")
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert c.get("/api/songs").headers["x-content-type-options"] == "nosniff"
     assert c.post(f"/api/songs/{gp}/parse").status_code == 400  # GP 曲子不用识别
     assert c.get(f"/api/songs/{gp}").json()["is_score"]
 
@@ -515,7 +560,7 @@ def test_confirmation_is_about_the_notes_not_the_tip(data_dir, sync_jobs):
     """reviewer 的 capo_change_unconfirms_bars_with_tips：改变调夹清掉提示会让 rev +1，以前只有带提示的小节
     因此丢了确认。确认说的是“识别得对不对”，记下当时音符的指纹（reviewed_key），提示变了不影响；
     早先按 rev 记的确认（reviewed_rev）在 rev 没变时照样有效。"""
-    from app import store, views
+    from app import confirmed, store
 
     c = TestClient(main.app, base_url="http://127.0.0.1:8765")
     sid = c.post("/api/songs", files={"files": ("p1.png", score_png())}).json()["id"]
@@ -540,9 +585,9 @@ def test_confirmation_is_about_the_notes_not_the_tip(data_dir, sync_jobs):
         b["reviewed_rev"] = b["rev"]
 
     store.update(sid, legacy)
-    assert views.reviewed(store.load(sid)["bars"][0])
+    assert confirmed.reviewed(store.load(sid)["bars"][0])
     store.update(sid, lambda s: s["bars"][0].update(rev=s["bars"][0]["rev"] + 1))
-    assert not views.reviewed(store.load(sid)["bars"][0])
+    assert not confirmed.reviewed(store.load(sid)["bars"][0])
 
 
 def test_double_check_setting_round_trips(client):
@@ -589,9 +634,9 @@ def test_bar_confirmation_survives_rerecognition_but_not_new_warnings(data_dir, 
         c.put(f"/api/songs/{sid}/bars/{b['id']}/review", json={"ok": True, "rev": b["rev"]})
 
     def reviewed():  # 重新识别后不确定说明可能没了（那就不用核对了），这里看确认本身还在不在
-        from app import views
+        from app import confirmed
 
-        return [views.reviewed(b) for b in store.load(sid)["bars"][:4]]
+        return [confirmed.reviewed(b) for b in store.load(sid)["bars"][:4]]
 
     assert reviewed() == [True] * 4
     row = bars[3]["system"]
@@ -760,3 +805,63 @@ def test_unknown_keys_are_rejected_instead_of_meaning_the_whole_song(client, syn
     r = client.post(f"/api/songs/{sid}/practice", json={"bar_ids": [bar], "bpm": 60, "extra": 1})
     assert r.status_code == 200
     assert client.post(f"/api/songs/{sid}/refine", json={"bars": [bar]}).status_code == 200
+
+
+def test_views_and_refine_do_not_import_each_other():
+    """“是否已核对”是领域规则（app/confirmed.py），views 和 refine 都从那里取：两个模块之间没有循环 import。"""
+    import ast
+    from pathlib import Path
+
+    def imports(name):
+        tree = ast.parse((Path(store.ROOT) / "app" / f"{name}.py").read_text(encoding="utf-8"))
+        out = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "app":
+                out |= {a.name for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("app."):
+                out.add(node.module.split(".")[1])
+        return out
+
+    assert "views" not in imports("refine") and "confirmed" in imports("refine")
+    assert "refine" in imports("views") and "confirmed" in imports("views")
+
+
+def test_request_limits_match_the_stored_model(client, monkeypatch):
+    """接口的上限和存盘的模型一致：上传时的曲名和改曲名一样最长 200；速度四舍五入成整数（存的是整数）；
+    普通 JSON 请求体有上限（413）。"""
+    r = client.post("/api/songs", files={"files": ("x.gp5", GP5)}, data={"title": "x" * 201})
+    assert r.status_code == 400 and "曲名" in r.json()["detail"]
+    sid = client.post("/api/songs", files={"files": ("x.gp5", GP5)}, data={"title": "x" * 200}).json()["id"]
+    client.put(f"/api/songs/{sid}/derived", json={"bars": derived_bars(2)})
+    bar = client.get(f"/api/songs/{sid}").json()["bars"][0]["id"]
+    client.post(f"/api/songs/{sid}/practice", json={"bar_ids": [bar], "loops": 1, "bpm": 59.6, "seconds": 5})
+    from app import practice
+
+    assert [r["bpm"] for r in practice.records(sid)] == [60]
+
+    monkeypatch.setattr(config.settings, "max_json_bytes", 1000)
+    r = client.put(f"/api/songs/{sid}/tags", json={"tags": ["x" * 2000]})
+    assert r.status_code == 413 and "请求太大" in r.json()["detail"]
+    r = client.put(
+        f"/api/songs/{sid}/tags", content=b"[" + b" " * 2000, headers={"transfer-encoding": "chunked"}
+    )
+    assert r.status_code == 413
+    assert client.put(f"/api/songs/{sid}/tags", json={"tags": ["ok"]}).status_code == 200
+    # GP 转换结果按 song.json 的上限，不受普通 JSON 上限影响
+    assert client.put(f"/api/songs/{sid}/derived", json={"bars": derived_bars(30)}).status_code == 200
+
+
+def test_long_timer_sessions_are_capped_not_dropped(data_dir):
+    """一次练琴最多记 600 分钟（接口和存盘一样）：以前秒表忘了停记下的更长的记录读出来按 600 算，不会被当成坏记录丢掉。"""
+    from app import model, study
+
+    s = model.StudySession.model_validate(
+        {"id": "0123abcd", "kind": "timer", "day": "2026-11-01", "minutes": 900, "segments": []}
+    )
+    assert s.minutes == model.MAX_SESSION_MINUTES
+    store.update_study(
+        lambda d: d.update(
+            sessions=[{"id": "0123abcd", "kind": "manual", "day": "2026-11-01", "minutes": 1200, "note": ""}]
+        )
+    )
+    assert [x["minutes"] for x in study.load()["sessions"]] == [600]

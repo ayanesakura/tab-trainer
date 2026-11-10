@@ -9,7 +9,7 @@
   tests/test_model.py 断言它和原来手写的逐字一致。
 - Study / StudyRecord / StudyTimer / StudySession：练琴计划（song.json 的 study 字段、study.jsonl 的一行、
   data/study.json 的秒表和练琴记录，见 app/study.py）。
-- SongView / LibraryItem：接口返回的形状（见 app/views.py）。
+- 接口返回的形状（SongView / LibraryItem …）在 app/viewmodels.py（这里按名字转过去，旧的 model.SongView 照样能用）。
 - 乐观锁按对象：bar.rev 只在这个小节的内容（音符；用户改提示时也算）变了时 +1，song.meta_rev 只在可改的谱头字段
   （EDITABLE_META）变了时 +1，都由 store.update 比较改前改后自动维护（见 content_snapshot / bump_revs）。
   写问答、讲解补提示、进度、识别其他行都不会让别人手里的版本号过期。顶层 rev 是“任意保存计数”，不用于 409。
@@ -22,11 +22,11 @@ import datetime
 import hashlib
 import json
 import re
-import time
 from typing import Annotated, Any, ClassVar, Literal, get_args, get_origin
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
+from app import clock
 from app.music import (
     DERIVED_WARNS,
     MAX_FRET,
@@ -165,9 +165,35 @@ def llm_schema(cls: type[BaseModel]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 曲子目录里的文件名（唯一一处规则：存储、接口、曲子包都按它检查，见 store.page_path / source_path）
+# ---------------------------------------------------------------------------
+# 页面图片一律是 PNG，名字 pN.png（songs.save_pages 存的）；GP / MusicXML 原文件是 source + 认的扩展名
+PAGE_FILE = r"^p[0-9]{1,6}\.png$"
+SCORE_EXTS = tuple(e for exts in SCORE_FILES.values() for e in exts)
+SOURCE_FILE = r"^source(" + "|".join(re.escape(e) for e in SCORE_EXTS) + r")$"
+
+
+def page_file_name(k: int) -> str:
+    return f"p{k}.png"
+
+
+def page_number(name: str) -> int | None:
+    """页面文件名里的序号（p12.png → 12），不是页面文件名是 None。"""
+    return int(name[1:-4]) if valid_page_file(name) else None
+
+
+def valid_page_file(name: object) -> bool:
+    return isinstance(name, str) and re.fullmatch(PAGE_FILE, name) is not None
+
+
+def valid_source_file(name: object) -> bool:
+    return isinstance(name, str) and re.fullmatch(SOURCE_FILE, name) is not None
+
+
+# ---------------------------------------------------------------------------
 # 时间格式
 # ---------------------------------------------------------------------------
-# 练习记录的时间：model.now() 写的本地时间 "YYYY-MM-DD HH:MM"（也认带秒的），空串 = 没记时间。
+# 练习记录的时间：本地时间 "YYYY-MM-DD HH:MM:SS"（clock.stamp；早先的只到分钟，也认），空串 = 没记时间。
 # 会显示在曲库里：外来曲子包、手改的文件里别的内容（比如 HTML）这一条记录就不要
 LOCAL_TIME = r"^([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?)?$"
 # 练琴计划（app/study.py）的时间：本地时间 "YYYY-MM-DD HH:MM:SS"（也认不带秒的），必填；练琴日 "YYYY-MM-DD"
@@ -182,7 +208,7 @@ def _real_day(v: str) -> str:
 
 
 def _real_stamp(v: str) -> str:
-    if not re.match(STAMP, v):
+    if not re.fullmatch(STAMP, v):
         raise ValueError(f"时间格式不对：{v[:30]!r}")
     datetime.datetime.fromisoformat(v)
     return v
@@ -284,7 +310,7 @@ class Bar(_M):
 
 
 class Page(_M):
-    file: str
+    file: str = Field(pattern=PAGE_FILE)  # pN.png（见 PAGE_FILE）
     width: int
     height: int
 
@@ -359,22 +385,6 @@ class Refined(_M):
     changed: int = 0  # 改了几个
 
 
-class RefineEstimate(_M):
-    """精修的范围和预估：几个小节、大约花多少钱和时间（app/refine.py 的 estimate / scope_estimates）。"""
-
-    bars: int = 0
-    cost_usd: float = 0
-    minutes: int = 0  # 向上取整，至少 1
-    seconds: int = 0  # 按几个小节并行估的秒数（小节卡片上显示成“1–2 分钟”）
-
-
-class RefineScopes(_M):
-    """小节卡片上“精修这个小节 / 这一行”的预估：bar 是一个小节的；rows 按行，裁不出单个小节的行是 null。"""
-
-    bar: RefineEstimate
-    rows: list[RefineEstimate | None] = Field(default_factory=list)
-
-
 class Study(_M):
     """这首曲子在练琴计划里（见 app/study.py）：排第几、什么时候加的、是否暂停。没有这个字段 = 不在计划里。
     练习进度（新 / 学习中 / 复习）不存这里，每次按 study.jsonl 的自评记录重算。"""
@@ -391,7 +401,7 @@ class Song(_M):
     created: str = ""
     imported: str | None = None
     source_type: SourceType
-    source: str | None = None  # GP / MusicXML 原文件名
+    source: str | None = Field(None, pattern=SOURCE_FILE)  # GP / MusicXML 原文件名 source.<扩展名>
     status: Status
     activity: Activity | None = None
     notice: Notice | None = None
@@ -412,11 +422,15 @@ class Song(_M):
     derived: Derived | None = None
     refined: Refined | None = None
     study: Study | None = None  # 在练琴计划里才有
+    # 归档：曲库里收起来、不再排进今天的练琴清单，数据（练习记录、自评、计划位置）都留着。存在 song.json 里：
+    # 跟着曲子走（曲子包导出 / 导入自然带上，删曲子一起删），曲库列表读一首曲子就知道，不用再查 study.json。
+    # 没归档时不写这个键（所以默认是 None：导入曲子包补默认值时也不会写出 "archived": false）
+    archived: bool | None = None
 
 
 def problems(song: dict) -> list[str]:
-    """song.json 的不变量（写盘前检查）：形状符合 Song，以及字段之间的引用对得上——
-    小节 id 不重复；图片曲子的小节在存在的行上、页号和那一行一致；每一行都在存在的页上。"""
+    """song.json 的不变量（写盘前检查；导入曲子包时不满足就不导入）：形状符合 Song，以及字段之间的引用对得上——
+    小节 id 不重复；图片曲子的小节在存在的页、存在的行上，页号和那一行一致；每一行都在存在的页上。"""
     try:
         Song.model_validate(song)
     except Exception as e:  # noqa: BLE001 - 只报告
@@ -430,6 +444,9 @@ def problems(song: dict) -> list[str]:
         if not 0 <= x["page"] < len(pages):
             out.append(f"第 {si} 行的页号 {x['page']} 不存在")
     for b in [] if is_score(song) else bars:  # GP / MusicXML 的 system 是谱面排版的行，没有 systems
+        if b.get("page") is not None and not 0 <= b["page"] < len(pages):
+            out.append(f"小节 {b.get('id')} 的页号 {b['page']} 不存在")
+            continue
         si = b.get("system")
         if si is None:
             continue
@@ -486,6 +503,8 @@ class PracticeRecord(_Rec):
     loops: int = Field(0, ge=0)
     bpm: int = Field(0, ge=0)
     seconds: float = Field(0, ge=0)
+    kind: Literal["play", "rhythm"] = "play"  # rhythm = 敲节奏：算练习时间，不算遍数 / 最快速度 / 干净的遍数
+    clean: bool | None = None  # 用户标了这一遍干净 / 不干净；没标是 None（不写）
 
 
 class SeedBar(_Rec):
@@ -514,6 +533,10 @@ class PracticeSeed(_Rec):
 # ---------------------------------------------------------------------------
 # 练琴计划（见 app/study.py）：study.jsonl 的一行、data/study.json
 # ---------------------------------------------------------------------------
+MAX_STUCK_BARS = 500  # 一次自评最多记几个卡住的小节
+MAX_BAR_ID = 64
+
+
 class StudyRecord(_Rec):
     """练完一遍的自评（study.jsonl 一行）。day 是练琴日（凌晨 4 点换日）。"""
 
@@ -523,6 +546,19 @@ class StudyRecord(_Rec):
     issues: list[str] = Field(default_factory=list)  # vocab.study_issues 的代码
     note: str = Field("", max_length=500)
     bpm: int = Field(0, ge=0)
+    # 这一遍卡在哪几个小节（小节 id，用户在打分时点的）；之后重新识别掉的 id 读的时候不算（见 study.view）
+    stuck_bars: list[str] = Field(default_factory=list)
+
+    @field_validator("stuck_bars", mode="before")
+    @classmethod
+    def _bar_ids(cls, v: object) -> list[str]:
+        """只留像小节 id 的字符串（去重、保持顺序、最多 MAX_STUCK_BARS 个）：外来 / 手改的记录照样能读。"""
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            raise ValueError("stuck_bars 要是列表")  # noqa: TRY004 - pydantic 只把 ValueError 当成校验错误
+        ids = (x for x in v if isinstance(x, str) and 0 < len(x) <= MAX_BAR_ID)
+        return list(dict.fromkeys(ids))[:MAX_STUCK_BARS]
 
     @field_validator("issues", mode="before")
     @classmethod
@@ -567,12 +603,21 @@ class StudySession(_Rec):
     kind: Literal["timer", "manual"]
     day: Day
     segments: Segments = Field(default_factory=list)  # 只有 timer 有，都已结束
-    minutes: float = Field(ge=0)  # 秒表忘了停可能很长：按记下的算（停的时候可以改成实际练的分钟数）
+    # 一次最多 MAX_SESSION_MINUTES（和接口的上限一样）：秒表忘了停记下的更长的旧记录读的时候按上限算，不丢
+    minutes: float = Field(ge=0, le=MAX_SESSION_MINUTES)
     note: str = Field("", max_length=500)
+
+    @field_validator("minutes", mode="before")
+    @classmethod
+    def _cap_minutes(cls, v: object) -> object:
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > MAX_SESSION_MINUTES:
+            return MAX_SESSION_MINUTES
+        return v
 
 
 def now() -> str:
-    return time.strftime("%Y-%m-%d %H:%M")
+    """只给人看的时间（新建 / 导入、问答、上次精修）"YYYY-MM-DD HH:MM"，取自 app.clock（测试可以换）。"""
+    return clock.minute_stamp()
 
 
 def new_song(sid: str, source_type: str, **fields) -> dict:
@@ -720,147 +765,31 @@ def strip(song: dict) -> dict:
     return copy.deepcopy(out)
 
 
-# ---------------------------------------------------------------------------
-# 接口返回的形状（app/views.py 组装）
-# ---------------------------------------------------------------------------
-class PracticeBar(_M):
-    loops: int = 0
-    seconds: float = 0
-    best_bpm: int = 0
-    last: str = ""
+# 接口返回的形状搬到了 app/viewmodels.py；model.SongView 之类的旧写法照样能用（用到时才导入，不形成循环）
+_VIEW_MODELS = frozenset(
+    {
+        "RefineEstimate",
+        "RefineScopes",
+        "PracticeBar",
+        "PracticeLast",
+        "PracticeView",
+        "PracticeTime",
+        "StudyState",
+        "StudyPreview",
+        "StudyLast",
+        "StudyView",
+        "StuckBar",
+        "BarView",
+        "SongView",
+        "LibraryPractice",
+        "LibraryItem",
+    }
+)
 
 
-class PracticeLast(_M):
-    a: str
-    b: str
-    bpm: int = 0
-    at: str = ""
-    a_n: int | None = None  # 现在的小节位置（1 起）；小节不存在了是 null
-    b_n: int | None = None
+def __getattr__(name: str):
+    if name in _VIEW_MODELS:
+        from app import viewmodels
 
-
-class PracticeView(_M):
-    bars: dict[str, PracticeBar] = Field(default_factory=dict)
-    last: PracticeLast | None = None
-    total_seconds: float = 0
-
-
-StudyState = Literal["new", "learning", "review"]
-
-
-class StudyPreview(_M):
-    state: StudyState
-    due_in: int | None = None
-
-
-class StudyLast(_M):
-    day: str
-    rating: int
-    issues: list[str] = Field(default_factory=list)
-    note: str = ""
-    bpm: int = 0
-
-
-class StudyView(_M):
-    """曲子在练琴计划里的状态（app/study.py 的 view）：按自评记录重放 FSRS 算出来的。"""
-
-    state: StudyState
-    paused: bool = False
-    order: int = 0
-    added: str = ""
-    due: str | None = None  # 下次该练的练琴日；新曲子是 null
-    due_in: int | None = None  # 离今天几天，负数 = 过期了
-    last: StudyLast | None = None
-    rated_today: int | None = None
-    reps: int = 0  # 评过几天
-    lapses: int = 0  # 复习时卡住、退回学习的次数
-    stability: float | None = None
-    difficulty: float | None = None
-    preview: dict[str, StudyPreview]  # 今天评 1–4 分别会怎样
-
-
-class BarView(Bar):
-    orig: Orig | None = Field(None, exclude=True)  # _orig 只是撤销基线，不给前端
-    n: int
-    needs_review: bool = False  # 有警告或模型标了不确定、用户还没确认
-    reviewed: bool = False  # 有警告或不确定说明，但用户已经确认没问题（内容没再变）
-    reviewed_key: str | None = Field(None, exclude=True)  # 内部字段，不给前端
-    reviewed_rev: int | None = Field(None, exclude=True)
-    reviewed_warn: list[str] | None = Field(None, exclude=True)
-    refine_key: str | None = Field(None, exclude=True)
-    locked: str | None = None  # 现在不能改的原因
-    refinable: bool = False  # 能单独裁出来精修（小节卡片上显示“精修这个小节”，见 refine.refinable）
-    warn: list[Warn] = Field(default_factory=list)
-
-
-class SongView(_M):
-    """GET /api/songs/{id} 的返回。"""
-
-    id: str
-    title: str
-    created: str = ""
-    imported: str | None = None
-    source_type: SourceType
-    source: str | None = None
-    status: Status
-    rev: int  # 保存次数（只用来判断要不要重绘，不用于 409）
-    meta_rev: int  # 改谱头的 PUT 带这个
-    busy: bool  # 有任何后台任务（整首识别 / 单行重识别 / 讲解）
-    recognizing: bool  # 整首识别或单行重识别在进行（讲解不算）
-    activity: Activity | None = None
-    can_edit_bars: bool
-    editable_meta: list[str]
-    notice: dict | None = None  # {kind: warn|error, msg}
-    progress: Progress | None = None
-    meta: dict | None = None  # 含派生的 title、tuning_midi
-    pages: list[Page] = Field(default_factory=list)
-    systems: list[System] = Field(default_factory=list)
-    bars: list[BarView] = Field(default_factory=list)
-    plan: dict | None = None  # 含派生的 stale
-    practice: PracticeView
-    usage: dict = Field(default_factory=dict)
-    tags: list[str] = Field(default_factory=list)
-    track: int = 0
-    derived: Derived | None = None
-    is_score: bool = False  # Guitar Pro / MusicXML（小节来自原文件）
-    failed_rows: int = 0  # 识别失败的行数
-    refined: Refined | None = None  # 上一次精修整首的结果
-    refine_estimate: RefineEstimate | None = None  # 图片曲子：现在精修整首的范围和预估；GP 是 null
-    refine_scopes: RefineScopes | None = None  # 图片曲子：精修一个小节 / 一行的预估；GP 是 null
-    study: StudyView | None = None  # 不在练琴计划里是 null
-
-
-class LibraryPractice(_M):
-    last_at: str = ""
-    total_seconds: float = 0
-    last: PracticeLast | None = None
-
-
-class LibraryItem(_M):
-    """GET /api/songs 的一项。"""
-
-    id: str
-    title: str
-    artist: str = ""
-    status: Status | Literal["corrupt"]
-    progress: Progress | None = None
-    activity: Activity | None = None
-    busy: bool = False
-    recognizing: bool = False
-    notice: dict | None = None
-    bars: int = 0
-    needs_review_bars: int = 0
-    created: str | None = None
-    imported: str | None = None
-    source_type: SourceType | None = None
-    is_score: bool = False
-    failed_rows: int = 0
-    tags: list[str] = Field(default_factory=list)
-    practice: LibraryPractice | None = None
-    cost_usd: float = 0
-    cost_estimated: bool = False
-    unpriced_tokens: int = 0
-    tokens: int = 0
-    refined: Refined | None = None
-    refine_estimate: RefineEstimate | None = None
-    study: StudyView | None = None
+        return getattr(viewmodels, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

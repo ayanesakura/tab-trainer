@@ -11,13 +11,14 @@ import logging
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import BinaryIO
 
 from PIL import Image, ImageOps
 
 from app import state, store
 from app.config import settings
 from app.errors import STALE_REV, AppError, BarNotFound, Busy, Conflict, Invalid
-from app.model import is_score, new_song, notes_key, touch_bar
+from app.model import SCORE_EXTS, is_score, new_song, notes_key, page_file_name, page_number, touch_bar
 from app.music import (
     GBK_EXT,
     SCORE_FILES,
@@ -48,8 +49,10 @@ from app.text import fix_meta_text
 
 log = logging.getLogger("tab_trainer.songs")
 
-SCORE_EXT = tuple(e for exts in SCORE_FILES.values() for e in exts)
+SCORE_EXT = SCORE_EXTS
 MIN_SIDE = 32  # 图片最短边（像素）：再小就不可能看清谱子
+# 上传的图片只按这些格式解码（Pillow 默认什么都试，包括会调用外部程序的 EPS）；PDF 走 pymupdf
+IMAGE_FORMATS = ("PNG", "JPEG", "WEBP", "GIF", "BMP", "TIFF")
 
 
 def find_bar(song: dict, bar_id: str) -> dict:
@@ -108,16 +111,43 @@ def _write_new(tmp, song: dict) -> None:
     store.write_song(tmp, song)
 
 
+# ---------------------------------------------------------------------------
+# 上传上限（唯一一处：接口读文件和新建 / 补页都按这里检查）
+# ---------------------------------------------------------------------------
+def _check_count(n: int) -> None:
+    if n > settings.max_files:
+        raise Invalid(f"一次最多上传 {settings.max_files} 个文件")
+
+
+def _check_size(name: str, n: int) -> None:
+    if n > settings.max_file_bytes:
+        raise Invalid(f"“{name}”太大了（单个文件最大 {settings.max_file_bytes // 1024 // 1024} MB）")
+
+
 def check_upload_sizes(uploads: list[tuple[str, bytes]]) -> None:
+    """上传的文件：至少一个、个数、单个文件和总大小都在上限内（config.settings）。"""
     if not uploads:
         raise Invalid("没有收到文件")
-    if len(uploads) > settings.max_files:
-        raise Invalid(f"一次最多上传 {settings.max_files} 个文件")
+    _check_count(len(uploads))
     for name, data in uploads:
-        if len(data) > settings.max_file_bytes:
-            raise Invalid(f"“{name}”太大了（单个文件最大 {settings.max_file_bytes // 1024 // 1024} MB）")
+        _check_size(name, len(data))
     if sum(len(d) for _, d in uploads) > settings.max_total_bytes:
         raise Invalid(f"文件总大小超过 {settings.max_total_bytes // 1024 // 1024} MB")
+
+
+def read_uploads(files: list[tuple[str, int | None, BinaryIO]]) -> list[tuple[str, bytes]]:
+    """接口收到的 (文件名, 声明的大小, 文件对象) → (文件名, 内容)，按上面的上限检查。声明的大小已经超了的不读，
+    每个文件最多读到上限多一个字节（不会把超大的文件整个读进内存）。没有文件是 []（补页时可以不传文件）。"""
+    if not files:
+        return []
+    _check_count(len(files))
+    out = []
+    for name, size, f in files:
+        if size is not None:
+            _check_size(name, size)
+        out.append((name, f.read(settings.max_file_bytes + 1)))
+    check_upload_sizes(out)
+    return out
 
 
 @contextmanager
@@ -165,12 +195,12 @@ def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
                         raise Invalid(f"“{name}”的页面尺寸太大")
                     with _decoding(name):
                         pix = page.get_pixmap(dpi=dpi)
-                        img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+                        img = Image.open(io.BytesIO(pix.tobytes("png")), formats=["PNG"]).convert("RGB")
                     yield img
         else:
             one_more()
             with _decoding(name):
-                img = Image.open(io.BytesIO(data))  # 只读文件头，还没解码像素
+                img = Image.open(io.BytesIO(data), formats=IMAGE_FORMATS)  # 只读文件头，还没解码像素
                 if img.width * img.height > settings.max_pixels:
                     raise Invalid(f"“{name}”分辨率太大（{img.width}×{img.height}），请缩小后再上传")
                 if min(img.width, img.height) < MIN_SIDE:
@@ -185,19 +215,19 @@ def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
 
 
 def save_pages(uploads: list[tuple[str, bytes]], pages_dir, existing: list[dict] | None = None) -> list[dict]:
-    """把上传的图片 / PDF 存成 pages/pN.png。补页时 existing 是已有的页：编号接着往后排，页数上限算上它们。"""
+    """把上传的图片 / PDF 存成 pages/pN.png（model.page_file_name）。补页时 existing 是已有的页：编号接着往后排，
+    页数上限算上它们。"""
     pages_dir.mkdir(parents=True, exist_ok=True)
     taken = {pg["file"] for pg in existing or []}
-    nums = [int(f[1:-4]) for f in taken if f.startswith("p") and f.endswith(".png") and f[1:-4].isdigit()]
-    k = max(nums, default=0)
+    k = max((n for n in map(page_number, taken) if n is not None), default=0)
     pages = []
     try:
         for img in _page_images(uploads, len(existing or [])):
             k += 1
-            while f"p{k}.png" in taken or (pages_dir / f"p{k}.png").exists():
+            while page_file_name(k) in taken or (pages_dir / page_file_name(k)).exists():
                 k += 1
-            fn = f"p{k}.png"
-            img.save(pages_dir / fn, optimize=True)
+            fn = page_file_name(k)
+            img.save(pages_dir / fn, format="PNG", optimize=True)
             pages.append({"file": fn, "width": img.width, "height": img.height})
     except Exception:
         if existing is not None:  # 补页失败：已经存下的新页删掉（新建曲子时整个目录会被删掉）
@@ -438,6 +468,18 @@ def edit_meta(sid: str, raw: dict, rev: int | None = None) -> dict:
             apply_time_signatures(s["bars"], s["meta"])
 
     return store.update(sid, apply)
+
+
+def set_archived(sid: str, archived: bool) -> bool:
+    """归档 / 取消归档（model.Song.archived）：只是曲库里的一个标记，数据都留着；归档的不排进今天的练琴清单。"""
+
+    def apply(s: dict) -> None:
+        if archived:
+            s["archived"] = True
+        else:
+            s.pop("archived", None)
+
+    return bool(store.update(sid, apply).get("archived"))
 
 
 def set_tags(sid: str, tags: list[str]) -> list[str]:

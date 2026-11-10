@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.errors import NewerSchema
 from app.music import SCORE_FILES, as_warn, drop_empty_event_keys
 from app.text import fix_meta_text, fix_mojibake
 
@@ -24,7 +25,11 @@ SCHEMA_VERSION = 2
 
 
 def migrate(song: dict, song_id: str) -> dict:
-    """升级到当前格式（原地修改并返回）。升级过的曲子带 _migrated 标记（不存盘），旧练习记录放在 _practice_seed。"""
+    """升级到当前格式（原地修改并返回）。升级过的曲子带 _migrated 标记（不存盘），旧练习记录放在 _practice_seed。
+    比当前格式新的（更新版本的 tab-trainer 存的）抛 NewerSchema：不读，也就不会按旧格式写回去。"""
+    ver = _version(song)
+    if ver > SCHEMA_VERSION:
+        raise NewerSchema(song_id, ver)
     song["id"] = song_id  # 以目录名为准：复制出来的目录里 song.json 写的还是原来那首的 id
     for k, default in (("bars", []), ("systems", []), ("pages", [])):
         if not isinstance(song.get(k), type(default)):
@@ -34,10 +39,6 @@ def migrate(song: dict, song_id: str) -> dict:
     song.setdefault("title", "")
     song.setdefault("rev", 0)
     song.setdefault("meta_rev", 0)  # 按对象的版本号：旧数据（和新识别出来的小节）没有的视为 0
-    try:
-        ver = int(song.get("schema_version") or 0)
-    except (TypeError, ValueError):
-        ver = 0
     if ver < 2:
         _to_v2(song)
         song["_migrated"] = True
@@ -50,6 +51,16 @@ def migrate(song: dict, song_id: str) -> dict:
                 song["_migrated"] = True  # 启动时写回
     song["schema_version"] = SCHEMA_VERSION
     return song
+
+
+def _version(song: dict) -> int:
+    v = song.get("schema_version")
+    if isinstance(v, bool):
+        return 0
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _drop_empty_event_keys(b: dict) -> bool:

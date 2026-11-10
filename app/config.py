@@ -1,6 +1,6 @@
 """配置集中在这里：运行参数（并发数、各种上限）和模型设置（API key、Base URL、模型、精细度）。
 
-- settings：进程内的运行参数，用的时候才读，测试可以直接改字段（例外：max_rows_global 在导入 recognize 时就建成了信号量）。
+- settings：进程内的运行参数，用的时候才读，测试可以直接改字段（max_rows_global 也是：每次取全局名额时读，见 jobs.slots）。
 - 模型设置存在 data/config.json（读写和损坏处理在 store），这里负责合并、打码显示和建模型客户端。
 - 数据目录：环境变量 TAB_TRAINER_DATA，默认仓库下的 data/（见 store.DATA）。
 """
@@ -29,6 +29,8 @@ class Settings:
     max_bundle_songs: int = 500
     max_song_json: int = 20 * 1024 * 1024
     max_import_bytes: int = 2 * 1024 * 1024 * 1024  # 一次导入解出来的总大小（也用来挡上传的请求体）
+    # 普通的 JSON 请求体（改小节、自评、排序…）最大多少字节；GP 转换结果按 max_song_json
+    max_json_bytes: int = 2 * 1024 * 1024
     # AI 讲解 / 问答
     explain_chunk: int = 16  # 一次请求讲解几个小节
     qa_keep: int = 20  # 每个小节保留最近几条问答
@@ -50,11 +52,14 @@ def mask(key: str) -> str:
 
 
 def public_settings() -> dict:
-    """设置页显示的内容（key 打码）。"""
+    """设置页显示的内容（key 打码）。has_key：现在有没有能用的 key（存的或环境变量的），练习页据此把 AI 按钮置灰；
+    不含 key 本身。"""
     c = store.load_config()
+    env_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     return {
+        "has_key": bool(c.get("api_key")) or env_key,
         "api_key_masked": mask(c.get("api_key", "")),
-        "env_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "env_key": env_key,
         "base_url": c.get("base_url", ""),
         "model": c.get("model") or DEFAULT_MODEL,
         "effort": c.get("effort") or "high",

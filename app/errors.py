@@ -63,3 +63,12 @@ class CorruptSong(AppError, ValueError):
     def __init__(self, song_id: str, reason: str):
         super().__init__(f"曲子数据损坏，无法读取：{reason}")
         self.song_id = song_id
+
+
+class NewerSchema(CorruptSong):
+    """song.json 是更新版本的 tab-trainer 存的（schema_version 比这个版本认识的大）：不读，更不能按旧格式写回去
+    （会悄悄丢掉新版本的字段）。曲库里和数据损坏一样列出来（可以删除），说明要升级。"""
+
+    def __init__(self, song_id: str, version: int):
+        AppError.__init__(self, f"这首曲子是更新版本的 tab-trainer 存的（格式 {version}），请升级后再打开")
+        self.song_id = song_id

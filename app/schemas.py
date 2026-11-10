@@ -4,15 +4,16 @@
 from __future__ import annotations
 
 import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.model import DAY, MAX_SESSION_MINUTES, STUDY_SETTINGS, Event
+from app.model import DAY, MAX_BAR_ID, MAX_SESSION_MINUTES, MAX_STUCK_BARS, STUDY_SETTINGS, Event
 from app.music import STRINGS, STUDY_ISSUES
 
 MAX_TAGS = 12
 MAX_TAG_LEN = 20
+MAX_TITLE = 200  # 曲名（上传时的表单字段和改谱头共用）
 
 
 class _In(BaseModel):
@@ -54,7 +55,7 @@ class ImportErrorIn(_Strict):
 
 
 class MetaIn(_Strict):
-    title: str | None = Field(None, max_length=200)
+    title: str | None = Field(None, max_length=MAX_TITLE)
     artist: str | None = Field(None, max_length=200)
     tuning: list[str] | None = Field(None, max_length=STRINGS)
     capo: int | None = Field(None, ge=0, le=12)
@@ -83,8 +84,17 @@ class AskIn(_Strict):
 class PracticeIn(_In):
     bar_ids: list[str] = Field(min_length=1, max_length=5000)
     loops: int = Field(0, ge=0, le=10000)
-    bpm: float = Field(gt=0, le=400)  # 前端的速度可能带小数，记录时取整
+    bpm: float = Field(
+        gt=0, le=400
+    )  # 前端的速度可能带小数：四舍五入成整数（存盘的 PracticeRecord.bpm 是整数）
     seconds: float = Field(0, ge=0, le=6 * 3600)
+    kind: Literal["play", "rhythm"] = "play"  # rhythm：敲节奏（算练习时间，不算遍数 / 最快速度）
+    clean: bool | None = None  # 用户标了这一遍干净 / 不干净
+
+    @field_validator("bpm")
+    @classmethod
+    def _whole_bpm(cls, v: float) -> int:
+        return max(1, round(v))
 
 
 class TagsIn(_Strict):
@@ -100,6 +110,10 @@ class TagsIn(_Strict):
         if any(len(t) > MAX_TAG_LEN for t in clean):
             raise ValueError(f"标签最长 {MAX_TAG_LEN} 个字")
         return clean
+
+
+class ArchiveIn(_Strict):
+    archived: bool
 
 
 class ReviewIn(_Strict):
@@ -143,6 +157,10 @@ class StudyRateIn(_Strict):
     issues: list[str] = Field(default_factory=list, max_length=len(STUDY_ISSUES))
     note: str = Field("", max_length=500)
     bpm: int | None = Field(None, ge=0, le=1000)
+    # 卡在哪几个小节（小节 id）：重复的去掉；曲子里没有的 id 记的时候忽略（study.rate）
+    stuck_bars: list[Annotated[str, Field(min_length=1, max_length=MAX_BAR_ID)]] = Field(
+        default_factory=list, max_length=MAX_STUCK_BARS
+    )
 
     @field_validator("issues")
     @classmethod
@@ -218,9 +236,12 @@ FIELD_NAMES = {
     "loops": "遍数",
     "bpm": "速度",
     "seconds": "时长",
+    "kind": "类型",
+    "clean": "干净",
     "hint": "说明",
     "title": "曲名",
     "tags": "标签",
+    "archived": "归档",
     "tuning": "调弦",
     "capo": "变调夹",
     "time_signature": "拍号",
@@ -233,6 +254,7 @@ FIELD_NAMES = {
     "rating": "自评",
     "issues": "问题",
     "note": "备注",
+    "stuck_bars": "卡住的小节",
     "action": "操作",
     "minutes": "分钟数",
     "day": "日期",

@@ -9,7 +9,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bundles, main, model, recognize, songs, store, study
+from app import bundles, main, recognize, songs, store, study, viewmodels
 from app.errors import Conflict, Invalid, NotFound
 from tests.fakes import derived_bars
 
@@ -358,6 +358,7 @@ def test_corrupt_study_file_is_moved_aside(data_dir):
         "settings": {"goal_minutes": 45, "max_learning": 2, "max_reviews": 5},
         "timer": None,
         "sessions": [],
+        "next_order": 0,
     }
     assert not path.exists() and list(data_dir.glob("study.corrupt-*.json"))
     # 能读的文件里个别坏值：用默认值 / 跳过那一条
@@ -419,9 +420,19 @@ def test_today_queue_with_real_songs(data_dir):
     t = study.today(now=T0)
     assert [(x["id"], x["kind"]) for x in t["queue"]] == [(a, "learning"), (b, "review")]
     first = t["queue"][0]
-    assert set(first) == {"id", "title", "artist", "kind", "study", "today_seconds", "playable"}
+    assert set(first) == {
+        "id",
+        "title",
+        "artist",
+        "kind",
+        "study",
+        "today_seconds",
+        "total_seconds",
+        "undated_seconds",
+        "playable",
+    }
     assert first["title"] == "甲" and first["playable"] is True and first["today_seconds"] == 0
-    assert t["counts"] == {"learning": 1, "review_due": 1, "new": 0, "in_plan": 3, "paused": 1}
+    assert t["counts"] == {"learning": 1, "review_due": 1, "new": 0, "in_plan": 3, "paused": 1, "archived": 0}
     assert t["streak"] == 1 and t["timer"] is None and t["done"] == []  # 昨天评过、今天还没练
     assert t["settings"] == {"goal_minutes": 45, "max_learning": 2, "max_reviews": 5}
 
@@ -542,10 +553,10 @@ def test_http_plan_rate_and_views(client):
     assert "问题" in r.json()["detail"]
 
     song = client.get(f"/api/songs/{sid}").json()
-    model.SongView.model_validate(song)
+    viewmodels.SongView.model_validate(song)
     assert song["study"]["state"] == "review" and set(song["study"]["preview"]) == {"1", "2", "3", "4"}
     row = client.get("/api/songs").json()[0]
-    model.LibraryItem.model_validate(row)
+    viewmodels.LibraryItem.model_validate(row)
     assert row["study"]["rated_today"] == 3
 
     today = client.get("/api/study/today").json()
@@ -637,3 +648,179 @@ def test_http_order_timer_sessions_settings(client):
     r = client.get("/api/study/calendar", params={"days": 0})
     assert r.status_code == 400 and "天数" in r.json()["detail"]
     assert client.get("/api/study/calendar", params={"days": 801}).status_code == 400
+
+
+def test_practice_records_within_one_minute_are_not_collapsed(data_dir):
+    """练习记录的 at 到秒：同一分钟里练完的两段（各 30 秒、不重叠）合起来是 60 秒，不会因为 at 只到分钟而叠成一段。
+    早先只到分钟的记录照样能读。"""
+    from app import clock, practice
+
+    sid = _song()
+    bar = store.load(sid)["bars"][0]["id"]
+    clock.set_now(dt.datetime(2026, 11, 9, 20, 0, 31))
+    practice.record(sid, [bar], 1, 60, 30)
+    clock.set_now(dt.datetime(2026, 11, 9, 20, 0, 59))
+    practice.record(sid, [bar], 1, 60, 28)
+    recs = practice.records(sid)
+    assert [r["at"] for r in recs] == ["2026-11-09 20:00:31", "2026-11-09 20:00:59"]
+    assert study.seconds_of(study.merge(study.app_intervals(recs))) == 58
+    store.append_practice(sid, {"at": "2026-11-09 19:00", "ids": [bar], "loops": 1, "bpm": 60, "seconds": 60})
+    assert study.seconds_of(study.merge(study.app_intervals(practice.records(sid)))) == 118
+    t = study.today(now=dt.datetime(2026, 11, 9, 21, 0))
+    assert t["minutes"]["total"] == round(118 / 60, 1)
+
+
+def test_study_and_practice_share_one_clock(data_dir):
+    from app import clock
+
+    clock.set_now(dt.datetime(2026, 11, 10, 3, 30))  # 凌晨 4 点前：还算前一个练琴日
+    assert study.current() == dt.datetime(2026, 11, 10, 3, 30)
+    assert study.today()["day"] == "2026-11-09"
+    a = _planned("甲")[0]
+    study.rate(a, 3, [])
+    assert study.ratings(a)[-1]["at"] == "2026-11-10 03:30:00"
+
+
+# ---------------------------------------------------------------------------
+# 归档
+# ---------------------------------------------------------------------------
+def test_archived_songs_leave_today_but_keep_their_data(client):
+    a, b = _planned("甲", "乙")
+    study.rate(a, 3, [], now=at("2026-11-01"))  # 早就到期的复习
+    r = client.post(f"/api/songs/{a}/archive", json={"archived": True})
+    assert r.status_code == 200 and r.json() == {"archived": True}
+    assert json.loads((store.song_dir(a) / "song.json").read_text())["archived"] is True
+    t = study.today(now=T0)
+    assert [x["id"] for x in t["queue"] + t["done"]] == [b]
+    assert t["counts"]["archived"] == 1 and t["counts"]["in_plan"] == 1
+    row = next(x for x in client.get("/api/songs").json() if x["id"] == a)
+    assert row["archived"] is True and row["study"]["order"] == 0  # 计划里的位置、自评都留着
+    assert client.get(f"/api/songs/{a}").json()["archived"] is True
+    assert len(study.ratings(a)) == 1
+    # 曲子包带着归档标记
+    path, _ = bundles.export_bundle([a])
+    store.delete(a)
+    with open(path, "rb") as f:
+        bundles.import_bundles([("x.zip", f)])
+    assert store.load(a)["archived"] is True
+    b_path, _ = bundles.export_bundle([b])
+    store.delete(b)
+    with open(b_path, "rb") as f:
+        bundles.import_bundles([("x.zip", f)])
+    assert "archived" not in json.loads((store.song_dir(b) / "song.json").read_text())  # 没归档的不写 false
+    # 取消归档：回到今天的清单，song.json 里不留这个键
+    assert client.post(f"/api/songs/{a}/archive", json={"archived": False}).json() == {"archived": False}
+    assert "archived" not in json.loads((store.song_dir(a) / "song.json").read_text())
+    assert {x["id"] for x in study.today(now=T0)["queue"]} == {a, b}
+    assert client.post(f"/api/songs/{a}/archive", json={}).status_code == 400
+    assert client.post("/api/songs/nope-0000/archive", json={"archived": True}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 卡住的小节
+# ---------------------------------------------------------------------------
+def test_rating_remembers_stuck_bars(client):
+    a = _planned("甲")[0]
+    bars = [b["id"] for b in store.load(a)["bars"]]
+    body = {"rating": 2, "stuck_bars": [bars[1], "gone-bar", bars[0], bars[1]]}
+    r = client.post(f"/api/songs/{a}/study/rate", json=body)
+    assert r.status_code == 200
+    want = [{"id": bars[0], "n": 1}, {"id": bars[1], "n": 2}]  # 按小节顺序，不认识的 id 不记
+    assert r.json()["study"]["stuck_bars"] == want
+    assert study.ratings(a)[-1]["stuck_bars"] == [bars[1], bars[0]]
+    assert client.get(f"/api/songs/{a}").json()["study"]["stuck_bars"] == want
+    assert next(x for x in client.get("/api/songs").json() if x["id"] == a)["study"]["stuck_bars"] == want
+    t = client.get("/api/study/today").json()
+    assert next(x for x in t["queue"] + t["done"] if x["id"] == a)["study"]["stuck_bars"] == want
+    # 小节后来不在了（重新转换换了 id）：读的时候不算
+    store.update(a, lambda s: s["bars"].pop(0))
+    assert client.get(f"/api/songs/{a}").json()["study"]["stuck_bars"] == [{"id": bars[1], "n": 1}]
+    # 最近一次自评没卡住：清空
+    client.post(f"/api/songs/{a}/study/rate", json={"rating": 3})
+    assert client.get(f"/api/songs/{a}").json()["study"]["stuck_bars"] == []
+    for bad in (
+        {"rating": 3, "stuck_bars": "x"},
+        {"rating": 3, "stuck_bars": [""]},
+        {"rating": 3, "stuck_bars": [1]},
+    ):
+        assert client.post(f"/api/songs/{a}/study/rate", json=bad).status_code == 400, bad
+
+
+def test_old_rating_records_without_stuck_bars_still_read(data_dir):
+    rec = {"at": "2026-11-01 20:00:00", "day": "2026-11-01", "rating": 3}
+    assert study.clean_rating(rec)["stuck_bars"] == []
+    assert study.clean_rating({**rec, "stuck_bars": ["a", 5, "a", "x" * 99]})["stuck_bars"] == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# 练习时间：一个算法（曲库的累计、练习页、练琴计划），早期没日期的单独说
+# ---------------------------------------------------------------------------
+def test_one_practice_time_for_library_song_and_study(client):
+    from app import clock, practice
+
+    a = _planned("甲")[0]
+    bars = [b["id"] for b in store.load(a)["bars"]]
+    store.append_practice(a, {"seed": True, "total_seconds": 600, "bars": {bars[0]: {"seconds": 600}}})
+    clock.set_now(at("2026-11-09", "20:01"))
+    practice.record(a, [bars[0]], 2, 60, 60)
+    clock.set_now(at("2026-11-09", "20:01:30"))
+    practice.record(a, [bars[1]], 1, 60, 60)  # 和上一段重叠 30 秒（两个标签页同时在练）：只算一次
+    clock.set_now(at("2026-11-09", "20:05"))
+    practice.record(a, [bars[0]], 0, 60, 30, kind="rhythm")  # 敲节奏也算练习时间
+    want = {"total_seconds": 600 + 90 + 30, "undated_seconds": 600}
+
+    song = client.get(f"/api/songs/{a}").json()
+    assert song["practice"]["time"] == want
+    row = next(x for x in client.get("/api/songs").json() if x["id"] == a)
+    assert {k: row["practice"][k] for k in want} == want  # 曲库的“累计”（含早期没日期的）
+    t = study.today(now=T0)
+    item = next(x for x in t["queue"] if x["id"] == a)
+    assert (item["total_seconds"], item["undated_seconds"]) == (720, 600)
+    assert item["today_seconds"] == 120  # 今天的只算有日期的
+    assert t["minutes"]["total"] == 2.0
+    cal = study.calendar(now=T0)
+    assert cal["days"] == [{"day": "2026-11-09", "minutes": 2.0, "ratings": 0}]
+    assert cal["total_minutes"] == 12.0 and cal["undated_minutes"] == 10.0  # 总数含早期没日期的
+    study.add_session("2026-11-08", 15, now=T0)
+    assert study.calendar(now=T0)["total_minutes"] == 27.0
+
+
+def test_rhythm_drill_and_clean_passes(client):
+    """敲节奏：算时间，不算遍数、最快速度、练到哪；标了“干净”的遍数单独统计。"""
+    from app import clock
+
+    a = _song("甲", bars=3)
+    b0, b1, _ = (b["id"] for b in store.load(a)["bars"])
+    times = iter(f"20:{m:02d}" for m in range(10, 60))
+
+    def post(**body):
+        clock.set_now(at("2026-11-09", next(times)))
+        r = client.post(
+            f"/api/songs/{a}/practice", json={"bar_ids": [b0, b1], "loops": 1, "seconds": 20, **body}
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    post(bpm=60)
+    p = post(bpm=90, loops=8, kind="rhythm")
+    assert p["bars"][b0]["loops"] == 1 and p["bars"][b0]["best_bpm"] == 60 and p["bars"][b0]["seconds"] == 20
+    assert p["last"]["bpm"] == 60  # 练到哪：只看跟着谱子练的
+    assert p["time"]["total_seconds"] == 40
+    post(bpm=60, clean=True)
+    post(bpm=60, clean=True)
+    p = post(bpm=60)  # 没标：不打断连续
+    bar = p["bars"][b0]
+    assert (bar["clean"], bar["clean_bpm"], bar["clean_streak"], bar["clean_streak_bpm"]) == (2, 60, 2, 60)
+    bar = post(bpm=66, clean=True)["bars"][b0]  # 提速：从 1 重新数
+    assert (bar["clean"], bar["clean_bpm"], bar["clean_streak"], bar["clean_streak_bpm"]) == (3, 66, 1, 66)
+    bar = post(bpm=66, clean=False)["bars"][b0]  # 不干净：清零
+    assert (bar["clean"], bar["clean_bpm"], bar["clean_streak"], bar["clean_streak_bpm"]) == (3, 66, 0, 66)
+    bar = post(bpm=66, clean=True, kind="rhythm")["bars"][b0]  # 敲节奏标的不算
+    assert (bar["clean"], bar["clean_streak"]) == (3, 0)
+    h = client.get(f"/api/songs/{a}/practice/history").json()["sessions"]
+    assert [(x["kind"], x["clean"]) for x in h[:3]] == [("play", None), ("rhythm", None), ("play", True)]
+    viewmodels.SongView.model_validate(client.get(f"/api/songs/{a}").json())
+    bad = {"bar_ids": [b0], "bpm": 60, "kind": "drum"}
+    assert client.post(f"/api/songs/{a}/practice", json=bad).status_code == 400
+    lines = (store.song_dir(a) / "practice.jsonl").read_text().splitlines()
+    assert "kind" not in json.loads(lines[0]) and "clean" not in json.loads(lines[0])  # 默认值不写

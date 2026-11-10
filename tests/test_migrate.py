@@ -272,3 +272,23 @@ def test_set_derived_fixes_mojibake_only_for_old_gp_formats(data_dir, source, fi
     moji = _as_cp1252("押尾光太郎")
     s = songs.set_derived(sid, {"tuning": ["E4"] * 6, "artist": moji}, derived_bars(1), 0, None)
     assert s["meta"]["artist"] == ("押尾光太郎" if fixed else moji)  # GP7+ / MusicXML 本来就是 UTF-8
+
+
+def test_newer_schema_is_refused_and_never_written_back(data_dir):
+    """更新版本的 tab-trainer 存的曲子：旧代码不读（说明要升级），也不会按旧格式写回去、丢掉新字段。"""
+    from app import errors
+
+    sid = "20260101-000000-bbbbbb"
+    newer = {**_old_gp_song(), "id": sid, "schema_version": migrate.SCHEMA_VERSION + 1, "future": {"x": 1}}
+    _write_old(sid, newer)
+    path = store.SONGS / sid / "song.json"
+    before = path.read_bytes()
+    with pytest.raises(errors.NewerSchema):
+        store.load(sid)
+    with pytest.raises(errors.NewerSchema):
+        store.update(sid, lambda s: s.update(title="x"))
+    songs.recover_interrupted()
+    assert path.read_bytes() == before and not (path.parent / "song.json.bak").exists()
+    row = next(x for x in views.list_library() if x["id"] == sid)
+    assert row["status"] == "corrupt" and "更新版本" in row["notice"]["msg"]
+    store.delete(sid)  # 还是可以删掉

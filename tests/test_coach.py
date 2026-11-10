@@ -66,6 +66,21 @@ def test_ask_bar_keeps_history_and_sends_context(data_dir):
         coach.ask_bar(sid, "nope", "问题")
 
 
+def test_ask_bar_with_a_broken_page_reference_asks_without_image(data_dir, monkeypatch):
+    """小节的页号对不上（外来 / 手改坏的数据）或者原图不在了：照样能问，只是不带图（以前是 IndexError → 500）。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    monkeypatch.setattr(store, "STRICT", False)
+    store.update(sid, lambda s: s["bars"][0].update(page=7))
+    bar = store.load(sid)["bars"][0]
+    assert coach.ask_bar(sid, bar["id"], "怎么按？")["answer"]
+    assert FakeClaude.calls[-1]["image"] is None
+    (store.song_dir(sid) / "pages" / "p1.png").unlink()
+    bar = store.load(sid)["bars"][1]
+    assert coach.ask_bar(sid, bar["id"], "怎么按？")["answer"]
+    assert FakeClaude.calls[-1]["image"] is None
+
+
 def test_ask_bar_without_key_is_a_user_error(data_dir, monkeypatch):
     from app import llm  # 用真正的客户端（没有 key 时构造就会失败）
 

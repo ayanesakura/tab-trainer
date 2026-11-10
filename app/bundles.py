@@ -23,7 +23,6 @@ import os
 import re
 import shutil
 import tempfile
-import time
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -32,7 +31,7 @@ from typing import BinaryIO
 from PIL import Image
 from pydantic import ValidationError
 
-from app import migrate, model, practice, songs, state, store, study
+from app import clock, migrate, model, practice, songs, state, store, study
 from app.config import settings
 from app.errors import CorruptSong, Invalid, NotFound
 from app.model import now
@@ -42,7 +41,6 @@ log = logging.getLogger("tab_trainer.bundles")
 FORMAT = "tab-trainer-bundle"
 VERSION = 1
 MANIFEST = "tab-trainer.json"
-_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 
 
 # ---------------------------------------------------------------------------
@@ -50,15 +48,15 @@ _FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # ---------------------------------------------------------------------------
 def _files(song: dict) -> list[tuple[str, Path]]:
     """曲子目录里要放进包的文件：(包内相对路径, 本机路径)。只取 song.json 里登记过的，备份和临时文件不要。"""
-    d = store.song_dir(song["id"])
+    sid = song["id"]
     out = []
     for p in song.get("pages", []):
         name = p.get("file") if isinstance(p, dict) else None
-        if isinstance(name, str) and _FILE_RE.match(name) and (d / "pages" / name).is_file():
-            out.append((f"pages/{name}", d / "pages" / name))
+        if model.valid_page_file(name) and (path := store.page_path(sid, name)).is_file():
+            out.append((f"pages/{name}", path))
     src = song.get("source")
-    if isinstance(src, str) and _FILE_RE.match(src) and (d / src).is_file():
-        out.append((src, d / src))
+    if model.valid_source_file(src) and (path := store.source_path(sid, src)).is_file():
+        out.append((src, path))
     return out
 
 
@@ -110,7 +108,7 @@ def export_bundle(ids: list[str]) -> tuple[Path, str]:
                 "format": FORMAT,
                 "version": VERSION,
                 "schema_version": store.SCHEMA_VERSION,
-                "exported": time.strftime("%Y-%m-%d %H:%M"),
+                "exported": clock.minute_stamp(),
                 "songs": [{"id": s["id"], "title": song_title(s)} for s in loaded],
             }
             zf.writestr(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=1), zipfile.ZIP_DEFLATED)
@@ -140,7 +138,7 @@ def export_bundle(ids: list[str]) -> tuple[Path, str]:
     if len(loaded) == 1:
         name = f"{song_title(loaded[0])} - 曲子包.zip"
     else:
-        name = f"曲子包 - {len(loaded)} 首 - {time.strftime('%Y%m%d')}.zip"
+        name = f"曲子包 - {len(loaded)} 首 - {clock.now():%Y%m%d}.zip"
     return path, re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name)
 
 
@@ -181,8 +179,9 @@ def _read(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
 
 
 def _check_image(data: bytes, name: str) -> None:
+    """页面必须是真的 PNG（练习页按 image/png 取），其他格式（哪怕 Pillow 认得）一律不要。"""
     try:
-        img = Image.open(io.BytesIO(data))
+        img = Image.open(io.BytesIO(data), formats=["PNG"])
         if img.width * img.height > settings.max_pixels:
             raise Invalid(f"页面 {name} 分辨率太大")
         img.verify()
@@ -222,13 +221,12 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
     wanted: list[tuple[str, str]] = []  # (包内路径, 曲子目录里的相对路径)
     for p in pages:
         name = p.get("file") if isinstance(p, dict) else None
-        if not isinstance(name, str) or not _FILE_RE.match(name):
+        if not model.valid_page_file(name):  # 只认 pN.png（model.PAGE_FILE）
             raise Invalid("页面文件名无效")
         wanted.append((base + "pages/" + name, "pages/" + name))
     src = song.get("source")
     if src is not None:
-        ext = songs.score_ext(src) if isinstance(src, str) else None
-        if not ext or not _FILE_RE.match(src):
+        if not model.valid_source_file(src):  # source.<GP / MusicXML 扩展名>（model.SOURCE_FILE）
             raise Invalid("原文件名无效")
         wanted.append((base + src, src))
 
@@ -256,6 +254,8 @@ def _import_one(zf: zipfile.ZipFile, bid: str, budget: _Budget) -> dict:
         song = migrate.migrate(song, bid)
         _check_shape(song)  # 先查形状：后面的 recover / strip 都假定字段类型是对的
         state.recover(song)  # 导出时正在识别 / 讲解的，改成“已中断”
+        if bad := model.problems(song):  # 字段之间对不上（小节的页号 / 行号不存在之类）：用的时候会出错
+            raise Invalid(f"song.json 里的数据对不上（{bad[0][:200]}）")
         song["imported"] = now()
         store.write_song(tmp, song)
         if not store.install(tmp, bid):  # 目标已存在（同时导入了同一首）时失败，不会覆盖
@@ -291,47 +291,93 @@ def _clean_jsonl(data: bytes, clean: Callable[[object], dict | None]) -> bytes:
     return ("\n".join(lines) + "\n").encode() if lines else b""
 
 
+def _manifest(zf: zipfile.ZipFile, budget: _Budget) -> list:
+    """读清单，返回曲子列表。格式不对抛 Invalid（类型也查：外来的 version 可能是列表、字符串）。"""
+    try:
+        manifest = json.loads(_read(zf, _entry(zf, MANIFEST, 1024 * 1024, budget, "清单")))
+    except (ValueError, UnicodeDecodeError):
+        raise Invalid("清单不是有效的 JSON") from None
+    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
+        raise Invalid("清单格式不对")
+    version = manifest.get("version", 0)
+    if version is None:
+        version = 0
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise Invalid("清单里的版本号不对")
+    if version > VERSION:
+        raise Invalid("曲子包来自更新版本的 tab-trainer，请先升级再导入")
+    entries = manifest.get("songs")
+    if not isinstance(entries, list) or len(entries) > settings.max_bundle_songs:
+        raise Invalid("清单里的曲子列表无效")
+    return entries
+
+
 def import_bundles(files: list[tuple[str, BinaryIO]]) -> dict:
-    """导入一个或多个曲子包。返回 {"imported": [{"id", "title"}], "skipped": [{"title", "reason", "duplicate"}]}：
-    整个包读不了时 title 是文件名；包里单首有问题只跳过那一首。"""
+    """导入一个或多个曲子包。返回
+    {"imported": [{"id", "title", "bundle"}], "skipped": [{"title", "reason", "duplicate", "bundle"}],
+     "bundles": [{"file", "ok", "imported", "skipped", "error"}]}：
+    整个包读不了时 skipped 里 title 是文件名、bundles 里 ok=false 并写明 error；包里单首有问题只跳过那一首。
+    bundles 按上传顺序，每个包一项：imported / skipped 是这个包里导入 / 跳过了几首。"""
     if not files:
         raise Invalid("没有收到文件")
     budget = _Budget(settings.max_import_bytes)
-    imported, skipped = [], []
+    imported: list[dict] = []
+    skipped: list[dict] = []
+    report: list[dict] = []
     for fname, fobj in files:
+        n_in, n_skip = len(imported), len(skipped)
+        error = _import_file(fname, fobj, budget, imported, skipped)
+        report.append(
+            {
+                "file": fname,
+                "ok": error is None,
+                "imported": len(imported) - n_in,
+                "skipped": len(skipped) - n_skip,
+                "error": error,
+            }
+        )
+    log.info("导入曲子包：%d 首成功，%d 首跳过", len(imported), len(skipped))
+    return {"imported": imported, "skipped": skipped, "bundles": report}
+
+
+def _import_file(fname: str, fobj: BinaryIO, budget: _Budget, imported: list, skipped: list) -> str | None:
+    """导入一个包里的曲子（追加到 imported / skipped）。整个包读不了时返回原因，否则 None。
+    任何意外的错误都只算到这个包（或这一首）上：前面已经导入的不受影响，接口也不会 500。"""
+
+    def whole(reason: str) -> str:
+        skipped.append({"title": fname, "reason": reason, "duplicate": False, "bundle": fname})
+        return reason
+
+    try:
+        zf = zipfile.ZipFile(fobj)
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return whole("不是曲子包（不是 zip 文件）")
+    with zf:
         try:
-            zf = zipfile.ZipFile(fobj)
-        except (zipfile.BadZipFile, OSError):
-            skipped.append({"title": fname, "reason": "不是曲子包（不是 zip 文件）", "duplicate": False})
-            continue
-        with zf:
+            entries = _manifest(zf, budget)
+        except Invalid as e:
+            return whole(f"不是 tab-trainer 曲子包（{e}）")
+        except (zipfile.BadZipFile, OSError, ValueError):
+            return whole("不是 tab-trainer 曲子包")
+        except Exception:  # 外来文件：什么错都只算到这个包上
+            log.exception("导入曲子包：%s 的清单读不出来", fname)
+            return whole("不是 tab-trainer 曲子包")
+        for ent in entries:
+            ent = ent if isinstance(ent, dict) else {}
+            title = str(ent.get("title") or ent.get("id") or fname)[:200]
             try:
-                manifest = json.loads(_read(zf, _entry(zf, MANIFEST, 1024 * 1024, budget, "清单")))
-                if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
-                    raise Invalid("清单格式不对")
-                if int(manifest.get("version") or 0) > VERSION:
-                    raise Invalid("曲子包来自更新版本的 tab-trainer，请先升级再导入")
-                entries = manifest.get("songs")
-                if not isinstance(entries, list) or len(entries) > settings.max_bundle_songs:
-                    raise Invalid("清单里的曲子列表无效")
+                imported.append({**_import_one(zf, ent.get("id"), budget), "bundle": fname})
             except Invalid as e:
                 skipped.append(
-                    {"title": fname, "reason": f"不是 tab-trainer 曲子包（{e}）", "duplicate": False}
+                    {
+                        "title": title,
+                        "reason": str(e),
+                        "duplicate": isinstance(e, _Duplicate),
+                        "bundle": fname,
+                    }
                 )
-                continue
-            except (ValueError, zipfile.BadZipFile, OSError):
-                skipped.append({"title": fname, "reason": "不是 tab-trainer 曲子包", "duplicate": False})
-                continue
-            for ent in entries:
-                ent = ent if isinstance(ent, dict) else {}
-                title = str(ent.get("title") or ent.get("id") or fname)
-                try:
-                    imported.append(_import_one(zf, ent.get("id"), budget))
-                except Invalid as e:
-                    skipped.append({"title": title, "reason": str(e), "duplicate": isinstance(e, _Duplicate)})
-                except Exception as e:  # 外来数据结构不对（检查没覆盖到的）：只跳过这一首，其他的照常导入
-                    log.exception("导入曲子包：%s 无法导入", ent.get("id"))
-                    reason = f"song.json 格式不对（{type(e).__name__}）"
-                    skipped.append({"title": title, "reason": reason, "duplicate": False})
-    log.info("导入曲子包：%d 首成功，%d 首跳过", len(imported), len(skipped))
-    return {"imported": imported, "skipped": skipped}
+            except Exception as e:  # 外来数据结构不对（检查没覆盖到的）：只跳过这一首，其他的照常导入
+                log.exception("导入曲子包：%s 无法导入", ent.get("id"))
+                reason = f"song.json 格式不对（{type(e).__name__}）"
+                skipped.append({"title": title, "reason": reason, "duplicate": False, "bundle": fname})
+    return None

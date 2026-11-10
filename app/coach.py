@@ -104,6 +104,19 @@ def _explain_chunks(sid: str, chunks: list[list[str]], cancel, claude, charge) -
 # ---------------------------------------------------------------------------
 # 小节问答
 # ---------------------------------------------------------------------------
+def _bar_image(sid: str, song: dict, bar: dict):
+    """问答带上的小节原图；没有区域、页号对不上（外来 / 手改坏的数据）、图片读不出来时不带图，照样能问。"""
+    pi, region, pages = bar.get("page"), bar.get("region"), song.get("pages") or []
+    if not (isinstance(pi, int) and 0 <= pi < len(pages) and isinstance(region, list) and len(region) == 4):
+        return None
+    try:
+        x0, x1, y0, y1 = region
+        return store.page_image(sid, pages[pi]).crop((x0, y0, x1, y1))
+    except (OSError, ValueError, LookupError, TypeError):
+        log.warning("song=%s bar=%s 的原图读不出来，问答不带图", sid, bar.get("id"))
+        return None
+
+
 def ask_bar(sid: str, bar_id: str, question: str) -> dict:
     """问一个小节的练习问题，等回答写完再返回 {"answer", "qa"}（练习页用的是流式的，见 prepare_ask）。"""
     return prepare_ask(sid, bar_id, question)()
@@ -120,10 +133,7 @@ def prepare_ask(sid: str, bar_id: str, question: str) -> Callable[..., dict]:
     bar = find_bar(song, bar_id)
     idx = song["bars"].index(bar)
     neighbours = [song["bars"][j] for j in (idx - 1, idx + 1) if 0 <= j < len(song["bars"])]
-    image = None
-    if bar.get("region") and bar.get("page") is not None:
-        x0, x1, y0, y1 = bar["region"]
-        image = store.page_image(sid, song["pages"][bar["page"]]).crop((x0, y0, x1, y1))
+    image = _bar_image(sid, song, bar)
     history = [q for q in bar.get("qa") or [] if not q.get("stale")]  # 改谱之前的问答说的是旧音，不再当上下文
     log_text = practice.coach_text(sid, song, bar_id)
     claude = config.new_llm()  # 没配 key：MissingKey，400

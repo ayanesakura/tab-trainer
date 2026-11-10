@@ -1,5 +1,6 @@
-"""接口背后的编排：main.py 只做 HTTP（参数、文件、响应），所有路由都经过这里，再分给 songs / recognize / pages /
-coach / bundles / study。多数函数只是一行转发，留着是为了让 main 只依赖这一个模块、返回的视图形状统一在这里决定。
+"""接口背后的用例：main.py 只做 HTTP（路由、参数、文件、响应），每个路由调这里的一个函数，再由这里分给 songs / recognize /
+pages / coach / bundles / study / practice / config。业务规则（上传的上限和读文件、新建后要不要识别、页面 / 原文件能不能给、
+返回什么形状的视图）都在这一层或更下层，main 不直接调下层模块。不少函数只是一行转发：留着让 main 只依赖这一个模块。
 
 错误一律抛 app.errors 里的 AppError（main 统一转成 {"detail": 中文说明} 和对应的状态码）。
 """
@@ -10,10 +11,11 @@ from pathlib import Path
 from typing import BinaryIO
 
 from app import bundles, coach, config, pages, practice, recognize, refine, songs, store, study, views
-from app.config import settings
 from app.errors import Busy, Conflict, Invalid, NotFound
 from app.jobs import jobs
 from app.model import is_score
+
+Upload = tuple[str, int | None, BinaryIO]  # 接口收到的文件：(文件名, 声明的大小, 文件对象)
 
 
 def startup() -> None:
@@ -21,32 +23,36 @@ def startup() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 设置
+# ---------------------------------------------------------------------------
+def settings_view() -> dict:
+    """设置页显示的内容（key 打码；has_key：现在有没有能用的 key，练习页据此把 AI 按钮置灰）。"""
+    return config.public_settings()
+
+
+def save_settings(api_key: str | None, clear_api_key: bool, fields: dict) -> dict:
+    return config.update_settings(api_key, clear_api_key, fields)
+
+
+def test_settings() -> dict:
+    return config.test_connection()
+
+
+# ---------------------------------------------------------------------------
 # 上传
 # ---------------------------------------------------------------------------
-def read_uploads(files: list[tuple[str, int | None, BinaryIO]]) -> list[tuple[str, bytes]]:
-    """(文件名, 声明的大小, 文件对象) → (文件名, 内容)。超过上限的文件不整个读进内存。"""
-    if len(files) > settings.max_files:
-        raise Invalid(f"一次最多上传 {settings.max_files} 个文件")
-    out = []
-    for name, size, f in files:
-        if size is not None and size > settings.max_file_bytes:
-            raise Invalid(f"“{name}”太大了（单个文件最大 {settings.max_file_bytes // 1024 // 1024} MB）")
-        out.append((name, f.read(settings.max_file_bytes + 1)))
-    return out
-
-
-def upload(uploads: list[tuple[str, bytes]], title: str) -> str:
-    """新建曲子；图片 / PDF 曲子马上开始识别。"""
-    sid = songs.create_song(uploads, title)
-    if not is_score(store.load(sid)):
+def upload(files: list[Upload], title: str) -> str:
+    """新建曲子（上限见 songs.read_uploads）；图片 / PDF 曲子马上开始识别。"""
+    sid = songs.create_song(songs.read_uploads(files), title)
+    if not is_score(store.read(sid)):
         recognize.start_parse(sid)
     return sid
 
 
-def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) -> dict:
+def arrange_pages(sid: str, order: list[str], files: list[Upload]) -> dict:
     """补页、删页、调整页序（order：已有页的文件名或 "new:k"）。新页上的行在后台识别。"""
-    store.load(sid)
-    pages.arrange_pages(sid, order, uploads)
+    store.read(sid)  # 曲子不存在：404（先于读上传的文件）
+    pages.arrange_pages(sid, order, songs.read_uploads(files))
     return song(sid)
 
 
@@ -62,7 +68,7 @@ def import_bundles(files: list[tuple[str, BinaryIO]]) -> dict:
 # 读
 # ---------------------------------------------------------------------------
 def song(sid: str) -> dict:
-    return views.song_view(store.load(sid))
+    return views.song_view(store.read(sid))
 
 
 def library() -> list[dict]:
@@ -70,20 +76,21 @@ def library() -> list[dict]:
 
 
 def practice_history(sid: str) -> dict:
-    return {"sessions": practice.history(sid, store.load(sid))}
+    return {"sessions": practice.history(sid, store.read(sid))}
 
 
 def source_file(sid: str) -> Path:
-    s = store.load(sid)
-    if not s.get("source"):
+    """GP / MusicXML 原文件（练习页取来交给 alphaTab）。文件名按 model.SOURCE_FILE 检查（store.source_path）。"""
+    p = store.source_path(sid, store.read(sid).get("source"))
+    if not p.is_file():
         raise NotFound("这首曲子没有原文件")
-    return store.song_dir(sid) / s["source"]
+    return p
 
 
 def page_file(sid: str, name: str) -> Path:
-    store.load(sid)
-    p = store.song_dir(sid) / "pages" / name
-    if "/" in name or "\\" in name or name.startswith(".") or not p.is_file():
+    """曲子的一页原图。只认 pN.png（store.page_path），所以接口总是按 image/png 返回。"""
+    p = store.page_path(sid, name)
+    if not p.is_file():
         raise NotFound("页面不存在")
     return p
 
@@ -92,7 +99,7 @@ def page_file(sid: str, name: str) -> Path:
 # 任务
 # ---------------------------------------------------------------------------
 def reparse_all(sid: str) -> None:
-    if is_score(store.load(sid)):
+    if is_score(store.read(sid)):
         raise Invalid("Guitar Pro / MusicXML 曲子不需要识别")
     config.check_llm_ready()
     if not recognize.start_parse(sid):
@@ -112,14 +119,14 @@ def refine_song(sid: str, bars: list[str] | None = None, system: int | None = No
 
 
 def reparse_row(sid: str, si: int, hint: str) -> None:
-    s = store.load(sid)
+    s = store.read(sid)
     if not 0 <= si < len(s.get("systems") or []):
         raise NotFound("这一行不存在")
     recognize.start_reparse(sid, si, hint.strip())
 
 
 def cancel(sid: str) -> None:
-    store.load(sid)
+    store.read(sid)  # 曲子不存在：404
     if not jobs.cancel(sid):
         raise Conflict("没有正在进行的识别")
 
@@ -162,6 +169,10 @@ def set_tags(sid: str, tags: list[str]) -> dict:
     return {"tags": songs.set_tags(sid, tags)}
 
 
+def set_archived(sid: str, archived: bool) -> dict:
+    return {"archived": songs.set_archived(sid, archived)}
+
+
 def ask_bar(sid: str, bar_id: str, question: str) -> dict:
     return coach.ask_bar(sid, bar_id, question)
 
@@ -171,8 +182,16 @@ def prepare_ask(sid: str, bar_id: str, question: str):
     return coach.prepare_ask(sid, bar_id, question)
 
 
-def record_practice(sid: str, bar_ids: list[str], loops: int, bpm: float, seconds: float) -> dict:
-    return practice.record(sid, bar_ids, loops, bpm, seconds)
+def record_practice(
+    sid: str,
+    bar_ids: list[str],
+    loops: int,
+    bpm: int,
+    seconds: float,
+    kind: str = "play",
+    clean: bool | None = None,
+) -> dict:
+    return practice.record(sid, bar_ids, loops, bpm, seconds, kind, clean)
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +205,10 @@ def study_order(ids: list[str]) -> None:
     study.reorder(ids)
 
 
-def rate_song(sid: str, rating: int, issues: list[str], note: str, bpm: int | None) -> dict:
-    return study.rate(sid, rating, issues, note, bpm or 0)
+def rate_song(
+    sid: str, rating: int, issues: list[str], note: str, bpm: int | None, stuck_bars: list[str] | None = None
+) -> dict:
+    return study.rate(sid, rating, issues, note, bpm or 0, stuck_bars=stuck_bars)
 
 
 def study_today() -> dict:

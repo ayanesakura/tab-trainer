@@ -1,4 +1,5 @@
-"""FastAPI 服务：只做 HTTP（路由、参数、文件、响应）。业务编排在 app/service.py，返回的形状在 app/views.py。
+"""FastAPI 服务：只做 HTTP（路由、参数、文件、响应），每个路由只调 app/service.py（用例）；返回的形状在 app/views.py。
+store 只用来取数据目录、锁数据目录（进程级的启动检查）。
 
 启动：uv run python -m app.main   （默认 http://127.0.0.1:8765）
 """
@@ -22,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
-from app import auth, config, schemas, service, store
+from app import auth, schemas, service, store
 from app.config import settings
 from app.errors import AppError
 
@@ -30,8 +31,16 @@ STATIC = store.ROOT / "app" / "static"
 log = logging.getLogger("tab_trainer.main")
 
 
+def _another_instance() -> str:
+    return f"\n  另一个 tab-trainer 正在使用数据目录 {store.DATA}，请先关掉它（或用 TAB_TRAINER_DATA 指定别的目录）。\n"
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # 任务登记和存储锁都在进程内：两个实例同时用一个数据目录会重复识别、互相覆盖。main() 启动前已经锁过（同一个进程
+    # 再锁直接成功）；`uvicorn app.main:app --reload` 之类不经过 main 的启动在这里锁，锁不上就不启动（不做下面的恢复）
+    if not store.lock_data_dir():
+        raise RuntimeError(_another_instance())
     service.startup()  # 上次服务关掉时没跑完的任务标成中断；旧格式的曲子存成当前格式
     yield
 
@@ -52,8 +61,8 @@ async def app_error(_request: Request, e: AppError):
     return JSONResponse({"detail": str(e)}, status_code=e.status)
 
 
-def _files(files: list[UploadFile]) -> list[tuple[str, bytes]]:
-    return service.read_uploads([(f.filename or "upload", f.size, f.file) for f in files])
+def _files(files: list[UploadFile]) -> list[service.Upload]:
+    return [(f.filename or "upload", f.size, f.file) for f in files]
 
 
 # ---------------------------------------------------------------------------
@@ -71,12 +80,20 @@ def trainer():
 
 @app.get("/files/{sid}/source")
 def source_file(sid: str):
-    return FileResponse(service.source_file(sid))
+    """原文件只当下载的字节给（练习页用 fetch 取来交给 alphaTab）：不让浏览器按内容猜类型、当成页面打开。"""
+    path = service.source_file(sid)
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=path.name,
+        content_disposition_type="attachment",
+    )
 
 
 @app.get("/files/{sid}/{name}")
 def page_file(sid: str, name: str):
-    return FileResponse(service.page_file(sid, name))
+    """页面图片：只有 pN.png，类型固定是 image/png（不按扩展名猜）。"""
+    return FileResponse(service.page_file(sid, name), media_type="image/png")
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +101,7 @@ def page_file(sid: str, name: str):
 # ---------------------------------------------------------------------------
 @app.get("/api/settings")
 def get_settings():
-    return config.public_settings()
+    return service.settings_view()
 
 
 @app.put("/api/settings")
@@ -93,12 +110,12 @@ def put_settings(body: schemas.SettingsIn):
         k: getattr(body, k)
         for k in body.model_fields_set & {"base_url", "model", "effort", "double_check", "refine"}
     }
-    return config.update_settings(body.api_key, body.clear_api_key, fields)
+    return service.save_settings(body.api_key, body.clear_api_key, fields)
 
 
 @app.post("/api/settings/test")
 def test_settings():
-    return config.test_connection()
+    return service.test_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -109,14 +126,22 @@ def list_songs():
     return service.library()
 
 
-def _upload_limit(method: str, path: str) -> int | None:
-    """上传接口的请求体上限（字节，多给 1 MB 表单开销）；其他请求不限。"""
-    if method != "POST":
+_WRITES = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _body_limit(method: str, path: str) -> tuple[int, str] | None:
+    """请求体上限（字节）和超了时的说明。上传接口按文件的上限（多给 1 MB 表单开销）；GP 转换结果（小节多）按 song.json
+    的上限；别的写请求都是小的 JSON（settings.max_json_bytes）。读请求不限。"""
+    if method not in _WRITES:
         return None
-    limit = {"/api/songs": settings.max_total_bytes, "/api/import": settings.max_import_bytes}.get(path)
-    if path.startswith("/api/songs/") and path.endswith("/pages"):
-        limit = settings.max_total_bytes
-    return limit
+    mb = 1024 * 1024
+    upload = {"/api/songs": settings.max_total_bytes, "/api/import": settings.max_import_bytes}.get(path)
+    if method == "POST" and path.startswith("/api/songs/") and path.endswith("/pages"):
+        upload = settings.max_total_bytes
+    if method == "POST" and upload:
+        return upload + mb, f"文件总大小超过 {upload // mb} MB"
+    limit = settings.max_song_json if path.endswith("/derived") else settings.max_json_bytes
+    return limit, f"请求太大（超过 {max(1, limit // mb)} MB）"
 
 
 class _TooLarge(Exception):
@@ -124,25 +149,26 @@ class _TooLarge(Exception):
 
 
 class LimitUploadSize:
-    """表单解析之前就挡掉过大的上传（否则 Starlette 会先把整个请求收下来存到临时文件）：
-    有 Content-Length 的直接看它；分块上传（没有 Content-Length）边收边数，超过上限就不再往下读、回 413。"""
+    """解析之前就挡掉过大的请求体（否则 Starlette 会先把整个上传收下来存到临时文件、把整个 JSON 读进内存）：
+    有 Content-Length 的直接看它；分块上传（没有 Content-Length）边收边数，超过上限就不再往下读、回 413。上限见 _body_limit。"""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        limit = (
-            _upload_limit(scope.get("method", ""), scope.get("path", "")) if scope["type"] == "http" else None
+        rule = (
+            _body_limit(scope.get("method", ""), scope.get("path", "")) if scope["type"] == "http" else None
         )
-        if not limit:
+        if not rule:
             return await self.app(scope, receive, send)
-        too_large = JSONResponse({"detail": f"文件总大小超过 {limit // 1024 // 1024} MB"}, 413)
+        limit, why = rule
+        too_large = JSONResponse({"detail": why}, 413)
         headers = dict(scope.get("headers") or [])
         try:
             size = int(headers.get(b"content-length") or 0)
         except ValueError:
             size = 0
-        if size > limit + 1024 * 1024:
+        if size > limit:
             return await too_large(scope, receive, send)
         got, tripped, started = 0, False, False
 
@@ -151,7 +177,7 @@ class LimitUploadSize:
             message = await receive()
             if message["type"] == "http.request":
                 got += len(message.get("body") or b"")
-                if got > limit + 1024 * 1024:
+                if got > limit:
                     tripped = True
                     raise _TooLarge  # 表单解析会把它变成 400：下面按 tripped 改成 413
             return message
@@ -184,6 +210,8 @@ async def cache_headers(request: Request, call_next):
     接口数据一律不缓存（no-store）：前进 / 后退时 Chrome 会直接用 HTTP 缓存里的旧回应、不问服务器，
     从练习页后退回曲库（页面没能从往返缓存恢复、重新加载时）看到的就是旧的“待核对”数量、练习记录。"""
     response = await call_next(request)
+    # 所有响应都不许浏览器按内容猜类型（上传的文件不会被当成 HTML / 脚本执行）
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
     path = request.url.path
     if path in ("/", "/trainer") or path.startswith("/static/"):
         response.headers.setdefault("Cache-Control", "no-cache")
@@ -193,7 +221,9 @@ async def cache_headers(request: Request, call_next):
 
 
 @app.post("/api/songs")
-def upload(files: Annotated[list[UploadFile], File()], title: Annotated[str, Form()] = ""):
+def upload(
+    files: Annotated[list[UploadFile], File()], title: Annotated[str, Form(max_length=schemas.MAX_TITLE)] = ""
+):
     # 普通 def：FastAPI 放到线程池里跑，PDF 渲染、PNG 压缩不会卡住其他请求
     return {"id": service.upload(_files(files), title)}
 
@@ -267,6 +297,12 @@ def arrange_pages(
 @app.put("/api/songs/{sid}/tags")
 def put_tags(sid: str, body: schemas.TagsIn):
     return service.set_tags(sid, body.tags)
+
+
+@app.post("/api/songs/{sid}/archive")
+def archive(sid: str, body: schemas.ArchiveIn):
+    """归档 / 取消归档：{archived}。返回 {archived}。归档的曲子不排进今天的练琴清单，数据都留着。"""
+    return service.set_archived(sid, body.archived)
 
 
 @app.post("/api/songs/{sid}/explain")
@@ -365,7 +401,9 @@ async def _ask_events(run):
 
 @app.post("/api/songs/{sid}/practice")
 def practice(sid: str, body: schemas.PracticeIn):
-    return service.record_practice(sid, body.bar_ids, body.loops, body.bpm, body.seconds)
+    return service.record_practice(
+        sid, body.bar_ids, body.loops, body.bpm, body.seconds, body.kind, body.clean
+    )
 
 
 @app.get("/api/songs/{sid}/practice/history")
@@ -390,8 +428,8 @@ def put_study(sid: str, body: schemas.StudyIn):
 
 @app.post("/api/songs/{sid}/study/rate")
 def rate_song(sid: str, body: schemas.StudyRateIn):
-    """练完一遍的自评 1–4（同一个练琴日再评替换当天的）。不在计划里 400。返回 {study}。"""
-    return service.rate_song(sid, body.rating, body.issues, body.note, body.bpm)
+    """练完一遍的自评 1–4（同一个练琴日再评替换当天的），可以带 stuck_bars（卡住的小节 id）。不在计划里 400。返回 {study}。"""
+    return service.rate_song(sid, body.rating, body.issues, body.note, body.bpm, body.stuck_bars)
 
 
 @app.get("/api/study/today")
@@ -464,11 +502,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     import uvicorn
 
-    if not store.lock_data_dir():
-        # 任务登记和存储锁都在进程内：两个实例同时用一个数据目录会重复识别、互相覆盖
-        raise SystemExit(
-            f"\n  另一个 tab-trainer 正在使用数据目录 {store.DATA}，请先关掉它（或用 TAB_TRAINER_DATA 指定别的目录）。\n"
-        )
+    if not store.lock_data_dir():  # lifespan 里还会再确认一次（同一个进程再锁直接成功）
+        raise SystemExit(_another_instance())
 
     if a.host in auth.LOOPBACK:
         print(f"\n  tab-trainer 已启动：http://{a.host}:{a.port}\n")

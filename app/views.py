@@ -9,12 +9,18 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app import practice, state, store, study
+from app import practice, refine, state, store, study
+from app.confirmed import has_doubts, needs_review, reviewed
 from app.errors import CorruptSong, NotFound
 from app.jobs import jobs
 from app.llm import DEFAULT_MODEL, price_of
-from app.model import is_score, notes_key
-from app.music import warn_texts
+from app.model import is_score
+
+__all__ = [
+    "has_doubts",
+    "needs_review",
+    "reviewed",
+]  # 以前在这里定义（脚本还从这里取），规则在 app/confirmed.py
 
 log = logging.getLogger("tab_trainer.views")
 
@@ -31,29 +37,6 @@ def _public(x: Any) -> Any:
     return x
 
 
-def has_doubts(bar: dict) -> bool:
-    """有警告或者模型标了不确定。"""
-    return bool(bar.get("warn")) or bool(str(bar.get("uncertain") or "").strip())
-
-
-def reviewed(bar: dict) -> bool:
-    """用户看过、点了“确认没问题”，而且之后音没再变过（提示变了不算）、也没冒出确认时没有的警告
-    （比如改了拍号后时值对不上）。早先的确认只记了 rev（reviewed_rev）：rev 没变就有效；
-    reviewed_warn 为空（None）的只看音 / rev。"""
-    if bar.get("reviewed_key") is not None:
-        if bar["reviewed_key"] != notes_key(bar):
-            return False
-    elif bar.get("reviewed_rev") is None or bar.get("reviewed_rev") != int(bar.get("rev") or 0):
-        return False
-    seen = bar.get("reviewed_warn")
-    return seen is None or set(warn_texts(bar)) <= set(seen)
-
-
-def needs_review(bar: dict) -> bool:
-    """有警告或者模型标了不确定、用户还没确认过：练习页标出来、曲库里算作“待核对”。"""
-    return has_doubts(bar) and not reviewed(bar)
-
-
 def bar_view(s: dict, bar: dict, slots: dict | None = None) -> dict:
     out = _public(bar)
     out["warn"] = list(out.get("warn") or [])
@@ -64,22 +47,16 @@ def bar_view(s: dict, bar: dict, slots: dict | None = None) -> dict:
     for k in ("reviewed_key", "reviewed_rev", "reviewed_warn", "refine_key"):
         out.pop(k, None)
     out["locked"] = state.bar_locked(s, bar)
-    out["refinable"] = _refine().refinable(s, bar, slots)  # slots：见 refine.row_slots
+    out["refinable"] = refine.refinable(s, bar, slots)  # slots：见 refine.row_slots
     return out
 
 
-def _refine():
-    from app import refine  # refine 用到本模块的 reviewed
-
-    return refine
-
-
 def song_view(s: dict) -> dict:
-    """GET /api/songs/{id}。s 是 store.load 的结果。"""
+    """GET /api/songs/{id}。s 是 store.load / read 的结果（只读，不改它）。"""
     running = jobs.running(s["id"])
     flags = state.flags(s, running)
     notice = state.public_notice(s)
-    slots = _refine().row_slots(s)
+    slots = refine.row_slots(s)
     out = {k: v for k, v in s.items() if k not in _HIDDEN and k not in ("bars", "notice", "practice")}
     out = _public(out)
     out.update(
@@ -94,15 +71,16 @@ def song_view(s: dict) -> dict:
         is_score=is_score(s),
         failed_rows=failed_rows(s),
         refine_estimate=refine_estimate(s),
-        refine_scopes=_refine().scope_estimates(s),
+        refine_scopes=refine.scope_estimates(s),
         study=study.song_study(s),
+        archived=bool(s.get("archived")),
     )
     return out
 
 
 def refine_estimate(s: dict) -> dict | None:
     """现在点“精修整首”会核对几个小节、预估的费用和时间（见 app/refine.py）；GP / MusicXML 是 None。"""
-    return _refine().estimate(s)
+    return refine.estimate(s)
 
 
 def failed_rows(s: dict) -> int:
@@ -138,6 +116,7 @@ def library_item(s: dict) -> dict:
         "refined": s.get("refined"),
         "refine_estimate": refine_estimate(s),
         "tags": [t for t in s.get("tags") or [] if isinstance(t, str)],
+        "archived": bool(s.get("archived")),
         "practice": p,
         "study": study.song_study(s),
         **cost_summary(s.get("usage")),
@@ -158,6 +137,7 @@ def corrupt_item(sid: str, msg: str) -> dict:
         "practice": None,
         "study": None,
         "tags": [],
+        "archived": False,
     }
 
 
@@ -165,7 +145,7 @@ def list_library() -> list[dict]:
     out = []
     for sid in store.song_ids():
         try:
-            out.append(library_item(store.load(sid)))
+            out.append(library_item(store.read(sid)))  # 有缓存：没改过的曲子不用重新解析
         except CorruptSong as e:
             out.append(corrupt_item(sid, str(e)))
         except NotFound:  # 刚被删掉（别的 KeyError 之类是数据不对，按下面的坏曲子列出来，能删）

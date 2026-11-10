@@ -6,10 +6,11 @@
   最后一次自评（今天重评就替换今天的）。
 - data/study.json：设置（每天目标分钟数、同时学几首、每天最多复习几首）、秒表、练琴记录（秒表停下的、手动补记的）。
 - 练琴日：凌晨 4 点换日（DAY_START_HOUR），所有按天算的东西（自评、今天的队列、时长、连续天数）都用它。
-- 一天的练琴时长 = 秒表的各段 + 练习页里的练习（每首曲子的 practice.jsonl）合起来去掉重叠，裁到这一天里，
-  再加上手动补记的分钟数。
+- 一天的练琴时长 = 秒表的各段 + 练习页里的练习（每首曲子的 practice.jsonl，敲节奏也算）合起来去掉重叠，裁到这一天里，
+  再加上手动补记的分钟数。没有日期的练习（旧版本的聚合记录）放不进哪一天，只算进总时长（calendar 的 total_minutes）。
+  一首曲子练了多久和曲库里的“累计”是同一个算法（practice.time_of）。
 
-和时钟有关的函数都带 now 参数（测试用固定时间）。纯函数（replay / view / build_queue / merge …）只算数据，
+和时钟有关的函数都带 now 参数；不给时取 app.clock（测试可以用 clock.set_now 固定）。纯函数（replay / view / build_queue / merge …）只算数据，
 读写文件的在后面几节。
 """
 
@@ -17,31 +18,29 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import threading
 import uuid
-from pathlib import Path
 
 from pydantic import ValidationError
 
-from app import fsrs, practice, store
+from app import clock, fsrs, practice, store
 from app.errors import Conflict, CorruptSong, Invalid, NotFound
-from app.model import STUDY_SETTINGS, StudyRecord, StudySession, StudyTimer, is_score
+from app.model import MAX_SESSION_MINUTES, STUDY_SETTINGS, StudyRecord, StudySession, StudyTimer, is_score
+from app.timeline import Interval, clip, merge, parse_time, seconds_of
 
 log = logging.getLogger("tab_trainer.study")
 
 DAY_START_HOUR = 4  # 练琴日从凌晨 4 点开始：半夜 1 点练的还算前一天
-TIME_FMT = "%Y-%m-%d %H:%M:%S"
+TIME_FMT = clock.STAMP_FMT
 NOT_IN_PLAN = "这首曲子不在练琴计划里"
 MIN_TIMER_SECONDS = 60  # 秒表停下时不到 1 分钟的不记（点错了），除非手填了分钟数
-
-Interval = tuple[dt.datetime, dt.datetime]
 
 
 # ---------------------------------------------------------------------------
 # 时间
 # ---------------------------------------------------------------------------
 def current(now: dt.datetime | None = None) -> dt.datetime:
-    return (now or dt.datetime.now()).replace(microsecond=0)
+    """现在：给了 now 用它，否则取 app.clock（和练习记录同一个时钟）。"""
+    return (now or clock.now()).replace(microsecond=0)
 
 
 def practice_day(t: dt.datetime) -> str:
@@ -72,16 +71,6 @@ def fmt(t: dt.datetime) -> str:
     return t.strftime(TIME_FMT)
 
 
-def parse_time(s: object) -> dt.datetime | None:
-    """ "YYYY-MM-DD HH:MM[:SS]" → datetime；格式不对是 None。"""
-    if not isinstance(s, str) or len(s) < 16:
-        return None
-    try:
-        return dt.datetime.fromisoformat(s)
-    except ValueError:
-        return None
-
-
 def valid_day(day: object) -> bool:
     if not isinstance(day, str) or len(day) != 10:
         return False
@@ -95,10 +84,6 @@ def valid_day(day: object) -> bool:
 # ---------------------------------------------------------------------------
 # 自评记录 study.jsonl
 # ---------------------------------------------------------------------------
-_cache: dict[Path, tuple[int, int, list[dict]]] = {}
-_cache_lock = threading.Lock()
-
-
 def clean_rating(rec: object) -> dict | None:
     """一行自评记录按 model.StudyRecord 检查并整理；格式不对返回 None（这一行不要）。"""
     if not isinstance(rec, dict):
@@ -110,21 +95,8 @@ def clean_rating(rec: object) -> dict | None:
 
 
 def ratings(song_id: str) -> list[dict]:
-    """这首曲子的全部自评（按写入的先后）。解析结果按文件的修改时间和大小缓存。"""
-    path = store.study_log_path(song_id)
-    try:
-        st = path.stat()
-    except FileNotFoundError:
-        return []
-    sig = (st.st_mtime_ns, st.st_size)
-    with _cache_lock:
-        hit = _cache.get(path)
-    if hit and hit[:2] == sig:
-        return hit[2]
-    out = [r for r in map(clean_rating, store.read_jsonl(path)) if r]
-    with _cache_lock:
-        _cache[path] = (*sig, out)
-    return out
+    """这首曲子的全部自评（按写入的先后）。store.read_records 按文件签名缓存，只读。"""
+    return store.read_records(song_id, store.STUDY_LOG_FILE, clean_rating)
 
 
 def last_per_day(log_: list[dict]) -> dict[str, dict]:
@@ -168,8 +140,9 @@ def replay(rated: list[tuple[str, int]]) -> dict:
     return st
 
 
-def view(study: dict, log_: list[dict], today: str) -> dict:
-    """接口里的 study（见 model.StudyView）：study 是 song.json 里的字段，log_ 是自评记录。"""
+def view(study: dict, log_: list[dict], today: str, bars: list[dict] | None = None) -> dict:
+    """接口里的 study（见 viewmodels.StudyView）：study 是 song.json 里的字段，log_ 是自评记录，bars 是曲子现在的小节
+    （算最近一次自评卡住的小节 stuck_bars：[{id, n}]，已经不在曲子里的 id 不算）。"""
     days = last_per_day(log_)
     rated = [(d, r["rating"]) for d, r in days.items()]
     st = replay(rated)
@@ -193,7 +166,16 @@ def view(study: dict, log_: list[dict], today: str) -> dict:
         "stability": round(st["s"], 3) if st["s"] is not None else None,
         "difficulty": round(st["d"], 3) if st["d"] is not None else None,
         "preview": preview,
+        "stuck_bars": stuck_view(last, bars),
     }
+
+
+def stuck_view(rec: dict | None, bars: list[dict] | None) -> list[dict]:
+    """一次自评卡住的小节 → [{id, n}]（按小节顺序；曲子里已经没有的 id 不要）。"""
+    want = set((rec or {}).get("stuck_bars") or [])
+    if not want:
+        return []
+    return [{"id": b["id"], "n": i + 1} for i, b in enumerate(bars or []) if b.get("id") in want]
 
 
 def _due_in(due: str | None, today: str) -> int | None:
@@ -252,25 +234,6 @@ def streak(active: set[str], today: str) -> int:
 # ---------------------------------------------------------------------------
 # 时间段：合并、裁剪、按天分（纯函数）
 # ---------------------------------------------------------------------------
-def merge(intervals: list[Interval]) -> list[Interval]:
-    """去掉重叠（首尾相接的也连成一段），按开始时间排好。长度为 0 的不要。"""
-    out: list[list[dt.datetime]] = []
-    for a, b in sorted(x for x in intervals if x[1] > x[0]):
-        if out and a <= out[-1][1]:
-            out[-1][1] = max(out[-1][1], b)
-        else:
-            out.append([a, b])
-    return [(a, b) for a, b in out]
-
-
-def clip(intervals: list[Interval], lo: dt.datetime, hi: dt.datetime) -> list[Interval]:
-    return [(max(a, lo), min(b, hi)) for a, b in intervals if b > lo and a < hi]
-
-
-def seconds_of(intervals: list[Interval]) -> float:
-    return sum((b - a).total_seconds() for a, b in intervals)
-
-
 def seconds_by_day(merged: list[Interval]) -> dict[str, float]:
     """合并好的时间段按练琴日切开，每天多少秒。"""
     out: dict[str, float] = {}
@@ -312,15 +275,8 @@ def session_intervals(session: dict) -> list[Interval]:
 
 
 def app_intervals(records: list[dict]) -> list[Interval]:
-    """练习页的练习记录 → 时间段 [at − seconds, at]（at 是练完的时间，只到分钟）。种子记录（旧版本的聚合）没有时间，不算。"""
-    out = []
-    for r in records:
-        end = parse_time(r.get("at"))
-        secs = float(r.get("seconds") or 0)
-        if r.get("seed") or end is None or secs <= 0:
-            continue
-        out.append((end - dt.timedelta(seconds=secs), end))
-    return out
+    """练习页的练习记录 → 时间段（见 practice.intervals）。"""
+    return practice.intervals(records)
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +294,8 @@ def clean_settings(raw: object) -> dict:
 
 
 def clean_data(raw: object) -> dict:
-    """study.json 的内容整理成 {settings, timer, sessions}：格式不对的秒表当没有，格式不对的练琴记录跳过。"""
+    """study.json 的内容整理成 {settings, timer, sessions, next_order}：格式不对的秒表当没有，格式不对的练琴记录跳过。
+    next_order：下一首加进计划的曲子的序号（见 _next_order）。"""
     raw = raw if isinstance(raw, dict) else {}
     timer = None
     if raw.get("timer") is not None:
@@ -356,7 +313,14 @@ def clean_data(raw: object) -> dict:
         if any(b is None for _, b in rec["segments"]):
             continue
         sessions.append(rec)
-    return {"settings": clean_settings(raw.get("settings")), "timer": timer, "sessions": sessions}
+    nxt = raw.get("next_order")
+    nxt = nxt if isinstance(nxt, int) and not isinstance(nxt, bool) and nxt >= 0 else 0
+    return {
+        "settings": clean_settings(raw.get("settings")),
+        "timer": timer,
+        "sessions": sessions,
+        "next_order": nxt,
+    }
 
 
 def load() -> dict:
@@ -433,7 +397,8 @@ def timer_action(action: str, minutes: float | None = None, now: dt.datetime | N
             "kind": "timer",
             "day": practice_day(start),
             "segments": segs,
-            "minutes": round(minutes if minutes is not None else total / 60, 2),
+            # 忘了停的秒表最多记 MAX_SESSION_MINUTES（和手填的上限一样）
+            "minutes": round(min(minutes if minutes is not None else total / 60, MAX_SESSION_MINUTES), 2),
             "note": "",
         }
         data["sessions"].append(session)
@@ -499,15 +464,18 @@ class _Library:
     def __init__(self) -> None:
         self.songs: dict[str, dict] = {}  # 读得出来的曲子
         self.app: dict[str, list[Interval]] = {}  # 每首曲子练习页里的练习时间段（读不出来的曲子也算）
+        self.undated: dict[str, float] = {}  # 每首曲子没有日期的练习秒数（practice.undated_seconds）
         self.logs: dict[str, list[dict]] = {}  # 每首曲子的自评（移出计划的也在）
         for sid in store.song_ids():
             try:
-                self.app[sid] = app_intervals(practice.records(sid))
+                recs = practice.records(sid)
+                self.app[sid] = practice.intervals(recs)
+                self.undated[sid] = practice.undated_seconds(recs)
                 self.logs[sid] = ratings(sid)
             except (NotFound, OSError, ValueError):  # 刚删掉的；记录文件不是 UTF-8（手改坏了）的这首不算
                 continue
             try:
-                self.songs[sid] = store.load(sid)
+                self.songs[sid] = store.read(sid)  # 有缓存，只读
             except NotFound:
                 continue
             except CorruptSong as e:
@@ -527,6 +495,18 @@ class _Library:
         if data["timer"]:
             out += _segments(data["timer"]["segments"], now)
         return out
+
+    def song_seconds(self, sid: str) -> float:
+        """一首曲子练了多久（秒）：和 practice.time_of 同一个算法（有日期的合并重叠，加上没日期的）。"""
+        return round(seconds_of(merge(self.app.get(sid, []))) + self.undated.get(sid, 0.0), 1)
+
+    def totals(self, data: dict, now: dt.datetime) -> dict:
+        """有记录以来的练琴总时长（分钟）：秒表 + 练习页的合并去重，加上手动补记，再加上没日期的（旧版本的练习记录）。
+        {total_minutes, undated_minutes}：undated_minutes 已经含在 total_minutes 里（界面上说“含早期未记日期的 N 分钟”）。"""
+        dated = seconds_of(merge(self.all_intervals(data, now))) / 60
+        manual = sum(s["minutes"] for s in data["sessions"] if s["kind"] == "manual")
+        undated = sum(self.undated.values()) / 60
+        return {"total_minutes": round(dated + manual + undated, 1), "undated_minutes": round(undated, 1)}
 
     def activity(self, data: dict, now: dt.datetime) -> dict[str, dict]:
         """每个有动静的练琴日：{minutes（秒表 + 练习页去重后，加上手动补记）, manual, ratings（评了几首）}。"""
@@ -559,7 +539,7 @@ def song_study(song: dict, now: dt.datetime | None = None) -> dict | None:
     st = song.get("study")
     if not isinstance(st, dict):
         return None
-    return view(st, ratings(song["id"]), practice_day(current(now)))
+    return view(st, ratings(song["id"]), practice_day(current(now)), song.get("bars"))
 
 
 def _minutes(act: dict, day: str, goal: int) -> dict:
@@ -568,15 +548,18 @@ def _minutes(act: dict, day: str, goal: int) -> dict:
 
 
 def today(now: dt.datetime | None = None) -> dict:
-    """GET /api/study/today：今天的队列、做完的、时长、连续天数、秒表。"""
+    """GET /api/study/today：今天的队列、做完的、时长、连续天数、秒表。归档的曲子不算在计划里（counts.archived 是几首）。"""
     t = current(now)
     day = practice_day(t)
     data = load()
     lib = _Library()
     act = lib.activity(data, t)
     lo, hi = day_bounds(day)
-    items, rated_at = [], {}
+    items, rated_at, archived = [], {}, 0
     for sid, s in lib.plan().items():
+        if s.get("archived"):  # 归档的不排进今天（计划里的位置、自评都留着，取消归档就回来）
+            archived += 1
+            continue
         log_ = lib.logs.get(sid, [])
         meta = s.get("meta") if isinstance(s.get("meta"), dict) else {}
         items.append(
@@ -584,8 +567,10 @@ def today(now: dt.datetime | None = None) -> dict:
                 "id": sid,
                 "title": s.get("title") or "未命名",
                 "artist": meta.get("artist", ""),
-                "study": view(s["study"], log_, day),
+                "study": view(s["study"], log_, day, s.get("bars")),
                 "today_seconds": round(seconds_of(clip(merge(lib.app.get(sid, [])), lo, hi)), 1),
+                "total_seconds": lib.song_seconds(sid),  # 一共练了多久（含没日期的）
+                "undated_seconds": round(lib.undated.get(sid, 0.0), 1),
                 "playable": playable(s),
             }
         )
@@ -593,6 +578,8 @@ def today(now: dt.datetime | None = None) -> dict:
             rated_at[sid] = today_rec["at"]
     active = {d for d, v in act.items() if v["minutes"] > 0 or v["ratings"]}
     week = [add_days(day, -i) for i in range(7)]
+    queue = build_queue(items, data["settings"], day, rated_at)
+    queue["counts"]["archived"] = archived
     return {
         "day": day,
         "settings": data["settings"],
@@ -600,23 +587,25 @@ def today(now: dt.datetime | None = None) -> dict:
         "streak": streak(active, day),
         "week_minutes": round(sum((act.get(d) or {}).get("minutes", 0.0) for d in week), 1),
         "timer": timer_view(data["timer"], t),
-        **build_queue(items, data["settings"], day, rated_at),
+        **queue,
     }
 
 
 def calendar(days: int = 371, now: dt.datetime | None = None) -> dict:
-    """GET /api/study/calendar：最近 days 个练琴日（含今天）里有练琴或自评的日子，早的在前。"""
+    """GET /api/study/calendar：最近 days 个练琴日（含今天）里有练琴或自评的日子，早的在前；
+    另有有记录以来的总时长 total_minutes（含没日期的 undated_minutes，见 _Library.totals）。"""
     t = current(now)
     day = practice_day(t)
     data = load()
-    act = _Library().activity(data, t)
+    lib = _Library()
+    act = lib.activity(data, t)
     first = add_days(day, -(days - 1))
     out = [
         {"day": d, "minutes": v["minutes"], "ratings": v["ratings"]}
         for d, v in sorted(act.items())
         if first <= d <= day and (v["minutes"] > 0 or v["ratings"])
     ]
-    return {"days": out, "goal": data["settings"]["goal_minutes"], "today": day}
+    return {"days": out, "goal": data["settings"]["goal_minutes"], "today": day, **lib.totals(data, t)}
 
 
 def day_detail(day: str, now: dt.datetime | None = None) -> dict:
@@ -658,11 +647,11 @@ def day_detail(day: str, now: dt.datetime | None = None) -> dict:
 # 写：加入 / 移出 / 暂停、排顺序、自评
 # ---------------------------------------------------------------------------
 def _plan_songs() -> dict[str, dict]:
-    """计划里、读得出来的曲子（排顺序、加入时找最大序号用）。"""
+    """计划里、读得出来的曲子（排顺序、加入时找最大序号用；store.read 的缓存，只读）。不拿任何锁。"""
     out = {}
     for sid in store.song_ids():
         try:
-            s = store.load(sid)
+            s = store.read(sid)
         except (NotFound, CorruptSong):  # 刚删掉的、坏了的在这里不管
             continue
         except Exception:
@@ -673,54 +662,102 @@ def _plan_songs() -> dict[str, dict]:
     return out
 
 
+def _next_order() -> int:
+    """新加进计划的曲子排在最后：比现在计划里最大的序号大。扫曲库不拿锁；取号在 study.json 的锁里，
+    同时加两首也不会拿到同一个序号（计数器 next_order 存在 study.json）。"""
+    biggest = max((int(x["study"].get("order") or 0) for x in _plan_songs().values()), default=-1)
+    out = {}
+
+    def fn(data: dict) -> None:
+        out["n"] = max(data["next_order"], biggest + 1)
+        data["next_order"] = out["n"] + 1
+
+    _update(fn)
+    return out["n"]
+
+
 def set_plan(
     sid: str, in_plan: bool | None = None, paused: bool | None = None, now: dt.datetime | None = None
 ) -> dict:
     """PUT /api/songs/{sid}/study：加入计划（排在最后）/ 移出（自评记录留着）/ 暂停 / 继续。返回 {study}。"""
     t = current(now)
-    with store._lock:  # 找最大序号和写入在同一把锁里：同时加两首不会排到同一个位置
-        s = store.load(sid)
-        st = s.get("study") if isinstance(s.get("study"), dict) else None
-        if in_plan is False:
-            if st is not None:
-                s = store.update(sid, lambda x: x.pop("study", None))
-            return {"study": None}
-        if st is None and not in_plan:
-            if paused is not None:
-                raise Invalid(NOT_IN_PLAN)
-            return {"study": None}
-        new = dict(st or {})
-        if st is None:
-            orders = [int(x["study"].get("order") or 0) for x in _plan_songs().values()]
-            new = {"order": max(orders, default=-1) + 1, "added": fmt(t), "paused": False}
+    s = store.read(sid)
+    st = s.get("study") if isinstance(s.get("study"), dict) else None
+    if in_plan is False:
+        if st is not None:
+            store.update(sid, lambda x: x.pop("study", None))
+        return {"study": None}
+    if st is None and not in_plan:
         if paused is not None:
-            new["paused"] = paused
-        if new != st:
-            s = store.update(sid, lambda x: x.update(study=new))
+            raise Invalid(NOT_IN_PLAN)
+        return {"study": None}
+    order = _next_order() if st is None else None  # 在曲子的锁外面取号（要扫曲库）
+
+    def apply(x: dict) -> None:
+        cur = x.get("study") if isinstance(x.get("study"), dict) else None
+        if cur is None:
+            if not in_plan:  # 刚被别处移出了计划
+                raise Invalid(NOT_IN_PLAN)
+            # 读的时候还在计划里、改的时候已经被移出：重新取号（已经拿着曲子的锁，只看计数器、不扫曲库）
+            n = order if order is not None else _next_order_counter()
+            cur = {"order": n, "added": fmt(t), "paused": False}
+        x["study"] = {**cur, **({"paused": paused} if paused is not None else {})}
+
+    if st is None or (paused is not None and bool(st.get("paused")) != paused):
+        s = store.update(sid, apply)
     return {"study": song_study(s, t)}
 
 
+def _next_order_counter() -> int:
+    """只按 study.json 里的计数器取号（已经拿着曲子的锁时用，不扫曲库）。"""
+    out = {}
+
+    def fn(data: dict) -> None:
+        out["n"] = data["next_order"]
+        data["next_order"] += 1
+
+    _update(fn)
+    return out["n"]
+
+
 def reorder(ids: list[str]) -> None:
-    """PUT /api/study/order：ids 里（计划中的）曲子按给的顺序排在最前，没列出的按原来的先后排在后面。"""
-    with store._lock:
-        plan = _plan_songs()
-        listed = [x for x in dict.fromkeys(ids) if x in plan]
-        rest = sorted(
-            (x for x in plan if x not in listed), key=lambda x: (int(plan[x]["study"].get("order") or 0), x)
-        )
-        for i, sid in enumerate(listed + rest):
-            if plan[sid]["study"].get("order") != i:
-                store.update(sid, lambda s, i=i: s["study"].update(order=i))
+    """PUT /api/study/order：ids 里（计划中的）曲子按给的顺序排在最前，没列出的按原来的先后排在后面。
+    扫曲库不拿锁；每首只在改自己的序号时锁一下（期间被移出计划、删掉的跳过）。"""
+    plan = _plan_songs()
+    listed = [x for x in dict.fromkeys(ids) if x in plan]
+    rest = sorted(
+        (x for x in plan if x not in listed), key=lambda x: (int(plan[x]["study"].get("order") or 0), x)
+    )
+    for i, sid in enumerate(listed + rest):
+        if plan[sid]["study"].get("order") == i:
+            continue
+
+        def apply(s: dict, i: int = i) -> None:
+            if isinstance(s.get("study"), dict):
+                s["study"]["order"] = i
+
+        try:
+            store.update(sid, apply)
+        except NotFound:
+            continue
 
 
 def rate(
-    sid: str, rating: int, issues: list[str], note: str = "", bpm: int = 0, now: dt.datetime | None = None
+    sid: str,
+    rating: int,
+    issues: list[str],
+    note: str = "",
+    bpm: int = 0,
+    now: dt.datetime | None = None,
+    stuck_bars: list[str] | None = None,
 ) -> dict:
-    """POST /api/songs/{sid}/study/rate：记下这一遍的自评（同一天再评替换今天的）。返回 {study}。"""
+    """POST /api/songs/{sid}/study/rate：记下这一遍的自评（同一天再评替换今天的）。stuck_bars：卡在哪几个小节
+    （小节 id；曲子里没有的忽略）。返回 {study}。"""
     t = current(now)
-    s = store.load(sid)
+    s = store.read(sid)
     if not isinstance(s.get("study"), dict):
         raise Invalid(NOT_IN_PLAN)
+    known = {b.get("id") for b in s.get("bars") or []}
     rec = clean_rating(
         {
             "at": fmt(t),
@@ -729,6 +766,7 @@ def rate(
             "issues": issues,
             "note": note.strip(),
             "bpm": bpm,
+            "stuck_bars": [x for x in stuck_bars or [] if x in known],
         }
     )
     if rec is None:  # schemas.StudyRateIn 检查过，不会到这里

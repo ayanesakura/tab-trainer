@@ -127,6 +127,15 @@ def _bundle(song: dict, files: dict[str, bytes], manifest: dict | None = None) -
     return buf
 
 
+def _gif_with_script() -> bytes:
+    """一张能解码的 GIF，后面跟着一段 HTML（按 text/html 打开时会执行）。"""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 40), "white").save(buf, "GIF")
+    return buf.getvalue() + b"<script>alert(1)</script>"
+
+
 @pytest.mark.parametrize(
     ("song", "files", "reason"),
     [
@@ -140,6 +149,19 @@ def _bundle(song: dict, files: dict[str, bytes], manifest: dict | None = None) -
         ({"id": "evil-0004", "source": "../source.gp5"}, {}, "原文件名无效"),
         ({"id": "evil-0005", "source": "source.gp5"}, {"songs/evil-0005/source.gp5": b"junk"}, "不是有效"),
         ({"id": "evil-0006", "schema_version": 99}, {}, "更新版本"),
+        # 页面只认 pN.png：别的名字（x.html 会被当成网页）和别的格式（GIF 里藏 <script>）都不要
+        (
+            {"id": "evil-0007", "pages": [{"file": "x.html", "width": 1, "height": 1}]},
+            {"songs/evil-0007/pages/x.html": _gif_with_script()},
+            "页面文件名无效",
+        ),
+        (
+            {"id": "evil-0008", "pages": [{"file": "p1.png", "width": 1, "height": 1}]},
+            {"songs/evil-0008/pages/p1.png": _gif_with_script()},
+            "不是有效的图片",
+        ),
+        ({"id": "evil-0009", "pages": [{"file": "p1.png\n"}]}, {}, "页面文件名无效"),
+        ({"id": "evil-0010", "source": "x.gp5"}, {"songs/evil-0010/x.gp5": GP5}, "原文件名无效"),
     ],
 )
 def test_import_rejects_bad_songs(data_dir, song, files, reason):
@@ -170,6 +192,69 @@ def test_import_rejects_bad_manifest(data_dir):
         [("x.zip", _bundle(song, {}, {"format": bundles.FORMAT, "songs": [{"id": "../x"}]}))]
     )
     assert "id 无效" in r["skipped"][0]["reason"]
+
+
+@pytest.mark.parametrize("version", [[1], {"a": 1}, "x", 1.5, True])
+def test_import_rejects_manifest_version_of_wrong_type(data_dir, version):
+    """清单的 version 是列表 / 字典之类：这个包跳过并说明原因（以前 int() 抛 TypeError → 500，
+    同一次导入里前面已经装好的曲子还在，但前端只看到失败）。"""
+    good = {"id": "ok-00001", "pages": [], "bars": [], "status": "ready"}
+    bad_manifest = {"format": bundles.FORMAT, "version": version, "songs": [{"id": "ok-00002"}]}
+    r = bundles.import_bundles(
+        [("good.zip", _bundle(good, {})), ("bad.zip", _bundle({"id": "ok-00002"}, {}, bad_manifest))]
+    )
+    assert [s["id"] for s in r["imported"]] == ["ok-00001"] and r["imported"][0]["bundle"] == "good.zip"
+    assert r["skipped"][0]["title"] == "bad.zip" and "版本号" in r["skipped"][0]["reason"]
+    assert r["bundles"] == [
+        {"file": "good.zip", "ok": True, "imported": 1, "skipped": 0, "error": None},
+        {"file": "bad.zip", "ok": False, "imported": 0, "skipped": 1, "error": r["skipped"][0]["reason"]},
+    ]
+
+
+def test_import_reports_each_bundle_over_http(client):
+    good = {"id": "ok-00001", "pages": [], "bars": [], "status": "ready"}
+    bad = {"format": bundles.FORMAT, "version": [1], "songs": []}
+    files = [
+        ("files", ("a.zip", _bundle(good, {}).getvalue())),
+        ("files", ("b.zip", _bundle(good, {}, bad).getvalue())),
+        ("files", ("c.zip", b"not a zip")),
+    ]
+    r = client.post("/api/import", files=files)
+    assert r.status_code == 200
+    assert [(b["file"], b["ok"], b["imported"]) for b in r.json()["bundles"]] == [
+        ("a.zip", True, 1),
+        ("b.zip", False, 0),
+        ("c.zip", False, 0),
+    ]
+
+
+def test_import_rejects_songs_whose_references_do_not_match(data_dir):
+    """形状对、但字段之间对不上（小节的页号不存在）：不导入（以前导进来以后问 AI 时 IndexError → 500）。"""
+    png = io.BytesIO()
+    from PIL import Image
+
+    Image.new("RGB", (64, 64), "white").save(png, "PNG")
+    bar = {
+        "id": "b1",
+        "system": None,
+        "page": 5,
+        "region": [0, 1, 0, 1],
+        "events": [{"dur": "4", "notes": []}],
+    }
+    song = {
+        "id": "ref-0001",
+        "schema_version": 2,
+        "source_type": "image",
+        "status": "ready",
+        "pages": [{"file": "p1.png", "width": 64, "height": 64}],
+        "meta": {"tuning": music.STANDARD, "time_signature": [4, 4]},
+        "bars": [bar],
+    }
+    r = bundles.import_bundles([("x.zip", _bundle(song, {"songs/ref-0001/pages/p1.png": png.getvalue()}))])
+    assert (
+        r["imported"] == [] and "对不上" in r["skipped"][0]["reason"] and "页号" in r["skipped"][0]["reason"]
+    )
+    assert not store.exists("ref-0001")
 
 
 def test_import_size_budget(data_dir, monkeypatch):
