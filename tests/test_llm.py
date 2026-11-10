@@ -405,3 +405,61 @@ def test_json_calls_use_the_fallback_models_answer():
     _mock_client(c, lambda req: _sse_response(_reply(['{"half": ', '{"ok": 2}'], fallback_at=1)))
     assert c._call([], {}) == {"ok": 2}
     assert c.usage["cost_usd"] == pytest.approx((5 * 2 + 7 * 10) / 1e6)  # 按兜底模型（Sonnet）的价格
+
+
+def _bad_request(body):
+    import anthropic
+    import httpx
+
+    req = httpx.Request("POST", "http://127.0.0.1:3425/v1/messages")
+    return anthropic.BadRequestError("x", response=httpx.Response(400, request=req, json=body), body=body)
+
+
+def test_fallbacks_are_dropped_only_when_the_400_is_about_them():
+    """400 说的是 fallbacks 参数（错误体里的 param 或 message）才关掉兜底重来；别的参数错误照常报错。"""
+    from app.llm import _about_fallbacks
+
+    def err(**e):
+        return _bad_request({"type": "error", "error": {"type": "invalid_request_error", **e}})
+
+    assert _about_fallbacks(err(message="fallbacks: Extra inputs are not permitted"))
+    assert _about_fallbacks(
+        err(message="Unexpected value(s) `server-side-fallback-2026-07-01` for anthropic-beta")
+    )
+    assert _about_fallbacks(err(message="invalid request", param="fallbacks"))
+    assert not _about_fallbacks(err(message="max_tokens: too large", param="max_tokens"))
+    assert not _about_fallbacks(err(message="fallback mentioned elsewhere", param="max_tokens"))
+    assert not _about_fallbacks(err(message="prompt is too long"))
+    assert _about_fallbacks(_bad_request(None)) is False  # 没有错误体：看异常文字（这里是 "x"）
+
+    c = Claude(LLMConfig(api_key="sk-test"))
+    assert not c._drop_fallbacks(err(message="prompt is too long"), True) and c.use_fallbacks
+    assert c._drop_fallbacks(err(message="unknown field fallbacks"), True) and not c.use_fallbacks
+
+
+def test_verify_retries_at_the_normal_effort_only_when_truncated(monkeypatch):
+    """精修最高精细度输出超长被截断（Truncated）：按设置的精细度再核对一次；拒绝等别的错误照常抛出。"""
+    from PIL import Image
+
+    from app.llm import VERIFY_EFFORT, Refused, Truncated
+
+    c = Claude(LLMConfig(api_key="sk-test", effort="high"))
+    efforts = []
+    errors = [Truncated("输出超出长度上限，被截断")]
+
+    def call(content, schema, effort=None, max_tokens=32000):
+        efforts.append(effort)
+        if errors:
+            raise errors.pop(0)
+        return {"changed": False}
+
+    monkeypatch.setattr(c, "_call", call)
+    meta = {**META, "notes": ""}
+    img = Image.new("RGB", (200, 100), "white")
+    assert c.verify_bar(img, meta, (10, 190), []) == {"changed": False}
+    assert efforts == [VERIFY_EFFORT, None]
+    efforts.clear()
+    errors.append(Refused("模型拒绝了这次请求（不是截断）"))
+    with pytest.raises(Refused):
+        c.verify_bar(img, meta, (10, 190), [])
+    assert efforts == [VERIFY_EFFORT]

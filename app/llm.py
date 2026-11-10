@@ -69,6 +69,14 @@ class LLMError(Upstream):
         self.request_id = request_id
 
 
+class Refused(LLMError):
+    """模型拒绝了这次请求（stop_reason = refusal）。"""
+
+
+class Truncated(LLMError):
+    """输出超出长度上限被截断（stop_reason = max_tokens）。"""
+
+
 class MissingKey(LLMError, Invalid):
     """还没有设置 API key：用户自己能解决，400。"""
 
@@ -99,6 +107,18 @@ def _dropped_mid_stream(e: Exception) -> bool:
     body = e.body if isinstance(e.body, dict) else {}
     err = body.get("error") if isinstance(body.get("error"), dict) else body
     return err.get("type") in ("api_error", "overloaded_error")
+
+
+def _about_fallbacks(e: anthropic.BadRequestError) -> bool:
+    """400 说的是不是 fallbacks 参数（或它的 beta 头）：先看错误体里指明的参数（param，有的网关会给），
+    再看错误说明（error.message）；错误体不是 JSON 时退回看整个异常的文字。"""
+    body = e.body if isinstance(e.body, dict) else {}
+    err = body.get("error") if isinstance(body.get("error"), dict) else body
+    param = err.get("param")
+    if isinstance(param, str) and param:
+        return "fallback" in param.lower()
+    msg = err.get("message")
+    return "fallback" in (msg if isinstance(msg, str) else str(e)).lower()
 
 
 def answer_text(msg) -> str:
@@ -311,7 +331,7 @@ class Claude(LLM):
     def _drop_fallbacks(self, e: anthropic.BadRequestError, used_fallbacks: bool) -> bool:
         """代理或旧模型可能不认识 fallbacks 参数：这次请求带了、报错说的又是它，就关掉兜底，
         返回 True 让调用方不带它重试一次（看的是这次请求自己有没有带）。"""
-        if not (used_fallbacks and "fallback" in str(e).lower()):
+        if not (used_fallbacks and _about_fallbacks(e)):
             return False
         log.warning("request_id=%s fallbacks rejected, retrying without: %s", request_id_of(e), e)
         with self._lock:
@@ -339,9 +359,9 @@ class Claude(LLM):
         rid = getattr(msg, "_request_id", None) or "none"
         self._local.request_id = rid
         if msg.stop_reason == "refusal":
-            raise LLMError(f"模型拒绝了这次请求（request_id={rid}）", rid)
+            raise Refused(f"模型拒绝了这次请求（request_id={rid}）", rid)
         if msg.stop_reason == "max_tokens":
-            raise LLMError(f"输出超出长度上限，被截断（request_id={rid}）", rid)
+            raise Truncated(f"输出超出长度上限，被截断（request_id={rid}）", rid)
         return rid
 
     def _call(self, content: list, schema: dict, effort: str | None = None, max_tokens: int = 32000) -> dict:
@@ -629,9 +649,7 @@ class Claude(LLM):
         try:
             # 精修用最高精细度：评测里最难的 25 个错小节改对 24 个、对的 208 个一个没改坏（high 只改对 16 个）
             return self._call(content, VERIFY_SCHEMA, effort=VERIFY_EFFORT, max_tokens=VERIFY_MAX_TOKENS)
-        except LLMError as e:
-            if "截断" not in str(e):
-                raise
+        except Truncated:
             # 想得太久、输出超长（很少见）：按设置里的精细度再核对一次
             log.warning("verify_bar truncated at effort %s, retrying with %s", VERIFY_EFFORT, self.cfg.effort)
             return self._call(content, VERIFY_SCHEMA)
