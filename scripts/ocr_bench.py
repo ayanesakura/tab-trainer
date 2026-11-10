@@ -278,7 +278,7 @@ def main() -> None:
     a = ap.parse_args()
     if a.model:
         ocr.MODEL = a.model
-        ocr._recognizer.cache_clear()
+        ocr._load.cache_clear()
     if a.light is not None:
         ocr.LIGHT = a.light
     if a.digits_only:

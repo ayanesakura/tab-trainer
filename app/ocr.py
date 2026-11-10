@@ -52,7 +52,9 @@ BRACKETS = {
 # 数字块连同括号一起读：块里常混着括号（"(5)"、"<7>" 的括号和数字挨得近，会拼进同一块；单独的括号也像 1），
 # 只许读数字时模型只好把括号也读成数字（"<7>" → 77、")" → 1）。让它可以读成括号，再把括号去掉
 MARKS_IN_BLOCK = True
-_lock = threading.Lock()
+# 识别模型只建一次（几个识别线程第一次同时用到时也只建一个）；建好以后各线程同时推理，不加锁
+# （onnxruntime 的 InferenceSession.run 是线程安全的）
+_init_lock = threading.Lock()
 
 
 class Digit(NamedTuple):
@@ -122,7 +124,7 @@ class _Recognizer:
 
 
 @lru_cache(maxsize=1)
-def _recognizer() -> _Recognizer | None:
+def _load() -> _Recognizer | None:
     try:
         return _Recognizer(MODEL)
     except Exception as e:  # noqa: BLE001 - 缺依赖 / 模型文件时整个校对功能关闭，不影响识别
@@ -130,18 +132,29 @@ def _recognizer() -> _Recognizer | None:
         return None
 
 
+def _recognizer() -> _Recognizer | None:
+    with _init_lock:
+        return _load()
+
+
 def available() -> bool:
     return MODEL.exists() and _recognizer() is not None
 
 
 def read_system(
-    gray: np.ndarray, lines: list[float], spans: list[tuple[float, float]], detail: bool = False
+    gray: np.ndarray,
+    lines: list[float],
+    spans: list[tuple[float, float]],
+    detail: bool = False,
+    marks_in_block: bool | None = None,
 ) -> list[list[tuple[int, int]]] | list[list[Digit]] | None:
     """读一行六线谱。gray：这一行的灰度裁剪图；lines：6 根弦线的 y；spans：每个小节的 [x0, x1)。
     返回每个小节读到的 [(弦, 品), ...]（按弦、再按横坐标排序）；不可用时返回 None。
     detail=True 时每个音换成 Digit（多了横坐标和括号 / 尖括号标记），读到的音和顺序完全一样；
     数字块本身没带上括号的，要连同左右再读一遍，大约多花一倍时间。
-    括号标记的准确率见 scripts/ocr_bench.py --gp-truth（(n)：鬼音、小节开头的延续音；<n>：泛音）。"""
+    括号标记的准确率见 scripts/ocr_bench.py --gp-truth（(n)：鬼音、小节开头的延续音；<n>：泛音）。
+    marks_in_block：数字块连同括号一起读（None = 按 MARKS_IN_BLOCK）。"""
+    marks = MARKS_IN_BLOCK if marks_in_block is None else marks_in_block
     rec = _recognizer()
     if rec is None or len(lines) != 6 or not spans:
         return None
@@ -201,8 +214,7 @@ def read_system(
         sub = lab[c["y"] : c["y"] + c["h"], c["x"] : c["x"] + c["w"]]
         mask = np.isin(sub, c["ids"])
         glyph = np.pad(np.where(mask, 0, 255).astype(np.uint8), pad, constant_values=255)
-        with _lock:
-            raw = rec.marks(glyph) if MARKS_IN_BLOCK else rec.digits(glyph)
+        raw = rec.marks(glyph) if marks else rec.digits(glyph)
         t = "".join(ch for ch in raw if ch.isdigit())
         # 行首谱号 TAB 的 T、B 也是宽块，会被硬读成 1、0：那一段（第一个小节开头 3 个线距内）的宽块
         # 只在模型确实读出了括号时才要（"(2)"）
@@ -238,8 +250,7 @@ def _brackets(rec, region, lab, owner: dict, k: int, c: dict, pad: int) -> tuple
     sub = lab[y0:y1, x0:x1]
     ink = region[y0:y1, x0:x1] & ~np.isin(sub, [i for i, o in owner.items() if o != k])
     glyph = np.pad(np.where(ink, 0, 255).astype(np.uint8), pad, constant_values=255)
-    with _lock:
-        t = rec.marks(glyph)
+    t = rec.marks(glyph)
     # 括号里的数字这次可能读错（"(0)" 读成 "()"）：只看括号，数字以第一遍读的为准
     return _pair(t, "(", ")"), _pair(t, "<", ">")
 

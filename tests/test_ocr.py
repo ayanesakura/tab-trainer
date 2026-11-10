@@ -216,3 +216,31 @@ def test_chord_sheet_rows_judge_ocr_by_what_it_read():
     out = recognize.ocr_disagreements(ai, ocr, chord_sheet=True)
     # 只有 AI 有的音（× 换算出来的）调用方会忽略；OCR 读到、AI 没写的才算：第 2 小节的 3 弦 0 品
     assert {i: dict(o) for i, (o, _) in out.items() if o} == {1: {(3, 0): 1}}
+
+
+def test_reading_rows_in_parallel_gives_the_same_result():
+    """几行同时校对（识别是几个线程并行的）：推理不加锁，结果和一行一行读一样；识别模型只建一个。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    notes = [(0, 0, 5, 0), (0, 1, 1, 12), (0, 2, 2, "(3)"), (1, 0, 4, 10), (1, 3, 3, "<7>"), (1, 5, 6, 3)]
+    gray, lines, spans = _tab_image(notes)
+    want = ocr.read_system(gray, lines, spans, detail=True)
+    assert want and any(want)
+    with ThreadPoolExecutor(8) as pool:
+        got = list(pool.map(lambda _: ocr.read_system(gray, lines, spans, detail=True), range(16)))
+    assert all(g == want for g in got)
+    assert not hasattr(ocr, "_lock")
+
+
+def test_marks_in_block_can_be_chosen_per_call(monkeypatch):
+    """数字块是否连同括号一起读可以按调用指定（识别任务开始时定好的选项），不用改模块开关。"""
+    seen = []
+    rec = ocr._recognizer()
+    monkeypatch.setattr(rec, "marks", lambda g: seen.append("marks") or "5")
+    monkeypatch.setattr(rec, "digits", lambda g: seen.append("digits") or "5")
+    gray, lines, spans = _tab_image([(0, 0, 1, 5)])
+    ocr.read_system(gray, lines, spans, marks_in_block=False)
+    assert seen == ["digits"]
+    seen.clear()
+    ocr.read_system(gray, lines, spans)
+    assert seen == ["marks"]
