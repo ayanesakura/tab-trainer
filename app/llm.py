@@ -50,6 +50,7 @@ DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_BASE_URL = "https://api.anthropic.com"
 MAX_EDGE = 2576  # 当前模型支持的最大长边，超过会被缩小
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+USER_AGENT = "tab-trainer"
 
 
 @dataclass
@@ -274,7 +275,12 @@ class Claude(LLM):
                 "还没有设置 API key：请在曲库页顶部的“设置”里填写，或启动前设置环境变量 ANTHROPIC_API_KEY。"
             )
         self.client = anthropic.Anthropic(
-            api_key=key, base_url=cfg.base_url or DEFAULT_BASE_URL, max_retries=3, timeout=600
+            api_key=key,
+            base_url=cfg.base_url or DEFAULT_BASE_URL,
+            max_retries=3,
+            timeout=600,
+            # 网关（如 magpie）按 User-Agent 区分调用方；不改的话只会显示成 SDK 默认的 "Anthropic"
+            default_headers={"User-Agent": USER_AGENT},
         )
         # 同一个客户端会被识别的几个线程同时用：用量累加和兜底开关都要加锁
         self._lock = threading.Lock()
