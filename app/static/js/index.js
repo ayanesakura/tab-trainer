@@ -4,7 +4,7 @@
 import { UI, $, esc, icon, toast } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
 import { SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
-import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML, latestPracticed } from '/static/js/library-view.js';
+import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML, latestPracticed, importReport } from '/static/js/library-view.js';
 import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
 import { initStudy, renderPlan, refresh as refreshStudy, setVisible as setStudyVisible, setStudy, addMany } from '/static/js/study.js';
 
@@ -83,18 +83,24 @@ async function importBundles(files) {
   await api.withBusy($('importBtn'), async () => {
     toast('正在导入…', 'info', 60000);
     try {
-      const r = await api.upload('/api/import', files);
-      const n = r.imported.length, dup = r.skipped.filter(s => s.duplicate).length, bad = r.skipped.filter(s => !s.duplicate);
-      const parts = [`已导入 ${n} 首`];
-      if (dup) parts.push(`${dup} 首曲库里已有，跳过`);
-      if (bad.length) parts.push(`${bad.length} 首无法导入：` + bad.slice(0, 3).map(s => `“${s.title}”${s.reason}`).join('；') + (bad.length > 3 ? ' 等' : ''));
-      toast(parts.join('；'), bad.length ? (n ? 'info' : 'err') : 'ok', bad.length || dup ? 8000 : 2200);
+      const rep = importReport(await api.upload('/api/import', files));
+      // 全部导入成功：轻提示就够了；有跳过、失败的：按包列出明细（哪个包导入了哪几首、哪些已有、为什么失败）
+      if (rep.simple) toast(rep.summary);
+      else { document.querySelectorAll('.toast').forEach(t => t.remove()); showImportReport(rep); }
     } catch (e) {
-      toast(e.message, 'err', 5000);
+      toast(e.message, 'err', 6000); // 413（太大）、400（包本身的问题）都带说明
     }
   });
   songsPoll.now();
 }
+let importLayer = null;
+function showImportReport(rep) {
+  $('importTitle').textContent = rep.summary;
+  $('importTitle').className = `dlg-t ${rep.kind === 'err' ? 'err-text' : ''}`.trim();
+  $('importList').innerHTML = rep.html;
+  importLayer = UI.layer($('importDlg'), { modal: true, focus: $('importOk'), onClose: () => { importLayer = null; } });
+}
+$('importOk').onclick = () => importLayer && importLayer.close();
 $('importBtn').onclick = () => $('bundleFile').click();
 $('bundleFile').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) importBundles(f); };
 

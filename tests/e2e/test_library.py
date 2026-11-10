@@ -839,3 +839,72 @@ def test_archive_hides_songs_and_filter_shows_them(server, browser):
             b'{"in_plan": false}',
             {"Content-Type": "application/json"},
         )
+
+
+IMPORT_FAKE = """(() => { const of = window.fetch;
+  window.fetch = async (u, init) => {
+    if (!String(u).includes('/api/import')) return of(u, init);
+    return new Response(JSON.stringify(%s), { status: %d, headers: { 'Content-Type': 'application/json' } });
+  };
+  const dt = new DataTransfer(); dt.items.add(new File(['x'], 'a.zip', { type: 'application/zip' }));
+  const input = document.getElementById('bundleFile'); input.files = dt.files; input.dispatchEvent(new Event('change'));
+  return true; })()"""
+
+
+def test_bundle_import_report_per_bundle(server, browser):
+    # 导入了几个包，有跳过 / 失败的：对话框里按包列出明细（不只是第一条错误）
+    report = {
+        "imported": [{"id": "x1", "title": "第一首", "bundle": "a.zip"}],
+        "skipped": [
+            {"title": "已有的", "reason": "曲库里已经有这首", "duplicate": True, "bundle": "a.zip"},
+            {"title": "坏.zip", "reason": "不是有效的 zip 文件", "duplicate": False, "bundle": "坏.zip"},
+        ],
+        "bundles": [
+            {"file": "a.zip", "ok": True, "imported": 1, "skipped": 1, "error": None},
+            {"file": "坏.zip", "ok": False, "imported": 0, "skipped": 1, "error": "不是有效的 zip 文件"},
+        ],
+    }
+    b = browser
+    b.open(server["base"] + "/")
+    b.wait_for("!!document.querySelector('.song-row')")
+    b.js(IMPORT_FAKE % (json.dumps(report), 200))
+    b.wait_for("document.getElementById('importDlg').open")
+    assert b.js("document.getElementById('importTitle').textContent") == "已导入 1 首 · 1 首已有 · 1 首失败"
+    sections = b.js(
+        "[...document.querySelectorAll('#importList .ib')].map(x => x.textContent.replace(/\\s+/g, ' ').trim())"
+    )
+    assert "a.zip" in sections[0] and "第一首" in sections[0] and "已有的" in sections[0]
+    assert "坏.zip" in sections[1] and "不是有效的 zip 文件" in sections[1]
+    b.key("Escape", vk=27)
+    b.wait_for("!document.getElementById('importDlg').open")
+    # 上传太大（413）、格式不对（400）：显示后端的说明
+    b.open(server["base"] + "/")
+    b.wait_for("!!document.querySelector('.song-row')")
+    b.js(IMPORT_FAKE % (json.dumps({"detail": "文件总大小超过 2048 MB"}), 413))
+    b.wait_for(
+        "[...document.querySelectorAll('.toast.err')].some(t => t.textContent === '文件总大小超过 2048 MB')"
+    )
+    assert not b.js("document.getElementById('importDlg').open")
+    assert not b.errors, b.errors
+
+
+def test_upload_too_large_shows_the_reason(server, browser):
+    # 真的超过上限：服务端在读请求体之前就回 413，页面显示它的说明
+    from app.config import settings
+
+    old = settings.max_total_bytes
+    settings.max_total_bytes = 1  # 上限 = 1 字节 + 1 MB 表单开销（0 会被当成“没有上限”）
+    try:
+        b = browser
+        b.open(server["base"] + "/")
+        b.wait_for("!!document.getElementById('file')")
+        b.js("""const dt = new DataTransfer(); dt.items.add(new File([new Uint8Array(3 * 1024 * 1024)], 'big.png', { type: 'image/png' }));
+          const input = document.getElementById('file'); input.files = dt.files; input.dispatchEvent(new Event('change'));
+          document.getElementById('uploadBtn').click(); true""")
+        b.wait_for(
+            "[...document.querySelectorAll('.toast.err')].some(t => t.textContent.includes('文件总大小超过'))",
+            timeout=10,
+        )
+        assert not b.errors, b.errors
+    finally:
+        settings.max_total_bytes = old

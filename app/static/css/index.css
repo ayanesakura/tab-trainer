@@ -72,6 +72,21 @@
 .test-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-1); }
 .head-actions { display: flex; gap: 6px; }
 
+/* 导入曲子包的结果（有跳过或失败时才弹出）：按包列出导入 / 已有 / 失败的曲子 */
+.import-dlg { width: 460px; }
+.import-dlg .dlg-b { padding: 18px 20px 4px; display: flex; flex-direction: column; gap: 10px; }
+.import-dlg .dlg-t { font-size: var(--fs-3); font-weight: 600; }
+.import-list { max-height: min(60vh, 480px); overflow: auto; display: flex; flex-direction: column; gap: var(--sp-3); }
+.ib-h { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; margin-bottom: var(--sp-1); }
+.ib-h b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ib-h .hint { margin-left: auto; flex: none; }
+.ib ul { list-style: none; border: 1px solid var(--line-2); border-radius: var(--r-md); }
+.ib li { display: flex; align-items: center; gap: var(--sp-2); padding: 5px 10px; font-size: var(--fs-2); }
+.ib li + li { border-top: 1px solid var(--line-2); }
+.ib-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib li .badge { height: 18px; padding: 0 6px; flex: none; }
+.ib-why { font-size: var(--fs-1); margin-top: var(--sp-1); line-height: 1.5; }
+
 /* 管理原谱页面（<dialog class="dlg pages-dlg">） */
 .pages-dlg { width: min(1000px, 94vw); max-height: 90vh; }
 .pages-dlg[open] { display: flex; flex-direction: column; }

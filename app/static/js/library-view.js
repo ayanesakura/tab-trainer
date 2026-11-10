@@ -191,3 +191,34 @@ export function pagerHTML({ page, pages, from, to }, total) {
     : `<button class="pg" data-page="${n}" data-k="p${n}" aria-label="第 ${n} 页"${n === page ? ' aria-current="page"' : ''}>${n}</button>`).join('');
   return `<span class="hint range">${from}–${to} / ${total} 首</span><span class="grow"></span>${nav('prev', 'left', '上一页', page <= 1)}${nums}${nav('next', 'right', '下一页', page >= pages)}`;
 }
+
+// ---------------- 导入曲子包的结果 ----------------
+/**
+ * POST /api/import 的返回 → { summary（一句话）, kind: ok|info|err, simple（全部导入、没有跳过：只用轻提示）, html（按包列出的明细） }。
+ * 每个包一节：导入了哪些曲子、哪些曲库里已有（跳过）、哪些导入失败和原因；整个包读不了时只写原因。
+ */
+export function importReport(r) {
+  const imported = r.imported || [], skipped = r.skipped || [];
+  const dup = skipped.filter(s => s.duplicate).length, bad = skipped.length - dup;
+  const summary = [`已导入 ${imported.length} 首`, dup && `${dup} 首已有`, bad && `${bad} 首失败`].filter(Boolean).join(' · ');
+  const kind = bad ? (imported.length ? 'info' : 'err') : 'ok';
+  // 老的返回没有 bundles：当成一个包
+  const bundles = (r.bundles && r.bundles.length) ? r.bundles : [{ file: '', ok: true }];
+  const of = (list, b) => list.filter(x => !r.bundles || !r.bundles.length || x.bundle === b.file);
+  const li = (title, tag, cls, tip = '') => `<li><span class="ib-t" title="${esc(tip || title)}">${esc(title)}</span><span class="badge ${cls}">${esc(tag)}</span></li>`;
+  const html = bundles.map(b => {
+    const imp = of(imported, b), skp = b.ok ? of(skipped, b) : [];
+    const n = [imp.length && `导入 ${imp.length}`, skp.length && `跳过 ${skp.length}`].filter(Boolean).join(' · ');
+    const dot = !b.ok ? 'err' : skp.some(s => !s.duplicate) ? 'warn' : 'ok';
+    const items = [
+      ...imp.map(s => li(s.title, '导入', 'ok')),
+      ...skp.map(s => (s.duplicate ? li(s.title, '已有', '', s.reason) : li(s.title, '失败', 'err', s.reason))),
+    ];
+    const bad1 = skp.filter(s => !s.duplicate).map(s => `<div class="ib-why err-text">${esc(s.title)}：${esc(s.reason)}</div>`).join('');
+    return `<section class="ib">
+      ${b.file ? `<div class="ib-h"><span class="dot ${dot}"></span><b title="${esc(b.file)}">${esc(b.file)}</b><span class="hint">${esc(b.ok ? n || '没有曲子' : '无法导入')}</span></div>` : ''}
+      ${b.ok ? `${items.length ? `<ul>${items.join('')}</ul>` : ''}${bad1}` : `<div class="ib-why err-text">${esc(b.error || '无法导入')}</div>`}
+    </section>`;
+  }).join('');
+  return { summary, kind, simple: !skipped.length && bundles.every(b => b.ok), html };
+}

@@ -1,7 +1,7 @@
 // 曲库页的纯函数：js/library-view.js。运行：node --test tests/js/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ago, duration, rangeText, practiceText, practiceTip, latestPracticed, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay, paginate, pageNumbers, pagerHTML, PAGE_SIZE } from '../../app/static/js/library-view.js';
+import { ago, duration, rangeText, practiceText, practiceTip, latestPracticed, importReport, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay, paginate, pageNumbers, pagerHTML, PAGE_SIZE } from '../../app/static/js/library-view.js';
 
 const NOW = new Date(2026, 10, 7, 20, 0); // 2026-11-07 20:00（本地时间）
 const song = (o = {}) => ({ id: 's1', title: '曲子', source_type: 'image', is_score: false, status: 'ready', bars: 8, created: '2026-11-01 10:00', ...o });
@@ -50,6 +50,26 @@ test('latestPracticed：只有最近练过的一首用主色“接着练”', ()
   assert.match(rowHTML(list[0]), /btn ghost sm act" data-k="resume"/);
   assert.match(rowHTML(song()), /btn ghost sm act" data-k="play"/);
   assert.match(rowHTML(list[2]), /song-row click archived/);
+});
+
+test('importReport：按包列出导入 / 已有 / 失败', () => {
+  const ok = importReport({ imported: [{ id: 'x', title: 'A', bundle: '1.zip' }], skipped: [], bundles: [{ file: '1.zip', ok: true, imported: 1, skipped: 0, error: null }] });
+  assert.deepEqual([ok.summary, ok.kind, ok.simple], ['已导入 1 首', 'ok', true]);
+  const r = importReport({
+    imported: [{ id: 'x', title: 'A', bundle: '1.zip' }],
+    skipped: [{ title: 'B', reason: '曲库里已经有这首', duplicate: true, bundle: '1.zip' }, { title: '<C>', reason: '时值不对', duplicate: false, bundle: '1.zip' },
+      { title: '坏.zip', reason: '不是 zip 文件', duplicate: false, bundle: '坏.zip' }],
+    bundles: [{ file: '1.zip', ok: true, imported: 1, skipped: 2, error: null }, { file: '坏.zip', ok: false, imported: 0, skipped: 1, error: '不是 zip 文件' }],
+  });
+  assert.deepEqual([r.summary, r.kind, r.simple], ['已导入 1 首 · 1 首已有 · 2 首失败', 'info', false]);
+  const [one, bad] = r.html.split('</section>');
+  assert.match(one, /1\.zip[\s\S]*导入 1 · 跳过 2/);
+  assert.match(one, />A<\/span><span class="badge ok">导入/);
+  assert.match(one, />B<\/span><span class="badge ">已有/);
+  assert.match(one, /&lt;C&gt;：时值不对/); // 后端文字转义
+  assert.match(bad, /dot err[\s\S]*坏\.zip[\s\S]*无法导入[\s\S]*不是 zip 文件/);
+  assert.doesNotMatch(bad, /<li>/); // 整个包读不了：只写原因，不把包名当成一首曲子
+  assert.equal(importReport({ imported: [], skipped: [{ title: 'B', reason: 'x', duplicate: false }] }).kind, 'err');
 });
 
 test('stateHTML / barsText：状态说明，后端文字要转义', () => {
