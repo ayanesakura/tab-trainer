@@ -213,7 +213,7 @@ def test_chords_differing_only_by_case_render_and_export_separately(server, trai
             """(async () => {
               let blob = null; const orig = URL.createObjectURL, click = HTMLAnchorElement.prototype.click;
               URL.createObjectURL = x => { blob = x; return 'blob:x'; }; HTMLAnchorElement.prototype.click = () => {};
-              try { tt.player.exportGp(); } finally { URL.createObjectURL = orig; HTMLAnchorElement.prototype.click = click; }
+              try { tt.exportGp(); } finally { URL.createObjectURL = orig; HTMLAnchorElement.prototype.click = click; }
               const at = await import('/static/vendor/alphatab/alphaTab.min.mjs');
               const sc = at.importer.ScoreLoader.loadScoreFromBytes(new Uint8Array(await blob.arrayBuffer()), new at.Settings());
               return sc.tracks[0].staves[0].bars.slice(0, 2).map(x => { const c = x.voices[0].beats[0].chord; return [c.name, [...c.strings]]; });

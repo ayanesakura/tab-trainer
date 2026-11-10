@@ -270,3 +270,21 @@ test('tempoAverage：一遍里换了速度，按时间加权平均（快结束�
   tempoChange(z, 5, 100); // 一开始就换：完全按新的
   assert.equal(tempoAverage(z, 15), 100);
 });
+
+test('hooks：只认登记过的名字，重复注册会警告，invoke 返回提供者的结果', async () => {
+  const { createHooks } = await import('../../app/static/js/trainer/hooks.js');
+  const warned = [];
+  const h = createHooks(['a', 'b'], m => warned.push(m));
+  assert.equal(h.has('a'), false);
+  assert.equal(h.invoke('a', 1), undefined); // 没人挂：什么都不做
+  const off = h.provide('a', x => x + 1);
+  assert.equal(h.invoke('a', 1), 2);
+  assert.deepEqual(warned, []);
+  h.provide('a', x => x * 10);
+  assert.equal(warned.length, 1);
+  assert.equal(h.invoke('a', 2), 20);
+  off(); // 已经被换掉的那个取消：不影响现在的
+  assert.equal(h.invoke('a', 3), 30);
+  assert.throws(() => h.provide('c', () => {}), /未知的钩子/);
+  assert.throws(() => h.invoke('typo'), /未知的钩子/);
+});

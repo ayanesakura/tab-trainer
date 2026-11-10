@@ -5,7 +5,8 @@ import { $, UI, setButton, songUrl } from './dom.js';
 import { put, post, withBusy } from '../lib/api.js';
 import { DUR_CHOICES, durToTicks, eventIndexAt, retimeEvent } from '../score.js';
 import { TECH_NAME, STRINGS, INSTRUMENT } from '../vocab.js';
-import { stop, setPlayerHooks, holdBarWhile } from './player.js';
+import { stop, holdBarWhile } from './player.js';
+import { provide } from './hooks.js';
 import { refresh, applySong, conflict, isLocked, lockedToast } from './song.js';
 
 // ---------------------------------------------------------------------
@@ -237,7 +238,7 @@ async function deleteNotePop() {
 export const editorState = { get saving() { return saving; }, get undo() { return undoStack.length; }, get undoBars() { return undoStack.map(u => u.barId); }, get undoRevs() { return undoStack.map(u => u.rev); }, get np() { return np; } };
 
 export function initEditor() {
-  setPlayerHooks({ editClick: queueEditClick });
+  provide('score.editClick', queueEditClick);
   holdBarWhile(() => editorBarId !== null); // 编辑器开着时侧栏一切小节，编辑器就关了，没保存的内容会丢
   $('editBtn').onclick = () => {
     const bar = curBar();

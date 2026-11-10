@@ -9,14 +9,15 @@
 // 和别的模块怎么接：
 //   - 状态：rhythm.on / rhythm.running 在 store 里（播放键、小节卡片、指板停靠条各自订阅）；一次敲节奏的细节（run）、
 //     成绩、练法、延迟补偿是这个模块自己的状态。
-//   - player.js 不导入这里：initRhythm 用 setPlayerHooks 注册 drill.start / stop / loopChanged，
+//   - player.js 不导入这里：initRhythm 在 hooks.js 上挂 drill.start / stop / loopChanged，
 //     player 的 play / stop / setLoop 在 rhythm.on / rhythm.running 时交给它。
 //   - 键盘：main.js 的快捷键先问 rhythmKey(e)（同一个监听、同样的 UI.hasLayer / 输入框判断），处理了就不再往下走。
 
 import * as core from '../rhythm.js';
 import { get, set, on } from './store.js';
 import { $, UI, esc, setButton, svgEl } from './dom.js';
-import { stop as stopPlayback, setLoop, setStatus, setPlayerHooks, IDLE_HINT } from './player.js';
+import { stop as stopPlayback, setLoop, setStatus, IDLE_HINT } from './player.js';
+import { provide } from './hooks.js';
 import { ac, initAudio, playEvent, stopAllVoices, setGuitarVolume } from './audio.js';
 import { loopLabel } from './view.js';
 import { stored, remember } from './prefs.js';
@@ -434,7 +435,9 @@ export const rhythmDebug = {
 // 绑定
 // ---------------------------------------------------------------------
 export function initRhythm() {
-  setPlayerHooks({ drill: { start: () => start(), stop: stopRun, loopChanged } });
+  provide('drill.start', () => start());
+  provide('drill.stop', stopRun);
+  provide('drill.loopChanged', loopChanged);
   $('rhythmBtn').onclick = () => toggle(!isOn());
   $('rhClose').onclick = () => toggle(false);
   $('rhCalib').onclick = () => { if (RH.run && RH.run.calib) stopRun(); else start(true); paintCalib(); };

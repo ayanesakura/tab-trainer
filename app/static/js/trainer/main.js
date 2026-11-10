@@ -4,7 +4,12 @@
 import { get, set, on, store } from './store.js';
 import { $, UI, SONG_ID } from './dom.js';
 import * as player from './player.js';
-import { initPlayer, play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, refreshScoreTheme, getApi } from './player.js';
+import { initPlayer, play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, refreshScoreTheme, getApi, machineState } from './player.js';
+import { initControls } from './controls.js';
+import { initLyrics } from './lyrics.js';
+import { initReviewMarks } from './review-marks.js';
+import { exportGp } from './gp-export.js';
+import * as atAdapter from './at-adapter.js';
 import { initFretboard } from './fretboard.js';
 import { initBarCard } from './bar-card.js';
 import { initOrig } from './orig.js';
@@ -121,7 +126,9 @@ window.tt = {
   get ac() { return ac; },
   get editor() { return editorState; },
   DERIVE_VERSION,
-  play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, setEditMode, openNotePop, refresh, player,
+  get machine() { return machineState(); },
+  play, stop, setLoop, setTempo, stepSection, applyAudio, onBeatClick, cursorOutOfView, setEditMode, openNotePop, refresh, player, exportGp,
+  at: atAdapter,
   rhythm: rhythmDebug,
   followDelta, follow: followDebug,
 };
@@ -131,6 +138,9 @@ window.tt = {
 // ---------------------------------------------------------------------
 initViews();
 initPlayer();
+initControls();
+initLyrics();
+initReviewMarks();
 initFollow();
 initFretboard();
 initBarCard();

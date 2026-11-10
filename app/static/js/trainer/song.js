@@ -9,7 +9,8 @@ import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.
 import { SOURCES } from '../vocab.js';
 import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
-import { alphaTab, setLoop, setTempo, setPlayerHooks, revealLoop, stop } from './player.js';
+import { alphaTab, setLoop, setTempo, revealLoop, stop } from './player.js';
+import { provide } from './hooks.js';
 import { notice } from './notices.js';
 import { stored, remember } from './prefs.js';
 import { refineConfirm, NO_REFINE, refineScopeLabel } from '../lib/refine.js';
@@ -349,10 +350,8 @@ function onView(v) {
 }
 
 export function initSong() {
-  setPlayerHooks({
-    scoreLoaded: onScoreLoaded,
-    error: msg => { const s = get('song'); if (s && isScore(s) && !s.bars.length) reportImportError(msg); else UI.toast('谱面出错：' + msg, 'err', 6000); },
-  });
+  provide('score.loaded', onScoreLoaded);
+  provide('score.error', msg => { const s = get('song'); if (s && isScore(s) && !s.bars.length) reportImportError(msg); else UI.toast('谱面出错：' + msg, 'err', 6000); });
   on(['song.bars', 'song.meta', 'song.pages', 'song.source_type', 'song.track', 'song.id'], () => set('view', deriveView(get('song'))));
   on('view', onView);
   // 只订阅用到的那几项：练完一遍（song.practice）、问答（song.bars.k.qa 会动 song.bars）、打分（song.study）这些写入
