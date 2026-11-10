@@ -7,6 +7,7 @@ import { parseBarInput } from './view.js';
 import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref, stored, remember } from './prefs.js';
 import { play, stop, setLoop, setTempo, stepSection, revealLoop, cursorOutOfView, scrollToCursor, TIMBRES } from './player.js';
 import { exportGp } from './gp-export.js';
+import { markClean } from './practice-log.js';
 
 // 跟着曲子走的默认值（加载谱子后按原速调整）；其余播放设置记在本机，见 prefs.js
 const SONG_DEFAULTS = { bpmMax: 140 };
@@ -114,11 +115,21 @@ export function initControls() {
   on(Object.keys(PREF_DEFAULTS).map(k => 'play.' + k), () => remember(PREFS_KEY, serializePrefs(get('play'))));
   on('play.timbre', v => remember('tt.timbre', v));
   bindInputs();
-  const paintBpm = bpm => { $('bpm').value = bpm; $('bpmVal').textContent = bpm; UI.fillRange($('bpm')); };
-  const paintMax = m => { $('bpm').max = m; UI.fillRange($('bpm')); };
-  on('play.bpm', paintBpm);
+  // 速度：数字后面是原速的百分比（“72 · 80%”，悬停看原速），滑块上原速那里有一道刻度；不知道原速就写 BPM
+  const paintBpm = () => {
+    const bpm = get('play.bpm'), orig = get('play.origBpm') || 0, el = $('bpm');
+    el.value = bpm; $('bpmVal').textContent = bpm; UI.fillRange(el);
+    $('bpmUnit').textContent = orig ? `· ${Math.round(bpm / orig * 100)}%` : 'BPM';
+    $('bpmBox').title = orig ? `${bpm} BPM，原速 ${orig}` : `${bpm} BPM`;
+    const o = (orig - +el.min) / (+el.max - +el.min);
+    $('bpmOrig').hidden = !orig || o < 0 || o > 1;
+    $('bpmOrig').style.setProperty('--o', Math.max(0, Math.min(1, o)));
+    $('bpmOrig').title = `原速 ${orig}`;
+  };
+  const paintMax = m => { $('bpm').max = m; paintBpm(); };
+  on(['play.bpm', 'play.origBpm'], paintBpm);
   on('play.bpmMax', paintMax);
-  paintMax(get('play.bpmMax')); paintBpm(get('play.bpm'));
+  paintMax(get('play.bpmMax'));
   // 播放键：alphaTab 在放，或者敲节奏在进行，都显示成“停止”
   const paintPlay = () => {
     const now = busy();
@@ -159,6 +170,8 @@ export function initControls() {
     set('ui.notation', n);
   });
   $('exportBtn').onclick = exportGp;
+  $('cleanBtn').onclick = e => { e.currentTarget.blur(); markClean(); };
+  on('play.clean', v => $('cleanBtn').setAttribute('aria-pressed', String(!!v)));
   $('bpm').oninput = e => setTempo(+e.target.value);
   $('bpmDown').onclick = () => setTempo(get('play.bpm') - 4);
   $('bpmUp').onclick = () => setTempo(get('play.bpm') + 4);

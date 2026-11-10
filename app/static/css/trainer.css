@@ -56,7 +56,14 @@
 .grp { display: flex; align-items: center; gap: var(--sp-1); flex: none; }
 .bpm { color: var(--muted); font-size: var(--fs-1); min-width: 62px; white-space: nowrap; }
 .bpm b { color: var(--fg); font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; vertical-align: -1px; } /* 速度是控制条上最常看的数：字号大一档 */
-#bpm { width: 120px; }
+#bpm { width: 120px; display: block; }
+/* 原速：滑块上一道小刻度（拇指中心的位置：两头各让出半个拇指 8px） */
+.bpm-track { position: relative; display: block; }
+.bpm-orig { position: absolute; top: 2px; width: 2px; height: 14px; margin-left: -1px; border-radius: 1px; background: var(--muted); pointer-events: none; left: calc(8px + (100% - 16px) * var(--o, 0)); }
+.bpm-orig[hidden] { display: none; }
+#bpmUnit { font-variant-numeric: tabular-nums; }
+/* 这遍干净：按下后这一遍里一直亮着（绿色），弹完记下后复原 */
+.clean-btn[aria-pressed="true"] { background: var(--green-soft); color: var(--green); }
 .loop-label { font-weight: 500; font-variant-numeric: tabular-nums; min-width: 92px; text-align: center; white-space: nowrap; }
 /* 起止小节：浅底的小输入框，一看就知道能点进去改 */
 .loop-num { width: 3.2ch; padding: 1px 3px; margin: 0 2px; border: 1px solid transparent; border-radius: var(--r-sm); background: var(--pill); color: inherit;

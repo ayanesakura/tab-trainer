@@ -15,7 +15,7 @@ import { initFretboard } from './fretboard.js';
 import { initBarCard } from './bar-card.js';
 import { initOrig } from './orig.js';
 import { initCoach } from './coach.js';
-import { initPracticeLog } from './practice-log.js';
+import { initPracticeLog, markClean } from './practice-log.js';
 import { initEditor, setEditMode, openNotePop, editorState } from './editor.js';
 import { initSong, startLoading, refresh, songGone } from './song.js';
 import { initTuner } from './tuner.js';
@@ -44,9 +44,14 @@ function showView(v) {
 
 // ---------------------------------------------------------------------
 // 键盘（判断条件和唯一的监听在 keys.js）：空格 播放 / 停止；← → 上一段 / 下一段；↑ ↓ 快 / 慢 4 BPM；
-// Home 回到段首（播放中就从段首重新开始）；M 节拍器开 / 关。滑块、按钮用过之后照样能用空格（按完让它失焦）。
+// Home 回到段首（播放中就从段首重新开始）；M 节拍器开 / 关；Enter 这遍干净。滑块、按钮用过之后照样能用空格（按完让它失焦）。
 // 敲节奏进行中的空格 / F / J / Esc、改音的 ⌘Z、原谱弹窗里的 ←→ 由各自的模块登记，排在这一组前面。
 // ---------------------------------------------------------------------
+const cleanKey = e => {
+  const t = e.target;
+  if (t && t !== document.body && t.closest && t.closest('button, a[href], summary, [role=button], [tabindex]')) return false;
+  markClean();
+};
 function initShortcuts() {
   const blur = e => { if (e.target.blur && e.target !== document.body) e.target.blur(); }; // 免得空格再“按”一次刚点过的按钮
   const act = fn => e => { blur(e); fn(); };
@@ -58,6 +63,8 @@ function initShortcuts() {
       ArrowUp: act(() => setTempo(get('play.bpm') + 4)), ArrowDown: act(() => setTempo(get('play.bpm') - 4)),
       Home: act(() => { toLoopStart(); revealLoop(); }),
       KeyM: act(() => { const v = !get('play.metro'); set('play.metro', v); UI.toast(v ? '节拍器：开' : '节拍器：关', 'info', 1200); }),
+      // 这遍干净：焦点在按钮、链接上时 Enter 归它们（照常“按下”）
+      Enter: cleanKey, NumpadEnter: cleanKey,
     },
   });
   initKeys();

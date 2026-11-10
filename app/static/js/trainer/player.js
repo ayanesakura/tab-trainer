@@ -229,7 +229,7 @@ async function onScoreLoaded(score) {
   if (isScore(song) && hasHook('score.loaded') && !(await invoke('score.loaded', score))) return;
   if (!scoreTempoDone) {
     scoreTempoDone = true;
-    const s = get('song'), t = (s.meta && s.meta.tempo) || (isScore(s) ? baseTempo : 0);
+    const s = get('song'), t = origTempo(s);
     if (t) { // 原速比滑块上限快时把上限放宽，原速也能拖得到（已经定下的速度更快时不收窄）
       const bpm = get('play.bpm');
       set({ 'play.bpmMax': Math.min(240, Math.max(140, Math.ceil(t * 1.25 / 10) * 10, Math.ceil(bpm / 10) * 10)) });
@@ -237,8 +237,11 @@ async function onScoreLoaded(score) {
     // 默认就用谱上标的速度（识别出来的 / GP 文件里的）；没有标速度就 50。接着练 / 用户在谱子加载好之前已经定了速度的，不覆盖
     if (!tempoSet) setTempo(t || 50);
   }
+  set('play.origBpm', origTempo(get('song'))); // 控制条上的原速刻度和百分比（controls.js）
   if (api) api.playbackSpeed = get('play.bpm') / baseTempo;
 }
+/** 谱上标的速度（识别出来的 / GP 文件里的）；不知道是 0 */
+const origTempo = s => Math.round((s && s.meta && s.meta.tempo) || (isScore(s) ? baseTempo : 0)) || 0;
 
 export function applyAudio() {
   if (!api) return;

@@ -392,3 +392,41 @@ def test_switching_timbre_while_playing_keeps_playing(trainer):
     b.js("""tt.stop(); document.querySelector('#timbreSeg [data-v="steel"]').click(); true""")
     b.wait_for("!tt.state.playing")
     assert not b.errors, b.errors
+
+
+def test_clean_pass_marker(trainer):
+    """“这遍干净”（Enter / 按钮）：没用过时练习记录不带 clean；标了的那一遍弹完带 clean: true，
+    之后没标的遍带 clean: false（连续干净才会清零）；停着时按不算。"""
+    b = trainer()
+    b.js("""(() => { window.__posts = []; const f = window.fetch;
+      window.fetch = (u, o) => { if (String(u).endsWith('/practice')) __posts.push(JSON.parse(o.body)); return f(u, o); };
+      return true; })()""")
+    b.js("document.activeElement.blur(); true")
+    b.key("Enter", vk=13)  # 停着：不标
+    assert b.js("tt.state.clean") is False
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(240); tt.play(); true")
+    b.wait_for("__posts.filter(p => p.loops === 1).length >= 1", timeout=6)
+    assert "clean" not in b.js("__posts.find(p => p.loops === 1)")
+    b.key("Enter", vk=13)
+    assert b.js("tt.state.clean") is True
+    assert b.js("document.getElementById('cleanBtn').getAttribute('aria-pressed')") == "true"
+    b.wait_for("__posts.some(p => p.clean === true)", timeout=6)
+    assert b.js("tt.state.clean") is False  # 只管那一遍
+    b.wait_for("__posts.some(p => p.clean === false && p.loops === 1)", timeout=6)
+    b.js("tt.stop(); true")
+    assert not b.errors, b.errors
+
+
+def test_tempo_shows_the_original_tempo(server, trainer):
+    """GP 曲子知道原速：BPM 后面是百分比（悬停看原速），滑块上有原速的刻度；图片曲子没标速度就只写 BPM。"""
+    b = trainer()
+    assert b.js("document.getElementById('bpmUnit').textContent") == "BPM"
+    assert b.js("document.getElementById('bpmOrig').hidden")
+    b = trainer(server["gp"])
+    b.wait_for("tt.state.origBpm > 0")
+    orig = b.js("tt.state.origBpm")
+    b.js(f"tt.setTempo({orig} / 2); true")
+    assert b.js("document.getElementById('bpmUnit').textContent") == "· 50%"
+    assert f"原速 {orig}" in b.js("document.getElementById('bpmBox').title")
+    assert not b.js("document.getElementById('bpmOrig').hidden")
+    assert not b.errors, b.errors
