@@ -6,8 +6,8 @@
 // 小节详情里显示这一小节的记录。
 
 import { get, set, on } from './store.js';
-import { $, UI, songUrl } from './dom.js';
-import { practiceText, tempoSpan, tempoChange, tempoAverage } from './view.js';
+import { $, UI, esc, songUrl } from './dom.js';
+import { practiceLines, tempoSpan, tempoChange, tempoAverage } from './view.js';
 
 // 正在记的一段：{ids: 循环的小节 id, t: 开始的 performance.now(), tempo: tempoSpan, kind: 'play' | 'rhythm', clean: 标了这遍干净}；没在练是 null
 let cur = null;
@@ -65,7 +65,9 @@ function renderLine() {
   const bi = get('ui.bar'), s = get('song');
   if (bi < 0 || !s || !s.bars[bi]) return;
   const p = ((s.practice || {}).bars || {})[s.bars[bi].id];
-  $('practiceLine').textContent = practiceText(p);
+  const { lines, title } = practiceLines(p);
+  $('practiceLine').innerHTML = `<span class="pl-h">本小节</span><div class="pl-body">${lines.map(l => `<div>${esc(l)}</div>`).join('')}</div>`;
+  $('practiceLine').title = title;
   $('practiceLine').classList.toggle('none', !p);
 }
 

@@ -7,7 +7,7 @@ import { get, set, on } from './store.js';
 import { $, UI, esc, songUrl, SONG_ID } from './dom.js';
 import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.js';
 import { SOURCES } from '../vocab.js';
-import { deriveView, isScore, songSubtitle, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
+import { deriveView, isScore, songSubtitle, songTimeText, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
 import { alphaTab, setLoop, setTempo, revealLoop, stop } from './player.js';
 import { provide } from './hooks.js';
@@ -106,7 +106,10 @@ function renderHeader(s) {
   // 太长会被截断：悬停看全名；来源（图片 / GP …）也只放在悬停提示里，顶栏不再单独占一个标签
   const src = SOURCES[s.source_type];
   $('songTitle').textContent = title; $('songTitle').title = src ? `${title}（来源：${src}）` : title;
-  $('songSub').textContent = $('songSub').title = songSubtitle(s, v);
+  // 副标题最后是整首练了多久（practice.time：重叠的时间只算一次；悬停说明有没有不带日期的旧记录）
+  const sub = songSubtitle(s, v), tm = songTimeText((s.practice || {}).time);
+  $('songSub').textContent = [sub, tm && tm.text].filter(Boolean).join(' · ');
+  $('songSub').title = [sub, tm && tm.title].filter(Boolean).join('\n');
 }
 
 // ---------------------------------------------------------------------
@@ -356,7 +359,7 @@ export function initSong() {
   on('view', onView);
   // 只订阅用到的那几项：练完一遍（song.practice）、问答（song.bars.k.qa 会动 song.bars）、打分（song.study）这些写入
   // 不该让顶栏、通知、精修按钮跟着重画
-  on(['song.title', 'song.meta', 'song.source_type', 'view'], () => renderHeader(get('song')));
+  on(['song.title', 'song.meta', 'song.source_type', 'view', 'song.practice.time'], () => renderHeader(get('song')));
   on(['song.activity', 'song.progress', 'song.notice', 'song.status', 'song.failed_rows', 'song.is_score', 'song.bars', 'song.plan', 'song.meta'], () => renderNotices(get('song')));
   on(['song.bars', 'song.practice'], () => renderResume(get('song')));
   on(['song.is_score', 'song.bars', 'song.busy', 'song.activity', 'song.refined'], () => renderRefineBtn(get('song')));

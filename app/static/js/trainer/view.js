@@ -144,13 +144,30 @@ export function tempoAverage(span, t) {
   return Math.round(total > 0 ? acc / total : span.bpm);
 }
 
-const mins = s => (s < 60 ? '不到 1 分钟' : `${Math.round(s / 60)} 分钟`);
-/** 小节详情里的练习记录一行 */
-export function practiceText(p) {
-  if (!p) return '还没练过这一小节';
-  return p.loops
-    ? `循环 ${p.loops} 遍 · 累计 ${mins(p.seconds)}${p.best_bpm ? ` · 最快 ${p.best_bpm} BPM` : ''} · 上次 ${p.last}`
-    : `听过 ${mins(p.seconds)} · 上次 ${p.last}`;
+const mins = s => (s < 60 ? '不到 1 分钟' : s < 3600 ? `${Math.round(s / 60)} 分钟` : `${Math.floor(s / 3600)} 小时${Math.round(s % 3600 / 60) ? ` ${Math.round(s % 3600 / 60)} 分钟` : ''}`);
+export const durationText = mins;
+/**
+ * 小节卡片“本小节”的几行：循环几遍 · 最快；干净几遍 · 最快（用过“这遍干净”才有）；播放了多久 · 上次。
+ * 时间是播放 / 敲节奏的时间（停着看谱不算），所以写“播放”。→ {lines: [文字], title: 悬停提示}
+ */
+export function practiceLines(p) {
+  if (!p) return { lines: ['还没练过'], title: '' };
+  const lines = [], tips = [];
+  if (p.loops) lines.push(`循环 ${p.loops} 遍${p.best_bpm ? ` · 最快 ${p.best_bpm} BPM` : ''}`);
+  if (p.clean) {
+    lines.push(`干净 ${p.clean} 遍${p.clean_bpm ? ` · 最快 ${p.clean_bpm} BPM` : ''}`);
+    if (p.clean_streak) tips.push(`最近连续干净 ${p.clean_streak} 遍（${p.clean_streak_bpm} BPM）`);
+  }
+  lines.push(`播放 ${mins(p.seconds || 0)}${p.loops ? '' : '（还没弹完一遍）'}${p.last ? ` · 上次 ${p.last}` : ''}`);
+  tips.push('时间按播放和敲节奏算，停着看谱不算');
+  return { lines, title: tips.join('\n') };
+}
+/** 整首练了多久（practice.time）：显示的文字和悬停提示（有没有日期的旧记录时说一句）；没练过返回 null */
+export function songTimeText(t) {
+  const total = (t && t.total_seconds) || 0;
+  if (total < 60) return null;
+  const old = (t && t.undated_seconds) || 0;
+  return { text: `练了 ${mins(total)}`, title: `一共练了 ${mins(total)}（同一段时间开着几个页面只算一次）${old >= 60 ? `，其中 ${mins(old)}是旧版本记下的、没有日期` : ''}` };
 }
 
 /** 上次练到哪：{a, z, label, bpm, at}，找不到返回 null */

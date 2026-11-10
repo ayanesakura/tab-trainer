@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, equal } from '../../app/static/js/trainer/store.js';
 import {
-  deriveView, sectionsOf, stepSection, practiceText, resumeInfo, rangeLabel, loopLabel, parseBarInput, barTags, planRange,
+  deriveView, sectionsOf, stepSection, practiceLines, songTimeText, resumeInfo, rangeLabel, loopLabel, parseBarInput, barTags, planRange,
   songSubtitle, explainState, needsReview, warnText, showNote, tuningInput, nameToMidi, noteMidi, beatNumber, eventsText,
 } from '../../app/static/js/trainer/view.js';
 import { refineConfirm, barRefineHint, rowRefineHint, refineTime, refineScopeLabel } from '../../app/static/js/lib/refine.js';
@@ -87,9 +87,16 @@ test('stepSection: whole song, whole sections, custom ranges', () => {
 });
 
 test('practice line, resume and labels', () => {
-  assert.equal(practiceText(null), '还没练过这一小节');
-  assert.equal(practiceText({ loops: 3, seconds: 150, best_bpm: 72, last: '昨天' }), '循环 3 遍 · 累计 3 分钟 · 最快 72 BPM · 上次 昨天');
-  assert.equal(practiceText({ loops: 0, seconds: 20, last: '今天' }), '听过 不到 1 分钟 · 上次 今天');
+  assert.deepEqual(practiceLines(null).lines, ['还没练过']);
+  assert.deepEqual(practiceLines({ loops: 3, seconds: 150, best_bpm: 72, last: '昨天' }).lines, ['循环 3 遍 · 最快 72 BPM', '播放 3 分钟 · 上次 昨天']);
+  assert.deepEqual(practiceLines({ loops: 0, seconds: 20, last: '今天' }).lines, ['播放 不到 1 分钟（还没弹完一遍） · 上次 今天']);
+  const clean = practiceLines({ loops: 5, seconds: 4000, best_bpm: 80, clean: 2, clean_bpm: 76, clean_streak: 2, clean_streak_bpm: 76, last: '今天' });
+  assert.deepEqual(clean.lines, ['循环 5 遍 · 最快 80 BPM', '干净 2 遍 · 最快 76 BPM', '播放 1 小时 7 分钟 · 上次 今天']);
+  assert.match(clean.title, /最近连续干净 2 遍（76 BPM）/);
+  assert.equal(songTimeText({ total_seconds: 30 }), null);
+  assert.equal(songTimeText({ total_seconds: 600, undated_seconds: 0 }).text, '练了 10 分钟');
+  assert.doesNotMatch(songTimeText({ total_seconds: 600, undated_seconds: 0 }).title, /旧版本/);
+  assert.match(songTimeText({ total_seconds: 600, undated_seconds: 120 }).title, /其中 2 分钟是旧版本/);
   const s = { ...SONG, practice: { last: { a: 'c', b: 'b', bpm: 60, at: '昨天' } } };
   assert.deepEqual(resumeInfo(s), { a: 1, z: 2, label: '第 2–3 小节', bpm: 60, at: '昨天' });
   assert.equal(resumeInfo({ ...SONG, practice: { last: { a: 'x', b: 'y', bpm: 60 } } }), null);

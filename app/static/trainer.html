@@ -100,18 +100,19 @@
         <div class="card score-card" id="scoreCard">
           <div class="card-h">
             <span class="card-title" data-ic="music">谱面</span>
+            <span class="badge accent" id="editBadge" hidden>改音中</span>
             <span class="hint" id="trackName"></span>
+            <span class="hint tuning-line" id="tuningLine"></span>
             <div class="grow"></div>
-            <button class="btn sm" id="editModeBtn" data-ic="edit" aria-pressed="false" title="点击谱面上的音符修改弦、品和技巧">改音</button>
+            <button class="btn sm primary" id="editModeBtn" data-ic="check" aria-pressed="false" title="退出改音（改过的都已保存）" hidden>完成</button>
             <div class="seg sm" id="notationSeg" aria-label="谱面样式"><button data-v="both">五线谱 + 六线谱</button><button data-v="tab">只看六线谱</button></div>
-            <button class="btn sm" id="refineBtn" data-ic="sparkle" title="精修整首：AI 逐小节放大核对原谱（约 $0.2 / 小节）" hidden>精修</button>
+            <button class="btn sm" id="refineBtn" data-ic="sparkle" data-ai title="精修整首：AI 逐小节放大核对原谱（约 $0.2 / 小节）" hidden>精修</button>
             <button class="btn sm" id="exportBtn" data-ic="download" title="下载为 Guitar Pro 文件（.gp）">导出 GP</button>
             <span class="help-wrap">
               <button class="icon-btn sm help-btn" id="scoreHelpBtn" aria-label="谱面操作说明" aria-describedby="scoreHelp">?</button>
               <span class="legend help-pop" id="scoreHelp" role="tooltip"></span>
             </span>
           </div>
-          <div class="legend score-legend" id="scoreLegend" hidden></div>
           <div id="score"></div>
           <div class="empty-state" id="scoreEmpty" hidden><b>还没有识别出的小节</b>识别完成后显示。</div>
           <div class="note-pop" id="notePop" role="dialog" aria-labelledby="npTitle" hidden>
@@ -134,6 +135,7 @@
             <span class="card-title">第 <span id="barNo">1</span> 小节</span>
             <span class="badge warn" id="barReview" hidden>待核对</span>
             <div class="grow"></div>
+            <button class="btn sm primary" id="barCheckBtn" data-ai hidden>核对</button>
             <button class="icon-btn sm drawer-close" id="drawerClose" data-ic="x" title="收起（Esc）" aria-label="收起小节详情"></button>
           </div>
           <div class="body">
@@ -141,32 +143,37 @@
             <div class="bar-chords" id="barChords" hidden></div>
             <div class="tip" id="tipText"></div>
             <div class="warns" id="tipWarn" hidden></div>
+            <div class="review-row" id="reviewRow" hidden><span class="review-ok" id="reviewHint"></span><button class="btn sm" id="reviewBtn" data-ic="check" title="对照原谱看过，识别是对的">无误</button></div>
             <div class="refine-row" id="refineRow" hidden><div class="refine-diff"><span id="refineDiff"></span></div><div class="refine-acts"><span class="hint" id="refinePrevLine">原来：<span id="refinePrev"></span></span><button class="btn sm ghost" id="undoRefineBtn" data-ic="back" title="恢复成精修之前的读法">撤销精修</button></div></div>
-            <div class="bar-acts"><div class="review-row" id="reviewRow" hidden><span class="review-ok" id="reviewHint"></span><button class="btn sm" id="reviewBtn" data-ic="check" title="对照原谱看过，识别是对的">无误</button></div>
-            <div class="refine-scope" id="refineScope" hidden><div class="refine-scope-btns" id="refineScopeBtns"><button class="btn sm" id="refineBarBtn">精修本小节</button><button class="btn sm" id="refineRowBtn">精修本行</button></div><span class="refine-busy" id="refineBusy" hidden><span class="spinner"></span>精修中…</span><span class="hint" id="refineScopeHint"></span></div></div>
             <button class="paper" id="cropBox" title="点开看这一整行的原谱" hidden><canvas id="crop"></canvas><span class="paper-msg" id="cropMsg" hidden></span><span class="paper-cap">原谱</span></button>
+            <div class="bar-plan" id="barPlan" hidden></div>
+            <div class="practice-line" id="practiceLine"></div>
             <div class="coach">
               <div class="sec-h">问 AI</div>
               <div class="qa-list" id="qaList" hidden></div>
               <div class="ask">
                 <input class="input" id="askInput" maxlength="500" aria-label="问 AI 这一小节" placeholder="如“左手指法怎么安排”">
-                <button class="btn sm" id="askBtn">提问</button>
+                <button class="btn sm" id="askBtn" data-ai>提问</button>
               </div>
             </div>
-            <div class="practice-line" id="practiceLine"></div>
-            <details class="fix" id="fixBox">
-              <summary>识别有误？</summary>
-              <div class="tools">
-                <button class="btn sm" id="editBtn" data-ic="edit">修改本小节</button>
-                <input class="input" id="hintInput" aria-label="重新识别时告诉 AI 哪里不对" placeholder="哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
-                <button class="btn sm" id="reparseBtn" data-ic="refresh">重新识别这一行</button>
+            <!-- 纠错：只对识别出来的曲子（GP / MusicXML 的小节来自原文件，整块不显示）。从便宜到贵：自己改 → AI 核对 → 重新识别整行 -->
+            <section class="fix" id="fixBox" aria-labelledby="fixH">
+              <div class="sec-h" id="fixH">纠错</div>
+              <div class="fix-row">
+                <button class="btn sm" id="barEditBtn" data-ic="edit" title="在谱面上点音符改弦、品、技巧和时值">改音</button>
+                <button class="btn sm" id="editBtn" title="直接改这一小节的数据（JSON）：倚音等复杂的改动">改数据</button>
               </div>
               <div class="editor" id="editor" hidden>
                 <textarea class="input" id="edText" spellcheck="false" aria-label="本小节的数据（JSON）"></textarea>
                 <div class="hint">每行一个事件（音符） <span class="help-wrap"><button class="icon-btn help-btn xs" aria-label="字段说明" aria-describedby="edHelp">?</button><span class="help-pop left up" id="edHelp" role="tooltip">dur：到下一个音的时长（四分音符为 1，"1/2" 八分、"1/3" 三连音）；string：弦（1 最细）；fret：品；tech：h p sl si pm nh ah th roll x vib bend；grace：倚音品位（-1 表示没有）；harm：点弦泛音（th）右手点的品。</span></span></div>
                 <div class="ed-bar"><button class="btn sm primary" id="edSave">保存</button><button class="btn sm ghost" id="edCancel">取消</button><span class="hint" id="edMsg"></span></div>
               </div>
-            </details>
+              <div class="fix-ai" id="fixAi">
+                <input class="input" id="hintInput" aria-label="哪里不对（AI 核对、重新识别时一起告诉 AI）" placeholder="哪里不对（可选），如“第 3 拍是 2 弦 4 品”">
+                <div class="refine-scope" id="refineScope" hidden><span class="fix-lbl">AI 核对</span><span class="refine-scope-btns" id="refineScopeBtns"><button class="btn sm" id="refineBarBtn" data-ai>本小节</button><button class="btn sm" id="refineRowBtn" data-ai>本行</button></span><span class="refine-busy" id="refineBusy" hidden><span class="spinner"></span>核对中…</span><span class="hint" id="refineScopeHint"></span></div>
+                <div class="fix-row"><button class="btn sm ghost" id="reparseBtn" data-ai data-ic="refresh">重新识别整行</button></div>
+              </div>
+            </section>
           </div>
         </div>
 

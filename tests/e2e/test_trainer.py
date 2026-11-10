@@ -1276,3 +1276,58 @@ def test_narrow_window_puts_the_bar_card_in_a_drawer(server, browser):
     _viewport(b, 1200, 800)  # 变宽：不再是抽屉
     b.wait_for(f"!({hidden}) && !document.getElementById('side').inert")
     assert not b.errors, b.errors
+
+
+def test_bar_card_order_and_one_correction_section(trainer):
+    """小节卡片：原谱紧跟在提示后面，问答不自己滚；纠错集中在一块（改音 / 改数据 → 哪里不对 + AI 核对 → 重新识别整行）；
+    待核对的小节标题栏有“核对”；“改音”进入改音模式，谱面标题栏只剩“完成”。"""
+    b = trainer()
+    b.js("tt.set('ui.bar', 1); true")
+    order = b.js(
+        "[...document.querySelectorAll('.bar-card .body > *')].filter(x => !x.hidden).map(x => x.id || x.className)"
+    )
+    assert (
+        order.index("tipText") < order.index("cropBox") < order.index("practiceLine") < order.index("fixBox")
+    )
+    assert b.js("getComputedStyle(document.getElementById('qaList')).overflowY") == "visible"
+    fix = b.js(
+        "[...document.querySelectorAll('#fixBox button, #fixBox input')].filter(x => x.offsetParent).map(x => x.id)"
+    )
+    assert fix == ["barEditBtn", "editBtn", "hintInput", "refineBarBtn", "refineRowBtn", "reparseBtn"]
+    assert "本小节" in b.js("document.getElementById('practiceLine').textContent")
+    assert b.js("document.getElementById('barCheckBtn').hidden")
+    b.js(
+        """tt.set('song', {...tt.song, bars: tt.song.bars.map((x, i) => i === 1 ? {...x, needs_review: true} : x)}); true"""
+    )
+    b.wait_for("!document.getElementById('barCheckBtn').hidden")
+    assert "核对" in b.js("document.getElementById('barCheckBtn').textContent")
+    assert b.js("document.getElementById('editModeBtn').hidden")
+    b.js("document.getElementById('barEditBtn').click(); true")
+    assert b.js("tt.get('ui.editMode')") and not b.js("document.getElementById('editModeBtn').hidden")
+    assert "改音" in b.js("document.getElementById('scoreHelp').textContent")
+    b.js("document.getElementById('editModeBtn').click(); true")
+    assert not b.js("tt.get('ui.editMode')") and b.js("document.getElementById('editModeBtn').hidden")
+    assert "快捷键" in b.js("document.getElementById('scoreHelp').textContent")
+    # 整首练了多久：副标题最后，悬停说明不带日期的旧记录
+    b.js(
+        "tt.set('song.practice', {...tt.song.practice, time: {total_seconds: 600, undated_seconds: 120}}); true"
+    )
+    assert b.js("document.getElementById('songSub').textContent").endswith("练了 10 分钟")
+    assert "旧版本" in b.js("document.getElementById('songSub').title")
+    assert not b.errors, b.errors
+
+
+def test_gp_bar_card_shows_its_plan_section(server, trainer):
+    """GP 曲子：没有纠错（小节来自原文件），卡片上显示这一小节所在的分段，可以直接循环它。"""
+    b = trainer(server["gp"])
+    b.wait_for("tt.song.bars.length === 3")
+    assert b.js("document.getElementById('fixBox').hidden")
+    b.js("""tt.set('song', {...tt.song, plan: {overview: '', steps: [{bars: '2-3', title: '后半', advice: '慢练换把'}]}});
+      tt.set('ui.bar', 2); true""")
+    b.wait_for("!document.getElementById('barPlan').hidden")
+    assert "后半" in b.js("document.getElementById('barPlan').textContent")
+    b.js("document.querySelector('#barPlan button').click(); true")
+    assert [b.js("tt.state.a"), b.js("tt.state.b")] == [1, 2]
+    b.js("tt.set('ui.bar', 0); true")
+    assert b.js("document.getElementById('barPlan').hidden")
+    assert not b.errors, b.errors

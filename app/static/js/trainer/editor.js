@@ -1,11 +1,12 @@
-// 修改谱子（只对识别出来的曲子）：小节的 JSON 编辑器、重新识别一行、在谱面上点音符改音，以及撤销。
+// 修改谱子（只对识别出来的曲子）：小节的 JSON 编辑器（“改数据”）、重新识别整行、在谱面上点音符改音（“改音”），以及撤销。
+// 入口都在小节卡片的“纠错”里（bar-card.js 管 AI 核对）；改音模式里谱面标题栏只有一个“完成”。
 
 import { get, set, on } from './store.js';
 import { $, UI, setButton, songUrl } from './dom.js';
 import { put, post, withBusy } from '../lib/api.js';
 import { DUR_CHOICES, durToTicks, eventIndexAt, retimeEvent } from '../score.js';
 import { TECH_NAME, STRINGS, INSTRUMENT } from '../vocab.js';
-import { stop, holdBarWhile } from './player.js';
+import { stop, holdBarWhile, barBox } from './player.js';
 import { provide } from './hooks.js';
 import { addShortcuts } from './keys.js';
 import { refresh, applySong, conflict, isLocked, lockedToast } from './song.js';
@@ -32,7 +33,9 @@ function updateBarTools() {
   if (bar.id !== editorBarId) closeEditor();
   const sys = s.systems[bar.system], parsing = sys && sys.status === 'parsing';
   $('reparseBtn').disabled = !sys || parsing || s.busy;
-  setButton($('reparseBtn'), parsing ? '<span class="spinner"></span>正在重新识别…' : UI.icon('refresh') + '重新识别这一行');
+  setButton($('reparseBtn'), parsing ? '<span class="spinner"></span>正在重新识别…' : UI.icon('refresh') + '重新识别整行');
+  const row = s.bars.filter(b => b.system === bar.system).map(b => b.n);
+  if (!$('reparseBtn').classList.contains('ai-off')) $('reparseBtn').title = `最后的办法：让 AI 把第 ${row[0]}–${row[row.length - 1]} 小节这一整行重新识别一遍（会替换这一行的手改、提示和问答；写了“哪里不对”会一起告诉 AI）`;
 }
 
 // 保存一个小节；记下改之前的内容，⌘Z / Ctrl+Z 可以撤销。
@@ -97,8 +100,12 @@ const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 const UNDO_KEY = IS_MAC ? '⌘Z' : 'Ctrl+Z';
 // 谱面上方的操作说明：一项一个 <span>（.legend 是 flex，项与项之间有间距，项里面的文字和按键不能被拆开）
 const legend = items => items.map(x => `<span>${x}</span>`).join('');
-const LEGEND_PLAY = legend(['点小节：从这里开始播放', '<kbd>Shift</kbd> + 点：把循环扩到这个小节', '点音符：试听', '<i class="review-key"></i>待核对', '<i class="refine-key"></i>精修改过']);
-const LEGEND_EDIT = legend(['改音：点音符改弦、品、技巧和时值', '点拍上的空白处：改和弦、填品位加音', '<kbd>Enter</kbd> 保存', '<kbd>Esc</kbd> 关闭', `<kbd>${UNDO_KEY}</kbd> 撤销`]);
+// 快捷键（处理在 keys.js：main.js 的播放组、practice-log 的这遍干净、rhythm-drill 的敲击、这里的撤销）
+const LEGEND_KEYS = ['<b class="lg-h">快捷键</b>', '<kbd>空格</kbd>播放 / 停止', '<kbd>←</kbd><kbd>→</kbd>上一段 / 下一段', '<kbd>↑</kbd><kbd>↓</kbd>快 / 慢 4 BPM',
+  '<kbd>Home</kbd>回到段首', '<kbd>M</kbd>节拍器开 / 关', '<kbd>Enter</kbd>这遍干净', `<kbd>${UNDO_KEY}</kbd>撤销改音（改音时）`,
+  '敲节奏：<kbd>空格</kbd><kbd>F</kbd><kbd>J</kbd>敲，<kbd>Esc</kbd>停止'];
+const LEGEND_PLAY = legend(['<b class="lg-h">谱面</b>', '点小节：从这里开始播放', '<kbd>Shift</kbd> + 点：把循环扩到这个小节', '按住拖过几个小节：循环它们', '点音符：试听', '<i class="review-key"></i>待核对', '<i class="refine-key"></i>精修改过', ...LEGEND_KEYS]);
+const LEGEND_EDIT = legend(['<b class="lg-h">改音</b>', '点音符：改弦、品、技巧和时值', '点拍上的空白处：改和弦、填品位加音', '<kbd>Enter</kbd>保存', '<kbd>Esc</kbd>关闭面板', `<kbd>${UNDO_KEY}</kbd>撤销`, '改完点“完成”']);
 // 改音面板里的技巧（推弦不在面板里，原样保留）
 const NP_TECH = ['h', 'p', 'sl', 'si', 'pm', 'x', 'nh', 'ah', 'th', 'vib', 'roll'];
 let np = null, npLayer = null, pendingClick = null, setNpStr = null, setNpStrum = null;
@@ -110,10 +117,12 @@ export function setEditMode(v) {
 }
 function paintEditMode(on_) {
   $('editModeBtn').setAttribute('aria-pressed', on_);
+  $('editModeBtn').hidden = !on_; // 改音模式里只有“完成”；进入改音在小节卡片的“纠错”里
+  $('editBadge').hidden = !on_;
+  $('barEditBtn').setAttribute('aria-pressed', on_);
   $('scoreCard').classList.toggle('editing', on_);
-  // 平时的操作说明收在谱面标题栏的“?”里（省出谱面的地方）；改音时的快捷键直接显示在谱面上方
-  $('scoreLegend').innerHTML = on_ ? LEGEND_EDIT : '';
-  $('scoreLegend').hidden = !on_;
+  // 操作说明都收在谱面标题栏的“?”里（省出谱面的地方），改音时换成改音的说明
+  $('scoreHelp').innerHTML = on_ ? LEGEND_EDIT : LEGEND_PLAY;
   if (!on_) closeNotePop();
   else if (get('play.playing')) stop();
 }
@@ -130,7 +139,7 @@ export function openNotePop(beat, note) {
   if (bi >= s.bars.length) return;
   const locked = barLocked(bi);
   if (locked) { UI.toast(locked, 'info'); return; }
-  if (beat.graceType) { UI.toast('倚音请在“识别有误？→ 修改本小节”里改', 'info'); return; }
+  if (beat.graceType) { UI.toast('倚音请在小节卡片的“纠错 → 改数据”里改', 'info'); return; }
   if (barBusy(s.bars[bi].id)) return; // 上一次修改还没存好：这时的内容是旧的
   const ei = eventIndexAt(get('view').beatMap[bi] || [0], beat.playbackStart);
   const ev = barEvents(bi)[ei];
@@ -236,6 +245,27 @@ async function deleteNotePop() {
   await putBar(bar.id, events, rev, `已删除${where}的一个音`);
 }
 
+/** 小节卡片的“改音”：进入改音模式，谱面滚到这一小节并闪一下 */
+function editThisBar() {
+  const bi = get('ui.bar');
+  if (bi < 0) return;
+  const locked = barLocked(bi);
+  if (locked) { UI.toast(locked, 'info'); return; }
+  if (get('ui.editMode')) { setEditMode(false); return; }
+  setEditMode(true);
+  if (get('ui.drawer')) set('ui.drawer', false); // 窄屏：抽屉挡着谱面
+  const box = barBox(bi), score = $('score');
+  if (!box) return;
+  const t = $('transport'), stuck = parseFloat(getComputedStyle(t).top) + t.offsetHeight;
+  const y = scrollY + score.getBoundingClientRect().top + box.y;
+  if (y < scrollY + stuck || y + box.h > scrollY + innerHeight - 60) scrollTo({ top: y - stuck - 24, behavior: 'smooth' });
+  const f = document.createElement('div');
+  f.className = 'bar-flash';
+  Object.assign(f.style, { left: box.x + 'px', top: box.y + 'px', width: box.w + 'px', height: box.h + 'px' });
+  score.appendChild(f);
+  setTimeout(() => f.remove(), 1600);
+}
+
 export const editorState = { get saving() { return saving; }, get undo() { return undoStack.length; }, get undoBars() { return undoStack.map(u => u.barId); }, get undoRevs() { return undoStack.map(u => u.rev); }, get np() { return np; } };
 
 export function initEditor() {
@@ -272,6 +302,7 @@ export function initEditor() {
         await post(songUrl(`/systems/${si}/reparse`), { hint: $('hintInput').value });
         UI.toast('已开始重新识别这一行', 'info');
         $('hintInput').value = '';
+        $('hintInput').dispatchEvent(new Event('input'));
       } catch (e) { UI.toast(e.message, 'err', 5000); }
     });
     await refresh();
@@ -285,7 +316,8 @@ export function initEditor() {
   $('npChord').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); saveNotePop(); }
   });
-  $('editModeBtn').onclick = () => setEditMode(!get('ui.editMode'));
+  $('editModeBtn').onclick = () => setEditMode(false);
+  $('barEditBtn').onclick = editThisBar;
   $('npClose').onclick = closeNotePop;
   $('npSave').onclick = saveNotePop;
   $('npDel').onclick = deleteNotePop;
@@ -320,7 +352,6 @@ export function initEditor() {
   // 离开练习页（调弦、练习建议…）就退出改音模式：回来时谱面上点一下是播放，不会意外改音
   on('ui.view', v => { if (v !== 'practice' && get('ui.editMode')) setEditMode(false); });
 
-  $('scoreHelp').innerHTML = LEGEND_PLAY;
   on('ui.editMode', paintEditMode);
   paintEditMode(false);
   on(['ui.bar', 'song.bars', 'song.systems', 'song.busy'], updateBarTools);
@@ -333,7 +364,6 @@ export function initEditor() {
   on('song.can_edit_bars', v => {
     const can = !!v;
     $('fixBox').hidden = !can;
-    $('editModeBtn').hidden = !can;
     if (!can && get('ui.editMode')) setEditMode(false);
   });
 }

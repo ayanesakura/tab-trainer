@@ -97,8 +97,6 @@
 /* ---- 谱面（alphaTab） ---- */
 .score-card { position: relative; }
 .score-card .card-h { flex-wrap: wrap; }
-.score-legend { padding: var(--sp-2) 14px 0; margin: 0; }
-.score-legend[hidden] { display: none; }
 /* 谱面标题栏的“?”（.help-wrap，样式在 ui.css）：悬停或键盘聚焦时弹出平时的操作说明 */
 .legend kbd { margin-right: 3px; }
 .legend i.review-key { display: inline-block; margin-right: 4px; width: 18px; height: 11px; border-radius: 3px; vertical-align: -1px; background: color-mix(in srgb, var(--amber) 8%, transparent); box-shadow: inset 0 3px 0 color-mix(in srgb, var(--amber) 75%, transparent); }
@@ -106,6 +104,12 @@
 #score { position: relative; isolation: isolate; z-index: 0; padding: var(--sp-1) var(--sp-2) var(--sp-4); min-height: 200px; } /* 光标和选区高亮不能盖到吸顶的控制条上 */
 #score .at-surface { margin: 0 auto; }
 .score-card.editing #score { cursor: crosshair; }
+@keyframes bar-flash { 0%, 40% { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); } }
+.bar-flash { position: absolute; pointer-events: none; border-radius: 4px; z-index: 2; animation: bar-flash 1.6s var(--ease) both; }
+.help-pop .lg-h { font-weight: 600; color: var(--fg); margin-top: var(--sp-1); }
+.help-pop .lg-h:first-child { margin-top: 0; }
+.tuning-line { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tuning-line:empty { display: none; }
 /* 待核对的小节：很淡的底色 + 顶上一条色带，不用整圈描边，免得盖过谱面 */
 .warn-mark { position: absolute; pointer-events: none; border-radius: 4px; background: color-mix(in srgb, var(--amber) 8%, transparent); box-shadow: inset 0 3px 0 color-mix(in srgb, var(--amber) 75%, transparent); z-index: 1; }
 /* 精修改过的小节（淡绿色，比待核对的淡）；正在精修的小节：闪动的框 + 右上角转圈 */
@@ -161,7 +165,7 @@
 :root[data-theme="dark"] .paper canvas, :root[data-theme="dark"] #origCanvas { mix-blend-mode: lighten; }
 .sec-h { font-size: var(--fs-1); font-weight: 600; color: var(--muted); }
 .coach { display: flex; flex-direction: column; gap: var(--sp-2); border-top: 1px solid var(--line-2); padding-top: var(--sp-3); }
-.qa-list { display: flex; flex-direction: column; gap: var(--sp-3); max-height: 300px; overflow-y: auto; }
+.qa-list { display: flex; flex-direction: column; gap: var(--sp-3); } /* 不自己滚：侧栏已经会滚 */
 .qa { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-2); }
 .qa .q { font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
 .qa .q .ic { color: var(--accent); }
@@ -172,19 +176,24 @@
 .qa .old { font-weight: 400; font-size: 11px; color: var(--amber); border: 1px solid currentColor; border-radius: 5px; padding: 0 4px; }
 .ask { display: flex; gap: 6px; }
 .ask .input { flex: 1; }
-.practice-line { color: var(--fg-2); font-size: var(--fs-1); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--card-2); border: 1px solid var(--line-2); }
-.practice-line::before { content: '练习记录　'; color: var(--muted); }
-.practice-line.none { color: var(--muted); }
-.fix { border-top: 1px solid var(--line-2); padding-top: var(--sp-2); }
-.fix summary { cursor: pointer; color: var(--muted); font-size: var(--fs-1); list-style: none; display: flex; align-items: center; gap: 6px; }
-.fix summary::-webkit-details-marker { display: none; }
-.fix summary::before { content: '▸'; font-size: 10px; transition: transform .15s; }
-.fix[open] summary::before { transform: rotate(90deg); }
-.fix[open] summary { margin-bottom: var(--sp-2); }
-.tools { display: flex; gap: 6px; flex-wrap: wrap; }
-.tools .input { flex: 1 1 100%; order: 2; }
-.tools #reparseBtn { order: 3; }
-.editor { margin-top: var(--sp-2); }
+/* 本小节的练习记录：左边小标题，右边一两行数字（悬停看连续干净几遍） */
+.practice-line { display: flex; gap: var(--sp-3); color: var(--fg-2); font-size: var(--fs-1); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--card-2); border: 1px solid var(--line-2); font-variant-numeric: tabular-nums; }
+.practice-line .pl-h { color: var(--muted); flex: none; }
+.practice-line.none .pl-body { color: var(--muted); }
+/* 这一小节所在的分段（AI 的练习建议） */
+.bar-plan { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3); border-radius: var(--r-md); border: 1px solid var(--line-2); font-size: var(--fs-1); }
+.bp-h { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.bp-h b { font-weight: 600; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-h .hint { white-space: nowrap; }
+.bp-adv { color: var(--fg-2); line-height: 1.6; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+/* 纠错：从便宜到贵——改音 / 改数据，“哪里不对” + AI 核对，最后是重新识别整行 */
+.fix { display: flex; flex-direction: column; gap: var(--sp-2); border-top: 1px solid var(--line-2); padding-top: var(--sp-3); }
+.fix-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.fix-ai { display: flex; flex-direction: column; gap: var(--sp-2); }
+.fix-ai[hidden] { display: none; }
+.fix-lbl { color: var(--muted); font-size: var(--fs-1); }
+#barEditBtn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.editor { margin: 0; }
 .editor textarea { width: 100%; height: 220px; margin-bottom: 6px; }
 /* 字段说明的“?”：弹层以整行说明为准左对齐、不超出侧栏（侧栏会滚动，超出会出现横向滚动条） */
 .editor > .hint, .rh-guide { position: relative; }
@@ -371,15 +380,13 @@ body.song-gone main > .view, body.song-gone #nav, body.song-gone .fb-dock { disp
 .chord-diagram .cd-base, .chord-diagram .cd-mark { font-size: 9px; fill: var(--fg-2); }
 .chord-diagram .cd-dot { fill: var(--accent); }
 .chord-diagram .cd-open { fill: none; stroke: var(--fg-2); stroke-width: 1; }
-/* 无误 / 精修本小节 / 精修本行：一行按钮；都隐藏时整行不占地方 */
-.bar-acts { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.bar-acts:not(:has(> :not([hidden]))) { display: none; }
 .review-row { display: flex; align-items: center; gap: var(--sp-1); }
 .review-ok { display: inline-flex; align-items: center; gap: 4px; color: var(--green); font-size: var(--fs-2); font-weight: 500; }
 .review-ok:empty { display: none; }
 .review-row.done #reviewBtn { color: var(--muted); }
-/* 精修这个小节 / 这一行：按钮 + 预估；正在精修这个小节时换成“精修中…” */
+/* AI 核对本小节 / 本行：按钮（预估在悬停提示里）；正在核对这个小节时换成“核对中…” */
 .refine-scope { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.refine-scope[hidden] { display: none; }
 .refine-scope-btns { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 .refine-busy { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-1); color: var(--accent); }
 .refine-scope .hint { overflow-wrap: anywhere; }
