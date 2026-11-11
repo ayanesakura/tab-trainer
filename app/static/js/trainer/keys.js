@@ -9,7 +9,7 @@
 //   - 别的监听已经处理过（e.defaultPrevented）：顶栏标签页的 ←→、起止小节输入框里的 ↑↓、通知里折叠备注的空格……
 //   - 输入法正在组字（isComposing）
 //   - 焦点在打字的地方（文字输入框、多行文本、下拉框、可编辑区域）：什么都不抢
-//   - 焦点在方向键有自己用处的控件上（滑块、标签页、分段开关、菜单）：方向键、Home / End 留给控件
+//   - 焦点在方向键有自己用处的控件上（滑块、标签页、菜单）：方向键、Home / End 留给控件（分段开关不算：它不处理方向键）
 //   - 有浮层开着（UI.hasLayer）：只问标了 layer 的组
 //   - 不在练习页（ui.view）：都不管
 //   - 修饰键：普通快捷键不能按着 ⌘ / Ctrl / Alt；mod 组要按着 ⌘ 或 Ctrl
@@ -20,7 +20,9 @@ import { UI } from './dom.js';
 const scopes = [];
 
 const TYPING = 'textarea, select, [contenteditable]:not([contenteditable="false"]), input:not([type=range]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset])';
-const ARROW_OWNER = 'input[type=range], [role=tab], [role=tablist], [role=menu], [role=menuitem], [role=radiogroup], [role=listbox], .seg';
+// 分段开关（ui.js 的 seg，.seg）不在这里：它自己不处理方向键，算它的话鼠标点过以后 ←→↑↓ Home 全部失效；
+// 顶栏导航虽然也是 .seg 的样子，但它是 role=tablist（ui.js 的 tabs，←→ 切页），由上面的 [role=tablist] 管
+const ARROW_OWNER = 'input[type=range], [role=tab], [role=tablist], [role=menu], [role=menuitem], [role=radiogroup], [role=listbox]';
 const ARROWS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']);
 
 /** 焦点在打字的地方 */

@@ -1675,3 +1675,28 @@ def test_narrow_window_song_updates_do_not_jump_to_the_controls(server, browser)
       return document.getElementById('secBtns').scrollLeft > 0 && r.left >= h.left - 1 && r.right <= h.right + 1; })()""")
     assert b.js("scrollY") == y
     assert not b.errors, b.errors
+
+
+def test_arrow_keys_work_after_clicking_a_segmented_switch(trainer):
+    """鼠标点过“五线谱 + 六线谱 / 只看六线谱”这类分段开关（按钮拿着焦点）以后，←→ 换段、↑↓ 调速、Home 照常
+    （分段开关自己不处理方向键；以前方向键被当成它的，全部失效）。顶栏标签页的方向键见上面那个测试。"""
+    b = trainer()
+    label = "['loopA', 'loopB'].map(id => document.getElementById(id).value).join('–')"
+    focused = "document.activeElement.closest('#notationSeg') !== null"
+
+    def click_seg():
+        _press(b, "notationSeg", 0.05)  # 点在中间：落在某一个按钮上
+        assert b.js(focused)
+
+    bpm = b.js("tt.state.bpm")
+    click_seg()
+    b.key("ArrowRight", vk=39)
+    assert b.js(label) == "1–3"
+    click_seg()
+    b.key("ArrowUp", vk=38)
+    assert b.js("tt.state.bpm") == bpm + 4
+    b.js("tt.set('ui.bar', 2); true")
+    click_seg()
+    b.key("Home", vk=36)
+    assert b.js("tt.get('ui.bar')") == 0
+    assert not b.errors, b.errors
