@@ -179,10 +179,10 @@ def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
 
     for name, data in uploads:
         if _is_pdf(name, data):
-            import fitz  # pymupdf
+            import pymupdf  # 旧名字 fitz 已经弃用（导入时发 FutureWarning）
 
             with _decoding(name):
-                doc = fitz.open(stream=data, filetype="pdf")
+                doc = pymupdf.open(stream=data, filetype="pdf")
             with doc:
                 if count + len(doc) > max_pages:
                     raise Invalid(f"一首曲子最多 {max_pages} 页（“{name}”有 {len(doc)} 页）")

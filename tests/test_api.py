@@ -93,9 +93,9 @@ def test_domain_errors_map_to_status_codes(client):
 
 
 def _pdf(pages: int) -> bytes:
-    import fitz
+    import pymupdf
 
-    doc = fitz.open()
+    doc = pymupdf.open()
     for _ in range(pages):
         doc.new_page().insert_text((72, 72), "tab")
     return doc.tobytes()

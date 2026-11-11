@@ -1,6 +1,7 @@
 """曲库：上传、Guitar Pro / MusicXML 导入与重新转换、手工修改、启动恢复。"""
 
 import json
+import os
 
 import pytest
 
@@ -288,10 +289,37 @@ def test_rederive_with_a_different_bar_count_keeps_matching_bars(data_dir):
     assert song["plan"]["stale"] and song["plan"].get("stale_all")  # 小节号整体移动了
 
 
-def test_source_type_is_recorded(data_dir):
-    import fitz  # pymupdf
+def test_pdf_pages_decode_without_the_deprecated_fitz_import(tmp_path):
+    """PDF 用 `import pymupdf`：旧的 `import fitz` 会发 FutureWarning（以后会删）。在新进程里跑，把这条警告当成错误
+    （同一个进程里 fitz 可能已经被导入过，警告只在第一次导入时发）。"""
+    import subprocess
+    import sys
 
-    with fitz.open() as doc:  # 一页 PDF，内容就是那张谱子图片
+    code = (
+        "import pymupdf\n"
+        "from app import songs\n"
+        "with pymupdf.open() as doc:\n"
+        "    doc.new_page().insert_text((72, 72), 'tab')\n"
+        "    pdf = doc.tobytes()\n"
+        "assert len(list(songs._page_images([('a.pdf', pdf)]))) == 1\n"
+    )
+    env = {**os.environ, "TAB_TRAINER_DATA": str(tmp_path)}
+    r = subprocess.run(
+        [sys.executable, "-W", "error::FutureWarning", "-c", code],
+        cwd=store.ROOT,
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert r.returncode == 0, r.stderr[-2000:]
+
+
+def test_source_type_is_recorded(data_dir):
+    import pymupdf
+
+    with pymupdf.open() as doc:  # 一页 PDF，内容就是那张谱子图片
         page = doc.new_page()
         page.insert_image(page.rect, stream=score_png())
         pdf = doc.tobytes()
