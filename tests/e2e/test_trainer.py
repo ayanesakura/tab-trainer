@@ -1700,3 +1700,30 @@ def test_arrow_keys_work_after_clicking_a_segmented_switch(trainer):
     b.key("Home", vk=36)
     assert b.js("tt.get('ui.bar')") == 0
     assert not b.errors, b.errors
+
+
+def test_practice_record_survives_a_late_poll(server, trainer):
+    """练习记录写进来之前发出的读取（轮询）晚回来：不能把刚记下的练习统计盖回旧的。"""
+    b = trainer()
+    b.js(f"""(() => {{ const of = window.fetch; window.__held = [];
+      window.fetch = (u, i) => {{
+        if (String(u) === '/api/songs/{server["image"]}' && window.__hold) {{
+          const p = of(u, i); return new Promise(r => __held.push(r)).then(() => p); }}  // 现在就读（旧数据），晚点再交回去
+        return of(u, i); }};
+      return true; }})()""")
+    loops = "((tt.song.practice.bars || {}).bar1 || {}).loops || 0"
+    before = b.js(loops)
+    b.js("window.__hold = true; tt.refresh(); true")
+    b.wait_for("__held.length === 1")
+    time.sleep(0.3)  # 读取已经在服务上读完了
+    b.js(
+        "window.__hold = false; tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(240); tt.play(); true"
+    )
+    b.wait_for(f"{loops} > {before}", timeout=10)
+    b.js("tt.stop(); true")
+    time.sleep(0.5)
+    now = b.js(loops)
+    b.js("__held[0](); true")  # 旧的读取回来了
+    time.sleep(1)
+    assert b.js(loops) == now, (before, now, b.js(loops))
+    assert not b.errors, b.errors

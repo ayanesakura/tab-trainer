@@ -326,3 +326,31 @@ test('click：播放和敲节奏共用的节拍器 / 预备拍音量换算', asy
   assert.ok(c.clickGain(0.7, false) < c.clickGain(0.7, true));
   assert.equal(c.audibleLevel({ metroVol: 0 }), 0.5);
 });
+
+test('fresh：晚到的旧读取作废；applySong / setLocal 之前发出的读取也作废', async () => {
+  const { createFresh } = await import('../../app/static/js/trainer/fresh.js');
+  // 模拟 song.js：读取 = begin() 发出，回来时 accept() 了才 set；本地写 = local() 再 set
+  const st = createStore({ song: { practice: { n: 0 }, title: 'a' } });
+  const f = createFresh();
+  const read = () => { const my = f.begin(); return s => { if (f.accept(my)) st.set('song', s); }; };
+  const setLocal = (p, v) => { f.local(); st.set(p, v); };
+
+  const r1 = read(), r2 = read();
+  r2({ practice: { n: 0 }, title: 'b' });
+  r1({ practice: { n: 0 }, title: 'a' }); // 先发出的晚回来：不用
+  assert.equal(st.get('song.title'), 'b');
+
+  const poll = read(); // 轮询发出去了（服务上还没有这条练习记录）
+  setLocal('song.practice', { n: 1 }); // 练习记录的写接口先回来
+  poll({ practice: { n: 0 }, title: 'b' }); // 旧的轮询结果晚到：不能盖回去
+  assert.deepEqual(st.get('song.practice'), { n: 1 });
+  const next = read(); // 之后发出的读取照常用
+  next({ practice: { n: 1 }, title: 'c' });
+  assert.equal(st.get('song.title'), 'c');
+
+  const before = read();
+  f.local(); // applySong：写接口返回了整首
+  st.set('song', { practice: { n: 2 }, title: 'd' });
+  before({ practice: { n: 1 }, title: 'c' });
+  assert.equal(st.get('song.title'), 'd');
+});

@@ -15,14 +15,16 @@ import { notice } from './notices.js';
 import { stored, remember } from './prefs.js';
 import { refineConfirm, NO_REFINE, refineScopeLabel } from '../lib/refine.js';
 import { setTitleBase } from '../lib/doc-title.js';
+import { createFresh } from './fresh.js';
 
 
 // ---------------------------------------------------------------------
 // 取曲子、轮询
 // ---------------------------------------------------------------------
-let seq = 0, applied = 0, poller = null, polling = false;
+const fresh = createFresh(); // 晚到的旧读取作废（fresh.js）
+let poller = null, polling = false;
 async function load() {
-  const my = ++seq;
+  const my = fresh.begin();
   let s;
   try {
     s = await apiGet(songUrl());
@@ -40,8 +42,7 @@ async function load() {
     throw e; // poll 退避重试
   }
   notice('offline', null); songGone(null);
-  if (my < applied) return get('song'); // 晚到的旧结果
-  applied = my;
+  if (!fresh.accept(my)) return get('song'); // 晚到的旧结果
   set('song', s);
   return s;
 }
@@ -56,14 +57,14 @@ export function songGone(head, msg = '', retry = false) {
   stop(); // 曲子被删了还在放的话停下（播放键已经看不见了）
   if (get('ui.view') !== 'practice') location.hash = '#practice'; // 调弦页的麦克风也关掉
 }
-/** 本地直接改了 store 里的曲子（问 AI 的回答并进 qa）：在这之前发出、还没回来的读取结果作废，免得旧数据把它盖掉 */
+/** 本地直接改了 store 里的曲子（问 AI 的回答并进 qa、练习记录、打分）：在这之前发出、还没回来的读取结果作废，免得旧数据把它盖掉 */
 export function setLocal(path, value) {
-  applied = ++seq;
+  fresh.local();
   set(path, value);
 }
 /** 写接口返回了最新的曲子：直接用它（比它早发出的读取结果作废） */
 export function applySong(s) {
-  applied = ++seq;
+  fresh.local();
   set('song', s);
 }
 /** 写接口报 409（别处改过）：提示并刷新 */

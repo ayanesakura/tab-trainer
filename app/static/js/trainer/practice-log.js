@@ -11,6 +11,7 @@ import { get, set, on } from './store.js';
 import { $, UI, esc, songUrl } from './dom.js';
 import { practiceLines } from './view.js';
 import { initialLog, step } from './practice-pass.js';
+import { setLocal } from './song.js';
 
 // 练到哪了（practice-pass.js 的状态）：这里只把 store 的变化翻成事件交给它，按它给的结果发记录、改 play.clean
 let log = initialLog();
@@ -55,7 +56,7 @@ export function recordPractice({ ids, loops = 0, bpm, seconds, kind, clean }) {
   if (kind && kind !== 'play') body.kind = kind;
   if (clean !== undefined) body.clean = !!clean;
   return fetch(songUrl('/practice'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true })
-    .then(r => (r.ok ? r.json() : null)).then(p => { if (p) set('song.practice', p); }).catch(() => {});
+    .then(r => (r.ok ? r.json() : null)).then(p => { if (p) setLocal('song.practice', p); }).catch(() => {}); // 在这之前发出的轮询晚到了也不会盖回旧的
 }
 
 /** 这一段结束（loopDone：刚弹完一遍）；还在练同一件事就从现在开始下一段 */
