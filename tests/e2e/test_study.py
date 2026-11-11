@@ -298,3 +298,27 @@ def test_calendar_scrolled_to_today_when_opened_from_library(server):
         b.wait_for(f"{cal}.scrollLeft + {cal}.clientWidth >= {cal}.scrollWidth - 1", timeout=3)
         assert b.js("(r => r.left >= 0 && r.right <= innerWidth)(document.querySelector('#cal .cell.today').getBoundingClientRect())")
         assert not b.errors, b.errors
+
+
+def test_other_tab_changes_refresh_plan_and_library(server, browser):
+    # 别的标签页改了计划（BroadcastChannel 'tt-study' 发 'changed'）：曲库的徽章、练琴页的计划列表都跟着变
+    gp = server["gp"]
+    b = browser
+    badge = f"document.querySelector('.song-row[data-id=\"{gp}\"] .plan-badge')"
+    plan_row = f"document.querySelector('#plan .plan-row[data-id=\"{gp}\"]')"
+    announce = "new BroadcastChannel('tt-study').postMessage('changed'); true"  # 同一页面里另一个频道对象收得到
+    try:
+        b.open(server["base"] + "/#library")
+        b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{gp}\"]')")
+        assert b.js(f"!{badge}")
+        _api(server, f"/api/songs/{gp}/study", "PUT", {"in_plan": True})
+        b.js(announce)
+        b.wait_for(f"({badge} || {{}}).textContent === '待学'", timeout=5)
+        b.js("location.hash = 'study'; true")
+        b.wait_for(f"!!{plan_row}")
+        _leave_plan(server, gp)
+        b.js(announce)
+        b.wait_for(f"!{plan_row}", timeout=5)
+        assert not b.errors, b.errors
+    finally:
+        _leave_plan(server, gp)

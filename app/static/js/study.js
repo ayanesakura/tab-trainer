@@ -316,7 +316,8 @@ export function initStudy({ onSongs } = {}) {
   setGoal = UI.seg($('goalSeg'), '45', v => saveSettings({ goal_minutes: +v }, `每日目标改成 ${v} 分钟`));
   setLearn = UI.seg($('learnSeg'), '2', v => saveSettings({ max_learning: +v }, `同时在学最多 ${v} 首`));
   setRev = UI.seg($('revSeg'), '5', v => saveSettings({ max_reviews: +v }, +v ? `每天最多复习 ${v} 首` : '复习不限数量'));
-  onAnnounce(() => { if (S.visible) refresh(); });
+  // 别的标签页改了计划、打了分、记了时间：计划列表和曲库的徽章是用曲库列表画的，曲库页开着（练琴页隐藏）时也要重新取
+  onAnnounce(() => { S.onSongs(); if (S.visible) refresh(); });
   // 页面重新可见（练完一首从练习页回来、过了零点）：重新取今日
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.visible) refresh(); });
   addEventListener('pageshow', e => { if (e.persisted && S.visible) refresh(); });
