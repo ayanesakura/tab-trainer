@@ -281,12 +281,8 @@ def _check_shape(song: dict) -> None:
 def _clean_jsonl(data: bytes, clean: Callable[[object], dict | None]) -> bytes:
     """包里的练习记录 / 自评记录：只留格式对的行（practice.clean_record / study.clean_rating），坏行丢掉。"""
     lines = []
-    for line in data.decode("utf-8", "replace").splitlines():
-        try:
-            rec = clean(json.loads(line))
-        except ValueError:
-            continue
-        if rec:
+    for _, raw in store.parse_jsonl(data):  # 按字节分行、每行单独解码，坏行跳过
+        if rec := clean(raw):
             lines.append(json.dumps(rec, ensure_ascii=False))
     return ("\n".join(lines) + "\n").encode() if lines else b""
 

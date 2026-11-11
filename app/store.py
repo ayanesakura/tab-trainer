@@ -353,11 +353,8 @@ def practice_path(song_id: str) -> Path:
 
 
 def practice_text(song_id: str, song: dict | None = None) -> str:
-    """practice.jsonl 的全部内容（曲子包导出用）。旧曲子还没存过时带上内存里的种子行。"""
-    try:
-        text = practice_path(song_id).read_text(encoding="utf-8")
-    except FileNotFoundError:
-        text = ""
+    """practice.jsonl 的全部内容（曲子包导出用，坏行不带）。旧曲子还没存过时带上内存里的种子行。"""
+    text = _jsonl_text(practice_path(song_id))
     seed = (song or {}).get("_practice_seed")
     if seed and not any(r.get("seed") for r in read_jsonl(practice_path(song_id))):
         text = json.dumps(seed, ensure_ascii=False) + "\n" + text
@@ -373,11 +370,8 @@ def study_log_path(song_id: str) -> Path:
 
 
 def study_log_text(song_id: str) -> str:
-    """study.jsonl 的全部内容（曲子包导出用），没有是空串。"""
-    try:
-        return study_log_path(song_id).read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return ""
+    """study.jsonl 的全部内容（曲子包导出用，坏行不带），没有是空串。"""
+    return _jsonl_text(study_log_path(song_id))
 
 
 def append_study_log(song_id: str, record: dict) -> None:
@@ -403,21 +397,39 @@ def _append_jsonl(song_id: str, name: str, record: dict) -> None:
             os.fsync(f.fileno())
 
 
-def read_jsonl(path: Path) -> list[dict]:
-    """读 jsonl，跳过坏行（断电时可能留下半行）。"""
-    out = []
+def _jsonl_lines(path: Path) -> list[tuple[str, dict]]:
+    """jsonl 文件里读得出来的行（见 parse_jsonl）。文件不在是 []。"""
     try:
-        text = path.read_text(encoding="utf-8")
+        return parse_jsonl(path.read_bytes())
     except FileNotFoundError:
         return []
-    for line in text.splitlines():
+
+
+def parse_jsonl(data: bytes) -> list[tuple[str, dict]]:
+    """jsonl 内容里读得出来的行：(这一行的原文, 解析出的记录)，坏行跳过（导入曲子包时也用它）。
+    按字节分行、每行单独解码：断电留下的半行可能断在一个汉字中间（备注是中文），整个文件一起解码的话一行坏了
+    整个文件都读不出来。也不用 str.splitlines：它把字符串里的 U+2028、U+0085 之类当成换行（ensure_ascii=False
+    写进去的这些字符不转义）。"""
+    out = []
+    for raw in data.split(b"\n"):
         try:
+            line = raw.decode("utf-8")
             rec = json.loads(line)
-        except ValueError:
+        except ValueError:  # UnicodeDecodeError 也是 ValueError
             continue
         if isinstance(rec, dict):
-            out.append(rec)
+            out.append((line, rec))
     return out
+
+
+def _jsonl_text(path: Path) -> str:
+    """jsonl 里读得出来的行原样拼回去（曲子包导出用）：坏行不带，导出不会因为一行半截的记录失败。"""
+    return "".join(line + "\n" for line, _ in _jsonl_lines(path))
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    """读 jsonl，跳过坏行（断电时可能留下半行）。"""
+    return [rec for _, rec in _jsonl_lines(path)]
 
 
 def read_records(song_id: str, name: str, clean: Callable[[object], dict | None]) -> list[dict]:
@@ -442,9 +454,9 @@ def _write_seed(d: Path, seed: dict) -> None:
     if any(r.get("seed") for r in read_jsonl(path)):
         return
     d.mkdir(parents=True, exist_ok=True)
-    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    old = path.read_bytes() if path.exists() else b""  # 按字节拼：里面有半行坏字节也原样留着
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps(seed, ensure_ascii=False) + "\n" + old, encoding="utf-8")
+    tmp.write_bytes((json.dumps(seed, ensure_ascii=False) + "\n").encode("utf-8") + old)
     os.replace(tmp, path)
 
 

@@ -275,6 +275,23 @@ def test_practice_record_after_a_torn_line_is_kept(data_dir):
     assert [r["ids"] for r in store.read_jsonl(path)] == [["a"], ["b"]]
 
 
+def test_jsonl_is_split_and_decoded_line_by_line(data_dir):
+    """jsonl 按字节分行、一行一行解码：半行断在汉字中间只丢这一行（不是整个文件读不出来）；
+    字符串里的 U+2028 / U+0085（ensure_ascii=False 不转义）不算换行。导出只带完整的行。"""
+    sid = _gp()
+    path = store.practice_path(sid)
+    store.append_practice(sid, {"at": "2026-01-01 10:00", "ids": ["a b\x85c"], "loops": 1})
+    with open(path, "ab") as f:
+        f.write('{"at": "2026-01-02 10:00", "ids": ["指'.encode()[:-1])
+    store.append_practice(sid, {"at": "2026-01-03 10:00", "ids": ["弦"], "loops": 2})
+    assert [r["ids"] for r in store.read_jsonl(path)] == [["a b\x85c"], ["弦"]]
+    text = store.practice_text(sid)
+    assert [json.loads(x)["ids"] for x in text.split("\n") if x] == [["a b\x85c"], ["弦"]]
+    log = store.study_log_path(sid)
+    log.write_bytes('{"rating": 3, "note": "好"}\n{"rating": 2, "note": "手'.encode()[:-1])
+    assert store.study_log_text(sid) == '{"rating": 3, "note": "好"}\n'
+
+
 def test_valid_id_rejects_trailing_newline():
     """re.match + $ 会放过结尾的换行（"abcd\\n"）：用 fullmatch。"""
     assert store.valid_id("abcd-1234")

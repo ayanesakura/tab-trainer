@@ -466,6 +466,35 @@ def test_bad_rating_lines_are_skipped(data_dir):
     assert [r["rating"] for r in study.ratings(sid)] == [3, 2, 4]
 
 
+def test_rating_line_torn_inside_a_chinese_character_is_skipped(client):
+    """断电留下的半行断在一个汉字中间（备注是中文，按 UTF-8 写）：只跳过这一行。详情、曲库、今日计划、再评分、
+    导出都照常，不能把整首曲子当成“数据损坏”。"""
+    sid = _song("甲")
+    client.put(f"/api/songs/{sid}/study", json={"in_plan": True})
+    assert (
+        client.post(f"/api/songs/{sid}/study/rate", json={"rating": 3, "note": "第一次"}).status_code == 200
+    )
+    torn = '{"at": "2026-11-09 21:00:00", "day": "2026-11-09", "rating": 2, "note": "手指'.encode()[:-2]
+    with open(store.study_log_path(sid), "ab") as f:
+        f.write(torn)
+
+    r = client.get(f"/api/songs/{sid}")
+    assert r.status_code == 200 and r.json()["study"]["last"]["note"] == "第一次"
+    row = next(x for x in client.get("/api/songs").json() if x["id"] == sid)
+    assert row["status"] != "corrupt" and row["study"]["rated_today"] == 3
+    today = client.get("/api/study/today").json()
+    assert sid in [x["id"] for x in today["queue"] + today["done"]]
+    r = client.post(f"/api/songs/{sid}/study/rate", json={"rating": 4, "note": "第二次"})
+    assert r.status_code == 200 and r.json()["study"]["rated_today"] == 4
+    assert [x["note"] for x in study.ratings(sid)] == ["第一次", "第二次"]
+
+    r = client.get("/api/export", params={"ids": [sid]})
+    assert r.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        lines = zf.read(f"songs/{sid}/study.jsonl").splitlines()
+    assert [json.loads(x)["note"] for x in lines] == ["第一次", "第二次"]  # 坏行不进包
+
+
 # ---------------------------------------------------------------------------
 # 曲子包
 # ---------------------------------------------------------------------------

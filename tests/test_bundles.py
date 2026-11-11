@@ -377,6 +377,18 @@ def test_import_drops_malformed_practice_lines(client):
     assert v["practice"]["bars"]["b1"]["loops"] == 2 and v["practice"]["total_seconds"] == 30
 
 
+def test_import_reads_record_lines_byte_by_byte(data_dir):
+    """包里的自评记录按字节分行、每行单独解码：断在汉字中间的半行只丢这一行；备注里的 U+2028 不算换行。"""
+    from app import study
+
+    keep = {"at": "2026-11-09 20:00:00", "day": "2026-11-09", "rating": 3, "note": "第一行\u2028第二行"}
+    torn = json.dumps({**keep, "rating": 2, "note": "手指"}, ensure_ascii=False).encode()[:-5]
+    data = json.dumps(keep, ensure_ascii=False).encode() + b"\n" + torn
+    r = bundles.import_bundles([("x.zip", _bundle(_v2("ok-song"), {"songs/ok-song/study.jsonl": data}))])
+    assert [s["id"] for s in r["imported"]] == ["ok-song"]
+    assert [x["note"] for x in study.ratings("ok-song")] == ["第一行\u2028第二行"]
+
+
 def test_bad_data_on_disk_does_not_break_the_library(client):
     """读取一侧：song.json 被改坏（时值 1/0）只让这一首显示成“数据损坏”；practice.jsonl 的坏行跳过。"""
     good = _gp_song()
