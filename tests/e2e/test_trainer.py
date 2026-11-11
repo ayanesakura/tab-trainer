@@ -1817,3 +1817,37 @@ def test_clean_button_and_enter_to_ask_without_a_key(trainer):
     assert b.js("__asks") == 0
     b.key("Escape", vk=27)
     assert not b.errors, b.errors
+
+
+def test_narrow_topbar_keeps_title_and_rate_button(server, plan_song):
+    """390 宽：顶栏的标签组换到第二行，曲名看得到（省略号截断）、“打分”在屏幕里，整页没有横向滚动；
+    吸顶的控制条 / 抽屉按两行顶栏的高度（--top-h）让开。"""
+    from tests.e2e.cdp import Browser
+
+    with Browser(width=600, height=844) as b:  # 无界面 Chrome 的窗口最窄 500：用设备尺寸模拟
+        b._run(
+            b._send(
+                "Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=1, mobile=False
+            )
+        )
+        b.open(f"{server['base']}/trainer?id={plan_song}")
+        b.wait_for("window.tt && tt.state.ready && !document.getElementById('rateBtn').hidden", timeout=40)
+        assert b.js("innerWidth") == 390
+        assert b.js("document.documentElement.scrollWidth <= innerWidth")
+        assert b.js("document.getElementById('songTitle').getBoundingClientRect().width") > 40
+        assert b.js(
+            "(r => r.left >= 0 && r.right <= innerWidth)(document.getElementById('rateBtn').getBoundingClientRect())"
+        )
+        nav, bar = b.js(
+            "[document.getElementById('nav').getBoundingClientRect(), document.querySelector('.topbar').getBoundingClientRect()]"
+            ".map(r => ({ top: r.top, bottom: r.bottom, right: r.right }))"
+        )
+        assert nav["right"] <= 390 and nav["bottom"] <= bar["bottom"]
+        top_h = b.js("parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--top-h'))")
+        assert abs(top_h - bar["bottom"]) <= 1  # 顶栏多高，--top-h 就是多少
+        assert not b.errors, b.errors
+    # 宽屏不变：一行，52px
+    with Browser(width=1440, height=900) as b:
+        b.open(f"{server['base']}/trainer?id={plan_song}")
+        b.wait_for("window.tt && tt.state.ready", timeout=40)
+        assert b.js("document.querySelector('.topbar').getBoundingClientRect().height") == 52

@@ -380,8 +380,15 @@ body.song-gone main > .view, body.song-gone #nav, body.song-gone .fb-dock, body.
 @media (prefers-reduced-motion: reduce) { .side { transition: none !important; } }
 @media (max-width: 760px) {
   .transport { position: static; }
-  .crumb .t { max-width: 40vw; }
   .fb-legend { display: none; }
+  /* 顶栏放不下一行（返回、曲名、标签组、计时、打分）：标签组换到第二行（横着滚），曲名占剩下的宽度、省略号截断。
+     --top-h 跟着改成两行的高度：吸顶的侧栏 / 抽屉、改音时滚动的留白都按它让开 */
+  :root { --top-h: 92px; }
+  .topbar { height: var(--top-h); flex-wrap: wrap; align-content: center; row-gap: 4px; }
+  .topbar .crumb { flex: 1; }
+  .crumb .t, .crumb-sub { max-width: 100%; }
+  .topbar .center { order: 3; flex-basis: 100%; overflow-x: auto; scrollbar-width: none; }
+  .topbar .center .seg { width: max-content; }
 }
 
 .note-pop .np-chord { width: 84px; }
