@@ -189,10 +189,13 @@ def recover(s: dict) -> bool:
             s, notice=("warn", "服务重启，讲解生成中断，已完成的部分会保留，可以重新生成。"), source="explain"
         )
         changed = True
-    elif kind == "parse" and a.get("restaging"):  # 重新识别时原来的结果没动过，只是新结果丢了
-        finish(
-            s, status="ready", notice=("warn", "服务重启，重新识别中断，原来的结果保留不变。"), source="parse"
-        )
+    elif kind == "parse" and a.get("restaging"):
+        # 重新识别时原来的结果没动过，只是新结果丢了：状态也照旧（不给 status，交给 settle；和 recognize._end_restage 一样），
+        # 原来有行失败的还是失败
+        msg = "服务重启，重新识别中断，原来的结果保留不变。"
+        if failed := sum(x.get("status") == "error" for x in s.get("systems") or []):
+            msg += f"原来有 {failed} 行没识别出来，可以点“重试失败的行”再试。"
+        finish(s, notice=("warn", msg), source="parse")
         changed = True
     elif kind == "reparse_row":
         finish(s)

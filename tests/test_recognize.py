@@ -393,6 +393,22 @@ def test_restart_during_reparse_keeps_the_old_result(data_dir):
     assert after["bars"] == before["bars"] and after["activity"] is None
 
 
+def test_restart_during_reparse_of_a_song_with_failed_rows_keeps_its_status(data_dir):
+    """重新识别前就有行失败（status=error）：重启后中断的重新识别不能把它说成“可练习”（和 _end_restage 一样照旧）。"""
+    sid, before = _parsed_song_with_user_data()
+
+    def broken(s):
+        s["systems"][0].update(status="error", error="网络断了")
+        s.update(status="error", activity={"kind": "parse", "restaging": True, "systems": []})
+
+    store.update(sid, broken)
+    songs.recover_interrupted()
+    after = store.load(sid)
+    assert after["status"] == "error" and after["systems"][0]["status"] == "error"
+    assert "原来的结果保留不变" in after["notice"]["msg"] and "1 行没识别出来" in after["notice"]["msg"]
+    assert after["bars"] == before["bars"] and after["activity"] is None
+
+
 def _ts_transcribe(declare_on_row2=False, row2_retry_declares=False):
     """替身模型：第 1 行第 2 小节写着变拍号 3/4，之后的小节都是 3 拍。"""
     calls = []
