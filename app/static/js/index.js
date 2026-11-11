@@ -31,6 +31,24 @@ $('paletteSeg').innerHTML = UI.PALETTES.map(p => `<button data-v="${p.id}"><i cl
 const setPaletteSeg = UI.seg($('paletteSeg'), UI.getPalette(), v => UI.setPalette(v));
 document.addEventListener('themechange', e => { setThemeSeg(e.detail); setPaletteSeg(UI.getPalette()); });
 
+// ---------------- API key ----------------
+// 没有 key（GET /api/settings 的 has_key）时，要调用 AI 的操作——上传原谱识别、整首重新识别、精修整首、重试失败的行、
+// 管理原谱页面里新加的页——先说明要去设置填 key：不先建一首注定识别失败的曲子，也不先弹带费用的确认框。
+// 菜单里这几项灰掉但还能点（点了是说明，和练习页一样）；GP / MusicXML 导入不需要 key。还没查到时当作有。
+let hasKey = null;
+const NO_KEY = '先在设置里填 API key';
+const keyOk = () => hasKey !== false;
+async function askForKey() {
+  if (!await UI.confirm('识别原谱、精修、重新识别要调用 AI，先在设置里填 Anthropic API key。（导入 Guitar Pro / MusicXML 不需要。）', { title: '还没有 API key', ok: '去设置' })) return;
+  location.hash = 'settings';
+  route(); // 不等 hashchange：马上切过去，焦点放到 key 的输入框
+  $('apiKey').focus();
+}
+/** 包一层：没有 key 时只说明，不执行 fn */
+const needKey = fn => (...a) => (keyOk() ? fn(...a) : askForKey());
+/** 菜单里要调用 AI 的一项：没有 key 时灰掉（还能点，点了说明） */
+const aiItem = (label, icon, fn) => ({ label, icon, onClick: needKey(fn), off: keyOk() ? '' : NO_KEY });
+
 // ---------------- 上传 ----------------
 let picked = [];
 const isZip = f => /\.zip$/i.test(f.name);
@@ -63,7 +81,11 @@ const dragsFiles = e => !!e.dataTransfer && [...e.dataTransfer.types].includes('
 document.addEventListener('dragover', e => { if (!e.defaultPrevented && dragsFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'none'; } });
 document.addEventListener('drop', e => { if (dragsFiles(e)) e.preventDefault(); });
 $('clearPick').onclick = () => { setFiles([]); $('file').value = ''; drop.focus(); };
-$('uploadBtn').onclick = () => api.withBusy($('uploadBtn'), async () => {
+$('uploadBtn').onclick = () => {
+  if (picked.some(f => !isScoreFile(f.name)) && !keyOk()) { askForKey(); return; } // 原谱要识别；GP / MusicXML 不用 key
+  doUpload();
+};
+const doUpload = () => api.withBusy($('uploadBtn'), async () => {
   try {
     await api.upload('/api/songs', picked, { title: $('title').value });
     toast(picked.some(f => !isScoreFile(f.name)) ? '已上传，开始识别' : '已导入');
@@ -326,9 +348,9 @@ $('songs').addEventListener('click', e => {
   const more = e.target.closest('[data-more]');
   if (more) { e.stopPropagation(); openMore(more); return; }
   const retry = e.target.closest('[data-retry]');
-  if (retry) { const s = lastSongs.find(x => x.id === retry.dataset.retry); if (s) reparse(s); return; }
+  if (retry) { const s = lastSongs.find(x => x.id === retry.dataset.retry); if (s) needKey(reparse)(s); return; }
   const rf = e.target.closest('[data-retry-failed]');
-  if (rf) { const s = lastSongs.find(x => x.id === rf.dataset.retryFailed); if (s) retryFailed(s); return; }
+  if (rf) { const s = lastSongs.find(x => x.id === rf.dataset.retryFailed); if (s) needKey(retryFailed)(s); return; }
   if (e.target.closest('a,button')) return;
   const row = e.target.closest('.row[data-play="1"]');
   if (row) location.href = row.querySelector('a.title').href;
@@ -358,9 +380,9 @@ function openMore(btn) {
     { label: '重命名', icon: 'edit', onClick: () => rename(s) },
     { label: '编辑标签', icon: 'list', onClick: () => editTags(s) },
     image && { label: '管理原谱页面', icon: 'image', onClick: () => openPages(id) },
-    image && s.failed_rows > 0 && { label: `重试失败的 ${s.failed_rows} 行`, icon: 'refresh', onClick: () => retryFailed(s) },
-    image && { label: '整首重新识别', icon: 'refresh', onClick: () => reparse(s) },
-    image && s.bars > 0 && { label: '精修整首', icon: 'sparkle', onClick: () => refineSong(s) },
+    image && s.failed_rows > 0 && aiItem(`重试失败的 ${s.failed_rows} 行`, 'refresh', () => retryFailed(s)),
+    image && aiItem('整首重新识别', 'refresh', () => reparse(s)),
+    image && s.bars > 0 && aiItem('精修整首', 'sparkle', () => refineSong(s)),
     { label: '导出曲子包', icon: 'upload', onClick: () => exportSongs([id]) },
     { label: s.archived ? '取消归档' : '归档', icon: 'archive', onClick: () => setArchived([s], !s.archived) },
     'sep',
@@ -509,6 +531,7 @@ $('pagesCancel').onclick = closePages;
 $('pagesSave').onclick = async () => {
   const removed = removedPages();
   if (removed.bars && !await UI.confirm(`删除的页上有 ${removed.bars} 个小节，它们的提示、问答和练习记录会一起删掉。`, { title: `删除 ${removed.pages} 页原谱？`, ok: '删除并保存', danger: true })) return;
+  if (pg.items.some(it => it.kind === 'new') && !keyOk()) { toast(`新加的页要用 AI 识别：${NO_KEY}`, 'err', 4000); return; }
   const files = [];
   const order = pg.items.map(it => (it.kind === 'old' ? it.file : `new:${files.push(pg.files[it.k]) - 1}`));
   await api.withBusy($('pagesSave'), async () => {
@@ -526,10 +549,14 @@ $('pagesSave').onclick = async () => {
 // ---------------- 设置 ----------------
 const PRESETS = ['claude-opus-5-5', 'claude-sonnet-5-5'];
 let settings = null; // 服务器上当前的设置（showSettings 时更新），“测试”时比较哪些改了还没保存
+// 有没有能用的 key：曲库上面的提示、AI 操作要不要先说明（见上面的 needKey）
+function paintKey(c) {
+  hasKey = c.has_key ?? !!(c.api_key_masked || c.env_key);
+  UI.notice($('keyNotice'), hasKey ? null : { kind: 'warn', html: '还没设置 API key，识别原谱前请先到 <a href="#settings">设置</a> 填写。（导入 Guitar Pro / MusicXML 不需要。）' });
+}
 function showSettings(c) {
   settings = c;
-  const hasKey = !!(c.api_key_masked || c.env_key);
-  UI.notice($('keyNotice'), hasKey ? null : { kind: 'warn', html: '还没设置 API key，识别原谱前请先到 <a href="#settings">设置</a> 填写。（导入 Guitar Pro / MusicXML 不需要。）' });
+  paintKey(c);
   // 现在用的是哪个 key：打码显示在输入框的占位符里（填了新的就在失去焦点 / 回车时保存）
   $('apiKey').placeholder = c.api_key_masked ? `已保存 ${c.api_key_masked}` : c.env_key ? '用的是环境变量 ANTHROPIC_API_KEY' : 'sk-ant-…';
   $('keyState').innerHTML = c.api_key_masked ? `<span class="dot ok"></span>已保存 <code>${esc(c.api_key_masked)}</code>`
@@ -607,6 +634,8 @@ $('testBtn').onclick = () => api.withBusy($('testBtn'), async () => {
 initStudy({ onSongs: () => songsPoll.now() });
 route();
 api.get('/api/settings').then(showSettings).catch(() => {});
+// key 可能在别的标签页（另一个曲库页）填好或清掉了：回到这页时重新查一次
+document.addEventListener('visibilitychange', () => { if (!document.hidden) api.get('/api/settings').then(paintKey).catch(() => {}); });
 
 // 端到端测试 / 控制台调试用
 window.tt = { reload: loadSongs, refresh: () => songsPoll.now(), openPages, songs: () => lastSongs, study: refreshStudy };

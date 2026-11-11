@@ -15,6 +15,22 @@ def _api(server, path, method="GET", body=None, headers=None):
     return urllib.request.urlopen(req).read()
 
 
+def _fake_key(b, has_key):
+    """页面里 GET /api/settings 的 has_key 当作 has_key（测试环境没有 key，也可能有 ANTHROPIC_API_KEY）：要在 open 之前调。"""
+    b._run(
+        b._send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            source="""(() => { const of = window.fetch; window.fetch = async (u, init = {}) => {
+              const r = await of(u, init);
+              if (!String(u).endsWith('/api/settings') || (init.method || 'GET') !== 'GET') return r;
+              const c = await r.json(); c.has_key = %s; if (!c.has_key) { c.api_key_masked = ''; c.env_key = false; }
+              return new Response(JSON.stringify(c), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }; })()"""
+            % ("true" if has_key else "false"),
+        )
+    )
+
+
 def test_export_selected_then_import(server, browser):
     # 单独复制一首 GP 曲子来导出、删除、再导入，不影响其他测试用的曲子
     src = _api(server, f"/files/{server['gp']}/source")
@@ -423,6 +439,7 @@ def test_retry_failed_rows_from_library_and_practice_page(server, browser, train
       return of(u, init); }; return true; })()"""
     try:
         b = browser
+        _fake_key(b, True)  # 重试要调用 AI：没有 key 时只说明（见 test_ai_actions_without_key）
         b.open(server["base"] + "/")
         b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{sid}\"] [data-retry-failed]')")
         assert "重试失败的 1 行" in b.js(
@@ -899,6 +916,7 @@ def test_upload_too_large_shows_the_reason(server, browser):
     settings.max_total_bytes = 1  # 上限 = 1 字节 + 1 MB 表单开销（0 会被当成“没有上限”）
     try:
         b = browser
+        _fake_key(b, True)  # 上传原谱要有 key，没有时根本不发请求
         b.open(server["base"] + "/")
         b.wait_for("!!document.getElementById('file')")
         b.js("""const dt = new DataTransfer(); dt.items.add(new File([new Uint8Array(3 * 1024 * 1024)], 'big.png', { type: 'image/png' }));
@@ -911,3 +929,70 @@ def test_upload_too_large_shows_the_reason(server, browser):
         assert not b.errors, b.errors
     finally:
         settings.max_total_bytes = old
+
+
+def test_ai_actions_without_key(server, browser):
+    # 没有 API key：上传原谱、整首重新识别、精修整首先说明去设置填 key（不发请求、不弹带费用的确认框）；GP 导入照常
+    img = server["image"]
+    b = browser
+    _fake_key(b, False)
+    b.open(server["base"] + "/")
+    b.wait_for(f"!!document.querySelector('[data-more=\"{img}\"]') && !document.getElementById('keyNotice').hidden")
+    b.js("""window.__posts = []; const of = window.fetch; window.fetch = (u, init = {}) => {
+      if ((init.method || 'GET') !== 'GET') { __posts.push(String(u));
+        if (String(u).endsWith('/api/songs')) return Promise.resolve(new Response('{"id": "x"}', { status: 200, headers: { 'Content-Type': 'application/json' } })); }
+      return of(u, init); }; true""")
+    pick = """(name, type) => { const dt = new DataTransfer(); dt.items.add(new File(['x'], name, { type }));
+      const input = document.getElementById('file'); input.files = dt.files; input.dispatchEvent(new Event('change')); }"""
+    # 上传图片：直接说明，不上传
+    b.js(f"({pick})('p.png', 'image/png'); document.getElementById('uploadBtn').click(); true")
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    assert b.js("document.querySelector('.dlg-msg .dlg-t').textContent") == "还没有 API key"
+    assert b.js("__posts") == []
+    # “去设置”：切到设置页，焦点在 key 的输入框
+    b.js("document.querySelector('.dlg-msg [data-ok]').click(); true")
+    b.wait_for("!document.getElementById('view-settings').hidden")
+    assert b.js("location.hash") == "#settings"
+    assert b.js("document.activeElement.id") == "apiKey"
+    # “…”菜单：整首重新识别、精修整首灰掉，点了是说明（不是带费用的确认框）
+    b.js("location.hash = 'library'; true")
+    b.wait_for("!document.getElementById('view-library').hidden")
+    more = f"document.querySelector('[data-more=\"{img}\"]')"
+    item = "[...document.querySelectorAll('.menu button')].find(x => x.textContent === '{}')"
+    for label in ("整首重新识别", "精修整首"):
+        b.js(f"{more}.click(); true")
+        b.wait_for(f"!!{item.format(label)}")
+        assert b.js(f"{item.format(label)}.classList.contains('off')") is True
+        assert b.js(f"{item.format(label)}.title") == "先在设置里填 API key"
+        assert b.js(f"{item.format('重命名')}.classList.contains('off')") is False
+        b.js(f"{item.format(label)}.click(); true")
+        b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+        assert b.js("document.querySelector('.dlg-msg .dlg-t').textContent") == "还没有 API key"
+        b.js("document.querySelector('.dlg-msg [data-cancel]').click(); true")
+        b.wait_for("!document.querySelector('.dlg-msg')")
+    assert b.js("__posts") == []
+    # GP 文件不需要 key：照常导入
+    b.js(f"({pick})('a.gp', ''); document.getElementById('uploadBtn').click(); true")
+    b.wait_for("__posts.length === 1")
+    assert b.js("__posts[0]").endswith("/api/songs")
+    assert not b.errors, b.errors
+
+
+def test_ai_actions_with_key(server, browser):
+    # 有 key：菜单项不灰，整首重新识别照常弹确认框（写明费用）
+    img = server["image"]
+    b = browser
+    _fake_key(b, True)
+    b.open(server["base"] + "/")
+    more = f"document.querySelector('[data-more=\"{img}\"]')"
+    b.wait_for(f"!!{more}")
+    b.wait_for("document.getElementById('keyNotice').hidden")
+    b.js(f"{more}.click(); true")
+    item = "[...document.querySelectorAll('.menu button')].find(x => x.textContent === '整首重新识别')"
+    b.wait_for(f"!!{item}")
+    assert b.js(f"{item}.classList.contains('off')") is False
+    b.js(f"{item}.click(); true")
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    assert "整首重新识别" in b.js("document.querySelector('.dlg-msg .dlg-t').textContent")
+    b.js("document.querySelector('.dlg-msg [data-cancel]').click(); true")
+    assert not b.errors, b.errors

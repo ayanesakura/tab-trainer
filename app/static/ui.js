@@ -192,7 +192,8 @@ document.addEventListener('pointerdown', e => {
 }, true);
 
 // ---------------------------------------------------------------------
-// 弹出菜单：items = [{label, icon, danger, onClick} | 'sep' | false]。再点一次同一个按钮就收起。
+// 弹出菜单：items = [{label, icon, danger, off, onClick} | 'sep' | false]。再点一次同一个按钮就收起。
+// off：这一项暂时用不了的原因（比如没有 API key）：灰掉、悬停提示写原因，但还能点（onClick 自己说明怎么办）。
 // ↑ ↓ 在菜单项之间移动，Esc / 点外面 / 滚动关闭。
 // ---------------------------------------------------------------------
 let openMenu = null; // { layer, anchor }
@@ -208,6 +209,7 @@ export function menu(anchor, items) {
     const b = document.createElement('button');
     b.setAttribute('role', 'menuitem');
     if (it.danger) b.className = 'danger';
+    if (it.off) { b.classList.add('off'); b.title = it.off; }
     b.innerHTML = (it.icon ? icon(it.icon) : '') + `<span>${esc(it.label)}</span>`;
     b.onclick = e => { e.stopPropagation(); closeMenu(); it.onClick(); };
     m.appendChild(b);

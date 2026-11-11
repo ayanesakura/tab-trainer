@@ -327,6 +327,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
 .menu button:hover, .menu button:focus-visible { background: var(--accent); color: var(--accent-fg); outline: none; }
 .menu button.danger { color: var(--red); }
 .menu button.danger:hover, .menu button.danger:focus-visible { background: var(--red); color: var(--red-fg); }
+.menu button.off:not(:hover):not(:focus-visible) { color: var(--muted); } /* 暂时用不了（还能点，点了说明原因） */
 .menu hr { border: 0; border-top: 1px solid var(--line-2); margin: var(--sp-1) 6px; }
 @keyframes pop-in { from { opacity: 0; transform: translateY(-3px) scale(.98); } }
 
