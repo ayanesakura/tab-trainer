@@ -4,6 +4,7 @@ python -m exp.eval_cols [truth|newest|pool|all]"""
 import collections
 import json
 import sys
+from pathlib import Path
 
 from app import music
 from exp import staffcheck as sc
@@ -81,20 +82,20 @@ def truth_samples():
             k = rows[b["system"]]
             rows[b["system"]] += 1
             ss.append(
-                dict(
-                    song=sid,
-                    report="truth-" + sid,
-                    n=b["n"],
-                    system=b["system"],
-                    k=k,
-                    truth=b["events"],
-                    pred=b["events"],
-                    exact=True,
-                    notes_ok=True,
-                    uncertain="",
-                    warn=[],
-                    score_tab=None,
-                )
+                {
+                    "song": sid,
+                    "report": "truth-" + sid,
+                    "n": b["n"],
+                    "system": b["system"],
+                    "k": k,
+                    "truth": b["events"],
+                    "pred": b["events"],
+                    "exact": True,
+                    "notes_ok": True,
+                    "uncertain": "",
+                    "warn": [],
+                    "score_tab": None,
+                }
             )
     return ss
 
@@ -123,10 +124,9 @@ def main():
         sub = [x for x in ss if x["C"]["staff"] == (part == "staff")]
         print(f"[{mode} {part}] bars {len(sub)} wrong {sum(not x['exact'] for x in sub)}")
         for name, f in VARIANTS.items():
-            print(f"  {name:22s} {prf(sub, lambda x: f(x['C']))}")
-    json.dump(
-        [{k: x[k] for k in ("song", "report", "n", "exact", "C")} for x in ss],
-        open(f"exp/out/cols_{mode}.json", "w"),
+            print(f"  {name:22s} {prf(sub, lambda x, f=f: f(x['C']))}")
+    Path(f"exp/out/cols_{mode}.json").write_text(
+        json.dumps([{k: x[k] for k in ("song", "report", "n", "exact", "C")} for x in ss])
     )
 
 

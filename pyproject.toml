@@ -33,5 +33,7 @@ line-length = 110
 known-first-party = ["app"]
 
 [tool.pytest.ini_options]
+# 先 tests 再 exp：tests/conftest.py 先把数据目录换成临时目录
+testpaths = ["tests", "exp"]
 markers = ["e2e: 端到端测试，需要 Chrome（uv run pytest -m e2e）"]
 addopts = "-m 'not e2e'"

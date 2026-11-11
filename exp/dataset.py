@@ -6,12 +6,12 @@ import glob
 import json
 import os
 from functools import lru_cache
+from pathlib import Path
 
-os.environ.setdefault("TAB_TRAINER_DATA", "/Users/ayane/Documents/tab-trainer/data")
 from app import store
 from app.evaluate import compare_bar
 
-EVALS = "/Users/ayane/Documents/tab-trainer/data/evals"
+EVALS = str(store.DATA / "evals")
 SCORE_TAB = [
     "eval-amy",
     "eval-r-imagine",
@@ -45,7 +45,7 @@ TAB_ONLY = [
 SONGS = SCORE_TAB + TAB_ONLY
 # 评测还在主仓库里跑：固定一份报告清单，数字不随新报告变（python -m exp.dataset freeze 生成）
 _FROZEN_PATH = os.path.join(os.path.dirname(__file__), "frozen_reports.json")
-FROZEN = set(json.load(open(_FROZEN_PATH))) if os.path.exists(_FROZEN_PATH) else None
+FROZEN = set(json.loads(Path(_FROZEN_PATH).read_text())) if os.path.exists(_FROZEN_PATH) else None
 
 
 @lru_cache(None)
@@ -61,7 +61,7 @@ def reports(mode: str = "newest", since: str = "20261108-11") -> list[dict]:
         p = d + "/report.json"
         if not os.path.exists(p) or name < since or (FROZEN is not None and name not in FROZEN):
             continue
-        r = json.load(open(p))
+        r = json.loads(Path(p).read_text())
         if r.get("song") not in SONGS or r.get("errors"):
             continue
         r["_name"] = name
@@ -109,7 +109,7 @@ if __name__ == "__main__":
 
     if sys.argv[1:] == ["freeze"]:
         names = sorted({x["report"] for x in samples("pool", "20261107")})
-        json.dump(names, open(_FROZEN_PATH, "w"), indent=0)
+        Path(_FROZEN_PATH).write_text(json.dumps(names, indent=0))
         print("frozen", len(names))
 
     for mode in ("newest", "pool"):

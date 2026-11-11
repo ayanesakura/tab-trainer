@@ -8,6 +8,7 @@ python -m exp.eval_all [newest|pool|all] [full|tab]
 import json
 import os
 import sys
+from pathlib import Path
 
 from app import music
 from exp.dataset import samples, song
@@ -25,7 +26,7 @@ def add_omr(ss, kind):
     path = f"{OMR}/{kind}/pred.json"
     if not os.path.exists(path):
         return False
-    pred = json.load(open(path))
+    pred = json.loads(Path(path).read_text())
     cache = {}
     for x in ss:
         sid = x["song"]

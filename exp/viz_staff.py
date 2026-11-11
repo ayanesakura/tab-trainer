@@ -2,11 +2,10 @@
 
 import sys
 
-import numpy as np
 from PIL import ImageDraw
 
-from exp import staffcheck as sc
 from app import store
+from exp import staffcheck as sc
 from exp.dataset import song
 from exp.rows import row_geometry
 
@@ -18,8 +17,7 @@ def main():
         geo = row_geometry(sid, si)
         sy = s["systems"][si]
         img = store.page_image(sid, s["pages"][sy["page"]])
-        g = np.asarray(img.convert("L"))
-        x0, x1, y0, y1 = sy["crop"]
+        x0, x1, y0, _ = sy["crop"]
         dr = ImageDraw.Draw(img)
         if geo["staff"]:
             for y in geo["staff"]:

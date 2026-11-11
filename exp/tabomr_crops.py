@@ -4,6 +4,7 @@ full：整行（含五线谱）；tab：只要六线谱（上 2.5 个线距、�
 import json
 import os
 import sys
+from pathlib import Path
 
 from app import store
 from exp.dataset import SONGS, song
@@ -33,7 +34,7 @@ def main():
                 img.crop(box).save(p)
                 clips[kind].append({"id": cid, "imagePath": p, "systemIndex": si})
     for kind, c in clips.items():
-        json.dump({"clips": c}, open(f"{out}/{kind}/manifest.json", "w"))
+        Path(f"{out}/{kind}/manifest.json").write_text(json.dumps({"clips": c}))
         print(kind, len(c))
 
 
