@@ -206,7 +206,14 @@ def _load(song_id: str) -> dict:
         raise NotFound() from None
     except (OSError, ValueError) as e:
         raise CorruptSong(song_id, str(e)) from None
-    return model.derive(migrate.migrate(data, song_id))
+    try:
+        return model.derive(migrate.migrate(data, song_id))
+    except CorruptSong:  # 含 NewerSchema（更新版本存的，数据是好的）：原样抛出
+        raise
+    except Exception as e:
+        # 合法 JSON 但结构不对（手改坏了之类）：按数据损坏处理（曲库里列出来、能删，接口返回说明）
+        log.exception("song=%s 的 song.json 结构不对", song_id)
+        raise CorruptSong(song_id, f"曲子数据格式不对（{type(e).__name__}: {e}）"[:300]) from None
 
 
 def read(song_id: str) -> dict:

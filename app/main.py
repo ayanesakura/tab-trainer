@@ -61,6 +61,12 @@ async def app_error(_request: Request, e: AppError):
     return JSONResponse({"detail": str(e)}, status_code=e.status)
 
 
+@app.exception_handler(Exception)
+async def server_error(_request: Request, e: Exception):
+    """没料到的错误：500 也按约定带 {"detail"}，前端能显示一句说明（详细的堆栈照常进服务日志）。"""
+    return JSONResponse({"detail": f"服务出错了（{type(e).__name__}），详情见服务日志"}, status_code=500)
+
+
 def _files(files: list[UploadFile]) -> list[service.Upload]:
     return [(f.filename or "upload", f.size, f.file) for f in files]
 

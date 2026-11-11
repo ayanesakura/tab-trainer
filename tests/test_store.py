@@ -63,6 +63,36 @@ def test_missing_song_json_with_corrupt_backup_is_corrupt_not_gone(data_dir):
     assert rows[sid]["status"] == "corrupt"
 
 
+def test_song_json_of_the_wrong_shape_is_corrupt_with_a_json_error(data_dir):
+    """song.json 是合法 JSON 但结构不对（bars 里是数字）：读取抛 CorruptSong，详情和写接口返回 500 + {"detail"}
+    （不是 text/plain），曲库里列成数据损坏、可以删除。"""
+    sid = _gp()
+    path = store.song_dir(sid) / "song.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "bars": [1]}))
+    (path.parent / "song.json.bak").unlink()
+    with pytest.raises(errors.CorruptSong) as e:
+        store.load(sid)
+    assert not isinstance(e.value, errors.NewerSchema)
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    for r in (c.get(f"/api/songs/{sid}"), c.put(f"/api/songs/{sid}/tags", json={"tags": ["x"]})):
+        assert r.status_code == 500 and "数据损坏" in r.json()["detail"]
+    row = next(s for s in c.get("/api/songs").json() if s["id"] == sid)
+    assert row["status"] == "corrupt" and not row["newer"]
+    assert c.delete(f"/api/songs/{sid}").status_code == 200
+
+
+def test_unexpected_errors_still_answer_with_json(data_dir, monkeypatch):
+    """接口里没料到的异常：500 也带 {"detail"}，前端能显示一句说明（不是 text/plain 的 Internal Server Error）。"""
+
+    def boom():
+        raise RuntimeError("oops")
+
+    monkeypatch.setattr(views, "list_library", boom)
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False)
+    r = c.get("/api/songs")
+    assert r.status_code == 500 and "RuntimeError" in r.json()["detail"]
+
+
 def test_old_songs_get_missing_fields(data_dir):
     sid = _gp()
     path = store.song_dir(sid) / "song.json"
