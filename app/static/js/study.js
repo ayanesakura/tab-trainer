@@ -219,6 +219,7 @@ async function move(id, dir) {
   // 先在本地换好顺序（按钮跟着走，连点几下不卡），再告诉后端
   const order = new Map(ids.map((x, k) => [x, k]));
   S.songs = S.songs.map(s => (s.study && order.has(s.id) ? { ...s, study: { ...s.study, order: order.get(s.id) } } : s));
+  if (ids.length > PLAN_FOLD + 1 && j >= PLAN_FOLD) S.planOpen = true; // 移出了收起来的范围：展开，这一行和焦点都还在
   paintPlan();
   const btn = $('plan').querySelector(`.plan-row[data-id="${CSS.escape(id)}"] [data-mv="${dir}"]`);
   (btn && !btn.disabled ? btn : $('plan').querySelector(`.plan-row[data-id="${CSS.escape(id)}"] [data-plan-more]`))?.focus({ preventScroll: true });

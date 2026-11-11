@@ -322,3 +322,30 @@ def test_other_tab_changes_refresh_plan_and_library(server, browser):
         assert not b.errors, b.errors
     finally:
         _leave_plan(server, gp)
+
+
+def test_moving_last_folded_plan_row_down_unfolds(server, browser):
+    # 计划超过 7 首时只显示前 6 首：把第 6 首往后移，计划展开，这一行和焦点都还在
+    from app import songs
+    from tests.e2e.conftest import _gp_bytes
+
+    gp = _gp_bytes()
+    ids = [songs.create_song([("p.gp", gp)], title=f"E2E 计划 {i}") for i in range(1, 9)]
+    b = browser
+    rows = "[...document.querySelectorAll('#plan .plan-row')]"
+    try:
+        for sid in ids:
+            _api(server, f"/api/songs/{sid}/study", "PUT", {"in_plan": True})
+        b.open(server["base"] + "/#study")
+        b.wait_for("!!document.querySelector('#plan [data-fold]')")
+        assert b.js(f"{rows}.length") == 6
+        sixth = b.js(f"{rows}[5].dataset.id")
+        btn = f"document.querySelector('#plan .plan-row[data-id=\"{sixth}\"] [data-mv=\"1\"]')"
+        b.js(f"{btn}.focus(); {btn}.click(); true")
+        b.wait_for(f"{rows}.length > 6")  # 展开了
+        assert b.js(f"{rows}[6].dataset.id") == sixth
+        assert b.js(f"document.activeElement === {btn}")
+        assert not b.errors, b.errors
+    finally:
+        for sid in ids:
+            _api(server, f"/api/songs/{sid}", "DELETE")
