@@ -1777,3 +1777,21 @@ def test_locked_423_is_handled_the_same_everywhere(server, trainer):
     b.wait_for("!document.getElementById('planCreate')")
     assert "精修" in b.js("document.getElementById('plan').textContent")
     assert not b.errors, b.errors
+
+
+def test_gp_export_failure_is_reported(trainer):
+    """导出 GP 时 alphaTab 的导出器出错：提示导出失败（以前什么都不说），练习用的音色照样换回来。"""
+    b = trainer()
+    b.js("""(() => { const P = tt.player.alphaTab.exporter.Gp7Exporter.prototype; window.__orig = P.export;
+      P.export = () => { throw new Error('坏掉的小节'); }; return true; })()""")
+    program = "tt.api.score.tracks[0].playbackInfo.program"
+    before = b.js(program)
+    b.js("document.getElementById('exportBtn').click(); true")
+    b.wait_for(
+        "(document.querySelector('.toast.err') || {textContent: ''}).textContent.includes('坏掉的小节')",
+        timeout=3,
+    )
+    assert "导出" in b.js("document.querySelector('.toast.err').textContent")
+    assert b.js(program) == before
+    b.js("tt.player.alphaTab.exporter.Gp7Exporter.prototype.export = window.__orig; true")
+    assert not b.errors, b.errors
