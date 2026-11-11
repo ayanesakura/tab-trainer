@@ -1052,3 +1052,47 @@ def test_menu_tab_select_all_label_and_empty_library(server, browser):
     b.wait_for("!!document.querySelector('#songs .empty-state')")
     assert b.js("document.getElementById('selectBtn').hidden") is True
     assert not b.errors, b.errors
+
+
+def test_narrow_screen_layout(server):
+    # 390×844：不出横向滚动条；标签多时曲名不被挤没，来源图标和曲名在同一行；“?”说明、确认框、补记框都在屏幕里、两边留空
+    from tests.e2e.cdp import Browser
+
+    img = server["image"]
+    _put_json(server, f"/api/songs/{img}/tags", {"tags": ["指弹", "练习中", "民谣", "古典", "很长很长的标签名字"]})
+    no_hscroll = "document.documentElement.scrollWidth <= innerWidth"
+    inside = "(r => r.left >= {m} - 0.5 && r.right <= innerWidth - {m} + 0.5 && r.width > 0)({el}.getBoundingClientRect())"
+    try:
+        with Browser(width=600, height=844) as b:  # 无界面 Chrome 的窗口最窄 500：用设备尺寸模拟
+            b._run(b._send("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=1, mobile=False))
+            b.open(server["base"] + "/#library")
+            row = f"document.querySelector('.song-row[data-id=\"{img}\"]')"
+            b.wait_for(f"!!{row}?.querySelector('.tag')")
+            assert b.js("innerWidth") == 390
+            assert b.js(no_hscroll)
+            assert b.js(f"{row}.querySelector('.title').getBoundingClientRect().width") > 40
+            assert b.js(f"{row}.querySelector('.who').getBoundingClientRect().top < {row}.querySelector('.src-ic').getBoundingClientRect().bottom")
+            # 设置：Base URL 输入框不撑出横向滚动；“?”的说明在屏幕里
+            b.js("location.hash = 'settings'; true")
+            b.wait_for("!document.getElementById('view-settings').hidden")
+            assert b.js(no_hscroll)
+            b.js("document.querySelector('[aria-describedby=\"doubleHelp\"]').focus(); true")
+            assert b.js(inside.format(m=0, el="document.getElementById('doubleHelp')"))
+            assert b.js("(p => p.top >= document.querySelector('[aria-describedby=\"doubleHelp\"]').getBoundingClientRect().bottom)(document.getElementById('doubleHelp').getBoundingClientRect())")
+            # 确认框：两边各留 16px
+            b.js("UI.confirm('测试'); true")
+            b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+            assert b.js(inside.format(m=16, el="document.querySelector('.dlg-msg')"))
+            b.key("Escape", vk=27)
+            b.wait_for("!document.querySelector('.dlg-msg')")
+            # 练琴页：补记框同样
+            b.js("location.hash = 'study'; true")
+            b.wait_for("!!document.querySelector('#hero .ring')")
+            assert b.js(no_hscroll)
+            b.js("document.getElementById('logAdd').click(); true")
+            b.wait_for("document.getElementById('logDlg').open")
+            assert b.js(inside.format(m=16, el="document.getElementById('logDlg')"))
+            b.js("document.getElementById('logCancel').click(); true")
+            assert not b.errors, b.errors
+    finally:
+        _put_json(server, f"/api/songs/{img}/tags", {"tags": []})

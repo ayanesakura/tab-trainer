@@ -24,8 +24,10 @@
 .song-row .state { display: flex; align-items: center; gap: 6px; font-size: var(--fs-1); color: var(--muted); margin-top: 3px; min-width: 0; }
 .song-row .state .progress { width: 140px; flex: none; }
 .song-row .notice-badge { max-width: 360px; overflow: hidden; text-overflow: ellipsis; display: inline-block; line-height: 20px; }
-.song-row .tags { display: inline-flex; gap: var(--sp-1); flex: none; }
-.song-row .badges { display: inline-flex; gap: var(--sp-1); flex: none; margin-left: 2px; }
+/* 标签、徽章多了先让它们收窄（被裁掉），不把曲名挤没：flex-shrink 比曲名大得多。
+   padding + 负 margin：裁的时候留出标签按钮焦点框的位置 */
+.song-row .tags { display: inline-flex; gap: var(--sp-1); flex: 0 100 auto; min-width: 0; overflow: hidden; padding: 3px; margin: -3px; }
+.song-row .badges { display: inline-flex; gap: var(--sp-1); flex: 0 100 auto; min-width: 0; overflow: hidden; margin-left: 2px; }
 .song-row .who .sub { margin-top: 2px; }
 .song-row .tag { background: var(--accent-soft); color: var(--accent); cursor: pointer; height: 18px; padding: 0 6px; }
 .song-row .tag:hover { background: color-mix(in srgb, var(--accent) 22%, var(--card)); }
@@ -68,9 +70,15 @@
 .set .who-help { display: flex; align-items: center; gap: 2px; }
 .set .who-help .name { flex: none; }
 .w-model { width: 170px; }
-.w-url { width: 400px; }
+.w-url { width: 400px; max-width: 100%; }
 .test-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-1); }
 .head-actions { display: flex; gap: 6px; }
+
+@media (max-width: 760px) {
+  .set .row .ctl { max-width: 100%; min-width: 0; } /* Base URL 输入框跟着收窄，不撑出横向滚动条 */
+  /* “?”的说明：窄屏上按钮右边放不下 360px，改成贴着屏幕两边（离边 16px），在按钮下面弹出 */
+  .set .help-wrap .help-pop, .set .help-wrap .help-pop.left { position: fixed; left: 16px; right: 16px; top: auto; width: auto; max-width: none; margin-top: 26px; }
+}
 
 /* 导入曲子包的结果（有跳过或失败时才弹出）：按包列出导入 / 已有 / 失败的曲子 */
 .import-dlg { width: 460px; }

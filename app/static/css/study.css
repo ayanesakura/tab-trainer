@@ -97,7 +97,7 @@ button.cell:hover { outline-color: var(--line-strong); }
 .day-col .none { color: var(--muted); font-size: var(--fs-1); padding: 8px 0; }
 
 /* 补记对话框（样子和 ui.js 的确认框一样，但不用 .dlg-msg：那个类名留给动态建的确认框） */
-.log-dlg { width: 400px; max-width: 100%; }
+.log-dlg { width: 400px; } /* 窄屏上由 .dlg 的 max-width 留出两边各 16px */
 .log-dlg .dlg-b { padding: 18px 20px 6px; display: flex; flex-direction: column; gap: 14px; }
 .log-dlg .dlg-t { font-size: var(--fs-3); font-weight: 600; }
 .form-grid { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center; }

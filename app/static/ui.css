@@ -335,7 +335,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
 .dlg { margin: auto; padding: 0; border: 0; border-radius: var(--r-lg); background: var(--card); color: var(--fg); box-shadow: var(--shadow); max-width: calc(100vw - 32px); }
 .dlg[open] { animation: pop-in .16s var(--ease); }
 .dlg::backdrop { background: var(--backdrop); }
-.dlg-msg { width: 400px; max-width: 100%; }
+.dlg-msg { width: 400px; } /* 窄屏上由 .dlg 的 max-width 留出两边各 16px */
 .dlg-msg .dlg-b { padding: 18px 20px 6px; display: flex; flex-direction: column; gap: 10px; }
 .dlg-msg .dlg-t { font-size: var(--fs-3); font-weight: 600; }
 .dlg-msg .dlg-text { white-space: pre-wrap; line-height: 1.6; color: var(--fg-2); }
@@ -370,4 +370,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bord
   .brand .label { display: none; }
   .wrap { padding: 14px var(--sp-3) 60px; }
   .row { flex-wrap: wrap; }
+  /* 折行时说明（曲名）和前面的图标、阶段标记留在第一行，放不下的按钮换到下一行、靠右 */
+  .row .who { flex-basis: 0; min-width: min(120px, 100%); }
+  .row .ctl { margin-left: auto; }
 }
