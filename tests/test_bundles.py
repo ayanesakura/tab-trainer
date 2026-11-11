@@ -356,6 +356,74 @@ def test_import_rejects_bad_durations_and_time_signatures(client, over, reason):
     assert client.get("/api/songs").status_code == 200 and not store.exists("bad-song")
 
 
+def _png(w: int = 40, h: int = 40) -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), "white").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _broken_png() -> bytes:
+    """文件头和尺寸都对（Pillow 打得开），图像数据块的校验和是坏的：verify 才发现。"""
+    data = bytearray(_png())
+    i = data.index(b"IDAT")
+    data[i + 4] ^= 0xFF  # 改掉数据的第一个字节，CRC 对不上
+    return bytes(data)
+
+
+_PAGE = {"file": "p1.png", "width": 40, "height": 40}
+
+
+@pytest.mark.parametrize(
+    ("song_json", "files", "limits", "reason"),
+    [
+        (b"{nope", {}, {}, "song.json 不是有效的 JSON"),
+        (b'{"title": "\xff\xfe"}', {}, {}, "song.json 不是有效的 JSON"),  # 不是 UTF-8
+        (b"[1, 2]", {}, {}, "song.json 格式不对"),
+        (b'{"schema_version": "x"}', {}, {}, "song.json 格式不对"),
+        (b'{"schema_version": [2]}', {}, {}, "song.json 格式不对"),
+        (b'{"schema_version": 999}', {}, {}, "这首曲子来自更新版本的 tab-trainer，请先升级再导入"),
+        (
+            json.dumps({**_v2("bad-song"), "pages": [_PAGE]}).encode(),
+            {"pages/p1.png": _png()},
+            {"max_file_bytes": 50},
+            "文件 pages/p1.png太大或格式不对",
+        ),
+        (
+            json.dumps({**_v2("bad-song"), "pages": [_PAGE]}).encode(),
+            {"pages/p1.png": _png()},
+            {"max_pixels": 100},
+            "页面 p1.png 分辨率太大",
+        ),
+        (
+            json.dumps({**_v2("bad-song"), "pages": [_PAGE]}).encode(),
+            {"pages/p1.png": _broken_png()},
+            {},
+            "页面 p1.png 不是有效的图片",
+        ),
+    ],
+)
+def test_import_skips_one_bad_song_with_a_reason(data_dir, monkeypatch, song_json, files, limits, reason):
+    """导入时的各种拒绝：只跳过这一首、说明原因（不留临时目录），同一个包里的其他曲子照常导入。"""
+    for k, v in limits.items():
+        monkeypatch.setattr(bundles.settings, k, v)
+    good = _v2("good-song")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        songs_ = [{"id": "bad-song", "title": "坏的"}, {"id": "good-song", "title": "好的"}]
+        zf.writestr(bundles.MANIFEST, json.dumps({"format": bundles.FORMAT, "version": 1, "songs": songs_}))
+        zf.writestr("songs/bad-song/song.json", song_json)
+        for name, data in files.items():
+            zf.writestr(f"songs/bad-song/{name}", data)
+        zf.writestr("songs/good-song/song.json", json.dumps(good))
+    buf.seek(0)
+    r = bundles.import_bundles([("b.zip", buf)])
+    assert [s["id"] for s in r["imported"]] == ["good-song"]
+    assert r["skipped"] == [{"title": "坏的", "reason": reason, "duplicate": False, "bundle": "b.zip"}]
+    assert [p.name for p in store.SONGS.iterdir()] == ["good-song"] and not store.exists("bad-song")
+
+
 def test_import_drops_malformed_practice_lines(client):
     lines = [
         {"ids": ["b1"], "loops": "x", "seconds": 1},
