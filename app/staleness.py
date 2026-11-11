@@ -92,9 +92,15 @@ def refine_bar(s: dict, bar: dict, events: list[dict], uncertain: str, diff: str
     old = bar.get("refine")
     if old:
         diffs = [d for d in (old.get("diff") or "", diff) if d]
-        bar["refine"] = {"diff": "；".join(dict.fromkeys(diffs)), "prev": old["prev"]}
+        bar["refine"] = {
+            **old,
+            "diff": "；".join(dict.fromkeys(diffs)),
+        }  # prev、plan_changed_before 按第一次之前的
     else:
-        bar["refine"] = {"diff": diff, "prev": _snapshot(bar)}
+        # plan_changed_before：精修之前这个小节已经因为别的原因记在练习建议的 changed_bars 里，撤销精修时不移掉
+        plan = s.get("plan") or {}
+        before = bar["id"] in (plan.get("changed_bars") or [])
+        bar["refine"] = {"diff": diff, "prev": _snapshot(bar), "plan_changed_before": before}
     bar["events"] = events
     bar["tip"] = ""
     bar["uncertain"] = uncertain
@@ -105,14 +111,16 @@ def refine_bar(s: dict, bar: dict, events: list[dict], uncertain: str, diff: str
 
 def undo_refine(s: dict, bar: dict) -> None:
     """撤销精修：音、提示、不确定说明和警告恢复成精修之前的；因为精修才过时的问答和练习建议也恢复
-    （精修之前就是手改过的音：练习建议照样按手改过时，不恢复）。精修之后用户自己写的提示记在 prev 里（见 note_user_tip），
+    （精修之前就是手改过的音，或者这个小节精修之前就记在练习建议的 changed_bars 里：练习建议照样过时，不恢复）。精修之后用户自己写的提示记在 prev 里（见 note_user_tip），
     撤销时保留。"""
-    prev = bar.pop("refine")["prev"]
+    refine = bar.pop("refine")
+    prev = refine["prev"]
     bar["events"] = prev["events"]
     bar["tip"], bar["uncertain"] = prev.get("tip", ""), prev.get("uncertain", "")
     bar["warn"] = prev.get("warn") or []
     _restore_qa(bar, "stale_by_refine")
-    if not bar.get("edited"):
+    # 只撤掉精修自己记进 changed_bars 的那一条（早先的精修记录 migrate 补成了 True：不知道就不移除）
+    if not bar.get("edited") and not refine.get("plan_changed_before", True):
         restore_plan_bar(s, bar["id"])
 
 

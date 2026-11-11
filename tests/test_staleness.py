@@ -156,3 +156,33 @@ def test_kept_hand_edit_is_no_longer_a_placeholder_rest():
     bars = [new]
     music.apply_time_signatures(bars, meta)
     assert bars[0]["events"] == mine
+
+
+def _plan_song():
+    bar = {"id": "x", "events": [{"dur": "4", "notes": [{"string": 1, "fret": 0}]}], "tip": "", "warn": []}
+    return {"bars": [bar], "plan": {"overview": "ok", "steps": []}}, bar
+
+
+def test_undoing_a_refine_only_takes_back_its_own_plan_change():
+    """小节在精修之前就因为别的原因（比如别的改动）记在练习建议的 changed_bars 里：撤销精修不能把它移掉。
+    精修之前不在里面的，撤销后照常移掉；连着精修几次，按第一次之前的算。"""
+    new = [{"dur": "4", "notes": [{"string": 1, "fret": 5}]}]
+    s, bar = _plan_song()
+    staleness.invalidate_plan(s, "x")
+    staleness.refine_bar(s, bar, new, "", "第 1 拍改成 5 品")
+    staleness.refine_bar(s, bar, new, "", "又核对了一遍")
+    staleness.undo_refine(s, bar)
+    assert s["plan"]["changed_bars"] == ["x"] and s["plan"]["stale"]
+
+    s, bar = _plan_song()
+    staleness.refine_bar(s, bar, new, "", "第 1 拍改成 5 品")
+    assert s["plan"]["changed_bars"] == ["x"]
+    staleness.undo_refine(s, bar)
+    assert s["plan"]["changed_bars"] == [] and not s["plan"]["stale"]
+
+    # 早先的精修记录没有这一项（migrate 补成 True，见 test_migrate）：不知道精修之前在不在，保守地不移除
+    s, bar = _plan_song()
+    staleness.refine_bar(s, bar, new, "", "第 1 拍改成 5 品")
+    bar["refine"].pop("plan_changed_before")
+    staleness.undo_refine(s, bar)
+    assert s["plan"]["changed_bars"] == ["x"]

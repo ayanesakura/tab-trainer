@@ -276,6 +276,9 @@ class Refine(_M):
 
     diff: str = ""
     prev: RefinePrev
+    # 精修之前这个小节已经记在练习建议的 changed_bars 里（别的改动）：撤销精修时不移掉。
+    # 早先的精修记录没有这一项：migrate 补成 True（不知道就不移除）
+    plan_changed_before: bool = True
 
 
 class Bar(_M):

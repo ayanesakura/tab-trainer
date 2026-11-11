@@ -296,3 +296,18 @@ def test_newer_schema_is_refused_and_never_written_back(data_dir):
 
     assert LibraryItem.model_validate(row).newer  # 接口返回时不会被丢掉
     store.delete(sid)  # 还是可以删掉
+
+
+def test_old_refine_records_keep_their_plan_change_on_undo():
+    """早先的精修记录没记精修之前小节在不在练习建议的 changed_bars 里：补成“在”，撤销精修时不移除；
+    新记的原样不动。"""
+    events = [{"dur": "4", "notes": [{"string": 1, "fret": 0}]}]
+    old = {"id": "a", "events": events, "refine": {"diff": "改了", "prev": {"events": events}}}
+    new = {
+        "id": "b",
+        "events": events,
+        "refine": {"diff": "改了", "prev": {"events": events}, "plan_changed_before": False},
+    }
+    song = migrate.migrate({"schema_version": 2, "bars": [old, new]}, "x")
+    assert song["bars"][0]["refine"]["plan_changed_before"] is True
+    assert song["bars"][1]["refine"]["plan_changed_before"] is False

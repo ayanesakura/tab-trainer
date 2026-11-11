@@ -10,7 +10,8 @@ store.load 每次读取都会调用（纯函数，在内存里升级）；升级
   练习记录从 song.practice 搬到 practice.jsonl（旧的聚合结果成为第一行“种子”记录）；
   曲名 / 艺人 / 编配修复 GBK 被当成 cp1252 / Latin-1 读出来的乱码（GP 文件读出来的，以及从 GP 复制了谱头的图片曲子）。
 
-不分版本的修复：早先导入曲子包时事件里被补上的空 chord / lyrics / strum 去掉（见 _drop_empty_event_keys）。
+不分版本的修复：早先导入曲子包时事件里被补上的空 chord / lyrics / strum 去掉（见 _drop_empty_event_keys）；
+早先的精修记录（bar.refine）补上 plan_changed_before = True（不知道就按“精修之前已经在练习建议的 changed_bars 里”算）。
 """
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ def migrate(song: dict, song_id: str) -> dict:
     for b in song["bars"]:
         if isinstance(b, dict):
             b.setdefault("rev", 0)
+            if isinstance(b.get("refine"), dict):
+                # 早先的精修记录没记精修之前这个小节在不在练习建议的 changed_bars 里：按在里面算（撤销精修时不移除）
+                b["refine"].setdefault("plan_changed_before", True)
             if _drop_empty_event_keys(b):
                 song["_migrated"] = True  # 启动时写回
     song["schema_version"] = SCHEMA_VERSION
