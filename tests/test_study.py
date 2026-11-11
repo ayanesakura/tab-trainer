@@ -380,6 +380,40 @@ def test_corrupt_study_file_is_moved_aside(data_dir):
     assert data["timer"] is None and [s["id"] for s in data["sessions"]] == ["0123abcd"]
 
 
+def test_writes_keep_what_they_do_not_touch(data_dir):
+    """写 study.json 只改这次真的改了的部分：不认识的键（更新版本加的顶层键、设置项、练琴记录里的字段）、
+    认不出的练琴记录、超过上限的分钟数（读的时候按上限算）都原样留着。"""
+    path = store.study_file()
+    long = {"id": "0123abcd", "kind": "manual", "day": "2026-11-01", "minutes": 700, "mood": "好"}
+    weird = {"id": "zz", "kind": "manual", "day": "2026-11-01", "minutes": 5}
+    gone = {"id": "4567cdef", "kind": "manual", "day": "2026-11-02", "minutes": 10}
+    raw = {
+        "future": {"x": 1},
+        "settings": {"goal_minutes": 30, "future_setting": 7},
+        "sessions": [long, weird, [1], {"id": ["x"]}, gone],
+        "next_order": 3,
+    }
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    assert study.load()["sessions"][0]["minutes"] == 600  # 读的时候按上限算
+
+    new = study.add_session("2026-11-05", 20, "补", now=T0)
+    assert study.set_settings({"max_learning": 4}) == {
+        "goal_minutes": 30,
+        "max_learning": 4,
+        "max_reviews": 5,
+    }
+    study.timer_action("start", now=T0)
+    study.timer_action("pause", now=T0 + dt.timedelta(minutes=5))
+    study.delete_session("4567cdef")
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["future"] == {"x": 1} and saved["next_order"] == 3
+    assert saved["settings"] == {"goal_minutes": 30, "future_setting": 7, "max_learning": 4}
+    assert saved["sessions"] == [long, weird, [1], {"id": ["x"]}, new]
+    assert saved["timer"]["segments"][0][1] is not None
+    assert [s["minutes"] for s in study.load()["sessions"]] == [600, 20]
+
+
 # ---------------------------------------------------------------------------
 # 计划：加入 / 移出 / 暂停 / 排序 / 自评 / 今天
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import logging
 import uuid
@@ -328,15 +329,47 @@ def load() -> dict:
 
 
 def _update(fn) -> dict:
-    """加锁读-改-写 study.json；fn 拿到的是整理过的内容。fn 抛错时不写。"""
+    """加锁读-改-写 study.json；fn 拿到的是整理过的内容，返回 fn 改完的（整理过的）内容。fn 抛错时不写。
+    写回时只改 fn 真的改了的部分（_write_back），其余原样留着：不认识的键（更新版本加的顶层键、设置项、
+    练琴记录里的字段）、认不出的练琴记录、超过上限的分钟数（读的时候按上限算）都不动，旧一点的代码写一次也不会丢。"""
+    out: dict = {}
 
     def apply(raw: dict) -> None:
         data = clean_data(raw)
+        before = copy.deepcopy(data)
         fn(data)
-        raw.clear()
-        raw.update(data)
+        _write_back(raw, data, before)
+        out.update(data)
 
-    return store.update_study(apply)
+    store.update_study(apply)
+    return out
+
+
+def _write_back(raw: dict, data: dict, before: dict) -> None:
+    """把 fn 的改动（data 和改之前的 before 比）写进原始内容 raw（原地修改）。"""
+    for key in ("timer", "next_order"):
+        if data[key] != before[key]:
+            old = raw.get(key)
+            # 秒表还在（暂停、继续）：里面不认识的字段留着
+            raw[key] = (
+                {**old, **data[key]} if isinstance(old, dict) and isinstance(data[key], dict) else data[key]
+            )
+    changed = {k: v for k, v in data["settings"].items() if v != before["settings"][k]}
+    if changed:  # 只写改了的设置项：没改的项哪怕超出这一版的范围（更新版本放宽了）也不改成默认值
+        old = raw.get("settings")
+        raw["settings"] = {**(old if isinstance(old, dict) else {}), **changed}
+    if data["sessions"] != before["sessions"]:
+        was = {s["id"]: s for s in before["sessions"]}
+        now_ = {s["id"]: s for s in data["sessions"]}
+        kept = []
+        for s in raw.get("sessions") if isinstance(raw.get("sessions"), list) else []:
+            sid = s.get("id") if isinstance(s, dict) and isinstance(s.get("id"), str) else None
+            if sid in was and sid not in now_:
+                continue  # fn 删掉的
+            if sid in was and now_[sid] != was[sid]:
+                s = {**s, **now_[sid]}  # fn 改过的：改的字段换成新的，不认识的字段留着
+            kept.append(s)  # 没动的、这一版认不出的：原样
+        raw["sessions"] = kept + [s for s in data["sessions"] if s["id"] not in was]
 
 
 def timer_view(timer: dict | None, now: dt.datetime) -> dict | None:
