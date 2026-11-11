@@ -7,7 +7,7 @@ import { parseBarInput, planRange } from './view.js';
 import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref, stored, remember } from './prefs.js';
 import { play, stop, setLoop, setTempo, stepSection, revealLoop, cursorOutOfView, scrollToCursor, TIMBRES } from './player.js';
 import { exportGp } from './gp-export.js';
-import { markClean } from './practice-log.js';
+import { invoke } from './hooks.js';
 
 // 跟着曲子走的默认值（加载谱子后按原速调整）；其余播放设置记在本机，见 prefs.js
 const SONG_DEFAULTS = { bpmMax: 140 };
@@ -196,7 +196,7 @@ export function initControls() {
     set('ui.notation', n);
   });
   $('exportBtn').onclick = exportGp;
-  $('cleanBtn').onclick = e => { e.currentTarget.blur(); markClean(); };
+  $('cleanBtn').onclick = e => { e.currentTarget.blur(); invoke('practice.markClean'); }; // 练习记录（practice-log.js）
   on('play.clean', v => $('cleanBtn').setAttribute('aria-pressed', String(!!v)));
   $('bpm').oninput = e => setTempo(+e.target.value);
   $('bpmDown').onclick = () => setTempo(get('play.bpm') - 4);

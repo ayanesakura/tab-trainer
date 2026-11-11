@@ -1795,3 +1795,25 @@ def test_gp_export_failure_is_reported(trainer):
     assert b.js(program) == before
     b.js("tt.player.alphaTab.exporter.Gp7Exporter.prototype.export = window.__orig; true")
     assert not b.errors, b.errors
+
+
+def test_clean_button_and_enter_to_ask_without_a_key(trainer):
+    """功能模块之间通过钩子：控制条的“这遍干净”按钮标记正在弹的这一遍（practice-log.js）；
+    没有 API key 时在输入框里回车提问，弹出要先填 key 的说明（ai-key.js），不发请求。"""
+    b = trainer()
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(60); tt.play(); true")
+    b.wait_for("tt.state.phase === 'playing'")
+    b.js("document.getElementById('cleanBtn').click(); true")
+    assert b.js("tt.state.clean") is True
+    b.js("tt.stop(); true")
+    b.wait_for("tt.get('ui.hasKey') !== undefined")
+    b.js("""(() => { tt.set('ui.hasKey', false); const of = window.fetch; window.__asks = 0;
+      window.fetch = (u, i) => { if (String(u).includes('/ask')) __asks++; return of(u, i); }; return true; })()""")
+    b.js("document.getElementById('askInput').focus(); true")
+    b.type_text("怎么练")
+    b.key("Enter", vk=13)
+    b.wait_for("!!document.querySelector('.dlg-msg[open]')")
+    assert "API key" in b.js("document.querySelector('.dlg-msg[open]').textContent")
+    assert b.js("__asks") == 0
+    b.key("Escape", vk=27)
+    assert not b.errors, b.errors

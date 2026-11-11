@@ -12,6 +12,7 @@ import { $, UI, esc, songUrl } from './dom.js';
 import { practiceLines } from './view.js';
 import { initialLog, step } from './practice-pass.js';
 import { setLocal } from './song.js';
+import { provide } from './hooks.js';
 
 // 练到哪了（practice-pass.js 的状态）：这里只把 store 的变化翻成事件交给它，按它给的结果发记录、改 play.clean
 let log = initialLog();
@@ -83,6 +84,7 @@ function renderLine() {
 }
 
 export function initPracticeLog() {
+  provide('practice.markClean', markClean); // 控制条的按钮（controls.js）
   on(['play.playing', 'rhythm.running', 'rhythm.calib'], sync);
   // 换段、按 Home / 重选这一段从段首重新开始（player.js 的 play.restarts）：先把这一段练了的时间记下来
   // （没弹完的不算一遍，标的“这遍干净”也作废），再从段首开始计时

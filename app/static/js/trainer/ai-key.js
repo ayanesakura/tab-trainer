@@ -6,10 +6,11 @@
 import { get, set, on } from './store.js';
 import { $, UI } from './dom.js';
 import { get as apiGet } from '../lib/api.js';
+import { provide } from './hooks.js';
 
 export const NO_KEY = '先在设置里填 API key';
-/** 能不能用 AI：还没查到时当作能（不先把按钮灰掉再变回来） */
-export const hasKey = () => get('ui.hasKey') !== false;
+/** 能不能用 AI：还没查到时当作能（不先把按钮灰掉再变回来）。别的模块直接看 store 的 ui.hasKey（是 false 才是没有） */
+const hasKey = () => get('ui.hasKey') !== false;
 
 async function check() {
   try { set('ui.hasKey', !!(await apiGet('/api/settings')).has_key); } catch { /* 查不到就保持原样 */ }
@@ -26,6 +27,7 @@ function paint(v) {
 }
 
 export function initAiKey() {
+  provide('ai.askForKey', askForKey); // 回车提问不经过按钮（coach.js）
   on('ui.hasKey', paint);
   // 点灰掉的 AI 按钮：在捕获阶段拦下（按钮自己的处理不执行），改成说明
   document.addEventListener('click', e => {
