@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 
 from app import config, jobs, ocr, refine, review, staleness, state, store
 from app.config import settings
 from app.errors import Busy, Invalid, NotFound
 from app.jobs import Cancelled
-from app.llm import LLM, friendly, request_id_of
+from app.llm import LLM, LLMError, friendly, request_id_of
 from app.model import is_score, notes_key
 from app.music import apply_time_signatures, normalize_meta
 from app.ocrcheck import ocr_disagreements, tied_in
@@ -171,6 +172,29 @@ def first_bar_of(song: dict, si: int) -> int:
     return first
 
 
+class EmptiedPage(LLMError):
+    """重新识别整页一行（没检测到六线谱的页）时模型说这一页没有六线谱，但这一页原来有小节：按失败处理，原来的小节不动。"""
+
+
+def _bars_per_page(song: dict) -> Counter:
+    """每一页现在有几个小节（小节没记页号的按所在行的页）。"""
+    systems = song.get("systems") or []
+    return Counter(
+        b["page"] if b.get("page") is not None else systems[b["system"]]["page"]
+        for b in song.get("bars") or []
+    )
+
+
+def check_page_not_emptied(system: dict, bars: list[dict], had: Counter) -> None:
+    """整页一行读出 0 个小节：第一次识别时是“这一页没有六线谱”（封面、歌词页），这一行照常算完成（见 transcribe_system）。
+    重新识别（单行、重试失败的行、整首）时这一页原来有小节（had：_bars_per_page）：多半是模型这次没看出来，
+    不能悄悄把原来的小节、手改、问答都删掉（练习记录也对不上），按失败处理（EmptiedPage）。"""
+    if not bars and had.get(system["page"]):
+        raise EmptiedPage(
+            f"模型这次说第 {system['page'] + 1} 页没有六线谱，但这一页原来有 {had[system['page']]} 个小节，没有采用这次的结果"
+        )
+
+
 def _recognize_rows(
     claude: LLM,
     sid: str,
@@ -179,12 +203,15 @@ def _recognize_rows(
     cancel: threading.Event,
     on_row,
     opts: RowOptions | None = None,
+    had: Counter | None = None,
 ) -> tuple[dict[int, list[int]], list[str]]:
     """并行识别 rows：(行号, 这一行开头的拍号；None = 按 song 里前面各行写的变拍号推算[, 程序给模型的补充说明（context）])。
     起始小节号和拍号在提交前按 song 算好。每行结束（成功、失败、取消）都在调用线程里调用
     on_row(行号, 小节 | None, 错误说明 | None)。opts：这次任务的选项（None = 现在的 options()）。
+    had：识别前每一页有几个小节（见 check_page_not_emptied；None = 按 song 算）。
     返回 (每行识别时用的开头拍号, 失败的说明)。"""
     opts = opts or options()
+    had = _bars_per_page(song) if had is None else had
     meta_ts = song["meta"]["time_signature"]
     plan = [
         (
@@ -219,6 +246,7 @@ def _recognize_rows(
             si = futs[fut]
             try:
                 bars, err = fut.result(), None
+                check_page_not_emptied(song["systems"][si], bars, had)
             except (Cancelled, CancelledError):
                 bars, err = None, "已取消"
             except Exception as e:
@@ -444,8 +472,9 @@ def _run_parse(
     store.patch(sid, progress={"stage": "逐行识别", "done": 0, "total": len(systems)})
 
     on_row = _row_writer(sid, meter, out.write_row, work)
+    had = _bars_per_page(song)  # 重新识别时原来的结果（work 里还没有小节）；第一次识别是空的
     used, errors = _recognize_rows(
-        claude, sid, work, [(i, None) for i in range(len(systems))], cancel, on_row, opts
+        claude, sid, work, [(i, None) for i in range(len(systems))], cancel, on_row, opts, had
     )
     if review.fix_header_time_signature(work, meta_user):
         # 谱头的拍号读错了：改成第 1 小节上写的。后面按旧拍号识别的行，下面按“开头实际拍号”重做；
@@ -458,6 +487,7 @@ def _run_parse(
     redo = [] if cancel.is_set() else out.pick_redo(work, used, errors)
     if redo:
         log.info("song=%s rerun rows (time signature / chord diagrams): %s", sid, redo)
+        # 重做的整页一行读出 0 个小节：和第一遍的结果（work）比，不悄悄删掉第一遍读出的小节
         errors += _recognize_rows(claude, sid, work, redo, cancel, on_row, opts)[1]
 
     if cancel.is_set():
@@ -536,11 +566,17 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
             rid = request_id_of(e)
             log.exception("request_id=%s song=%s system=%d reparse failed", rid, sid, si)
             msg = "已取消" if isinstance(e, Cancelled) else friendly(e)
+            # 模型说整页没有六线谱、原来的小节保留着：这一行显示失败的同时说清楚小节还在（不然看着像丢了）
+            kept = (
+                f"第 {si + 1} 行重新识别失败：{msg}，原来的小节保留不变。"
+                if isinstance(e, EmptiedPage)
+                else None
+            )
 
             def failed(x):
                 _fail_unfinished_rows(x, msg)  # 这一行，以及按新拍号锁着等重做的行
                 meter.charge(x)  # 失败 / 取消的这次也花了钱
-                state.finish(x)
+                state.finish(x, notice=("warn", kept) if kept else None, source="reparse_row")
 
             meter.update(sid, failed)
         else:
@@ -574,6 +610,7 @@ def reparse_system(
         opts=opts,
         tied_in=tied_in(song, si),
     )
+    check_page_not_emptied(song["systems"][si], bars, _bars_per_page(song))
 
     def apply(s):
         others = {b["id"]: b.get("time_signature") for b in s["bars"] if b["system"] != si}

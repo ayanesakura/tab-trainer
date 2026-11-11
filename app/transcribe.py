@@ -383,7 +383,8 @@ def transcribe_system(
 ) -> list[dict]:
     """识别第 si 行，返回要写进曲子的小节（参数见 RowTask、RowOptions；opts 为 None 时用 RowOptions 的默认值）。
     检测到了小节线的行一个小节都没读出来：LLMError（这一行算失败）。整页一行（没检测到六线谱）读出 0 个小节：
-    这一页没有六线谱（封面、歌词页），返回 []。"""
+    这一页没有六线谱（封面、歌词页），返回 []（重新识别时这一页原来有小节的，调用方按失败处理，见
+    recognize.check_page_not_emptied）。"""
     opts = opts or RowOptions()
     task = RowTask(si, first_bar, hint, start_ts, context, tied_in)
     if opts.split and should_split(song["systems"][si]):
@@ -402,7 +403,8 @@ def transcribe_system(
         not bars and spans
     ):  # 返修后还是一个小节都没有：算这一行失败（不能标成完成；重新识别时会整行删掉原来的小节）
         raise LLMError("模型没有读出这一行的小节，请重新识别这一行", getattr(claude, "last_request_id", None))
-    # 检测不到六线谱、整页当一行的（spans 为 None）：模型说这一页没有六线谱（封面、歌词页）就是 0 个小节，这一行照常算完成
+    # 检测不到六线谱、整页当一行的（spans 为 None）：模型说这一页没有六线谱（封面、歌词页）就是 0 个小节，第一次识别时
+    # 这一行照常算完成；重新识别时原来这一页有小节的不算（见 recognize.check_page_not_emptied）
     return finish_bars(bars, song, si)
 
 

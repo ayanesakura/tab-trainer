@@ -1670,3 +1670,45 @@ def test_split_decision_uses_the_same_scaling_as_the_image_sent():
     assert systems.should_split({"crop": [0, 3000, 0, 300], "spans": spans})
     assert not systems.should_split({"crop": [0, 900, 0, 150], "spans": spans})
     assert not systems.should_split({"crop": [0, 3000, 0, 300], "spans": spans[:1]})  # 只有 1 个小节
+
+
+def test_rereading_a_whole_page_row_that_comes_back_empty_keeps_its_bars(data_dir, sync_jobs, monkeypatch):
+    """整页一行（检测不到六线谱的页）第一次识别出了小节；之后重新识别时模型说这一页没有六线谱（0 个小节）：
+    不能悄悄删掉原来的小节（连同手改、问答、练习记录），按失败处理、保留原结果并给出提示。
+    单行重新识别、重试失败的行、整首重新识别都一样；第一次识别时 0 个小节照常算“这一页没有六线谱”（见上一条）。"""
+    real = FakeClaude.transcribe
+    empty = {"on": False}
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        if spans is None:
+            return {"bars": []} if empty["on"] else real(self, img, meta, first_bar, [0, 0], *a, **kw)
+        return real(self, img, meta, first_bar, spans, *a, **kw)
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    sid = songs.create_song([("p0.png", _blank_png()), ("p1.png", score_png())])
+    recognize.run_parse(sid)
+    before = store.load(sid)
+    assert before["systems"][0]["spans"] is None
+    page_bars = [b for b in before["bars"] if b["system"] == 0]
+    assert len(page_bars) == 2
+    store.update(sid, lambda s: s["bars"][0].update(qa=[{"q": "怎么弹", "a": "慢慢弹"}]))
+    before = store.load(sid)
+    empty["on"] = True
+
+    # 单行重新识别：这一行算失败，原来的小节原样保留，提示说清楚
+    recognize.start_reparse(sid, 0)
+    s = store.load(sid)
+    assert s["bars"] == before["bars"] and s["activity"] is None
+    assert s["systems"][0]["status"] == "error" and "没有六线谱" in s["systems"][0]["error"]
+    assert s["notice"] and "原来的小节保留不变" in s["notice"]["msg"]
+
+    # 重试失败的行：同样不删
+    recognize.start_retry_failed(sid)
+    s = store.load(sid)
+    assert s["bars"] == before["bars"] and s["systems"][0]["status"] == "error"
+
+    # 整首重新识别：这一行失败，整首保留原来的结果
+    assert recognize.start_parse(sid)
+    s = store.load(sid)
+    assert s["bars"] == before["bars"] and "原来的结果保留不变" in s["notice"]["msg"]
+    assert "没有六线谱" in s["notice"]["msg"]
