@@ -31,6 +31,8 @@ let api = null, baseTempo = 60, soundFontsLoaded = 0, playerReadyOnce = false, w
 // tempoSet：速度已经由用户 / 接着练定下来了（setTempo 调过）。谱子加载好以后只在还没定的时候才用默认速度（谱上标的原速）。
 // scoreTempoDone：第一次加载谱子时按原速放宽滑块上限这件事做过了。cursorPending：谱子没加载好时设了循环范围，加载好后把光标放到段首。
 let tempoSet = false, scoreTempoDone = false, cursorPending = false, scoreBytes = null;
+// 预备拍里按住播放光标（竖线）不让它往前滑，数完再放开（at-adapter.js 的 holdableBeatCursor）
+let cursorHold = null;
 // 谱面上的点击：pendingBeat 一次点击里先到的拍（见 beatMouseDown）；drag 按着鼠标拖过几个小节；shiftDown 按下时有没有按着 Shift
 let pendingBeat = null, drag = null, shiftDown = false;
 export const getApi = () => api;
@@ -105,6 +107,7 @@ function ensureApi() {
       scrollMode: 'Off', // 不自动滚动：光标不在视野里时显示“回到播放位置”按钮，点了才滚（见 controls.js）
     },
   });
+  cursorHold = at.holdableBeatCursor(api, () => M.phase === 'countIn');
   api.soundFontLoad.on(e => { if (!get('play.ready')) setStatus('加载音色…', `${Math.round(100 * e.loaded / Math.max(1, e.total))}%`); });
   api.soundFontLoaded.on(() => {
     if (++soundFontsLoaded !== 1) return;
@@ -511,8 +514,10 @@ export function initPlayer() {
   on('play.bpm', bpm => { if (api) api.playbackSpeed = bpm / baseTempo; });
   on('play.playing', (now, was) => { if (!now && was) setStatus('已暂停', IDLE_HINT); });
   on('play.phase', (ph, was) => {
-    if (ph === 'countIn') { lastBeat = null; countIn(); }
-    else if (ph === 'playing' && was === 'countIn' && lastBeat) beatStatus(lastBeat); // 数完了：补上现在的小节和拍
+    if (ph === 'countIn') { lastBeat = null; countIn(); return; }
+    if (was !== 'countIn') return;
+    if (cursorHold) cursorHold.release(ph === 'playing'); // 数完了竖线从起始拍接着走；中途停下就不走了
+    if (ph === 'playing' && lastBeat) beatStatus(lastBeat); // 数完了：补上现在的小节和拍
   });
   on('play.ready', r => { if (!r) return; applyAudio(); if (!playing() && !get('rhythm.on')) setStatus('已停止', IDLE_HINT); });
   // 离开练习页（调弦、练习建议…）时停下：播放键和快捷键都只在练习页，切走就停不了了；调弦的麦克风也会听到它。

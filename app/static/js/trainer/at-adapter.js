@@ -1,7 +1,8 @@
 // alphaTab 适配层：我们用到的 alphaTab 内部结构（不在它公开文档里的字段和方法）都只在这里碰——
 //   tickCache（masterBars / getMasterBar：有反复时每个小节在播放顺序里的时间）、boundsLookup（staffSystems / realBounds /
 //   findMasterBarByIndex / onNotesX：谱面上小节、行、拍的位置）、beat.automations（换音色）、
-//   api.player.soundFontLoadFailed / api.player.output.context、播放光标的 CSS 类名 .at-cursor-bar、音频导出（节拍器的声音）。
+//   api.player.soundFontLoadFailed / api.player.output.context、播放光标的 CSS 类名 .at-cursor-bar 和自定义光标处理
+//   （customCursorHandler，预备拍里竖线不动）、音频导出（节拍器的声音）。
 // 我们挂在 alphaTab 模型对象上的字段（_origProgram / _orig：换成木吉他前的原音色，导出 GP 时还原）也只在这里读写。
 // 升级 alphaTab 时先看这个文件；tests/e2e/test_player.py 的 test_at_adapter_smoke 对着真实加载的谱子把每个函数都调一遍。
 
@@ -57,6 +58,30 @@ export function lyricSpots(api, root) {
 }
 /** 播放光标所在小节的高亮框（alphaTab 画的 DOM 元素）；没有时 null */
 export const cursorBar = root => (root ? root.querySelector('.at-cursor-bar') : null);
+/**
+ * 预备拍里不让播放光标（竖线）往前滑。alphaTab 一开始播放（预备拍也算）就让竖线在一拍的时长里滑向下一拍，可那时位置
+ * 根本没动，数完又跳回来。这里换成自己的光标处理（api.customCursorHandler；和 alphaTab 自带的动画光标一样画），
+ * hold() 为真时把“滑向下一拍”先记下、竖线留在原地，release(true) 时（预备拍数完）再接着滑；release(false) 丢掉。
+ * 用到光标元素的 transitionToX / setBounds 和拍框的 barBounds.masterBarBounds.visualBounds。
+ */
+export function holdableBeatCursor(api, hold) {
+  let pending = null;
+  api.customCursorHandler = {
+    onAttach() {}, onDetach() {},
+    placeBeatCursor(cur, bounds, x) {
+      pending = null;
+      const v = bounds.barBounds.masterBarBounds.visualBounds;
+      cur.transitionToX(0, x); cur.setBounds(x, v.y, 1, v.h);
+    },
+    placeBarCursor(cur, bounds) { const v = bounds.barBounds.masterBarBounds.visualBounds; cur.setBounds(v.x, v.y, v.w, v.h); },
+    transitionBeatCursor(cur, bounds, x, nextX, ms, mode) {
+      const f = mode === 1 ? 2 : 1, to = x + (nextX - x) * f, dur = ms * f; // 和自带的一样：整小节模式下距离、时长都翻倍
+      if (hold()) { pending = { cur, to, dur }; return; }
+      pending = null; cur.transitionToX(dur, to);
+    },
+  };
+  return { release(go) { const p = pending; pending = null; if (go && p) p.cur.transitionToX(p.dur, p.to); } };
+}
 
 // ---------------------------------------------------------------------
 // 播放时间（tickCache：有反复 / D.S. 时播放顺序和谱面顺序不一样）

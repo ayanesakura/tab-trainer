@@ -502,3 +502,21 @@ def test_count_in_counts_down_in_the_status(trainer):
     assert b.js("__pulse") == 0
     assert not any("已停止" in x for x in st)
     assert not b.errors, b.errors
+
+
+def test_count_in_holds_the_beat_cursor(trainer):
+    """预备拍里播放光标（竖线）不往前滑（alphaTab 一开始播放就让它朝下一拍滑，预备拍里位置其实没动），
+    数完才从起始拍接着走。"""
+    b = trainer()
+    x = "document.querySelector('#score .at-cursor-beat').getBoundingClientRect().left"
+    b.js("tt.set('play.countIn', true); tt.setLoop(1, 2); tt.setTempo(60); tt.play(); true")
+    b.wait_for("tt.state.phase === 'countIn'", timeout=5)
+    time.sleep(0.3)
+    x0 = b.js(x)
+    time.sleep(0.9)  # 60 BPM 一拍 1 秒：以前这时竖线已经滑到下一拍附近
+    assert abs(b.js(x) - x0) < 2
+    b.wait_for("tt.state.phase === 'playing'", timeout=6)
+    time.sleep(0.6)
+    assert b.js(x) > x0 + 5  # 数完了照常往前走
+    b.js("tt.stop(); true")
+    assert not b.errors, b.errors
