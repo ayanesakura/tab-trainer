@@ -266,10 +266,13 @@ def _recognize_rows(
     return {si: ts for si, _, ts, *_ in plan}, errors
 
 
-def _replace_system_bars(s: dict, si: int, bars: list[dict]) -> None:
+def _replace_system_bars(
+    s: dict, si: int, bars: list[dict], policy: staleness.Policy = staleness.ROW
+) -> None:
     """用新识别的小节替换第 si 行原来的小节，再按行和行内顺序重新编号。
-    和原来这一行的小节按内容 + 位置对上的，沿用 id、问答（练习记录按 id 自然保留），见 staleness.reconcile_bars。"""
-    staleness.reconcile_bars(s, [b for b in s["bars"] if b["system"] == si], bars, staleness.ROW)
+    和原来这一行的小节按内容 + 位置对上的，沿用 id、问答（练习记录按 id 自然保留），见 staleness.reconcile_bars
+    （policy：staleness.REDO 时手改的小节保留用户的音）。"""
+    staleness.reconcile_bars(s, [b for b in s["bars"] if b["system"] == si], bars, policy)
     for k, bar in enumerate(bars):
         bar["_order"] = k
     s["bars"] = [b for b in s["bars"] if b["system"] != si] + bars
@@ -279,10 +282,12 @@ def _replace_system_bars(s: dict, si: int, bars: list[dict]) -> None:
         bar.pop("_order", None)
 
 
-def _write_row(s: dict, si: int, bars: list[dict] | None, err: str | None) -> None:
+def _write_row(
+    s: dict, si: int, bars: list[dict] | None, err: str | None, policy: staleness.Policy = staleness.ROW
+) -> None:
     """一行结束，写进曲子：失败 / 取消的行只标状态、不动小节（按变拍号重做的行失败时，第一遍识别出的小节还留着）。"""
     if bars is not None:
-        _replace_system_bars(s, si, bars)
+        _replace_system_bars(s, si, bars, policy)
         apply_time_signatures(s["bars"], s["meta"])  # 这一行新写的变拍号会影响后面的行
     s["systems"][si].update(status="error" if err else "done", error=err)
 
@@ -621,18 +626,17 @@ def reparse_system(
 
     meter.update(sid, apply)
     # 这一行是用户要求重新识别的（可能带着提示）：只按拍号复核，不按别的行的和弦图读法再（不带提示）重做一遍
-    failed = _redo_after(
-        sid, song, {si: start_ts}, [si], cancel, meter, _row_writer(sid, meter), opts, shapes=False
-    )
+    failed, notes = _redo_after(sid, song, {si: start_ts}, [si], cancel, meter, opts, shapes=False)
 
     def finish(s):
         _fail_unfinished_rows(s, "已取消" if cancel.is_set() else "没有识别")
-        msg = (
-            "按新的拍号重做后面的行时有行没识别出来（"
-            + "；".join(failed)[:300]
-            + "），可以点“重试失败的行”再试"
-        )
-        state.finish(s, notice=("warn", msg) if failed else None, source="reparse_row")
+        if failed:
+            notes.append(
+                "按新的拍号重做后面的行时有行没识别出来（"
+                + "；".join(failed)[:300]
+                + "），可以点“重试失败的行”再试"
+            )
+        state.finish(s, notice=("warn", "；".join(notes)) if notes else None, source="reparse_row")
         meter.charge(s)
 
     meter.update(sid, finish)
@@ -645,24 +649,38 @@ def _redo_after(
     rows: list[int],
     cancel,
     meter: jobs.UsageMeter,
-    on_row,
     opts: RowOptions,
     shapes: bool = True,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """已有曲子里的 rows 识别完之后（used：它们识别时开头的拍号；before：识别前的曲子）：
-    - 识别的是第一行：它第 1 小节写的拍号可能说明谱头的拍号读错了（同整首识别，见 review.fix_header_time_signature）；
+    - 识别的是第一行：它第 1 小节写的拍号可能说明谱头的拍号读错了（同整首识别，见 review.fix_header_time_signature）。
+      程序自己改了全曲拍号：提示、问答和练习建议按“改设置”处理（同手动改拍号，staleness.invalidate_tips_for_setting），
+      并告诉用户；
     - 其他行开头实际的拍号（按现在各行写的变拍号推算）和它们当初识别时的（按 before 推算）不一样了
-      （这几行写了 / 去掉了变拍号、改了全曲拍号，补页插进来的新行写了变拍号），按新拍号再识别一次；
+      （这几行写了 / 去掉了变拍号、改了全曲拍号，补页插进来的新行写了变拍号），按新拍号再识别一次。
+      有手改的行照样重做，手改的小节保留用户的音（staleness.REDO）；手改的小节和重做的结果对不上（小节数变了）时
+      这一行不换（不丢用户的改动），在提示里说明；
     - shapes：rows 自己读出的和弦图和别的行的多数读法不一样时，带上多数的读法重做（补页、重试失败的行）。
       用户要求重新识别的一行不这样做（False）：重做时不带用户的提示，会把用户要的结果盖掉，还多花一次钱。
-    返回失败的说明。"""
+    返回 (失败的说明, 要告诉用户的话)。"""
+    notes: list[str] = []
     if 0 in rows and not cancel.is_set():
-        fixed = []
-        store.update(
-            sid, lambda s: fixed.append(review.fix_header_time_signature(s, s.get("meta_user") or {}))
-        )
-        if fixed[0]:  # 第一行自己是按图上的拍号读的，不用重做
-            used = {**used, 0: store.load(sid)["meta"]["time_signature"]}
+        fixed: list[tuple[list[int], list[int]]] = []
+
+        def fix(s):
+            old = s["meta"]["time_signature"] if s.get("meta") else None
+            if review.fix_header_time_signature(s, s.get("meta_user") or {}):
+                staleness.invalidate_tips_for_setting(s)  # 提示、问答都是按旧拍号写的
+                fixed.append((old, s["meta"]["time_signature"]))
+
+        store.update(sid, fix)
+        if fixed:  # 第一行自己是按图上的拍号读的，不用重做
+            old_ts, new_ts = fixed[0]
+            used = {**used, 0: new_ts}
+            notes.append(
+                f"第 1 小节标着 {new_ts[0]}/{new_ts[1]} 拍，全曲拍号已从 {old_ts[0]}/{old_ts[1]} "
+                f"改成 {new_ts[0]}/{new_ts[1]}（谱头读错了），按旧拍号写的提示和问答已标成过时"
+            )
     others = {k for k in range(len(before["systems"])) if k not in used}
     used = {**{k: review.row_start_ts(before["bars"], before["meta"], k) for k in others}, **used}
     # 别的行只看拍号（和弦图的多数读法整首识别时已经处理过）
@@ -670,12 +688,32 @@ def _redo_after(
     song = store.load(sid)
     redo: list[tuple[int, list[int], str]] = []
     # 先看一眼：没有要重做的就不写
-    if not cancel.is_set() and review.rows_to_redo(song["bars"], song["meta"], used, ts_only=ts_only):
-        store.update(sid, lambda s: review.lock_redo(s, used, redo, ts_only=ts_only))
+    if not cancel.is_set() and review.rows_to_redo(
+        song["bars"], song["meta"], used, skip_edited=False, ts_only=ts_only
+    ):
+        store.update(sid, lambda s: review.lock_redo(s, used, redo, ts_only=ts_only, skip_edited=False))
     if not redo:
-        return []
+        return [], notes
     log.info("song=%s rerun rows after %s (time signature): %s", sid, rows, redo)
-    return _recognize_rows(meter.claude, sid, store.load(sid), redo, cancel, on_row, opts)[1]
+    kept: list[int] = []
+
+    def write(s, si, bars, err):
+        old = [b for b in s["bars"] if b["system"] == si]
+        if bars is not None and staleness.unkept_edits(old, bars):
+            kept.append(si)  # 手改的小节和重做的结果对不上：这一行不换，照旧算识别完成
+            bars = None
+        _write_row(s, si, bars, err, staleness.REDO)
+
+    failed = _recognize_rows(
+        meter.claude, sid, store.load(sid), redo, cancel, _row_writer(sid, meter, write), opts
+    )[1]
+    if kept:
+        rows_text = "、".join(f"第 {k + 1} 行" for k in sorted(kept))
+        notes.append(
+            f"{rows_text}有手改过的小节，和按新拍号重做的结果对不上，这几行没有重做"
+            "（可以对照原谱修改，或单独重新识别这一行——会盖掉手改）"
+        )
+    return failed, notes
 
 
 def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what: str = "新加的页") -> None:
@@ -683,6 +721,7 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
     调用方已经登记任务、把这几行标成识别中（state.begin "reparse_row"）。what：结束提示里怎么称呼这几行。"""
     meter = jobs.UsageMeter(None)
     failed: list[str] = []
+    notes: list[str] = []  # 复核时程序自己改了全曲拍号、有手改的行没重做之类，结束时告诉用户
     keys = _bar_keys(store.load(sid))
 
     try:
@@ -694,7 +733,8 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
             meter.claude, sid, before, [(si, None) for si in rows], cancel, on_row, opts
         )
         failed += errs
-        failed += _redo_after(sid, before, used, rows, cancel, meter, on_row, opts)
+        more, notes = _redo_after(sid, before, used, rows, cancel, meter, opts)
+        failed += more
     except Exception as e:  # 建客户端失败之类：没开始的行都标成失败
         rid = request_id_of(e)
         log.exception("request_id=%s song=%s new pages failed", rid, sid)
@@ -704,8 +744,12 @@ def recognize_rows_job(sid: str, rows: list[int], cancel: threading.Event, what:
         def end(s):
             # 这几行，以及按新拍号锁着等重做的行
             _fail_unfinished_rows(s, "已取消" if cancel.is_set() else "没有识别")
-            msg = f"{what}有行没识别出来（" + "；".join(failed)[:300] + "），可以点“重试失败的行”再试"
-            state.finish(s, notice=("warn", msg) if failed else None, source="reparse_row")
+            msg = [*notes]
+            if failed:
+                msg.append(
+                    f"{what}有行没识别出来（" + "；".join(failed)[:300] + "），可以点“重试失败的行”再试"
+                )
+            state.finish(s, notice=("warn", "；".join(msg)) if msg else None, source="reparse_row")
             meter.charge(s)
 
         meter.update(sid, end)

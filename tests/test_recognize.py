@@ -1712,3 +1712,59 @@ def test_rereading_a_whole_page_row_that_comes_back_empty_keeps_its_bars(data_di
     s = store.load(sid)
     assert s["bars"] == before["bars"] and "原来的结果保留不变" in s["notice"]["msg"]
     assert "没有六线谱" in s["notice"]["msg"]
+
+
+def test_header_ts_fixed_by_a_first_row_reparse_redoes_edited_rows_and_outdates_tips(
+    data_dir, sync_jobs, monkeypatch
+):
+    """单行重新识别第 1 行，第 1 小节写着 3/4（谱头读错了）：程序自动改了全曲拍号。
+    - 按旧拍号写的提示、问答和练习建议按“改设置”处理（同手动改拍号），不能还当成有效的；
+    - 第 2 行有一个手改过的小节：这一行照样按新拍号重做，只有手改的那个小节保留用户的音；
+    - 结束提示里说清楚全曲拍号被改了。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    s = store.load(sid)
+    row2 = [b["id"] for b in s["bars"] if b["system"] == 1]
+    mine = [{"dur": "1", "notes": [_note(2, 7)]} for _ in range(3)]  # 用户把第 5 小节改成了 3 拍
+    songs.edit_bar(sid, row2[1], mine, None)
+    store.update(sid, lambda x: x["bars"][3].update(qa=[{"q": "怎么弹", "a": "慢慢弹"}]))
+    assert any(b["tip"] for b in store.load(sid)["bars"])
+    transcribe, starts = _ts_aware_transcribe({0: [3, 4]})
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+
+    recognize.start_reparse(sid, 0)
+    s = store.load(sid)
+    assert s["meta"]["time_signature"] == [3, 4] and s["activity"] is None
+    assert (4, None) in starts  # 第 2 行按新拍号重做了（全曲已经是 3/4）
+    by_id = {b["id"]: b for b in s["bars"]}
+    assert [b["id"] for b in s["bars"] if b["system"] == 1] == row2
+    assert by_id[row2[1]]["edited"] and music.same_events(by_id[row2[1]]["events"], mine)
+    assert all(not b["warn"] for b in s["bars"]), [(b["n"], b["warn"]) for b in s["bars"]]
+    assert all(b["tip"] == "" for b in s["bars"])
+    assert by_id[row2[0]]["qa"][0].get("stale") and s["plan"]["stale"]
+    assert s["notice"] and "3/4" in s["notice"]["msg"] and "过时" in s["notice"]["msg"]
+
+
+def test_ts_redo_that_cannot_keep_a_hand_edit_leaves_the_row_and_says_so(data_dir, sync_jobs, monkeypatch):
+    """按新拍号重做的行读出的小节数变了，手改的小节对不上：这一行不换（不丢用户的改动），提示里说明是哪一行。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    row2 = [b["id"] for b in store.load(sid)["bars"] if b["system"] == 1]
+    songs.edit_bar(sid, row2[1], [{"dur": "1", "notes": [_note(2, 7)]} for _ in range(3)], None)
+    before = [b for b in store.load(sid)["bars"] if b["system"] == 1]
+    aware, _ = _ts_aware_transcribe({0: [3, 4]})
+
+    def transcribe(self, img, meta, first_bar, spans, *a, **kw):
+        out = aware(self, img, meta, first_bar, spans, *a, **kw)
+        if first_bar > 1:
+            out["bars"] = out["bars"][:1]  # 第 2 行这次只读出 1 个小节
+        return out
+
+    monkeypatch.setattr(FakeClaude, "transcribe", transcribe)
+    recognize.start_reparse(sid, 0)
+    s = store.load(sid)
+    assert s["meta"]["time_signature"] == [3, 4]
+    after = [b for b in s["bars"] if b["system"] == 1]
+    assert [b["id"] for b in after] == row2 and [b["events"] for b in after] == [b["events"] for b in before]
+    assert s["systems"][1]["status"] == "done" and s["activity"] is None
+    assert "第 2 行有手改过的小节" in s["notice"]["msg"] and "3/4" in s["notice"]["msg"]

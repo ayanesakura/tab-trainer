@@ -198,6 +198,41 @@ class Dropped(NamedTuple):
 DERIVE = Policy()  # GP / MusicXML 重新转换（小节不能手改）
 RESTAGE = Policy(keep_edits=True)  # 整首重新识别图片谱子（新结果替换前已经算好拍号）
 ROW = Policy(ts_field="ts_change")  # 重新识别某一行（用户要的就是新结果）、补页、两遍携带拍号
+# 已有曲子里程序自己按新的开头拍号重做的行（见 recognize._redo_after）：用户没要求重做，手改的小节保留用户的音
+REDO = Policy(keep_edits=True, ts_field="ts_change")
+
+
+def _pairs(old: list[dict], bars: list[dict], policy: Policy) -> list[tuple[dict, dict, bool, bool]]:
+    """新旧小节按内容做序列比对（见 reconcile_bars）：(原来的小节, 新小节, 内容是否一样, 是否一一对应)。"""
+    keep_edits = policy.keep_edits
+
+    def key(events, b):
+        return json.dumps([canonical_events(events), b.get(policy.ts_field)], sort_keys=True)
+
+    def old_key(b):
+        orig = b.get("_orig") if keep_edits and b.get("edited") else None
+        if keep_edits and b.get("refine") and not b.get("edited"):
+            orig = b["refine"]["prev"]
+        return key(orig["events"] if orig else b["events"], b)
+
+    pairs = []
+    sm = difflib.SequenceMatcher(
+        None, [old_key(b) for b in old], [key(b["events"], b) for b in bars], autojunk=False
+    )
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op in ("equal", "replace"):
+            one_to_one = i2 - i1 == j2 - j1
+            pairs += [
+                (old[i], bars[j], op == "equal", one_to_one) for i, j in zip(range(i1, i2), range(j1, j2))
+            ]
+    return pairs
+
+
+def unkept_edits(old: list[dict], bars: list[dict], policy: Policy = REDO) -> int:
+    """bars 取代 old 时（policy.keep_edits、设定没变），手改过的小节里保留不了用户的音的个数：
+    和新小节对不上的，或者对上了但不是一一对应的（见 reconcile_bars）。"""
+    kept = {id(o) for o, _, same, one_to_one in _pairs(old, bars, policy) if same or one_to_one}
+    return sum(1 for b in old if b.get("edited") and id(b) not in kept)
 
 
 def reconcile_bars(
@@ -222,28 +257,10 @@ def reconcile_bars(
     返回没能保留的手改小节数和精修改过的小节数（Dropped）。调用方之后自己把 bars 放进 s。"""
     keep_edits = policy.keep_edits
 
-    def key(events, b):
-        return json.dumps([canonical_events(events), b.get(policy.ts_field)], sort_keys=True)
-
     def refined(b) -> bool:
         return keep_edits and bool(b.get("refine")) and not b.get("edited")
 
-    def old_key(b):
-        orig = b.get("_orig") if keep_edits and b.get("edited") else None
-        if refined(b):
-            orig = b["refine"]["prev"]
-        return key(orig["events"] if orig else b["events"], b)
-
-    pairs = []  # (原来的小节, 新小节, 内容是否一样, 是否一一对应)
-    sm = difflib.SequenceMatcher(
-        None, [old_key(b) for b in old], [key(b["events"], b) for b in bars], autojunk=False
-    )
-    for op, i1, i2, j1, j2 in sm.get_opcodes():
-        if op in ("equal", "replace"):
-            one_to_one = i2 - i1 == j2 - j1
-            pairs += [
-                (old[i], bars[j], op == "equal", one_to_one) for i, j in zip(range(i1, i2), range(j1, j2))
-            ]
+    pairs = _pairs(old, bars, policy)
     paired = {id(p[0]) for p in pairs}
     dropped = sum(1 for b in old if keep_edits and b.get("edited") and id(b) not in paired)
     lost_refines = sum(1 for b in old if refined(b) and id(b) not in paired)

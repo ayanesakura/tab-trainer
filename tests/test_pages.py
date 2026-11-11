@@ -260,7 +260,7 @@ def test_rename_before_the_header_is_read(data_dir):
 
 def test_edit_just_before_the_new_page_ts_rerun_is_not_overwritten(data_dir, sync_jobs, monkeypatch):
     """补页后按变拍号重做的行：挑行和锁住在同一次 store.update 里（同整首识别的 begin_redo），
-    用户在第一遍识别完、锁住之前改了那一行，也不会被重做覆盖。"""
+    用户在第一遍识别完、锁住之前改了那一行，也不会被重做覆盖：这一行照样按新拍号重做，手改的小节保留用户的音。"""
     calls = []
 
     def transcribe(self, img, meta, first_bar, spans, start_ts=None, **kw):
@@ -298,7 +298,7 @@ def test_edit_just_before_the_new_page_ts_rerun_is_not_overwritten(data_dir, syn
     song = real_load(sid)
     bar = next(b for b in song["bars"] if b["id"] == edited[0])
     assert bar["edited"] and bar["events"][0]["notes"][0]["fret"] == 9
-    assert [ts for fb, ts in calls if fb == 10] == [None]  # 新页第二行没有重做（和全曲拍号一样时不传）
+    assert [ts for fb, ts in calls if fb == 10] == [None, [3, 4]]  # 新页第二行按 3/4 重做了
     assert all(s["status"] == "done" for s in song["systems"])
 
 

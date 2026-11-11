@@ -92,10 +92,15 @@ def redo_progress(redo: list) -> dict:
 
 
 def lock_redo(
-    s: dict, used: dict[int, list[int]], redo: list, ts_only: set[int] | frozenset = frozenset()
+    s: dict,
+    used: dict[int, list[int]],
+    redo: list,
+    ts_only: set[int] | frozenset = frozenset(),
+    skip_edited: bool = True,
 ) -> None:
-    """挑出要重做的行（填进 redo）并把它们标成识别中，在同一次读-改-写里：中间用户改了的行不会被重做覆盖。"""
-    redo[:] = rows_to_redo(s["bars"], s["meta"], used, ts_only=ts_only)
+    """挑出要重做的行（填进 redo）并把它们标成识别中，在同一次读-改-写里：中间用户改了的行不会被重做覆盖
+    （skip_edited=False：有手改的行也重做，由写回时保留手改的小节，见 recognize._redo_after）。"""
+    redo[:] = rows_to_redo(s["bars"], s["meta"], used, skip_edited, ts_only)
     for si, *_ in redo:
         s["systems"][si].update(status="parsing", error=None)
     if redo:
