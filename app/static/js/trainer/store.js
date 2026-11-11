@@ -9,7 +9,7 @@
 //   ui    界面状态（bar 正在看的小节、view 当前页、editMode、orig 原图弹窗、loopPreview 拖选中的范围……）
 //   rhythm  敲节奏（rhythm-drill.js）：on 打开了（播放键 / 空格开始的是敲节奏），running 正在敲（播放键显示成停止），calib 正在敲的是延迟校准
 //
-// 去重：set 时按结构比较（普通对象和数组逐项比，其他按 ===），值没变就不通知。
+// 去重：set 时按结构比较（普通对象和数组逐项比，Set 比内容，其他按 ===），值没变就不通知。
 // 订阅了子路径的（如 on('song.plan')）只在那一部分真的变了时才收到通知；订阅了父路径的，子路径变了也会收到。
 // 一次 set 多个路径（set({a: 1, b: 2})）时，同一个订阅者只被调用一次。
 // 这个文件不碰 DOM，Node 测试里也能用。
@@ -65,9 +65,13 @@ export function createStore(initial = {}) {
 
 const plain = x => x !== null && typeof x === 'object' && (Array.isArray(x) || Object.getPrototypeOf(x) === Object.prototype || Object.getPrototypeOf(x) === null);
 
-/** 结构比较：普通对象和数组逐项比，其他（Set、类实例、函数）只看是不是同一个。 */
+/**
+ * 结构比较：普通对象和数组逐项比；Set 比内容（view 里每个音的技巧是 Set：不比内容的话，song.bars 有一点变化——
+ * 连写进一条问答都算——重新派生的 view 都算“变了”，选段、谱面跟着重画）；其他（类实例、函数）只看是不是同一个。
+ */
 export function equal(a, b) {
   if (Object.is(a, b)) return true;
+  if (a instanceof Set && b instanceof Set) return a.size === b.size && [...a].every(x => b.has(x));
   if (!plain(a) || !plain(b) || Array.isArray(a) !== Array.isArray(b)) return false;
   const ka = Object.keys(a), kb = Object.keys(b);
   if (ka.length !== kb.length) return false;

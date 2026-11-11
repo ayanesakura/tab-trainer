@@ -1644,3 +1644,34 @@ def test_practice_page_restored_by_back_shows_fresh_data(server, trainer):
         assert not b.errors, b.errors
     finally:
         _put_meta(server, sid, {"title": old})
+
+
+def test_narrow_window_song_updates_do_not_jump_to_the_controls(server, browser):
+    """窗口窄于 760px（控制条不吸顶）：滚到下面以后，问 AI 的回答写进来、轮询到别的小节变了，页面都不跳回控制条。
+    （以前 view 里有 Set，song.bars 任何变化都重设 view → 重画选段按钮 → scrollIntoView 把页面滚回控制条）"""
+    b = _open_at(server, browser, 700, 420)
+    b.js("tt.setLoop(3, 5); true")
+    time.sleep(0.5)
+    b.js("scrollTo(0, document.documentElement.scrollHeight); true")
+    time.sleep(0.3)
+    y = b.js("scrollY")
+    assert y > 200, y
+    b.js("window.__view = tt.view; tt.set('song.bars.1.qa', [{q: '怎么练', a: '慢练', at: '今天'}]); true")
+    time.sleep(0.5)
+    assert b.js("tt.view === window.__view")  # 问答不影响谱面：不重新派生
+    assert b.js("scrollY") == y
+    b.js("tt.set('song.bars.2.tip', '轮询到的新提示'); true")  # 真的变了（view 重设，选段按钮重画）
+    time.sleep(0.5)
+    assert b.js("tt.view !== window.__view")
+    assert b.js("scrollY") == y
+    assert b.js("document.querySelector('#secBtns button.on').dataset.a") == "3"
+    # 选段那一行放不下时，选中的按钮仍然横着滚进来（只是不再竖着滚页面）
+    b.js(
+        "const h = document.getElementById('secBtns'); h.style.maxWidth = '60px'; h.scrollLeft = 0; tt.setLoop(0, 2); tt.setLoop(3, 5); true"
+    )
+    time.sleep(0.3)
+    assert b.js("""(() => { const h = document.getElementById('secBtns').getBoundingClientRect(),
+      r = document.querySelector('#secBtns button.on').getBoundingClientRect();
+      return document.getElementById('secBtns').scrollLeft > 0 && r.left >= h.left - 1 && r.right <= h.right + 1; })()""")
+    assert b.js("scrollY") == y
+    assert not b.errors, b.errors

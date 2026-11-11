@@ -40,7 +40,22 @@ test('store: set / get / on with structural dedupe and sub-path subscriptions', 
   assert.deepEqual(before.bars, [2]); // 不改原来的对象
   assert.deepEqual(st.get('song.bars'), [9]);
   assert.ok(equal({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] }));
-  assert.ok(!equal(new Set([1]), new Set([1])));
+  assert.ok(equal(new Set([1, 2]), new Set([2, 1]))); // Set 比内容（view 里的技巧）
+  assert.ok(!equal(new Set([1]), new Set([1, 2])) && !equal(new Set([1]), new Set([2])) && !equal(new Set(), []));
+});
+
+test('deriveView：只改了问答 / 练习记录时，重新派生的 view 和原来的相等（store 不通知，选段和谱面不重画）', () => {
+  const v = deriveView(SONG);
+  const withQa = { ...SONG, bars: SONG.bars.map((b, i) => (i === 1 ? { ...b, qa: [{ q: '怎么练', a: '慢练' }] } : b)) };
+  assert.ok(equal(deriveView(withQa), v));
+  const st = createStore({ view: v });
+  let n = 0;
+  st.on('view', () => n++);
+  st.set('view', deriveView(withQa));
+  assert.equal(n, 0);
+  const tech = { ...SONG, bars: SONG.bars.map((b, i) => (i === 0 ? { ...b, events: [{ ...b.events[0], notes: [N(1, 0, ['pm']), N(6, 0)] }, ...b.events.slice(1)] } : b)) };
+  st.set('view', deriveView(tech)); // 技巧变了：要通知
+  assert.equal(n, 1);
 });
 
 test('deriveView: events, pitches, bar lengths, regions, sections, review flags', () => {

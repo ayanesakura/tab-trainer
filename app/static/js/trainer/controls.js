@@ -64,8 +64,15 @@ function paintLoop() {
     const on_ = +x.dataset.a === a && +x.dataset.z === b;
     x.classList.toggle('on', on_);
     x.setAttribute('aria-pressed', on_);
-    if (on_) x.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (on_) revealChip(x);
   });
+}
+// 选段那一行横着滚到这个按钮。只改 scrollLeft，不用 scrollIntoView：它还会竖着滚页面，
+// 窗口窄于 760px 时控制条不吸顶，后台刷新一次页面就跳回控制条
+function revealChip(btn) {
+  const host = $('secBtns'), h = host.getBoundingClientRect(), r = btn.getBoundingClientRect();
+  if (r.left < h.left) host.scrollLeft += r.left - h.left;
+  else if (r.right > h.right) host.scrollLeft += r.right - h.right;
 }
 
 /** 控制条和“更多”弹层里的输入框 ⇄ store 的 play 切片 */
