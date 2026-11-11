@@ -72,6 +72,8 @@
 button.cell:hover { outline-color: var(--line-strong); }
 .cell.today { outline-color: var(--muted); }
 .cell.sel, .cell.sel:hover { outline: 2px solid var(--fg); }
+/* 键盘焦点：上面的 outline 写在全局 :focus-visible 后面、优先级一样，会把焦点框盖成透明，这里再写一次 */
+.cell:focus-visible, .cell.sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cal-foot { display: flex; align-items: center; gap: var(--sp-2); margin-top: 12px; }
 .cal-legend { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); }
 .cal-legend i { width: 10px; height: 10px; border-radius: 2px; }

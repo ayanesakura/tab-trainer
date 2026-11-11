@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fmtClock, fmtMin, fmtShort, dayLabel, dueText, gapText, studyBadge, itemNotes, queueRowHTML, doneRowHTML, planRowHTML,
-  ringHTML, level, calendarModel, calendarHTML, sessionText, ratingTip, planNext, stuckText, timeTip,
+  ringHTML, level, calendarModel, calendarHTML, sessionText, ratingTip, planNext, stuckText, timeTip, calTabDay, calMove,
 } from '../../app/static/js/study-view.js';
 import { rowHTML } from '../../app/static/js/library-view.js';
 
@@ -152,6 +152,30 @@ test('日历：颜色档位、网格对齐到周一、未来的格子', () => {
   assert.match(html, /--weeks:53/);
   assert.match(html, /class="cell l1 sel" data-day="2026-11-09"[^>]*aria-pressed="true"/);
   assert.match(html, /title="11 月 15 日 周日 · 50 分钟 · 打分 2 首"/);
+});
+
+test('日历的键盘：只有一格能 Tab 到，方向键按网格走', () => {
+  const m = calendarModel([], '2026-11-11', 45, 3); // 周三；第一格是 2026-10-26（周一）
+  assert.equal(calTabDay(m), '2026-11-11'); // 默认今天
+  assert.equal(calTabDay(m, '', '2026-11-02'), '2026-11-02'); // 选中的那天
+  assert.equal(calTabDay(m, '2026-10-27', '2026-11-02'), '2026-10-27'); // 键盘走到的那天优先
+  assert.equal(calTabDay(m, '2026-11-14', '2025-01-01'), '2026-11-11'); // 未来的、日历外面的不算
+  const html = calendarHTML(m, '2026-11-02');
+  assert.equal((html.match(/tabindex="0"/g) || []).length, 1);
+  assert.match(html, /data-day="2026-11-02" tabindex="0"/);
+  assert.match(html, /data-day="2026-11-11" tabindex="-1"/);
+  assert.match(calendarHTML(m), /data-day="2026-11-11" tabindex="0"/);
+  // 一列一周：←→ 隔一周，↑↓ 隔一天；走出日历停在原处；Home / End
+  assert.equal(calMove(m, '2026-11-04', 'ArrowLeft'), '2026-10-28');
+  assert.equal(calMove(m, '2026-11-04', 'ArrowRight'), '2026-11-11');
+  assert.equal(calMove(m, '2026-11-04', 'ArrowDown'), '2026-11-05');
+  assert.equal(calMove(m, '2026-11-02', 'ArrowUp'), '2026-11-01');
+  assert.equal(calMove(m, '2026-11-05', 'ArrowRight'), '2026-11-05'); // 下周四还没到
+  assert.equal(calMove(m, '2026-10-27', 'ArrowLeft'), '2026-10-27');
+  assert.equal(calMove(m, '2026-11-11', 'ArrowDown'), '2026-11-11');
+  assert.equal(calMove(m, '2026-11-04', 'Home'), '2026-10-26');
+  assert.equal(calMove(m, '2026-11-04', 'End'), '2026-11-11');
+  assert.equal(calMove(m, '2026-11-04', 'Enter'), null);
 });
 
 test('某一天的记录：计时 / 补记的文案', () => {

@@ -8,10 +8,11 @@ import * as api from '/static/js/lib/api.js';
 import { mountTimer, announce, onAnnounce } from '/static/js/lib/study-timer.js';
 import {
   fmtMin, fmtShort, dayLabel, ringHTML, queueRowHTML, doneRowHTML, planRowHTML, calendarModel, calendarHTML,
-  ratingBadge, ratingTip, sessionText, trainerHref, parseDay, dayKey,
+  ratingBadge, ratingTip, sessionText, trainerHref, parseDay, dayKey, calMove,
 } from '/static/js/study-view.js';
 
-const S = { today: null, cal: null, day: '', songs: [], planOpen: false, onSongs: () => {}, visible: false, timer: null };
+// day：点开明细的那天；focus：日历里能 Tab 到的那一格（键盘走到 / 点过的那天，见 calTabDay）
+const S = { today: null, cal: null, day: '', focus: '', songs: [], planOpen: false, onSongs: () => {}, visible: false, timer: null };
 const PLAN_FOLD = 6; // 计划超过这么多首时先收起来
 
 // 只在内容变了的时候改 DOM（每次刷新都重画，不能把焦点、悬停冲掉）
@@ -114,15 +115,32 @@ function renderCalendar() {
   const tip = [`近一年 ${fmtMin(model.total)}`, `有记录以来 ${fmtMin(all)}`, undated > 0 && `含早期未记日期的 ${fmtMin(undated)}（日历上放不进哪一天）`].filter(Boolean).join('；');
   $('calSum').title = all > 0 ? tip : '';
   setHTML($('calSum'), model.active || all > 0 ? esc([model.active && `近一年 ${model.active} 天`, `累计 ${sum.n} ${sum.unit}`].filter(Boolean).join(' · ')) : '');
-  const first = !$('cal')._html;
-  setHTML($('cal'), calendarHTML(model, S.day));
-  if (first) $('cal').scrollLeft = $('cal').scrollWidth; // 窄屏只露出一部分时，先看到最近的几周
+  S.calModel = model;
+  const first = !$('cal')._html, box = $('cal'), had = box.contains(document.activeElement);
+  setHTML(box, calendarHTML(model, S.day, S.focus));
+  if (first) box.scrollLeft = box.scrollWidth; // 窄屏只露出一部分时，先看到最近的几周
+  // 格子是整个重画的：焦点原来在日历里（点了、用键盘走了），放回能 Tab 到的那一格
+  if (had && !box.contains(document.activeElement)) focusCell({ preventScroll: true });
 }
+const focusCell = opts => { const c = $('cal').querySelector('button.cell[tabindex="0"]'); if (c) c.focus(opts); };
 $('cal').addEventListener('click', e => {
   const c = e.target.closest('button.cell');
   if (!c) return;
+  S.focus = c.dataset.day;
   if (S.day === c.dataset.day) { closeDay(); return; }
   loadDay(c.dataset.day);
+});
+// 日历只有一格能 Tab 到，格子之间用方向键走（回车 / 空格就是点这个按钮）
+$('cal').addEventListener('keydown', e => {
+  const c = e.target.closest('button.cell');
+  if (!c || !S.calModel || e.altKey || e.ctrlKey || e.metaKey) return;
+  const to = calMove(S.calModel, c.dataset.day, e.key);
+  if (!to) return;
+  e.preventDefault();
+  S.focus = to;
+  renderCalendar(); // 焦点跟着放到新的那一格
+  const cell = $('cal').querySelector('button.cell[tabindex="0"]');
+  if (cell) cell.scrollIntoView({ block: 'nearest', inline: 'nearest' }); // 走到露出来的范围外面时，日历跟着滚
 });
 
 async function loadDay(day, { quiet = false } = {}) {

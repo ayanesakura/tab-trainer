@@ -237,3 +237,47 @@ def test_calendar_total_includes_undated(server, browser):
     b.wait_for("document.getElementById('calSum').textContent.includes('累计 5 小时')")
     assert "含早期未记日期的 2 小时" in b.js("document.getElementById('calSum').title")
     assert not b.errors, b.errors
+
+
+def test_calendar_keyboard(server, browser):
+    # 日历只有一格能 Tab 到（默认今天），Tab 一下就跳过整个日历；格子之间用方向键走，焦点框看得见，回车打开那一天
+    import datetime as dt
+    import time
+
+    b = browser
+    b.open(server["base"] + "/#study")
+    today = _api(server, "/api/study/today")["day"]
+    b.wait_for(f"!!document.querySelector('#cal .cell[data-day=\"{today}\"]')")
+    tabbable = "[...document.querySelectorAll('#cal button.cell')].filter(c => c.tabIndex === 0).map(c => c.dataset.day)"
+    assert b.js(tabbable) == [today]
+    # 从日历前面 Tab 进来：落在今天；再 Tab 就到了日历后面
+    b.js("""{ const mk = id => { const t = document.createElement('button'); t.id = id; t.textContent = id; return t; };
+      const cal = document.getElementById('cal'); cal.before(mk('__before')); cal.after(mk('__after'));
+      document.getElementById('__before').focus(); } true""")
+    b.key("Tab", vk=9)
+    assert b.js("document.activeElement.dataset.day") == today
+    b.key("Tab", vk=9)
+    assert b.js("document.activeElement.id") == "__after"
+    b.key("Tab", vk=9, modifiers=8)  # Shift+Tab 回来
+    assert b.js("document.activeElement.dataset.day") == today
+    # ←：上一周同一天；↑：前一天
+    d = dt.date.fromisoformat(today)
+    b.key("ArrowLeft", vk=37)
+    assert b.js("document.activeElement.dataset.day") == (d - dt.timedelta(days=7)).isoformat()
+    # 焦点框看得见（不是今天、没选中的格子）：和全局焦点框一样是强调色
+    time.sleep(0.3)  # 格子的 outline-color 有过渡
+    style = b.js("""(s => [s.outlineStyle, s.outlineColor, s.outlineWidth])(getComputedStyle(document.activeElement))""")
+    accent = b.js("""(() => { const x = document.createElement('i'); x.style.color = 'var(--accent)'; document.body.append(x);
+      const c = getComputedStyle(x).color; x.remove(); return c; })()""")
+    assert style == ["solid", accent, "2px"], (style, accent)
+    b.key("ArrowUp", vk=38)
+    target = (d - dt.timedelta(days=8)).isoformat()
+    assert b.js("document.activeElement.dataset.day") == target
+    assert b.js(tabbable) == [target]
+    # 回车：打开那一天，焦点还在那一格
+    b.key("Enter", vk=13, text="\r")
+    b.wait_for("!document.getElementById('dayCard').hidden && !document.querySelector('#dayCard .spinner')")
+    assert b.js("document.querySelector('#cal .cell.sel').dataset.day") == target
+    assert b.js("document.activeElement.dataset.day") == target
+    b.js("document.getElementById('__before').remove(); document.getElementById('__after').remove(); true")
+    assert not b.errors, b.errors

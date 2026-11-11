@@ -253,17 +253,40 @@ export function calendarModel(days, today, goal, weeks = 53) {
 export function cellTip(c) {
   return `${dayLabel(c.day)} · ${c.minutes > 0 ? fmtMin(c.minutes) : '没练'}${c.ratings ? ` · 打分 ${c.ratings} 首` : ''}`;
 }
-/** 日历的 HTML：上面一行月份，左边周一 / 三 / 五，格子是按钮（点开那一天的明细）。selected：选中的日子 */
-export function calendarHTML(model, selected = '') {
-  const n = model.cols.length;
+/** 日历里能点的格子（今天和以前的），按日期排好 */
+const calDays = model => model.cols.flat().filter(c => !c.future).map(c => c.day);
+/** 日历里唯一能 Tab 到的那一格（roving tabindex，其他格子用方向键走过去）：依次取 candidates 里第一个在日历上的日子
+ * （上次键盘走到 / 点过的那天、选中的那天），都不在时取今天（最后一个能点的格子）；日历是空的返回 '' */
+export function calTabDay(model, ...candidates) {
+  const days = calDays(model), set = new Set(days);
+  return candidates.find(d => d && set.has(d)) || days[days.length - 1] || '';
+}
+/** 方向键在日历格子之间走：一列是一周（周一在上），所以 ←→ 隔一周、↑↓ 隔一天；Home / End 到最早的一格 / 今天。
+ * → 要去的日子（走出日历时停在原处）；不是这几个键返回 null */
+export function calMove(model, day, key) {
+  const days = calDays(model);
+  if (!days.length) return null;
+  if (key === 'Home') return days[0];
+  if (key === 'End') return days[days.length - 1];
+  const step = { ArrowLeft: -7, ArrowRight: 7, ArrowUp: -1, ArrowDown: 1 }[key];
+  if (!step) return null;
+  const d = parseDay(day);
+  if (!d) return days[days.length - 1];
+  const to = dayKey(addDays(d, step));
+  return days.includes(to) ? to : day;
+}
+/** 日历的 HTML：上面一行月份，左边周一 / 三 / 五，格子是按钮（点开那一天的明细）。selected：选中的日子；
+ * focus：能 Tab 到的那一格（见 calTabDay），默认是选中的那天或今天 */
+export function calendarHTML(model, selected = '', focus = '') {
+  const n = model.cols.length, tab = calTabDay(model, focus, selected);
   const months = model.months.map(m => `<span style="grid-column:${m.col + 1}">${esc(m.label)}</span>`).join('');
   const cells = model.cols.map(col => col.map(c => c.future
     ? '<span class="cell future" aria-hidden="true"></span>'
-    : `<button class="cell l${c.level}${c.today ? ' today' : ''}${c.day === selected ? ' sel' : ''}" data-day="${c.day}" title="${esc(cellTip(c))}" aria-label="${esc(cellTip(c))}"${c.day === selected ? ' aria-pressed="true"' : ''}></button>`).join('')).join('');
+    : `<button class="cell l${c.level}${c.today ? ' today' : ''}${c.day === selected ? ' sel' : ''}" data-day="${c.day}" tabindex="${c.day === tab ? 0 : -1}" title="${esc(cellTip(c))}" aria-label="${esc(cellTip(c))}"${c.day === selected ? ' aria-pressed="true"' : ''}></button>`).join('')).join('');
   return `<div class="cal" style="--weeks:${n}">
     <div class="cal-months" aria-hidden="true">${months}</div>
     <div class="cal-days" aria-hidden="true"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span></span></div>
-    <div class="cal-grid">${cells}</div>
+    <div class="cal-grid" role="group" aria-label="练琴日历：方向键换日子，回车看那一天">${cells}</div>
   </div>`;
 }
 
