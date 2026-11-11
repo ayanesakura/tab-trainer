@@ -996,3 +996,26 @@ def test_ai_actions_with_key(server, browser):
     assert "整首重新识别" in b.js("document.querySelector('.dlg-msg .dlg-t').textContent")
     b.js("document.querySelector('.dlg-msg [data-cancel]').click(); true")
     assert not b.errors, b.errors
+
+
+def test_filters_survive_tab_switch_and_reload(server, browser):
+    # 切过顶栏标签（新的浏览记录）之后，标签筛选还要记在浏览记录里：刷新还在原来的筛选
+    img = server["image"]
+    _put_json(server, f"/api/songs/{img}/tags", {"tags": ["e2e-route"]})
+    try:
+        b = browser
+        b.open(server["base"] + "/#library")
+        b.wait_for("!!document.querySelector('#tagFilter [data-tag=\"e2e-route\"]')")
+        b.js("document.querySelector('#tagFilter [data-tag=\"e2e-route\"]').click(); true")
+        b.js("document.querySelector('#nav [data-v=\"study\"]').click(); true")
+        b.wait_for("!document.getElementById('view-study').hidden")
+        b.js("document.querySelector('#nav [data-v=\"library\"]').click(); true")
+        b.wait_for("!document.getElementById('view-library').hidden")
+        assert b.js("history.length") >= 3
+        b.js("location.reload(); true")
+        b.wait_for("!!document.querySelector('#tagFilter [aria-pressed=\"true\"]')")
+        assert b.js("document.querySelector('#tagFilter [aria-pressed=\"true\"]').dataset.tag") == "e2e-route"
+        assert b.js("[...document.querySelectorAll('.song-row')].map(r => r.dataset.id)") == [img]
+        assert not b.errors, b.errors
+    finally:
+        _put_json(server, f"/api/songs/{img}/tags", {"tags": []})

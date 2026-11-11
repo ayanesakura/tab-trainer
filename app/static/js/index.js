@@ -22,6 +22,9 @@ function route() {
   VIEWS.forEach(x => { $('view-' + x).hidden = x !== v; });
   if (v !== 'settings') { try { localStorage.setItem(HOME_KEY, v); } catch { /* 记不下就算了 */ } }
   setStudyVisible(v === 'study');
+  // 切顶栏标签会新建一条浏览记录（history.state 是空的）：把曲库的页码、标签、归档筛选也记进去，
+  // 不然从练习页后退（没用上往返缓存）或刷新时回到第 1 页
+  remember();
 }
 addEventListener('hashchange', route);
 
