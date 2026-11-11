@@ -333,14 +333,14 @@ def test_valid_id_rejects_trailing_newline():
 # ---------------------------------------------------------------------------
 # 按曲子的锁、读缓存
 # ---------------------------------------------------------------------------
-def _in_thread(fn):
+def _in_thread(fn, timeout=5):
     import threading
 
     out = {}
     t = threading.Thread(target=lambda: out.update(r=fn()), daemon=True)
     t.start()
-    t.join(timeout=5)
-    return (not t.is_alive()), out.get("r")
+    t.join(timeout=timeout)
+    return (not t.is_alive()), out.get("r"), t
 
 
 def test_locks_are_per_song(data_dir):
@@ -351,8 +351,12 @@ def test_locks_are_per_song(data_dir):
         assert _in_thread(lambda: store.update_study(lambda d: d.update(x=1)))[0]
         assert _in_thread(lambda: store.update_config(lambda c: c.update(model="m")))[0]
         assert _in_thread(lambda: views.list_library())[0]  # 曲库列表不被一首曲子的写入挡住
-        done, _ = _in_thread(lambda: store.patch(a, title="甲2"))
+        done, _, waiting = _in_thread(lambda: store.patch(a, title="甲2"), timeout=0.5)
         assert not done  # 同一首：等锁
+    # 放开锁后等它写完：不然它在测试结束、临时数据目录撤掉之后才写，线程里抛 NotFound（pytest 报未处理的线程异常）
+    waiting.join(timeout=5)
+    assert not waiting.is_alive()
+    assert store.load(a)["title"] == "甲2"
     assert store.load(b)["title"] == "乙2"
 
 
