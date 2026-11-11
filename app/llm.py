@@ -494,29 +494,20 @@ class Claude(LLM):
             chunks.close()
 
     def _text_stream(self, kwargs: dict, fallbacks: bool):
-        """_stream 的纯文字版：回复到一半的临时错误同样再试两次，重试前给出 None（已经给出的片段作废）。
+        """_stream 的纯文字版（同一个重试循环 _retrying）：重试前给出 None（已经给出的片段作废）。
         生成器，返回值是最后的完整消息。"""
-        for attempt in range(STREAM_RETRIES + 1):
-            try:
-                return (yield from self._text_once(kwargs, fallbacks))
-            except (anthropic.APIStatusError, anthropic.APIConnectionError, _http.TransportError) as e:
-                if attempt == STREAM_RETRIES or not _dropped_mid_stream(e):
-                    raise
-                log.warning(
-                    "request_id=%s transient error mid-stream, retry %d: %s", request_id_of(e), attempt + 1, e
-                )
-                time.sleep(STREAM_RETRY_WAIT * (attempt + 1))
-                yield None
-        raise AssertionError("unreachable")
+        return self._retrying(lambda: self._text_once(kwargs, fallbacks))
+
+    def _open(self, kwargs: dict, fallbacks: bool):
+        """开始一次流式请求（带不带服务端兜底），返回 SDK 的 stream manager。"""
+        if fallbacks:
+            return self.client.beta.messages.stream(**kwargs, betas=[FALLBACK_BETA], fallbacks="default")
+        return self.client.messages.stream(**kwargs)
 
     def _text_once(self, kwargs: dict, fallbacks: bool):
         """一次流式请求，边收边给出文字片段，返回最后的完整消息。用量在这里记：正常结束按最后的消息；
         中途出错、调用方不再往下读（生成器被关掉）时按已经收到的部分——服务端照样算钱。"""
-        if fallbacks:
-            manager = self.client.beta.messages.stream(**kwargs, betas=[FALLBACK_BETA], fallbacks="default")
-        else:
-            manager = self.client.messages.stream(**kwargs)
-        with manager as s:
+        with self._open(kwargs, fallbacks) as s:
             msg = None
             try:
                 for ev in s:
@@ -544,13 +535,16 @@ class Claude(LLM):
         """这个线程最近一次成功请求的 ID。"""
         return getattr(self._local, "request_id", "none")
 
-    def _stream(self, kwargs: dict, fallbacks: bool | None = None):
-        """流式请求。SDK 自带的重试只管建立连接；回复传到一半出错（网关断线、服务过载，流里收到的 error 事件，
-        状态码是 200）不会重试，整行识别就失败了。这类临时错误这里再试两次（建立连接时的错误 SDK 已经重试过，
-        不再重来，见 _dropped_mid_stream）。"""
+    @staticmethod
+    def _retrying(once):
+        """流式请求的重试循环（JSON 请求的 _stream 和问答的 _text_stream 共用）。once()：发一次请求的生成器，
+        给出文字片段、返回最后的完整消息。SDK 自带的重试只管建立连接；回复传到一半出错（网关断线、服务过载，
+        流里收到的 error 事件，状态码是 200）不会重试，整行识别就失败了。这类临时错误这里再试两次，重试前给出 None
+        （已经给出的片段作废）；建立连接时的错误 SDK 已经重试过，不再重来（见 _dropped_mid_stream）。
+        生成器，返回值是最后的完整消息。"""
         for attempt in range(STREAM_RETRIES + 1):
             try:
-                return self._stream_once(kwargs, fallbacks)
+                return (yield from once())
             except (anthropic.APIStatusError, anthropic.APIConnectionError, _http.TransportError) as e:
                 if attempt == STREAM_RETRIES or not _dropped_mid_stream(e):
                     raise
@@ -558,15 +552,26 @@ class Claude(LLM):
                     "request_id=%s transient error mid-stream, retry %d: %s", request_id_of(e), attempt + 1, e
                 )
                 time.sleep(STREAM_RETRY_WAIT * (attempt + 1))
+                yield None
         raise AssertionError("unreachable")
+
+    def _stream(self, kwargs: dict, fallbacks: bool | None = None):
+        """JSON 请求的流式请求（重试见 _retrying），返回最后的完整消息（用量由 _call 记）。"""
+
+        def once():  # 生成器，好和问答共用重试循环；JSON 请求不往外给片段
+            return self._stream_once(kwargs, fallbacks)
+            yield
+
+        chunks = self._retrying(once)
+        while True:
+            try:
+                next(chunks)  # 只有重试前的 None
+            except StopIteration as done:
+                return done.value
 
     def _stream_once(self, kwargs: dict, fallbacks: bool | None = None):
         """一次流式请求，返回最后的完整消息（用量由 _call 记）。中途出错时按已经收到的部分记上用量再抛出。"""
-        if self.use_fallbacks if fallbacks is None else fallbacks:
-            manager = self.client.beta.messages.stream(**kwargs, betas=[FALLBACK_BETA], fallbacks="default")
-        else:
-            manager = self.client.messages.stream(**kwargs)
-        with manager as s:
+        with self._open(kwargs, self.use_fallbacks if fallbacks is None else fallbacks) as s:
             try:
                 return s.get_final_message()
             except BaseException:

@@ -541,3 +541,45 @@ def test_verify_retries_at_the_normal_effort_only_when_truncated(monkeypatch):
     with pytest.raises(Refused):
         c.verify_bar(img, meta, (10, 190), [])
     assert efforts == [VERIFY_EFFORT]
+
+
+@pytest.mark.parametrize("use", ["json", "text"])
+def test_json_and_text_calls_share_retry_and_fallback_handling(monkeypatch, use):
+    """JSON 请求（识别、精修）和流式问答走同一套流式请求：网关不认识 fallbacks 参数时关掉兜底重来一次；
+    回复到一半断线时重试（问答给出 None，前面的作废）；服务端换兜底模型时只要兜底模型的回答（问答同样给出 None）。
+    每一次收到的部分都记用量。"""
+    from app import llm
+    from app.llm import _http, join_text
+
+    monkeypatch.setattr(llm, "STREAM_RETRY_WAIT", 0)
+    first, answer = ('{"half"', '{"ok": 3}') if use == "json" else ("前半", "完整的回答")
+
+    class Broken(_http.SyncByteStream):
+        def __iter__(self):
+            yield _reply([first]).split(b"event: content_block_stop")[0]
+            raise _http.RemoteProtocolError("peer closed connection")
+
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        if len(calls) == 1:
+            err = {
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "unknown field fallbacks"},
+            }
+            return _http.Response(400, json=err)
+        if len(calls) == 2:
+            return _sse_response(Broken())
+        return _sse_response(_reply([first, answer], fallback_at=1))
+
+    c = Claude(LLMConfig(api_key="sk-test"))
+    _mock_client(c, handler)
+    if use == "json":
+        assert c._call([], {}) == {"ok": 3}
+    else:
+        got = list(c.coach_stream(META, BAR, [], "怎么弹", []))
+        assert got == [first, None, first, None, answer] and join_text(got) == answer
+    assert len(calls) == 3 and not c.use_fallbacks
+    assert "fallback" not in calls[1].headers.get("anthropic-beta", "")
+    assert c.usage["input_tokens"] == 10 and c.usage["output_tokens"] == 1 + 7
