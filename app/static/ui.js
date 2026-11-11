@@ -194,7 +194,7 @@ document.addEventListener('pointerdown', e => {
 // ---------------------------------------------------------------------
 // 弹出菜单：items = [{label, icon, danger, off, onClick} | 'sep' | false]。再点一次同一个按钮就收起。
 // off：这一项暂时用不了的原因（比如没有 API key）：灰掉、悬停提示写原因，但还能点（onClick 自己说明怎么办）。
-// ↑ ↓ 在菜单项之间移动，Esc / 点外面 / 滚动关闭。
+// ↑ ↓ 在菜单项之间移动，Esc / 点外面 / 滚动关闭；Tab / Shift+Tab 关掉菜单，焦点从触发按钮往后 / 往前走（常见的菜单按钮做法）。
 // ---------------------------------------------------------------------
 let openMenu = null; // { layer, anchor }
 export function closeMenu() { if (openMenu) openMenu.layer.close('api'); }
@@ -215,6 +215,8 @@ export function menu(anchor, items) {
     m.appendChild(b);
   }
   m.addEventListener('keydown', e => {
+    // 不拦 Tab：先关菜单、焦点放回触发按钮，浏览器再按 Tab 从那里走到下一个（上一个）控件
+    if (e.key === 'Tab') { closeMenu(); if (anchor.isConnected) anchor.focus({ preventScroll: true }); return; }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
     const bs = [...m.querySelectorAll('button')], i = bs.indexOf(document.activeElement);

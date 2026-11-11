@@ -152,7 +152,6 @@ const selected = new Set();
 function setSelecting(on) {
   selecting = on; selected.clear();
   $('selectBar').hidden = !on;
-  $('selectBtn').hidden = on;
   renderSongs();
   (on ? $('selectAll') : $('selectBtn')).focus();
 }
@@ -303,6 +302,7 @@ function renderSongs() {
   const songs = visibleSongs(), box = $('songs');
   if (selecting) updateSelectBar();
   $('libTools').hidden = !lastSongs.length;
+  $('selectBtn').hidden = selecting || !lastSongs.length; // 空曲库没有可选的
   box.removeAttribute('aria-busy');
   // 删掉了最后一页上的曲子、筛选后变少了：停在还有曲子的最后一页
   const pg = paginate(songs, lib.page);

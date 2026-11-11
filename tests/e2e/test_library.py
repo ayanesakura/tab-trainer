@@ -1019,3 +1019,36 @@ def test_filters_survive_tab_switch_and_reload(server, browser):
         assert not b.errors, b.errors
     finally:
         _put_json(server, f"/api/songs/{img}/tags", {"tags": []})
+
+
+def test_menu_tab_select_all_label_and_empty_library(server, browser):
+    b = browser
+    b.open(server["base"] + "/")
+    more = "document.querySelector('.song-row [data-more]')"  # 第一行：后面还有别的控件
+    b.wait_for("document.querySelectorAll('.song-row').length > 1")
+    # 菜单打开时按 Tab：菜单关掉，焦点从“更多”按钮往后走（不留在菜单里、不掉到 body）
+    b.js(f"{more}.focus(); {more}.click(); true")
+    assert b.js("document.activeElement.closest('.menu') !== null")
+    b.key("Tab", vk=9)
+    assert b.js("!document.querySelector('.menu')")
+    assert b.js("UI.hasLayer()") is False
+    assert b.js(f"{more}.getAttribute('aria-expanded')") == "false"
+    assert b.js("document.activeElement !== document.body")
+    assert b.js(f"!!({more}.compareDocumentPosition(document.activeElement) & Node.DOCUMENT_POSITION_FOLLOWING)")
+    # Shift+Tab 同样关掉，焦点往前走
+    b.js(f"{more}.focus(); {more}.click(); true")
+    b.key("Tab", vk=9, modifiers=8)
+    assert b.js("!document.querySelector('.menu')")
+    assert b.js(f"!!({more}.compareDocumentPosition(document.activeElement) & Node.DOCUMENT_POSITION_PRECEDING)")
+    # “全选”复选框读出来是“全选当前列表”，不是“已选 N 首”
+    b.js("document.getElementById('selectBtn').click(); true")
+    assert b.js("document.getElementById('selectAll').getAttribute('aria-label')") == "全选当前列表"
+    assert b.js("document.getElementById('selectAll').getAttribute('aria-describedby')") == "selectCount"
+    b.js("document.getElementById('selectCancel').click(); true")
+    assert b.js("document.getElementById('selectBtn').hidden") is False
+    # 空曲库：没有“选择”
+    _patch_songs_response(b, "songs => songs.splice(0)")
+    b.js("tt.reload().then(() => true)")
+    b.wait_for("!!document.querySelector('#songs .empty-state')")
+    assert b.js("document.getElementById('selectBtn').hidden") is True
+    assert not b.errors, b.errors
