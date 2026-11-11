@@ -147,6 +147,64 @@ def test_busy_and_score_songs_are_refused(data_dir):
         pages.arrange_pages(gp, [], [])
 
 
+def test_delete_takes_the_job_slot(data_dir, monkeypatch):
+    """删除也登记任务：删的同时补页（或别的任务）登记不上，不会和删除交错；有任务在跑时删除返回 423。"""
+    sid = songs.create_song([("a.png", score_png())])
+    recognize.run_parse(sid)
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    jobs.jobs.claim(sid)
+    try:
+        assert c.delete(f"/api/songs/{sid}").status_code == 423
+    finally:
+        jobs.jobs.release(sid)
+    real, seen = store.delete, []
+
+    def delete(song_id):
+        with pytest.raises(errors.Busy):
+            pages.arrange_pages(song_id, ["p1.png", "new:0"], [("c.png", score_png())])
+        seen.append(True)
+        real(song_id)
+
+    monkeypatch.setattr(store, "delete", delete)
+    assert c.delete(f"/api/songs/{sid}").status_code == 200 and seen
+    assert not jobs.jobs.running(sid) and not store.exists(sid)
+
+
+def test_song_deleted_while_pages_are_added_leaves_no_ghost_folder(data_dir, monkeypatch):
+    """补页存新页之前曲子被删了：不能把曲子目录重新建出来（只剩 pages/p2.png 的“幽灵”曲子，同 id 的曲子包会被当成重复）。"""
+    sid = songs.create_song([("a.png", score_png())])
+    recognize.run_parse(sid)
+    real = songs.save_pages
+
+    def save_pages(*a, **kw):
+        store.delete(sid)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(songs, "save_pages", save_pages)
+    with pytest.raises(errors.NotFound):
+        pages.arrange_pages(sid, ["p1.png", "new:0"], [("c.png", score_png())])
+    assert not store.song_dir(sid).exists() and sid not in store.song_ids() and not store.exists(sid)
+    assert not jobs.jobs.running(sid)
+
+
+def test_added_pages_are_removed_when_the_song_cannot_be_written(data_dir, monkeypatch):
+    """新页存好了、写 song.json 失败：新页文件删掉（曲子不引用它们），原来的页不动。"""
+    from app import staleness
+
+    sid = songs.create_song([("a.png", score_png())])
+    recognize.run_parse(sid)
+    before = store.load(sid)
+
+    def boom(_s):
+        raise RuntimeError("写不进去")
+
+    monkeypatch.setattr(staleness, "invalidate_plan", boom)
+    with pytest.raises(RuntimeError):
+        pages.arrange_pages(sid, ["p1.png", "new:0"], [("c.png", score_png())])
+    assert sorted(p.name for p in (store.song_dir(sid) / "pages").iterdir()) == ["p1.png"]
+    assert store.load(sid)["pages"] == before["pages"] and not jobs.jobs.running(sid)
+
+
 def test_tags_and_cost_in_library(data_dir):
     sid = songs.create_song([("a.png", score_png())])
     c = TestClient(main.app, base_url="http://127.0.0.1:8765")

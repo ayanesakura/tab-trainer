@@ -132,10 +132,16 @@ def cancel(sid: str) -> None:
 
 
 def delete(sid: str) -> None:
-    """删除曲子（数据坏了的也能删）。有任务在跑时不删。"""
-    if jobs.running(sid):
+    """删除曲子（数据坏了的也能删）。有任务在跑时不删（423）。删除期间占着任务登记：
+    “查有没有任务”和“删”之间不会插进一个补页之类的任务（它会往删掉的目录里写）。"""
+    if not store.valid_id(sid):
+        raise NotFound()  # 不为乱七八糟的 id 登记任务
+    if jobs.claim(sid) is None:
         raise Busy("正在识别中，完成后再删除")
-    store.delete(sid)
+    try:
+        store.delete(sid)
+    finally:
+        jobs.release(sid)
 
 
 # ---------------------------------------------------------------------------

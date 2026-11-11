@@ -17,7 +17,7 @@ from PIL import Image, ImageOps
 
 from app import state, store
 from app.config import settings
-from app.errors import STALE_REV, AppError, BarNotFound, Busy, Conflict, Invalid
+from app.errors import STALE_REV, AppError, BarNotFound, Busy, Conflict, Invalid, NotFound
 from app.model import SCORE_EXTS, is_score, new_song, notes_key, page_file_name, page_number, touch_bar
 from app.music import (
     GBK_EXT,
@@ -216,8 +216,11 @@ def _page_images(uploads: list[tuple[str, bytes]], existing: int = 0):
 
 def save_pages(uploads: list[tuple[str, bytes]], pages_dir, existing: list[dict] | None = None) -> list[dict]:
     """把上传的图片 / PDF 存成 pages/pN.png（model.page_file_name）。补页时 existing 是已有的页：编号接着往后排，
-    页数上限算上它们。"""
-    pages_dir.mkdir(parents=True, exist_ok=True)
+    页数上限算上它们；曲子目录已经不在（删掉了）抛 NotFound，不把它重新建出来。"""
+    try:
+        pages_dir.mkdir(parents=existing is None, exist_ok=True)
+    except FileNotFoundError:
+        raise NotFound() from None
     taken = {pg["file"] for pg in existing or []}
     k = max((n for n in map(page_number, taken) if n is not None), default=0)
     pages = []

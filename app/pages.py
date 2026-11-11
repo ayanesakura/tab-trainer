@@ -27,35 +27,6 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
             songs.check_upload_sizes(uploads)
             config.check_llm_ready()  # 新页要识别：没配 key 就先别存
 
-        # 新页先存盘、做版面检测（都在改 song.json 之前，失败了曲子不受影响）
-        pages_dir = store.song_dir(sid) / "pages"
-        kept = [pg for pg in song["pages"] if pg["file"] in order]
-        added: dict[int, list[dict]] = {}
-        try:
-            for k in sorted(new_ix):
-                so_far = kept + [pg for pgs in added.values() for pg in pgs]
-                added[k] = songs.save_pages([uploads[k]], pages_dir, so_far)
-                if not added[k]:
-                    raise Invalid(f"“{uploads[k][0]}”里没有可用的页面")
-            new_pages, from_old = [], []  # 新页序；每页原来是第几页（新上传的是 None）
-            for x in order:
-                if x.startswith("new:"):
-                    new_pages += added[int(x[4:])]
-                    from_old += [None] * len(added[int(x[4:])])
-                else:
-                    new_pages.append(song["pages"][files.index(x)])
-                    from_old.append(files.index(x))
-            planned = {
-                npi: recognize.plan_page_systems(sid, pg, npi)
-                for npi, pg in enumerate(new_pages)
-                if from_old[npi] is None
-            }
-        except Exception:
-            for pgs in added.values():
-                for pg in pgs:
-                    store.page_path(sid, pg["file"]).unlink(missing_ok=True)
-            raise
-
         pending: list[int] = []
 
         def apply(s):
@@ -101,7 +72,37 @@ def arrange_pages(sid: str, order: list[str], uploads: list[tuple[str, bytes]]) 
                     progress={"stage": "识别新加的页", "done": 0, "total": len(pending)},
                 )
 
-        song = store.update(sid, apply)
+        # 新页先存盘、做版面检测（都在改 song.json 之前，失败了曲子不受影响）。
+        # 到写进 song.json 为止（包括写的时候）出错都删掉新页：曲子没有引用它们
+        pages_dir = store.song_dir(sid) / "pages"
+        kept = [pg for pg in song["pages"] if pg["file"] in order]
+        added: dict[int, list[dict]] = {}
+        try:
+            for k in sorted(new_ix):
+                so_far = kept + [pg for pgs in added.values() for pg in pgs]
+                added[k] = songs.save_pages([uploads[k]], pages_dir, so_far)
+                if not added[k]:
+                    raise Invalid(f"“{uploads[k][0]}”里没有可用的页面")
+            new_pages, from_old = [], []  # 新页序；每页原来是第几页（新上传的是 None）
+            for x in order:
+                if x.startswith("new:"):
+                    new_pages += added[int(x[4:])]
+                    from_old += [None] * len(added[int(x[4:])])
+                else:
+                    new_pages.append(song["pages"][files.index(x)])
+                    from_old.append(files.index(x))
+            planned = {
+                npi: recognize.plan_page_systems(sid, pg, npi)
+                for npi, pg in enumerate(new_pages)
+                if from_old[npi] is None
+            }
+            song = store.update(sid, apply)
+        except Exception:
+            for pgs in added.values():
+                for pg in pgs:
+                    store.page_path(sid, pg["file"]).unlink(missing_ok=True)
+            raise
+
         for f in set(files) - set(order):  # 删掉的页：曲子已经不再引用它们
             store.page_path(sid, f).unlink(missing_ok=True)
         if pending and song["bars"]:
