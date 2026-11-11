@@ -339,7 +339,7 @@ export function setLoop(a, b, restart = true, show = true) {
   const range = applyLoopRange();
   if (show) set('ui.bar', na);
   if (!range) cursorPending = true; // 谱子还没加载好：加载好以后（midiLoaded）再把光标放到段首
-  else if (restart && playing()) dispatch({ type: 'restart', tick: range.start }); // 等播放器真的停下再从段首开始（见 play-machine.js）
+  else if (restart && playing()) { restarted(); dispatch({ type: 'restart', tick: range.start }); } // 等播放器真的停下再从段首开始（见 play-machine.js）
   else if (!playing()) dispatch({ type: 'seek', tick: range.start });
   if (get('rhythm.on')) invoke('drill.loopChanged'); // 敲节奏：换成新的段（敲着的话从头再来）
 }
@@ -349,8 +349,12 @@ export function toLoopStart() {
   set('ui.bar', get('play.a'));
   if (get('rhythm.on')) { invoke('drill.loopChanged'); return; }
   const range = applyLoopRange();
-  if (range) dispatch({ type: playing() ? 'restart' : 'seek', tick: range.start });
+  if (!range) return;
+  if (playing()) restarted();
+  dispatch({ type: playing() ? 'restart' : 'seek', tick: range.start });
 }
+// 播放中从段首重新开始（Home、重选正在循环的这一段）：play.a / b 没变，练习记录（practice-log.js）靠这个计数知道这一遍断了
+const restarted = () => set('play.restarts', (get('play.restarts') || 0) + 1);
 /** 上一段 / 下一段（按控制条上选段的方式：原谱的行，或 AI 分的段落） */
 export function stepSection(dir) {
   const v = get('view'), { a, b } = get('play');

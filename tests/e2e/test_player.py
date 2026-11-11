@@ -423,6 +423,47 @@ def test_clean_pass_marker(trainer):
     assert not b.errors, b.errors
 
 
+_CAPTURE_POSTS = """(() => { window.__posts = []; const f = window.fetch;
+  window.fetch = (u, o) => { if (String(u).endsWith('/practice')) __posts.push(JSON.parse(o.body)); return f(u, o); };
+  document.activeElement.blur(); return true; })()"""
+
+
+def test_home_after_marking_clean_starts_an_unmarked_pass(trainer):
+    """标了“这遍干净”以后按 Home 从段首重新开始：标记作废，断掉的那一遍的时间不算进重新开始的这一遍
+    （以前标记带到了下一遍，第一条完整一遍的记录是 6 秒、clean: true）。"""
+    b = trainer()
+    b.js(_CAPTURE_POSTS)
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 0); tt.setTempo(60); tt.play(); true")
+    b.wait_for("tt.state.phase === 'playing'")
+    time.sleep(1)
+    b.key("Enter", vk=13)
+    assert b.js("tt.state.clean") is True
+    time.sleep(0.5)
+    b.key("Home", vk=36)
+    b.wait_for("tt.state.phase === 'playing'")
+    assert b.js("tt.state.clean") is False
+    b.wait_for("__posts.some(p => p.loops === 1)", timeout=10)
+    first = b.js("__posts.find(p => p.loops === 1)")
+    b.js("tt.stop(); true")
+    assert first["clean"] is False and first["seconds"] <= 5, first
+    assert not b.errors, b.errors
+
+
+def test_enter_just_after_a_pass_marks_that_pass(trainer):
+    """开着预备拍：一遍弹完后（预备拍里）才按 Enter，标的是刚弹完的那一遍，不是还没弹的下一遍；也不会两遍都算。"""
+    b = trainer()
+    b.js(_CAPTURE_POSTS)
+    b.js("tt.set('play.countIn', true); tt.setLoop(0, 0); tt.setTempo(120); tt.play(); true")
+    b.wait_for("tt.state.loops === 1", timeout=15)
+    b.key("Enter", vk=13)
+    assert b.js("tt.state.clean") is False  # 控制条上的按钮管正在弹的这一遍：不亮
+    b.wait_for("__posts.filter(p => p.loops === 1).length >= 2", timeout=15)
+    passes = b.js("__posts.filter(p => p.loops === 1).map(p => p.clean)")
+    b.js("tt.stop(); true")
+    assert passes[:2] == [True, False], passes
+    assert not b.errors, b.errors
+
+
 def test_tempo_shows_the_original_tempo(server, trainer):
     """GP 曲子知道原速：BPM 后面是百分比（悬停看原速），滑块上有原速的刻度；图片曲子没标速度就只写 BPM。"""
     b = trainer()
