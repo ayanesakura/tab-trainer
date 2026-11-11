@@ -364,11 +364,17 @@ export function stepSection(dir) {
   if (r.msg) UI.toast(r.msg, 'info'); else { setLoop(r.a, r.b); revealLoop(); }
 }
 
+// 播放中状态栏的“第几小节 · 第几拍”。预备拍里 alphaTab 一开始就会报起始那一拍：那时状态栏归倒数（countIn），
+// 不写，记下这一拍，数完（phase 变成 playing）再补上——不然倒数的第一拍会被“第 x 小节 · 第 1 拍”盖掉
+let lastBeat = null;
+function beatStatus(beat) {
+  setStatus(`第 ${beat.voice.bar.index + 1} 小节 · 第 ${beatNumber(beat.playbackStart, beat.voice.bar.masterBar.timeSignatureDenominator)} 拍`, `第 ${get('play.loops') + 1} 遍`);
+}
 function onBeat(beat, clicked) {
   const v = get('view');
   if (!v) return;
   const bi = beat.voice.bar.index, evs = v.bars[bi];
-  if (!clicked) setStatus(`第 ${bi + 1} 小节 · 第 ${beatNumber(beat.playbackStart, beat.voice.bar.masterBar.timeSignatureDenominator)} 拍`, `第 ${get('play.loops') + 1} 遍`);
+  if (!clicked) { lastBeat = beat; if (M.phase !== 'countIn') beatStatus(beat); }
   if (bi < v.bars.length && (clicked || !holds.some(f => f()))) set('ui.bar', bi);
   if (!evs || !evs.length) return;
   const cur = evs[eventIndexAt(v.beatMap[bi] || [0], beat.playbackStart)];
@@ -450,7 +456,7 @@ export function refreshScoreTheme() {
 }
 
 // ---------------------------------------------------------------------
-// 预备拍：状态栏倒数“预备 3…2…1”，每一拍谱面上的光标和底部指板轻轻闪一下（第一拍重一点）。
+// 预备拍：倒数只在状态栏里——第一行“预备 3”，第二行一排拍点逐个点亮（第一拍大一点）和速度。谱面、指板不闪。
 // 按 play.countInStart（状态机进入预备拍的时刻）、速度和开始那一小节的拍号算（alphaTab 数一小节：分子个拍，每拍一个分母音符）
 // ---------------------------------------------------------------------
 let ciRaf = 0;
@@ -458,12 +464,20 @@ function meterAt(bi) {
   const s = get('song'), b = s && s.bars[bi];
   return (b && b.time_signature) || (s && s.meta && s.meta.time_signature) || [4, 4];
 }
-function pulse(el, strong) {
-  if (!el || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  el.classList.remove('ci-beat', 'ci-strong');
-  void el.offsetWidth; // 重新开始动画
-  el.classList.add('ci-beat');
-  if (strong) el.classList.add('ci-strong');
+/** 状态栏显示预备拍倒数：一小节 total 拍，正在第 k 拍（从 0 数）。敲节奏的预备拍也用它（rhythm-drill.js） */
+export function setCountIn(k, total, bpm) {
+  const left = total - k;
+  setStatus(`预备 ${left}`, `${bpm} BPM`);
+  const dots = document.createElement('span');
+  dots.className = 'ci-dots';
+  dots.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < total; i++) {
+    const d = document.createElement('i');
+    if (i === 0) d.className = 'strong';
+    if (i <= k) d.classList.add('on');
+    dots.append(d);
+  }
+  $('statusL2').prepend(dots);
 }
 function countIn() {
   cancelAnimationFrame(ciRaf);
@@ -471,14 +485,10 @@ function countIn() {
   const [num, den] = meterAt(shown >= a && shown <= b ? shown : a);
   let last = -1;
   const frame = () => {
-    if (get('play.phase') !== 'countIn') { ['score', 'fbDock'].forEach(id => $(id).classList.remove('ci-beat', 'ci-strong')); return; }
+    if (get('play.phase') !== 'countIn') return;
     const beat = 60 / (get('play.bpm') || 60) * 4 / (den || 4) * 1000;
-    const k = Math.max(0, Math.floor((performance.now() - (get('play.countInStart') || performance.now())) / beat));
-    if (k !== last && k < num) {
-      last = k;
-      setStatus(`预备 ${num - k}…`, `${get('play.bpm')} BPM · 第 ${get('play.loops') + 1} 遍`);
-      pulse($('score'), k === 0); pulse($('fbDock'), k === 0);
-    }
+    const k = Math.min(num - 1, Math.max(0, Math.floor((performance.now() - (get('play.countInStart') || performance.now())) / beat)));
+    if (k !== last) { last = k; setCountIn(k, num, get('play.bpm')); }
     ciRaf = requestAnimationFrame(frame);
   };
   frame();
@@ -500,7 +510,10 @@ export function initPlayer() {
   on('play.timbre', switchTimbre);
   on('play.bpm', bpm => { if (api) api.playbackSpeed = bpm / baseTempo; });
   on('play.playing', (now, was) => { if (!now && was) setStatus('已暂停', IDLE_HINT); });
-  on('play.phase', ph => { if (ph === 'countIn') countIn(); });
+  on('play.phase', (ph, was) => {
+    if (ph === 'countIn') { lastBeat = null; countIn(); }
+    else if (ph === 'playing' && was === 'countIn' && lastBeat) beatStatus(lastBeat); // 数完了：补上现在的小节和拍
+  });
   on('play.ready', r => { if (!r) return; applyAudio(); if (!playing() && !get('rhythm.on')) setStatus('已停止', IDLE_HINT); });
   // 离开练习页（调弦、练习建议…）时停下：播放键和快捷键都只在练习页，切走就停不了了；调弦的麦克风也会听到它。
   // 预备拍、节拍器是同一个播放器，一起停；谱子正在重新加载、本来要接着放的也不放了（状态机的 stop 都管）

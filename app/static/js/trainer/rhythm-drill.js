@@ -16,7 +16,7 @@
 import * as core from '../rhythm.js';
 import { get, set, on } from './store.js';
 import { $, UI, esc, setButton, svgEl } from './dom.js';
-import { stop as stopPlayback, setLoop, revealLoop, setStatus, IDLE_HINT } from './player.js';
+import { stop as stopPlayback, setLoop, revealLoop, setStatus, setCountIn, IDLE_HINT } from './player.js';
 import { provide } from './hooks.js';
 import { addShortcuts } from './keys.js';
 import { ac, initAudio, playEvent, stopAllVoices, setGuitarVolume } from './audio.js';
@@ -395,12 +395,15 @@ function frame() {
     if (!m) clearMarks();
   }
   // 状态
-  let st;
-  if (run.calib) st = ['延迟校准', L.kind === 'pre' ? '预备…' : '跟着咔哒声敲 8 下'];
-  else if (L.kind === 'pre') st = [`预备 ${Math.max(1, Math.ceil((L.end - hn) / L.spq - 1e-6))}…`, `${L.bpm} BPM`]; // 和播放的预备拍一样的写法
-  else st = [`第 ${L.n} 遍 · ${L.bpm} BPM`, !L.graded ? '这一遍先听，下一遍自己敲' : L.demo ? '跟着示范敲' : '不放示范，自己敲'];
-  const key = st.join('|');
-  if (key !== run.status) { run.status = key; setStatus(st[0], st[1]); }
+  if (!run.calib && L.kind === 'pre') { // 和播放的预备拍一样：“预备 3” + 拍点（数到第几拍按排好的咔哒算，6/8 也是一拍一个点）
+    const k = Math.max(0, L.items.filter(it => it.t <= hn).length - 1), key = `pre|${k}|${L.items.length}|${L.bpm}`;
+    if (key !== run.status) { run.status = key; setCountIn(k, L.items.length, L.bpm); }
+  } else {
+    const st = run.calib ? ['延迟校准', L.kind === 'pre' ? '预备…' : '跟着咔哒声敲 8 下']
+      : [`第 ${L.n} 遍 · ${L.bpm} BPM`, !L.graded ? '这一遍先听，下一遍自己敲' : L.demo ? '跟着示范敲' : '不放示范，自己敲'];
+    const key = st.join('|');
+    if (key !== run.status) { run.status = key; setStatus(st[0], st[1]); }
+  }
   // 播放头
   const head = $('rhHead');
   if (!head) return;

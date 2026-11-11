@@ -65,6 +65,11 @@
 .transport:not(.playing) .status { width: auto; max-width: 140px; }
 .status .l1 { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status .l2 { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 预备拍倒数的拍点（player.js 的 setCountIn）：数到的拍点亮，第一拍（重拍）大一点 */
+.ci-dots { display: inline-flex; align-items: center; gap: 3px; margin-right: 6px; vertical-align: 1px; }
+.ci-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transition: background .08s; }
+.ci-dots i.strong { width: 9px; height: 9px; }
+.ci-dots i.on { background: var(--accent); }
 .grp { display: flex; align-items: center; gap: var(--sp-1); flex: none; }
 .bpm { color: var(--muted); font-size: var(--fs-1); min-width: 62px; white-space: nowrap; }
 .bpm b { color: var(--fg); font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; vertical-align: -1px; } /* 速度是控制条上最常看的数：字号大一档 */
@@ -132,13 +137,6 @@
 .refining-mark { position: absolute; pointer-events: none; border-radius: 4px; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent); animation: pulse 1.4s ease-in-out infinite; z-index: 2; }
 .refining-mark .spinner { position: absolute; top: 4px; right: 4px; width: 12px; height: 12px; }
 .at-cursor-bar { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-/* 预备拍：每一拍光标所在的小节和指板顶边闪一下（player.js 的 countIn），第一拍重一点 */
-@keyframes ci-bar { from { background: color-mix(in srgb, var(--accent) 30%, transparent); } }
-@keyframes ci-bar-strong { from { background: color-mix(in srgb, var(--accent) 48%, transparent); } }
-@keyframes ci-dock { from { box-shadow: inset 0 3px 0 color-mix(in srgb, var(--accent) 70%, transparent); } }
-#score.ci-beat .at-cursor-bar { animation: ci-bar .4s var(--ease); }
-#score.ci-strong .at-cursor-bar { animation-name: ci-bar-strong; }
-.fb-dock.ci-beat { animation: ci-dock .4s var(--ease); }
 .at-cursor-beat { background: var(--accent); width: 3px; }
 .at-selection div { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .at-highlight * { fill: var(--accent); stroke: var(--accent); }
