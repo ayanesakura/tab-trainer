@@ -281,3 +281,20 @@ def test_calendar_keyboard(server, browser):
     assert b.js("document.activeElement.dataset.day") == target
     b.js("document.getElementById('__before').remove(); document.getElementById('__after').remove(); true")
     assert not b.errors, b.errors
+
+
+def test_calendar_scrolled_to_today_when_opened_from_library(server):
+    # 窄于日历的窗口：先开曲库（练琴页隐藏、宽度为 0）再切到练琴，日历也要停在最近的几周，不是一年前
+    from tests.e2e.cdp import Browser
+
+    with Browser(width=800, height=900) as b:
+        b.open(server["base"] + "/#library")
+        b.wait_for("!!document.querySelector('.song-row') && !!document.querySelector('#cal .cell')")
+        assert b.js("innerWidth") == 800
+        b.js("location.hash = 'study'; true")
+        b.wait_for("!document.getElementById('view-study').hidden")
+        cal = "document.getElementById('cal')"
+        assert b.js(f"{cal}.scrollWidth > {cal}.clientWidth + 50")  # 日历确实比窗口宽
+        b.wait_for(f"{cal}.scrollLeft + {cal}.clientWidth >= {cal}.scrollWidth - 1", timeout=3)
+        assert b.js("(r => r.left >= 0 && r.right <= innerWidth)(document.querySelector('#cal .cell.today').getBoundingClientRect())")
+        assert not b.errors, b.errors

@@ -116,11 +116,19 @@ function renderCalendar() {
   $('calSum').title = all > 0 ? tip : '';
   setHTML($('calSum'), model.active || all > 0 ? esc([model.active && `近一年 ${model.active} 天`, `累计 ${sum.n} ${sum.unit}`].filter(Boolean).join(' · ')) : '');
   S.calModel = model;
-  const first = !$('cal')._html, box = $('cal'), had = box.contains(document.activeElement);
+  const box = $('cal'), had = box.contains(document.activeElement);
   setHTML(box, calendarHTML(model, S.day, S.focus));
-  if (first) box.scrollLeft = box.scrollWidth; // 窄屏只露出一部分时，先看到最近的几周
+  scrollCalOnce();
   // 格子是整个重画的：焦点原来在日历里（点了、用键盘走了），放回能 Tab 到的那一格
   if (had && !box.contains(document.activeElement)) focusCell({ preventScroll: true });
+}
+// 窄屏日历只露出一部分时，先看到最近的几周。先开的是曲库时练琴页是隐藏的、宽度为 0，拉不动：等第一次看得见时再拉
+let calScrolled = false;
+function scrollCalOnce() {
+  const box = $('cal');
+  if (calScrolled || !box._html || !box.clientWidth) return;
+  box.scrollLeft = box.scrollWidth;
+  calScrolled = true;
 }
 const focusCell = opts => { const c = $('cal').querySelector('button.cell[tabindex="0"]'); if (c) c.focus(opts); };
 $('cal').addEventListener('click', e => {
@@ -317,5 +325,6 @@ export function initStudy({ onSongs } = {}) {
 export function setVisible(v) {
   const was = S.visible;
   S.visible = v;
+  if (v) scrollCalOnce();
   if (v && !was && S.today) refresh();
 }
