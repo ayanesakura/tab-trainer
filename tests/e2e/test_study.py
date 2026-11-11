@@ -319,7 +319,7 @@ def test_other_tab_changes_refresh_plan_and_library(server, browser):
         assert b.js(f"!{badge}")
         _api(server, f"/api/songs/{gp}/study", "PUT", {"in_plan": True})
         b.js(announce)
-        b.wait_for(f"({badge} || {{}}).textContent === '待学'", timeout=5)
+        b.wait_for(f"!!{badge}", timeout=5)  # 待学 / 复习（前面的测试可能给它打过分）
         b.js("location.hash = 'study'; true")
         b.wait_for(f"!!{plan_row}")
         _leave_plan(server, gp)
