@@ -13,7 +13,7 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 
 from app import config, jobs, ocr, refine, review, staleness, state, store
 from app.config import settings
-from app.errors import Busy, Invalid
+from app.errors import Busy, Invalid, NotFound
 from app.jobs import Cancelled
 from app.llm import LLM, friendly, request_id_of
 from app.model import is_score, notes_key
@@ -520,7 +520,10 @@ def start_reparse(sid: str, si: int, hint: str = "") -> None:
     config.check_llm_ready()
 
     def begin(x):
-        x["systems"][si].update(status="parsing", error=None)
+        systems = x.get("systems") or []
+        if not 0 <= si < len(systems):  # 锁里再查一次：调用方查过之后可能刚删了一页（行少了）
+            raise NotFound("这一行不存在")
+        systems[si].update(status="parsing", error=None)
         state.begin(x, "reparse_row", systems=[si])
 
     def run(cancel):

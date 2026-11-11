@@ -113,6 +113,30 @@ def test_reparse_claim_rejects_concurrent_job(data_dir):
     jobs.jobs.release(sid)
 
 
+def test_reparse_of_a_row_removed_meanwhile_is_not_found(data_dir, monkeypatch):
+    """接口查过行号之后、登记任务之前删掉了一页（行少了）：在锁里再查一次，返回 404 而不是 IndexError 的 500。"""
+    from fastapi.testclient import TestClient
+
+    from app import main, pages
+
+    sid = songs.create_song([("a.png", score_png()), ("b.png", score_png())])
+    recognize.run_parse(sid)
+    assert len(store.load(sid)["systems"]) == 4
+    real = config.check_llm_ready
+
+    def page_deleted_meanwhile():
+        pages.arrange_pages(sid, ["p1.png"], [])
+        real()
+
+    monkeypatch.setattr(config, "check_llm_ready", page_deleted_meanwhile)
+    c = TestClient(main.app, base_url="http://127.0.0.1:8765")
+    r = c.post(f"/api/songs/{sid}/systems/3/reparse")
+    assert r.status_code == 404 and r.json()["detail"] == "这一行不存在"
+    assert not jobs.jobs.running(sid) and store.load(sid)["activity"] is None
+    with pytest.raises(errors.NotFound):
+        recognize.start_reparse(sid, -1)  # 负数也不能当成从后往前数
+
+
 def test_cancel_stops_remaining_systems(data_dir, monkeypatch):
     sid = songs.create_song([("p1.png", score_png())])
     cancel = threading.Event()
