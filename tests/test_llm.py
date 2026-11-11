@@ -206,8 +206,19 @@ def _sse(*events) -> bytes:
     return b"".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events)
 
 
-def _reply(texts, stop="end_turn", tin=5, tout=7, model="claude-opus-5-5", fallback_at=None):
-    """一个完整的流式回复：每段文字一个 text_delta；fallback_at=k：第 k 段之前插一个兜底模型接手的块。"""
+def _reply(
+    texts,
+    stop="end_turn",
+    tin=5,
+    tout=7,
+    model="claude-opus-5-5",
+    fallback_at=None,
+    to="claude-sonnet-5-5",
+    category=None,
+    iterations=None,
+):
+    """一个完整的流式回复：每段文字一个 text_delta；fallback_at=k：第 k 段之前插一个兜底模型（to）接手的块
+    （category：原模型拒绝的类别）。iterations：最后的 message_delta 里带的 usage.iterations（逐次尝试的用量）。"""
     ev = [
         {
             "type": "message_start",
@@ -231,8 +242,8 @@ def _reply(texts, stop="end_turn", tin=5, tout=7, model="claude-opus-5-5", fallb
             block = {
                 "type": "fallback",
                 "from": {"model": model},
-                "to": {"model": "claude-sonnet-5-5"},
-                "trigger": {"type": "refusal", "category": None},
+                "to": {"model": to},
+                "trigger": {"type": "refusal", "category": category},
             }
             ev.append({"type": "content_block_start", "index": idx + 1, "content_block": block})
             ev.append({"type": "content_block_stop", "index": idx + 1})
@@ -246,7 +257,7 @@ def _reply(texts, stop="end_turn", tin=5, tout=7, model="claude-opus-5-5", fallb
         {
             "type": "message_delta",
             "delta": {"stop_reason": stop, "stop_sequence": None},
-            "usage": {"output_tokens": tout},
+            "usage": {"output_tokens": tout, **({"iterations": iterations} if iterations else {})},
         }
     )
     ev.append({"type": "message_stop"})
@@ -399,12 +410,79 @@ def test_json_calls_count_usage_of_a_reply_broken_mid_stream(monkeypatch):
     assert c.usage["input_tokens"] == 5 * (llm.STREAM_RETRIES + 1) and c.usage["cost_usd"] > 0
 
 
+def _iteration(kind, model, tin, tout):
+    return {
+        "type": kind,
+        "model": model,
+        "input_tokens": tin,
+        "output_tokens": tout,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+
+
 def test_json_calls_use_the_fallback_models_answer():
-    """服务端换兜底模型：回复里先是原模型写了一半的文字，再是 fallback 块和兜底模型的回答，只解析后者。"""
-    c = Claude(LLMConfig(api_key="sk-test"))
-    _mock_client(c, lambda req: _sse_response(_reply(['{"half": ', '{"ok": 2}'], fallback_at=1)))
+    """服务端换兜底模型：回复里先是原模型写了一半的文字，再是 fallback 块和兜底模型的回答，只解析后者。
+    Claude Sonnet 5.5 用 fallbacks: "default" 时兜底到 Claude Sonnet 5（官方文档写明的目标）。费用逐次算：
+    写了一半被拒的那次按原模型的价格、兜底的那次按兜底模型的价格（顶层 usage 只是最后那次的）。"""
+    c = Claude(LLMConfig(api_key="sk-test", model="claude-sonnet-5-5"))
+    its = [
+        _iteration("message", "claude-sonnet-5-5", 40, 3),
+        _iteration("fallback_message", "claude-sonnet-5", 5, 7),
+    ]
+    body = _reply(
+        ['{"half": ', '{"ok": 2}'],
+        model="claude-sonnet-5-5",
+        fallback_at=1,
+        to="claude-sonnet-5",
+        iterations=its,
+    )
+    _mock_client(c, lambda req: _sse_response(body))
     assert c._call([], {}) == {"ok": 2}
-    assert c.usage["cost_usd"] == pytest.approx((5 * 2 + 7 * 10) / 1e6)  # 按兜底模型（Sonnet）的价格
+    assert c.usage["input_tokens"] == 45 and c.usage["output_tokens"] == 10
+    # Sonnet 5.5 和 Sonnet 5 都是每百万 token 输入 $2、输出 $10
+    assert c.usage["cost_usd"] == pytest.approx(((40 + 5) * 2 + (3 + 7) * 10) / 1e6)
+    assert c.usage["unpriced_tokens"] == 0 and c.usage["unpriced_models"] == []
+
+
+def test_fallback_to_a_model_without_a_price_is_recorded_as_unpriced():
+    """兜底模型不在价格表里（Claude Opus 5.5 的默认兜底目标官方没有公布，这里用一个价格表里没有的名字）：
+    这一次不算 $0，记成“没计价”的 token 并记下是哪个模型；原模型写了一半被拒的那次照常按原模型计价。"""
+    c = Claude(LLMConfig(api_key="sk-test"))
+    its = [
+        _iteration("message", "claude-opus-5-5", 40, 3),
+        _iteration("fallback_message", "claude-no-price", 5, 7),
+    ]
+    body = _reply(
+        ['{"half": ', '{"ok": 2}'], fallback_at=1, to="claude-no-price", category="cyber", iterations=its
+    )
+    _mock_client(c, lambda req: _sse_response(body))
+    assert c._call([], {}) == {"ok": 2}
+    assert c.usage["cost_usd"] == pytest.approx((40 * 4 + 3 * 20) / 1e6)  # 被拒的那次（Opus 5.5）
+    assert c.usage["unpriced_tokens"] == 12 and c.usage["unpriced_models"] == ["claude-no-price"]
+
+
+@pytest.mark.parametrize(("category", "billed"), [("cyber", False), (None, False), ("bio", True)])
+def test_a_refusal_before_any_output_is_billed_only_in_the_billed_categories(category, billed):
+    """原模型一个字都没写就拒绝了：官方只对 bio / frontier_llm / reasoning_extraction 这几类收费，
+    别的类别（和 null）不收费，token 照样记。"""
+    c = Claude(LLMConfig(api_key="sk-test", model="claude-sonnet-5-5"))
+    its = [
+        _iteration("message", "claude-sonnet-5-5", 40, 0),
+        _iteration("fallback_message", "claude-sonnet-5", 5, 7),
+    ]
+    body = _reply(
+        ['{"ok": 2}'],
+        model="claude-sonnet-5",
+        fallback_at=0,
+        to="claude-sonnet-5",
+        category=category,
+        iterations=its,
+    )
+    _mock_client(c, lambda req: _sse_response(body))
+    assert c._call([], {}) == {"ok": 2}
+    assert c.usage["input_tokens"] == 45
+    assert c.usage["cost_usd"] == pytest.approx(((40 if billed else 0) * 2 + 5 * 2 + 7 * 10) / 1e6)
 
 
 def _bad_request(body):

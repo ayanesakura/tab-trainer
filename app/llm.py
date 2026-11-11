@@ -157,12 +157,71 @@ def _image_block(img: Image.Image, min_width: int = 0) -> tuple[dict, float]:
     }, scale
 
 
-# 每百万 token 的美元价格（输入, 输出），用于估算费用（曲库显示每首花了多少、评测报告）
+# 每百万 token 的美元价格（输入, 输出），用于估算费用（曲库显示每首花了多少、评测报告）。
+# 来源：官方价格表 https://platform.claude.com/docs/en/about-claude/pricing （2026-11-11 核对）。
+# Haiku 5.5 是提示不超过 10 万 token 的价格（超过的是 $0.50 / $2.50）；识别一行的请求远没有这么长。
+# 只收官方写明的兜底目标：Claude Sonnet 5.5 用 fallbacks: "default" 时兜底到 Claude Sonnet 5
+# （https://platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5#refusals-fallback-and-billing）。
+# Claude Opus 5.5 的默认兜底按拒绝类别在服务端选，官方没有公布是哪个模型
+# （https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#server-side-fallback），不猜；
+# 兜底到价格表里没有的模型时那部分 token 记成“没计价”，并记下模型名（见 _record_usage），曲库的费用提示里看得到。
 PRICES = {
     "claude-opus-5-5": (4.0, 20.0),
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-haiku-5-5": (0.10, 0.50),
+    "claude-sonnet-5": (2.0, 10.0),
 }
+
+# 拒绝发生在给出任何输出之前时，只有这几类收费（别的类别、没有类别的不收费，token 照样报在 usage 里）。
+# 官方：https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#how-refusals-are-billed
+# （“as of September 2026”，类别以后可能变）。写了一部分才拒绝的，输入和已经写出的照常收费。
+BILLED_EARLY_REFUSALS = frozenset({"bio", "frontier_llm", "reasoning_extraction"})
+_UNKNOWN = object()  # 不知道拒绝的类别（对不上 fallback 块、没有 stop_details）：按收费算，宁可多估
+
+
+def _billed(refused: bool, output_tokens: int, category) -> bool:
+    """一次尝试收不收费：没拒绝、或者写了输出再拒绝的都收；一开头就拒绝的按类别（BILLED_EARLY_REFUSALS）。"""
+    if not refused or output_tokens > 0 or category is _UNKNOWN:
+        return True
+    return category in BILLED_EARLY_REFUSALS
+
+
+def attempts(msg, model: str) -> list[tuple[str, int, int, bool]]:
+    """一次请求里实际跑了的各次尝试：(模型, 输入 token, 输出 token, 收不收费)。model：请求的模型。
+    服务端兜底（fallbacks）时顶层 usage 只是最后那次（兜底模型）的，每一次的用量在 usage.iterations 里：
+    被拒、交给下一个模型的是 message 项（按顺序对应 content 里的 fallback 块，块上有拒绝的类别），
+    最后答出来的是 fallback_message 项；各按各的模型计价。
+    官方：https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#billing-and-rate-limits
+    没有换过模型（没有 fallback_message 项）时按顶层 usage 和 msg.model 算。"""
+    usage = msg.usage
+    served = getattr(msg, "model", None)
+    served = served if isinstance(served, str) and served else model
+    refused = getattr(msg, "stop_reason", None) == "refusal"
+    details = getattr(msg, "stop_details", None)
+    final_cat = getattr(details, "category", None) if details is not None else _UNKNOWN
+    its = [
+        it
+        for it in getattr(usage, "iterations", None) or []
+        if getattr(it, "type", None) in ("message", "fallback_message")
+    ]
+    if not any(it.type == "fallback_message" for it in its):
+        tin, tout = usage.input_tokens or 0, usage.output_tokens or 0
+        return [(served, tin, tout, _billed(refused, tout, final_cat))]
+    cats = [
+        getattr(getattr(b, "trigger", None), "category", None)
+        for b in getattr(msg, "content", None) or []
+        if getattr(b, "type", None) == "fallback"
+    ]
+    out, hop = [], 0
+    for it in its:
+        tin, tout = it.input_tokens or 0, it.output_tokens or 0
+        if it.type == "message":  # 这个模型拒绝了，交给下一个
+            cat = cats[hop] if hop < len(cats) else _UNKNOWN
+            hop += 1
+            out.append((getattr(it, "model", None) or model, tin, tout, _billed(True, tout, cat)))
+        else:  # 最后跑的兜底模型（整条链都拒绝时它也是拒绝）
+            out.append((getattr(it, "model", None) or served, tin, tout, _billed(refused, tout, final_cat)))
+    return out
 
 
 # 设置页“识别模型”的预设按钮（app/static/index.html 的 #modelSeg；tests/test_vocab.py 检查两边一致、都有价格）
@@ -321,7 +380,13 @@ class Claude(LLM):
         self._lock = threading.Lock()
         self._local = threading.local()  # 每个线程最近一次请求的 ID（识别是几个线程同时跑的）
         self.use_fallbacks = True
-        self.usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "unpriced_tokens": 0}
+        self.usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+            "unpriced_tokens": 0,
+            "unpriced_models": [],  # 没计价的那部分 token 是哪些模型的
+        }
 
     def _kwargs(self, content: list, schema: dict | None, effort: str | None, max_tokens: int) -> dict:
         """请求参数。schema 为 None 时不要求 JSON，模型直接写文字（流式问答）。"""
@@ -352,15 +417,17 @@ class Claude(LLM):
         if usage is None:
             return
         with self._lock:
-            tin, tout = usage.input_tokens or 0, usage.output_tokens or 0
-            self.usage["input_tokens"] += tin
-            self.usage["output_tokens"] += tout
-            served = getattr(msg, "model", None)
-            price = price_of(served if isinstance(served, str) and served else model)
-            if price:
-                self.usage["cost_usd"] += (tin * price[0] + tout * price[1]) / 1e6
-            else:  # 价格表里没有的模型（自定义）：只记 token
-                self.usage["unpriced_tokens"] += tin + tout
+            for name, tin, tout, billed in attempts(msg, model):
+                self.usage["input_tokens"] += tin
+                self.usage["output_tokens"] += tout
+                if not billed:
+                    continue
+                price = price_of(name)
+                if price:
+                    self.usage["cost_usd"] += (tin * price[0] + tout * price[1]) / 1e6
+                else:  # 价格表里没有的模型（自定义、兜底到的别的模型）：只记 token，记下模型名（换新列表，不原地改）
+                    self.usage["unpriced_tokens"] += tin + tout
+                    self.usage["unpriced_models"] = sorted({*self.usage["unpriced_models"], name})
 
     def _finish(self, msg) -> str:
         """请求结束：记下请求 ID；被拒绝、被截断都算失败。返回请求 ID。"""

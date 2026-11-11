@@ -89,7 +89,9 @@ export function costText(s) {
   if (!s.tokens) return '';
   const tip = [`共 ${s.tokens.toLocaleString()} token`];
   if (s.cost_estimated) tip.push('早期的曲子只记了 token 数，按 Opus 的价格估算');
-  if (s.unpriced_tokens) tip.push(`其中 ${s.unpriced_tokens.toLocaleString()} token 用的是自定义模型，没算进金额`);
+  // 模型不在价格表里（自定义模型、服务端换成的兜底模型）：这部分只有 token，没算进金额
+  const models = (s.unpriced_models || []).join('、');
+  if (s.unpriced_tokens) tip.push(`另有 ${s.unpriced_tokens.toLocaleString()} token 未计价（模型${models ? ' ' + models + ' ' : ''}不在价格表里）`);
   const usd = s.cost_usd >= 0.005 ? '$' + s.cost_usd.toFixed(2) : s.cost_usd > 0 ? '<$0.01' : '';
   const text = usd ? `AI 花费${s.cost_estimated ? '约' : ''} ${usd}` : `AI 用量 ${s.tokens.toLocaleString()} token`;
   return `<span class="cost" title="${esc(tip.join('；'))}">${esc(text)}${s.unpriced_tokens && usd ? ' +' : ''}</span>`;

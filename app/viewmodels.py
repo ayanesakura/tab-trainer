@@ -201,6 +201,7 @@ class LibraryItem(_M):
     cost_usd: float = 0
     cost_estimated: bool = False
     unpriced_tokens: int = 0
+    unpriced_models: list[str] = Field(default_factory=list)  # 没计价的 token 是哪些模型的（早期的曲子没记）
     tokens: int = 0
     refined: Refined | None = None
     refine_estimate: RefineEstimate | None = None

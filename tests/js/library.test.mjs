@@ -96,6 +96,12 @@ test('costText：精确 / 估算 / 只有 token', () => {
   assert.match(costText(song({ tokens: 1000, cost_usd: 18, cost_estimated: true })), /AI 花费约 \$18\.00/);
   assert.match(costText(song({ tokens: 1000, cost_usd: 0.001 })), /&lt;\$0\.01/);
   assert.match(costText(song({ tokens: 1234 })), /AI 用量 1,234 token/);
+  // 没计价的 token（模型不在价格表里，比如服务端换成的兜底模型）：提示里说清楚是哪个模型，金额后面带 +
+  const un = costText(song({ tokens: 2000, cost_usd: 1, unpriced_tokens: 1200, unpriced_models: ['claude-x'] }));
+  assert.match(un, /另有 1,200 token 未计价（模型 claude-x 不在价格表里）/);
+  assert.match(un, /\$1\.00 \+/);
+  // 早期的曲子只记了数，没记模型名
+  assert.match(costText(song({ tokens: 2000, cost_usd: 1, unpriced_tokens: 5 })), /另有 5 token 未计价（模型不在价格表里）/);
 });
 
 test('fixAction / rowHTML：失败的曲子给下一步，重试失败的行优先', () => {

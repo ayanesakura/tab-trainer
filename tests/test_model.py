@@ -97,6 +97,20 @@ def test_add_usage_accumulates():
     assert s["usage"]["legacy_input_tokens"] == 1 and s["usage"]["cost_usd"] == 0.6
 
 
+def test_add_usage_keeps_the_names_of_unpriced_models():
+    """没计价的 token 是哪些模型的：合并进曲子（不重复），之后照常累加；客户端没记这一项（替身）时不添。
+    （写盘时的不变量检查见 test_pages.test_tags_and_cost_in_library。）"""
+    s = {"usage": {"input_tokens": 1, "output_tokens": 2, "cost_usd": 0.1}}
+    model.add_usage(s, {"input_tokens": 1})
+    assert "unpriced_models" not in s["usage"]
+    model.add_usage(s, {"unpriced_tokens": 12, "unpriced_models": ["claude-no-price"]})
+    model.add_usage(
+        s, {"unpriced_tokens": 3, "unpriced_models": ["a-model", "claude-no-price"]}, {"unpriced_tokens": 1}
+    )
+    assert s["usage"]["unpriced_tokens"] == 14
+    assert s["usage"]["unpriced_models"] == ["a-model", "claude-no-price"]
+
+
 def test_legacy_cost_stays_estimated_after_a_new_call():
     from app import views
 

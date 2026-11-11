@@ -657,6 +657,10 @@ def add_usage(s: dict, usage: dict, before: dict | None = None) -> None:
         old["legacy_output_tokens"] = old.get("output_tokens", 0)
     s["usage"] = {k: old.get(k, 0) + usage.get(k, 0) - (before or {}).get(k, 0) for k in USAGE_KEYS}
     s["usage"].update({k: old[k] for k in LEGACY_USAGE_KEYS if old.get(k)})
+    # 没计价的 token 是哪些模型的（见 llm.Claude._record_usage）：合并，不重复；都没有时不添这一项
+    models = sorted({*(old.get("unpriced_models") or []), *(usage.get("unpriced_models") or [])})
+    if models:
+        s["usage"]["unpriced_models"] = models
 
 
 # ---------------------------------------------------------------------------

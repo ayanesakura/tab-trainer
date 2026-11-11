@@ -217,6 +217,17 @@ def test_tags_and_cost_in_library(data_dir):
     store.patch(sid, usage={"input_tokens": 5, "output_tokens": 5, "cost_usd": 1.5, "unpriced_tokens": 0})
     row = next(r for r in views.list_library() if r["id"] == sid)
     assert row["cost_usd"] == 1.5 and not row["cost_estimated"]
+    # 兜底到价格表里没有的模型：没计价的 token 和模型名都给到曲库（悬停提示里说明）
+    u = {
+        "input_tokens": 5,
+        "output_tokens": 5,
+        "cost_usd": 1.5,
+        "unpriced_tokens": 8,
+        "unpriced_models": ["m-x"],
+    }
+    store.patch(sid, usage=u)
+    row = next(r for r in views.list_library() if r["id"] == sid)
+    assert row["unpriced_tokens"] == 8 and row["unpriced_models"] == ["m-x"]
 
 
 def test_pages_and_tags_over_http(data_dir, sync_jobs):

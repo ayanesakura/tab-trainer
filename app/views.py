@@ -162,7 +162,7 @@ def list_library() -> list[dict]:
 
 def cost_summary(usage) -> dict:
     """曲库里显示的花费（美元）。早期的曲子只记了 token：按默认模型（Opus）的价格估算，标成估算。
-    用了价格表里没有的模型（自定义）的那部分只有 token，没法算钱，也标出来。"""
+    用了价格表里没有的模型（自定义、服务端换成的兜底模型）的那部分只有 token，没法算钱，也标出来（连同模型名）。"""
     u = usage if isinstance(usage, dict) else {}
     tin, tout = u.get("input_tokens") or 0, u.get("output_tokens") or 0
     price = price_of(DEFAULT_MODEL) or (0, 0)
@@ -176,5 +176,6 @@ def cost_summary(usage) -> dict:
         "cost_usd": round(cost, 4),
         "cost_estimated": estimated,
         "unpriced_tokens": int(u.get("unpriced_tokens") or 0),
+        "unpriced_models": [m for m in u.get("unpriced_models") or [] if isinstance(m, str)],
         "tokens": tin + tout,
     }
