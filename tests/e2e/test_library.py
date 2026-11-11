@@ -889,7 +889,7 @@ def test_bundle_import_report_per_bundle(server, browser):
     b.wait_for("!!document.querySelector('.song-row')")
     b.js(IMPORT_FAKE % (json.dumps(report), 200))
     b.wait_for("document.getElementById('importDlg').open")
-    assert b.js("document.getElementById('importTitle').textContent") == "已导入 1 首 · 1 首已有 · 1 首失败"
+    assert b.js("document.getElementById('importTitle').textContent") == "已导入 1 首 · 1 首已有 · 1 个包无法导入"
     sections = b.js(
         "[...document.querySelectorAll('#importList .ib')].map(x => x.textContent.replace(/\\s+/g, ' ').trim())"
     )

@@ -121,6 +121,7 @@ export function rowHTML(s, { selecting = false, selected = new Set(), primary = 
   const state = stateHTML(s);
   const busyish = s.busy || ['corrupt', 'error', 'cancelled'].includes(s.status); // 进度条 / 出错说明单独一行，徽章跟在曲名后面
   const range = rangeText(s), last = s.practice && s.practice.last;
+  // 归档的曲子不排进今日：不显示“待学 / 今天复习”这类计划徽章（计划里写着“已归档”）
   const tags = (s.tags || []).length ? `<span class="tags">${s.tags.map(t => `<button class="badge tag" data-tag="${esc(t)}" data-k="tag:${esc(t)}" title="只看“${esc(t)}”">${esc(t)}</button>`).join('')}</span>` : '';
   const title = play && !selecting ? `<a class="title" href="${href}" data-k="open" title="${esc(s.title)}">${esc(s.title)}</a>` : `<span class="title" title="${esc(s.title)}">${esc(s.title)}</span>`;
   // 只有最近练过的那一首（primary）的“接着练”用主色按钮，其他行用浅按钮：曲库里不会一列全是实心按钮
@@ -133,7 +134,7 @@ export function rowHTML(s, { selecting = false, selected = new Set(), primary = 
   return `<div class="row song-row${play || pick ? ' click' : ''}${on ? ' on' : ''}${s.archived ? ' archived' : ''}" data-id="${esc(s.id)}" data-play="${play ? 1 : ''}" data-pick="${pick ? 1 : ''}">
     ${selecting ? `<input type="checkbox" class="pick" data-k="pick" aria-label="选择 ${esc(s.title)}" ${on ? 'checked' : ''} ${pick ? '' : 'disabled'}>` : ''}
     <span class="src-ic" title="${esc(src ? `来源：${src}` : '')}">${icon(SOURCE_ICON[s.source_type] || 'music', 18)}</span>
-    <div class="who"><div class="name">${title}${studyBadge(s.study)}${tags}${state && !busyish ? `<span class="badges">${state}</span>` : ''}</div>
+    <div class="who"><div class="name">${title}${s.archived ? '' : studyBadge(s.study)}${tags}${state && !busyish ? `<span class="badges">${state}</span>` : ''}</div>
       ${state && busyish ? `<div class="state">${state}</div>` : ''}
       ${sub || more ? `<div class="sub"${more ? ` title="${more}"` : ''}>${sub || more}</div>` : ''}</div>
     <div class="ctl"${selecting ? ' hidden' : ''}>${action}
@@ -201,9 +202,11 @@ export function pagerHTML({ page, pages, from, to }, total) {
  */
 export function importReport(r) {
   const imported = r.imported || [], skipped = r.skipped || [];
-  const dup = skipped.filter(s => s.duplicate).length, bad = skipped.length - dup;
-  const summary = [`已导入 ${imported.length} 首`, dup && `${dup} 首已有`, bad && `${bad} 首失败`].filter(Boolean).join(' · ');
-  const kind = bad ? (imported.length ? 'info' : 'err') : 'ok';
+  // 整个包读不了：skipped 里也有一项（title 是包名），但那不是“一首失败”，单独算“几个包无法导入”
+  const broken = new Set((r.bundles || []).filter(b => !b.ok).map(b => b.file));
+  const dup = skipped.filter(s => s.duplicate).length, bad = skipped.filter(s => !s.duplicate && !broken.has(s.bundle)).length;
+  const summary = [`已导入 ${imported.length} 首`, dup && `${dup} 首已有`, bad && `${bad} 首失败`, broken.size && `${broken.size} 个包无法导入`].filter(Boolean).join(' · ');
+  const kind = bad || broken.size ? (imported.length ? 'info' : 'err') : 'ok';
   // 老的返回没有 bundles：当成一个包
   const bundles = (r.bundles && r.bundles.length) ? r.bundles : [{ file: '', ok: true }];
   const of = (list, b) => list.filter(x => !r.bundles || !r.bundles.length || x.bundle === b.file);

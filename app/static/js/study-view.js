@@ -45,11 +45,12 @@ export function parseDay(day) {
 }
 export const dayKey = d => d.toISOString().slice(0, 10);
 export const addDays = (d, n) => new Date(+d + n * 86400000);
-/** “11 月 9 日 周日” */
-export function dayLabel(day, { weekday = true } = {}) {
+/** “11 月 9 日 周日”；给了 today（“YYYY-MM-DD”）且不是同一年时带上年份：“2025 年 12 月 20 日 周六” */
+export function dayLabel(day, { weekday = true, today = '' } = {}) {
   const d = parseDay(day);
   if (!d) return String(day || '');
-  return `${d.getUTCMonth() + 1} 月 ${d.getUTCDate()} 日${weekday ? ` 周${WEEKDAYS[d.getUTCDay()]}` : ''}`;
+  const year = today && String(today).slice(0, 4) !== String(day).slice(0, 4) ? `${d.getUTCFullYear()} 年 ` : '';
+  return `${year}${d.getUTCMonth() + 1} 月 ${d.getUTCDate()} 日${weekday ? ` 周${WEEKDAYS[d.getUTCDay()]}` : ''}`;
 }
 
 /** 距离下次练的天数 → 文案：逾期 2 天 / 今天 / 明天 / 3 天后 */
@@ -160,7 +161,8 @@ export function queueRowHTML(it, { primary = false } = {}) {
 /** 今天已经打过分的一首：打勾、打分徽章、下次什么时候 */
 export function doneRowHTML(it) {
   const st = it.study || {}, last = st.last;
-  const next = st.paused ? '已暂停' : st.state === 'learning' ? '明天继续' : st.due_in != null ? `下次${dueText(st.due_in)}` : '';
+  // 和计划行一个写法：明天继续 / 明天复习 / 3 天后复习（今天又到期的不写：前面已经打了勾）
+  const next = st.paused ? '已暂停' : st.state === 'learning' ? '明天继续' : st.due_in > 0 ? `${dueText(st.due_in)}复习` : '';
   const tip = ratingTip(last);
   return `<div class="row study-row done${it.playable ? ' click' : ''}" data-id="${esc(it.id)}" data-href="${it.playable ? trainerHref(it.id) : ''}">
     <span class="kind done-mark" title="今天练过了">${icon('check', 14)}</span>
@@ -227,7 +229,7 @@ export function level(min, goal) {
  */
 export function calendarModel(days, today, goal, weeks = 53) {
   const t = parseDay(today);
-  if (!t) return { cols: [], months: [], total: 0, active: 0 };
+  if (!t) return { cols: [], months: [], total: 0, active: 0, today: '' };
   const byDay = new Map((days || []).map(d => [d.day, d]));
   const dow = (t.getUTCDay() + 6) % 7; // 周一 = 0
   const start = addDays(t, -dow - 7 * (weeks - 1));
@@ -248,10 +250,11 @@ export function calendarModel(days, today, goal, weeks = 53) {
     if (first && m !== lastMonth) { months.push({ col: w, label: `${m} 月` }); lastMonth = m; }
     cols.push(col);
   }
-  return { cols, months, total, active };
+  return { cols, months, total, active, today };
 }
-export function cellTip(c) {
-  return `${dayLabel(c.day)} · ${c.minutes > 0 ? fmtMin(c.minutes) : '没练'}${c.ratings ? ` · 打分 ${c.ratings} 首` : ''}`;
+/** 格子的悬停说明；today：去年的日子带上年份 */
+export function cellTip(c, today = '') {
+  return `${dayLabel(c.day, { today })} · ${c.minutes > 0 ? fmtMin(c.minutes) : '没练'}${c.ratings ? ` · 打分 ${c.ratings} 首` : ''}`;
 }
 /** 日历里能点的格子（今天和以前的），按日期排好 */
 const calDays = model => model.cols.flat().filter(c => !c.future).map(c => c.day);
@@ -282,7 +285,7 @@ export function calendarHTML(model, selected = '', focus = '') {
   const months = model.months.map(m => `<span style="grid-column:${m.col + 1}">${esc(m.label)}</span>`).join('');
   const cells = model.cols.map(col => col.map(c => c.future
     ? '<span class="cell future" aria-hidden="true"></span>'
-    : `<button class="cell l${c.level}${c.today ? ' today' : ''}${c.day === selected ? ' sel' : ''}" data-day="${c.day}" tabindex="${c.day === tab ? 0 : -1}" title="${esc(cellTip(c))}" aria-label="${esc(cellTip(c))}"${c.day === selected ? ' aria-pressed="true"' : ''}></button>`).join('')).join('');
+    : `<button class="cell l${c.level}${c.today ? ' today' : ''}${c.day === selected ? ' sel' : ''}" data-day="${c.day}" tabindex="${c.day === tab ? 0 : -1}" title="${esc(cellTip(c, model.today))}" aria-label="${esc(cellTip(c, model.today))}"${c.day === selected ? ' aria-pressed="true"' : ''}></button>`).join('')).join('');
   return `<div class="cal" style="--weeks:${n}">
     <div class="cal-months" aria-hidden="true">${months}</div>
     <div class="cal-days" aria-hidden="true"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span></span></div>

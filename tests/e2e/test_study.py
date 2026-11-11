@@ -143,6 +143,8 @@ def test_timer_manual_log_and_calendar(server, browser):
         b.js(f"document.querySelector('#cal .cell[data-day=\"{today}\"]').click(); true")
         b.wait_for("!!document.querySelector('#dayCard [data-del]')")
         assert "爬格子" in b.js("document.getElementById('dayCard').textContent")
+        # 备注长了会截断：悬停提示里是全文
+        assert b.js("document.querySelector('#dayCard [data-del]').closest('.day-item').querySelector('.lbl').title") == "补记 · 爬格子"
         created = [s["id"] for s in _api(server, f"/api/study/day/{today}")["sessions"]]
         b.js("document.querySelector('#dayCard [data-del]').click(); true")
         b.wait_for("!!document.querySelector('.dlg[open] [data-ok]')")
@@ -279,6 +281,10 @@ def test_calendar_keyboard(server, browser):
     b.wait_for("!document.getElementById('dayCard').hidden && !document.querySelector('#dayCard .spinner')")
     assert b.js("document.querySelector('#cal .cell.sel').dataset.day") == target
     assert b.js("document.activeElement.dataset.day") == target
+    # Home：最早的一格（去年的），明细的标题带年份
+    b.key("Home", vk=36)
+    b.key("Enter", vk=13, text="\r")
+    b.wait_for(f"document.querySelector('#dayCard .card-title')?.textContent.startsWith('{d.year - 1} 年 ')")
     b.js("document.getElementById('__before').remove(); document.getElementById('__after').remove(); true")
     assert not b.errors, b.errors
 

@@ -25,6 +25,9 @@ test('时长、日期文案', () => {
   assert.equal(dayLabel('2026-11-15'), '11 月 15 日 周日');
   assert.equal(dayLabel('2026-11-10', { weekday: false }), '11 月 10 日');
   assert.equal(dayLabel('坏的'), '坏的');
+  // 不是今年的日子带上年份
+  assert.equal(dayLabel('2025-12-20', { today: '2026-11-11' }), '2025 年 12 月 20 日 周六');
+  assert.equal(dayLabel('2026-01-02', { today: '2026-11-11' }), '1 月 2 日 周五');
   assert.equal(dueText(-2), '逾期 2 天');
   assert.equal(dueText(0), '今天');
   assert.equal(dueText(1), '明天');
@@ -98,8 +101,10 @@ test('计划里归档的曲子：留在原位、淡下去，写明不排进今�
 test('今天练过的一行：打分徽章和下次', () => {
   const html = doneRowHTML(item({ study: st({ rated_today: 3, due_in: 3, last: { rating: 3, issues: [], note: '', bpm: 0 } }), today_seconds: 900 }));
   assert.match(html, /badge ok rating[^>]*>顺</);
-  assert.match(html, /下次3 天后 · 练了 15 分钟/);
-  assert.match(doneRowHTML(item({ study: st({ state: 'learning', rated_today: 2, last: { rating: 2 } }) })), /明天继续/);
+  assert.match(html, />Carcassi · 3 天后复习 · 练了 15 分钟</);
+  assert.match(doneRowHTML(item({ study: st({ rated_today: 3, due_in: 1, last: { rating: 3 } }) })), /Carcassi · 明天复习</);
+  assert.match(doneRowHTML(item({ study: st({ state: 'learning', rated_today: 2, last: { rating: 2 } }) })), /Carcassi · 明天继续</);
+  assert.doesNotMatch(doneRowHTML(item({ study: st({ rated_today: 1, due_in: 0, last: { rating: 1 } }) })), /下次|复习/);
 });
 
 test('计划的一行：位置、上下移动按钮到头不可用', () => {
@@ -152,6 +157,7 @@ test('日历：颜色档位、网格对齐到周一、未来的格子', () => {
   assert.match(html, /--weeks:53/);
   assert.match(html, /class="cell l1 sel" data-day="2026-11-09"[^>]*aria-pressed="true"/);
   assert.match(html, /title="11 月 15 日 周日 · 50 分钟 · 打分 2 首"/);
+  assert.match(html, /data-day="2025-11-10"[^>]*title="2025 年 11 月 10 日 周一 · 没练"/); // 去年的格子带年份
 });
 
 test('日历的键盘：只有一格能 Tab 到，方向键按网格走', () => {

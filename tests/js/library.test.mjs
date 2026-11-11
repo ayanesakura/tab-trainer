@@ -61,7 +61,8 @@ test('importReport：按包列出导入 / 已有 / 失败', () => {
       { title: '坏.zip', reason: '不是 zip 文件', duplicate: false, bundle: '坏.zip' }],
     bundles: [{ file: '1.zip', ok: true, imported: 1, skipped: 2, error: null }, { file: '坏.zip', ok: false, imported: 0, skipped: 1, error: '不是 zip 文件' }],
   });
-  assert.deepEqual([r.summary, r.kind, r.simple], ['已导入 1 首 · 1 首已有 · 2 首失败', 'info', false]);
+  // 读不了的包不算“一首失败”，单独写“几个包无法导入”
+  assert.deepEqual([r.summary, r.kind, r.simple], ['已导入 1 首 · 1 首已有 · 1 首失败 · 1 个包无法导入', 'info', false]);
   const [one, bad] = r.html.split('</section>');
   assert.match(one, /1\.zip[\s\S]*导入 1 · 跳过 2/);
   assert.match(one, />A<\/span><span class="badge ok">导入/);
@@ -70,6 +71,15 @@ test('importReport：按包列出导入 / 已有 / 失败', () => {
   assert.match(bad, /dot err[\s\S]*坏\.zip[\s\S]*无法导入[\s\S]*不是 zip 文件/);
   assert.doesNotMatch(bad, /<li>/); // 整个包读不了：只写原因，不把包名当成一首曲子
   assert.equal(importReport({ imported: [], skipped: [{ title: 'B', reason: 'x', duplicate: false }] }).kind, 'err');
+  const onlyBroken = importReport({ imported: [], skipped: [{ title: '坏.zip', reason: 'x', duplicate: false, bundle: '坏.zip' }],
+    bundles: [{ file: '坏.zip', ok: false, imported: 0, skipped: 1, error: 'x' }] });
+  assert.deepEqual([onlyBroken.summary, onlyBroken.kind], ['已导入 0 首 · 1 个包无法导入', 'err']);
+});
+
+test('归档的曲子：曲库行里不显示计划徽章', () => {
+  const study = { state: 'new', paused: false, due_in: null };
+  assert.match(rowHTML(song({ study })), /plan-badge/);
+  assert.doesNotMatch(rowHTML(song({ study, archived: true })), /plan-badge/);
 });
 
 test('stateHTML / barsText：状态说明，后端文字要转义', () => {

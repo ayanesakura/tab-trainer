@@ -154,7 +154,7 @@ $('cal').addEventListener('keydown', e => {
 async function loadDay(day, { quiet = false } = {}) {
   S.day = day;
   renderCalendar();
-  if (!quiet) { $('dayCard').hidden = false; setHTML($('dayCard'), `<div class="card-h"><span class="card-title">${esc(dayLabel(day))}</span><span class="spinner"></span></div>`); }
+  if (!quiet) { $('dayCard').hidden = false; setHTML($('dayCard'), `<div class="card-h"><span class="card-title">${esc(dayLabel(day, { today: todayKey() }))}</span><span class="spinner"></span></div>`); }
   try {
     const d = await api.get(`/api/study/day/${encodeURIComponent(day)}`);
     if (S.day !== day) return; // 已经点了别的日子
@@ -163,23 +163,25 @@ async function loadDay(day, { quiet = false } = {}) {
     if (!quiet) toast(e.message, 'err', 4000);
   }
 }
+const todayKey = () => (S.today && S.today.day) || '';
 function closeDay() { S.day = ''; $('dayCard').hidden = true; setHTML($('dayCard'), ''); renderCalendar(); }
 function renderDay(d) {
   const total = (d.minutes && d.minutes.total) || 0;
   const songs = (d.songs || []).filter(s => s.seconds >= 30 || s.rating);
+  // 曲名、备注太长会截断：悬停提示里是全文
   const songItems = songs.length ? songs.map(s => `<div class="day-item">
-      <span class="lbl"><a href="${trainerHref(s.id)}">${esc(s.title)}</a></span>
+      <span class="lbl" title="${esc(s.title)}"><a href="${trainerHref(s.id)}">${esc(s.title)}</a></span>
       ${s.rating ? ratingBadge(s.rating.rating, ` title="${esc(ratingTip(s.rating))}"`) : ''}
       <span class="num">${s.seconds >= 30 ? esc(fmtMin(s.seconds / 60)) : ''}</span></div>`).join('')
     : '<div class="none">这天没在谱子上练</div>';
   const sessions = d.sessions || [];
   const logItems = sessions.length ? sessions.map(s => {
     const x = sessionText(s);
-    return `<div class="day-item"><span class="lbl">${esc(x.label)}${x.sub ? `<span class="hint">${esc(x.sub)}</span>` : ''}</span>
+    return `<div class="day-item"><span class="lbl" title="${esc([x.label, x.sub].filter(Boolean).join(' · '))}">${esc(x.label)}${x.sub ? `<span class="hint">${esc(x.sub)}</span>` : ''}</span>
       <span class="num">${esc(fmtMin(s.minutes))}</span>
       <button class="icon-btn sm" data-del="${esc(s.id)}" title="删除这条记录" aria-label="删除这条记录">${icon('trash', 14)}</button></div>`;
   }).join('') : '<div class="none">没有计时或补记</div>';
-  setHTML($('dayCard'), `<div class="card-h"><span class="card-title">${esc(dayLabel(d.day))}<span class="total">${total > 0 ? ` · ${esc(fmtMin(total))}` : ' · 没练'}</span></span>
+  setHTML($('dayCard'), `<div class="card-h"><span class="card-title">${esc(dayLabel(d.day, { today: todayKey() }))}<span class="total">${total > 0 ? ` · ${esc(fmtMin(total))}` : ' · 没练'}</span></span>
       <button class="icon-btn sm" data-close title="关闭" aria-label="关闭">${icon('x')}</button></div>
     <div class="day-body"><div class="day-col"><h3>曲子</h3>${songItems}</div><div class="day-col"><h3>计时和补记</h3>${logItems}</div></div>`);
   $('dayCard').hidden = false;
