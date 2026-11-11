@@ -175,7 +175,17 @@ export function initBarCard() {
   $('barCheckBtn').onclick = e => refineScope(e.currentTarget.dataset.kind || 'bar', e.currentTarget);
   $('hintInput').addEventListener('input', () => { hintFor = shownId(); scopeNow(); });
   on('ui.bar', () => { if (hintFor !== null && shownId() !== hintFor) clearHint(); });
-  holdBarWhile(() => document.activeElement === $('hintInput')); // 播放中写说明：侧栏停在这个小节
+  // 播放中写说明：侧栏停在这个小节；Tab 到“本小节 / 本行 / 核对”上（键盘焦点）也停着，按下去核对的还是这个小节
+  const scopeBtns = ['refineBarBtn', 'refineRowBtn', 'barCheckBtn'];
+  holdBarWhile(() => document.activeElement === $('hintInput') || scopeBtns.some(id => $(id).matches(':focus-visible')));
+  // 鼠标按在侧栏里（从按下到松开）：侧栏不跟着播放切小节。按下按钮时输入框已经失焦，不停住的话，
+  // 按住的这一会儿播放走到下一小节，松开时“提问”“本小节”读到的就是新小节，问题 / 核对发到了别处
+  let pressing = false;
+  const release = () => setTimeout(() => { pressing = false; }, 0); // click 在 pointerup 之后派发：等它处理完再放开
+  $('side').addEventListener('pointerdown', () => { pressing = true; }, true);
+  for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, release, true);
+  addEventListener('blur', e => { if (e.target === window) release(); }); // 按着切到别的窗口：收不到 pointerup
+  holdBarWhile(() => pressing);
   on(['song.activity', 'song.busy', 'song.refine_scopes'], scopeNow); // 精修开始 / 核对完一个小节：只重画这一行（不重画截图）
   on('view', v => { if (v) loadImages(v.pages); });
   document.addEventListener('tt-images', drawCrop);

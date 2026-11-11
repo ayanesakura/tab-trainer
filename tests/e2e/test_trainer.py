@@ -1526,3 +1526,56 @@ def test_stopping_the_timer_prompts_after_practising(server, browser, plan_song)
     finally:
         if (_api(server, "/api/study/timer") or {}).get("timer"):  # 测试中途失败：别把计时器留着
             _api(server, "/api/study/timer", "POST", {"action": "stop"})
+
+
+def _press(b, el_id, hold):
+    """在元素中间按下鼠标，按住 hold 秒再松开（真实的鼠标事件：按下时输入框会失焦）。"""
+    b.js(f"document.getElementById('{el_id}').scrollIntoView({{block: 'center'}}); true")
+    x, y = b.js(
+        f"(r => [r.left + r.width / 2, r.top + r.height / 2])(document.getElementById('{el_id}').getBoundingClientRect())"
+    )
+    b.mouse("mousePressed", x, y)
+    time.sleep(hold)
+    b.mouse("mouseReleased", x, y)
+
+
+def test_mouse_ask_while_playing_goes_to_the_bar_it_was_typed_for(trainer):
+    """播放中在第 1 小节写好问题，用鼠标点“提问”：按下时输入框失焦，按住的这一会儿播放走到了别的小节，
+    问题仍然发到第 1 小节（以前侧栏在按下后就跟着播放跳走，松开时问到了别的小节）。“本小节”核对同理。"""
+    b = trainer()
+    _ai_on(b)
+    b.js("""(() => { const of = window.fetch; window.__asks = []; window.__refines = [];
+      window.fetch = (u, i) => {
+        if (String(u).includes('/ask/stream')) { __asks.push(String(u));
+          return Promise.resolve(new Response('{"type":"done","qa":[]}\\n', {status: 200})); }
+        if (String(u).endsWith('/refine') && i && i.method === 'POST') { __refines.push(JSON.parse(i.body));
+          return Promise.resolve(new Response('{}', {status: 200})); }
+        return of(u, i); };
+      return true; })()""")
+    b.js("tt.set('play.countIn', false); tt.setLoop(0, 5); tt.setTempo(120); tt.play(); true")
+    b.wait_for("tt.state.phase === 'playing' && tt.get('ui.bar') === 0")
+    b.js("document.getElementById('askInput').focus(); true")
+    b.type_text("左手怎么按")
+    b.wait_for(
+        "tt.api.tickPosition > tt.api.score.masterBars[1].start + 960", timeout=10
+    )  # 播放已经走到第 2 小节
+    assert b.js("tt.get('ui.bar')") == 0  # 打字时侧栏停在第 1 小节
+    _press(b, "askBtn", 1.0)
+    b.wait_for("__asks.length === 1")
+    assert "/bars/bar1/ask/stream" in b.js("__asks[0]"), b.js("__asks[0]")
+    # “哪里不对”写给第 1 小节，然后用鼠标点“本小节”
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
+    b.js("tt.setLoop(0, 5); tt.play(); true")
+    b.wait_for("tt.state.phase === 'playing' && tt.get('ui.bar') === 0")
+    b.js("document.getElementById('hintInput').focus(); true")
+    b.type_text("第 3 拍是 2 弦 4 品")
+    b.wait_for("tt.api.tickPosition > tt.api.score.masterBars[1].start + 960", timeout=10)
+    b.wait_for(
+        "!document.getElementById('refineBarBtn').disabled && !document.getElementById('refineBarBtn').hidden"
+    )
+    _press(b, "refineBarBtn", 1.0)
+    b.wait_for("__refines.length === 1")
+    assert b.js("__refines[0]") == {"bars": ["bar1"], "hint": "第 3 拍是 2 弦 4 品"}
+    b.js("tt.stop(); true")
+    assert not b.errors, b.errors

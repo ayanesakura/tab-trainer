@@ -85,6 +85,7 @@ export function initCoach() {
   $('askBtn').onclick = ask;
   $('askInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); ask(); } });
   on(['ui.bar', 'song.bars'], render);
-  // 播放中打字提问：侧栏停在正在看的小节，问题不会挂到按回车那一刻光标走到的小节上
-  holdBarWhile(() => document.activeElement === $('askInput'));
+  // 播放中打字提问：侧栏停在正在看的小节，问题不会挂到按回车那一刻光标走到的小节上；
+  // Tab 到“提问”（键盘焦点）也停着。鼠标点“提问”时按下到松开之间由 bar-card.js 停住（按在侧栏里）
+  holdBarWhile(() => document.activeElement === $('askInput') || $('askBtn').matches(':focus-visible'));
 }
