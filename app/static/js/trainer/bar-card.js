@@ -7,7 +7,7 @@
 import { get, on } from './store.js';
 import { $, UI, esc, songUrl, setButton } from './dom.js';
 import { post, put, withBusy } from '../lib/api.js';
-import { applySong, writeFailed, refresh, isLocked, lockedToast } from './song.js';
+import { applySong, writeFailed, refresh } from './song.js';
 import { barTags, warnText, isScore, eventsText, planRange } from './view.js';
 import { images, loadImages } from './page-images.js';
 import { barChords, chordShapes, chordSVG } from './chords.js';
@@ -110,7 +110,7 @@ async function refineScope(kind, btn = kind === 'bar' ? $('refineBarBtn') : $('r
       if (hint) clearHint(); // 说明是写给这一次的，别带到下一次精修别的小节
       UI.toast(kind === 'bar' ? `已开始精修第 ${bi + 1} 小节` : `已开始精修第 ${sb.system + 1} 行`, 'info');
     } catch (e) {
-      if (isLocked(e)) lockedToast(e); else UI.toast(e.message, 'err', 5000);
+      await writeFailed(e); // 423（别处开始了任务）：稍后再试的提示 + 刷新
     }
   });
   await refresh();

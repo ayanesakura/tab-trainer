@@ -72,9 +72,9 @@ export async function conflict(e) {
   UI.toast(e.message, 'err', 5000);
   await refresh();
 }
-/** 423：曲子有任务在跑 / 这个小节锁着（不是冲突，内容没在别处改过）：把服务给的说明告诉用户，等一会再试 */
+/** 423：曲子有任务在跑 / 这个小节锁着（不是冲突，内容没在别处改过）：把服务给的说明告诉用户，等一会再试。写接口出错都走 writeFailed */
 export const isLocked = e => !!e && e.status === 423;
-export const lockedToast = e => UI.toast(e.message, 'info', 5000);
+const lockedToast = e => UI.toast(e.message, 'info', 5000);
 /** 423 的统一处理：提示，并重新取一次曲子——任务多半是在别处（曲库页）开始的，这里还不知道：刷新后显示进度、接上轮询 */
 export async function locked(e) {
   lockedToast(e);
@@ -152,7 +152,7 @@ async function retryFailed(btn, n) {
   if (!ok) return;
   await withBusy(btn, async () => {
     try { await post(songUrl('/retry-failed')); UI.toast('已开始重试失败的行', 'info'); }
-    catch (e) { UI.toast(e.message, 'err', 5000); }
+    catch (e) { await writeFailed(e); } // 423（别处开始了任务）：稍后再试的提示 + 刷新
   });
   await refresh();
 }
@@ -164,7 +164,7 @@ async function startRefine(btn) {
   if (!await UI.confirm(c.text, { title: c.title, ok: c.ok })) return;
   await withBusy(btn, async () => {
     try { await post(songUrl('/refine')); UI.toast('已开始精修整首', 'info'); }
-    catch (e) { if (isLocked(e)) lockedToast(e); else UI.toast(e.message, 'err', 5000); }
+    catch (e) { await writeFailed(e); }
   });
   await refresh();
 }
@@ -180,7 +180,7 @@ function renderRefineBtn(s) {
 async function explain(btn) {
   await withBusy(btn, async () => {
     try { await post(songUrl('/explain')); UI.toast('AI 正在写讲解', 'info'); }
-    catch (e) { UI.toast(e.message, 'err', 5000); }
+    catch (e) { await writeFailed(e); }
   });
   await refresh();
 }
@@ -267,13 +267,19 @@ function renderResume(s) {
 // ---------------------------------------------------------------------
 // 练习建议页
 // ---------------------------------------------------------------------
+const planBusyText = s => {
+  const k = s.activity && s.activity.kind;
+  return k === 'explain' ? '正在生成讲解和练习建议…' : k === 'refine' ? '正在精修，完成后可以生成。' : '正在处理中，完成后可以生成。';
+};
 function renderPlan() {
   const s = get('song'), v = get('view');
   if (!s || !v) return;
   const p = s.plan, n = v.bars.length;
   if (!p) {
-    const can = n && !s.recognizing;
-    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? '<p>让 AI 根据全曲生成分段练习建议。</p><button class="btn sm primary" id="planCreate" data-ai>' + UI.icon('sparkle') + '生成练习建议</button>' : '识别完成后会自动生成。'}</div></div>`;
+    // 有任务在跑（识别、精修、讲解……）时不给按钮：同一时间只能有一个任务，点了也是 423
+    const can = n && !s.busy;
+    const why = s.recognizing || !n ? '识别完成后会自动生成。' : planBusyText(s);
+    $('plan').innerHTML = `<div class="list"><div class="empty-state"><b>还没有练习建议</b>${can ? '<p>让 AI 根据全曲生成分段练习建议。</p><button class="btn sm primary" id="planCreate" data-ai>' + UI.icon('sparkle') + '生成练习建议</button>' : `<p>${why}</p>`}</div></div>`;
     if (can) $('planCreate').onclick = e => explain(e.currentTarget);
     return;
   }
@@ -424,7 +430,7 @@ export function initSong() {
     const f = e.target.closest('.n-fold');
     if (f && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); fold(f); } // 空格不能再当播放键
   });
-  on(['song.plan', 'song.status', 'song.busy', 'view'], renderPlan);
+  on(['song.plan', 'song.status', 'song.busy', 'song.activity', 'view'], renderPlan);
   on(['song.meta', 'song.title', 'song.editable_meta'], () => fillMeta(get('song')));
   $('metaSave').onclick = () => withBusy($('metaSave'), saveMeta);
   $('metaForm').addEventListener('submit', saveTitle);

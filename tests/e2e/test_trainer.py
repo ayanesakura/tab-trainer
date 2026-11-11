@@ -1727,3 +1727,53 @@ def test_practice_record_survives_a_late_poll(server, trainer):
     time.sleep(1)
     assert b.js(loops) == now, (before, now, b.js(loops))
     assert not b.errors, b.errors
+
+
+def test_locked_423_is_handled_the_same_everywhere(server, trainer):
+    """423（曲子有任务在跑）：重试失败的行、讲解 / 生成练习建议、重新识别整行都和精修一样——“稍后再试”的提示（不是错误）+ 刷新；
+    有任务在跑时分段页不显示“生成练习建议”（以前只看 recognizing，精修 / 讲解进行中也显示，点了才 423）。"""
+    sid = server["image"]
+    b = trainer()
+    _ai_on(b)
+    b.js(f"""(() => {{ const of = window.fetch; window.__gets = 0;
+      window.fetch = (u, i) => {{
+        const s = String(u);
+        if (i && i.method === 'POST' && /\\/(retry-failed|explain|systems\\/0\\/reparse)$/.test(s))
+          return Promise.resolve(new Response(JSON.stringify({{detail: '正在精修，完成后再试'}}), {{status: 423}}));
+        if (s === '/api/songs/{sid}') return of(u, i).then(r => {{ __gets++; return r; }});
+        return of(u, i); }};
+      return true; }})()""")
+    toast = "(document.querySelector('.toast') || {className: '', textContent: ''})"
+    ok = "document.querySelector('.dlg-msg [data-ok]')"
+
+    def expect_locked(start):
+        b.wait_for(f"{toast}.textContent.includes('正在精修')", timeout=5)
+        assert b.js(f"{toast}.className") == "toast info"
+        b.wait_for(f"__gets > {start}", timeout=5)
+        b.js("document.querySelectorAll('.toast').forEach(t => t.remove()); true")
+
+    # 重试失败的行（通知里的按钮 → 确认框）
+    b.js("tt.set('song', {...tt.song, failed_rows: 2}); true")
+    n = b.js("__gets")
+    b.js("document.querySelector('#notices [data-id=error] [data-act]').click(); true")
+    b.wait_for(f"!!{ok}")
+    b.js(f"{ok}.click(); true")
+    expect_locked(n)
+    # 重新识别整行（确认框）
+    n = b.js("__gets")
+    b.js("tt.set('ui.bar', 0); document.getElementById('reparseBtn').click(); true")
+    b.wait_for(f"!!{ok}")
+    b.js(f"{ok}.click(); true")
+    expect_locked(n)
+    # 分段页：没有练习建议时的“生成练习建议”
+    b.js("location.hash = '#plan'; true")
+    n = b.js("__gets")
+    b.js("tt.set('song', {...tt.song, plan: null}); document.getElementById('planCreate').click(); true")
+    expect_locked(n)
+    # 有任务在跑（精修）：不显示“生成练习建议”
+    b.js(
+        "tt.set('song', {...tt.song, plan: null, busy: true, activity: {kind: 'refine', scope: 'song'}}); true"
+    )
+    b.wait_for("!document.getElementById('planCreate')")
+    assert "精修" in b.js("document.getElementById('plan').textContent")
+    assert not b.errors, b.errors

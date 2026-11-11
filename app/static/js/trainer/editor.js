@@ -9,7 +9,7 @@ import { TECH_NAME, STRINGS, INSTRUMENT } from '../vocab.js';
 import { stop, holdBarWhile, barBox } from './player.js';
 import { provide } from './hooks.js';
 import { addShortcuts } from './keys.js';
-import { refresh, applySong, conflict, isLocked, locked } from './song.js';
+import { refresh, applySong, conflict, isLocked, locked, writeFailed } from './song.js';
 
 // ---------------------------------------------------------------------
 // 修改小节（JSON）、重新识别这一行
@@ -303,7 +303,7 @@ export function initEditor() {
         UI.toast('已开始重新识别这一行', 'info');
         $('hintInput').value = '';
         $('hintInput').dispatchEvent(new Event('input'));
-      } catch (e) { UI.toast(e.message, 'err', 5000); }
+      } catch (e) { await writeFailed(e); } // 423（别处开始了任务）：稍后再试的提示 + 刷新
     });
     await refresh();
   };
