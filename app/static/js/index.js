@@ -6,7 +6,7 @@ import * as api from '/static/js/lib/api.js';
 import { SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
 import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML, latestPracticed, importReport } from '/static/js/library-view.js';
 import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
-import { initStudy, renderPlan, refresh as refreshStudy, setVisible as setStudyVisible, setStudy, addMany } from '/static/js/study.js';
+import { initStudy, renderPlan, refresh as refreshStudy, setVisible as setStudyVisible, setStudy, addMany, checkDay } from '/static/js/study.js';
 
 // ---------------- 导航 ----------------
 // 练琴 / 曲库 / 设置。地址里没写时打开上次看的那个（练琴或曲库，记在本机），第一次是曲库
@@ -641,4 +641,4 @@ api.get('/api/settings').then(showSettings).catch(() => {});
 document.addEventListener('visibilitychange', () => { if (!document.hidden) api.get('/api/settings').then(paintKey).catch(() => {}); });
 
 // 端到端测试 / 控制台调试用
-window.tt = { reload: loadSongs, refresh: () => songsPoll.now(), openPages, songs: () => lastSongs, study: refreshStudy };
+window.tt = { reload: loadSongs, refresh: () => songsPoll.now(), openPages, songs: () => lastSongs, study: refreshStudy, checkDay };

@@ -44,6 +44,11 @@ export function parseDay(day) {
   return Number.isNaN(+d) ? null : d;
 }
 export const dayKey = d => d.toISOString().slice(0, 10);
+/** 本机时间 now（毫秒）所在的练琴日“YYYY-MM-DD”：凌晨 4 点前算前一天（和后端 study.practice_day 一样）。
+ * tzOffset：本地时区和 UTC 差几分钟（Date#getTimezoneOffset，测试里传固定值） */
+export function studyDay(now = Date.now(), tzOffset = new Date(now).getTimezoneOffset()) {
+  return dayKey(new Date(now - 4 * 3600e3 - tzOffset * 60e3));
+}
 export const addDays = (d, n) => new Date(+d + n * 86400000);
 /** “11 月 9 日 周日”；给了 today（“YYYY-MM-DD”）且不是同一年时带上年份：“2025 年 12 月 20 日 周六” */
 export function dayLabel(day, { weekday = true, today = '' } = {}) {

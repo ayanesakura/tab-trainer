@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fmtClock, fmtMin, fmtShort, dayLabel, dueText, gapText, studyBadge, itemNotes, queueRowHTML, doneRowHTML, planRowHTML,
-  ringHTML, level, calendarModel, calendarHTML, sessionText, ratingTip, planNext, stuckText, timeTip, calTabDay, calMove,
+  ringHTML, level, calendarModel, calendarHTML, sessionText, ratingTip, planNext, stuckText, timeTip, calTabDay, calMove, studyDay,
 } from '../../app/static/js/study-view.js';
 import { rowHTML } from '../../app/static/js/library-view.js';
 
@@ -36,6 +36,14 @@ test('时长、日期文案', () => {
   assert.equal(gapText(9), '9 天');
   assert.equal(gapText(16), '2 周');
   assert.equal(gapText(60), '2 个月');
+});
+
+test('练琴日：凌晨 4 点换日，按本地时区', () => {
+  assert.equal(studyDay(Date.UTC(2026, 10, 11, 3, 59), 0), '2026-11-10');
+  assert.equal(studyDay(Date.UTC(2026, 10, 11, 4, 0), 0), '2026-11-11');
+  // UTC+8（getTimezoneOffset 是 -480）：本地 11 月 11 日 04:00 = UTC 11 月 10 日 20:00
+  assert.equal(studyDay(Date.UTC(2026, 10, 10, 19, 59), -480), '2026-11-10');
+  assert.equal(studyDay(Date.UTC(2026, 10, 10, 20, 0), -480), '2026-11-11');
 });
 
 test('曲库一行的计划徽章', () => {

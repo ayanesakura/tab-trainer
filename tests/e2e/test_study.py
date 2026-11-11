@@ -355,3 +355,35 @@ def test_moving_last_folded_plan_row_down_unfolds(server, browser):
     finally:
         for sid in ids:
             _api(server, f"/api/songs/{sid}", "DELETE")
+
+
+def test_day_rollover_refreshes_today_and_log_limit(server, browser):
+    # 页面一直开着跨过凌晨 4 点：每分钟的换日检查重新取“今日”；打开补记框时也重新取，日期上限是新的一天
+    import datetime as dt
+
+    from app import clock
+
+    b = browser
+    try:
+        b.open(server["base"] + "/#study")
+        b.wait_for("!!document.querySelector('#hero .ring')")
+        old = b.js("document.getElementById('studyDate').textContent")
+        clock.set_now(lambda: dt.datetime.now() + dt.timedelta(days=1))  # 服务端过了一天
+        tomorrow = _api(server, "/api/study/today")["day"]
+        # 换日检查：本机时间也过了一天
+        b.js("window.__now = Date.now; Date.now = () => __now() + 864e5; tt.checkDay(); Date.now = __now; true")
+        b.wait_for(f"document.getElementById('studyDate').textContent !== {old!r}", timeout=5)
+        assert tomorrow in b.js("document.getElementById('cal').querySelector('.cell.today').dataset.day")
+        # 补记框：页面上的“今日”还是昨天（重新打开页面后服务端才过一天），打开时重新取
+        clock.set_now(None)
+        b.open(server["base"] + "/#study")
+        b.wait_for("!!document.querySelector('#hero .ring')")
+        clock.set_now(lambda: dt.datetime.now() + dt.timedelta(days=1))
+        b.js("document.getElementById('logAdd').click(); true")
+        b.wait_for("document.getElementById('logDlg').open")
+        b.wait_for(f"document.getElementById('logDay').max === '{tomorrow}'", timeout=5)
+        assert b.js("document.getElementById('logDay').value") == tomorrow
+        b.js("document.getElementById('logCancel').click(); true")
+        assert not b.errors, b.errors
+    finally:
+        clock.set_now(None)

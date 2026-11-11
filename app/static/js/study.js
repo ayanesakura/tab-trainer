@@ -8,7 +8,7 @@ import * as api from '/static/js/lib/api.js';
 import { mountTimer, announce, onAnnounce } from '/static/js/lib/study-timer.js';
 import {
   fmtMin, fmtShort, dayLabel, ringHTML, queueRowHTML, doneRowHTML, planRowHTML, calendarModel, calendarHTML,
-  ratingBadge, ratingTip, sessionText, trainerHref, parseDay, dayKey, calMove,
+  ratingBadge, ratingTip, sessionText, trainerHref, parseDay, studyDay, calMove,
 } from '/static/js/study-view.js';
 
 // day：点开明细的那天；focus：日历里能 Tab 到的那一格（键盘走到 / 点过的那天，见 calTabDay）
@@ -277,10 +277,17 @@ function changed() { announce(); S.onSongs(); refresh({ calendar: false }); }
 // ---------------- 补记 ----------------
 let logLayer = null;
 $('logAdd').onclick = () => {
-  const today = (S.today && S.today.day) || dayKey(new Date(Date.now() - 4 * 3600e3 - new Date().getTimezoneOffset() * 60e3));
+  // 页面开着跨过了凌晨 4 点：手上的“今日”可能是昨天的，先用本机算的（取晚的那个），再找服务端要一次
+  const known = (S.today && S.today.day) || '', local = studyDay(), today = known > local ? known : local;
   $('logDay').value = today; $('logDay').max = today;
   $('logMin').value = '30'; $('logNote').value = '';
   logLayer = UI.layer($('logDlg'), { modal: true, focus: $('logMin'), onClose: () => { logLayer = null; } });
+  refresh().then(() => {
+    const day = S.today && S.today.day, f = $('logDay');
+    if (!logLayer || !day || day === f.max) return;
+    if (f.value === f.max || f.value > day) f.value = day; // 没改过日期的跟着换；超出上限的拉回来
+    f.max = day;
+  });
 };
 $('logCancel').onclick = () => logLayer && logLayer.close();
 $('logForm').onsubmit = async e => {
@@ -311,6 +318,17 @@ async function saveSettings(body, msg) {
   try { const st = await api.put('/api/study/settings', body); syncSettings(st.settings || st); toast(msg); announce(); refresh(); } catch (e) { toast(e.message, 'err', 4000); }
 }
 
+// ---------------- 换日 ----------------
+// 页面一直开着跨过凌晨 4 点（练琴日换了）：“今日”、补记的日期上限都要换。每分钟用本机时间算一次练琴日，
+// 变了（只在变的那一次）而且和手上的“今日”不一样时重新取。练琴页没在显示时不取，切过来时（setVisible）会取
+let seenDay = '';
+export function checkDay() {
+  const d = studyDay();
+  if (d === seenDay) return;
+  seenDay = d;
+  if (S.visible && S.today && d !== S.today.day) refresh();
+}
+
 // ---------------- 入口 ----------------
 /** onSongs：计划变了，让曲库重新取列表（列表里有每首的 study） */
 export function initStudy({ onSongs } = {}) {
@@ -324,6 +342,8 @@ export function initStudy({ onSongs } = {}) {
   // 页面重新可见（练完一首从练习页回来、过了零点）：重新取今日
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.visible) refresh(); });
   addEventListener('pageshow', e => { if (e.persisted && S.visible) refresh(); });
+  seenDay = studyDay();
+  setInterval(checkDay, 60e3);
   refresh(); // 设置页的三项、计时器也要用
 }
 export function setVisible(v) {
