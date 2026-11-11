@@ -144,7 +144,12 @@ def test_timer_manual_log_and_calendar(server, browser):
         b.wait_for("!!document.querySelector('#dayCard [data-del]')")
         assert "爬格子" in b.js("document.getElementById('dayCard').textContent")
         # 备注长了会截断：悬停提示里是全文
-        assert b.js("document.querySelector('#dayCard [data-del]').closest('.day-item').querySelector('.lbl').title") == "补记 · 爬格子"
+        assert (
+            b.js(
+                "document.querySelector('#dayCard [data-del]').closest('.day-item').querySelector('.lbl').title"
+            )
+            == "补记 · 爬格子"
+        )
         created = [s["id"] for s in _api(server, f"/api/study/day/{today}")["sessions"]]
         b.js("document.querySelector('#dayCard [data-del]').click(); true")
         b.wait_for("!!document.querySelector('.dlg[open] [data-ok]')")
@@ -268,7 +273,9 @@ def test_calendar_keyboard(server, browser):
     assert b.js("document.activeElement.dataset.day") == (d - dt.timedelta(days=7)).isoformat()
     # 焦点框看得见（不是今天、没选中的格子）：和全局焦点框一样是强调色
     time.sleep(0.3)  # 格子的 outline-color 有过渡
-    style = b.js("""(s => [s.outlineStyle, s.outlineColor, s.outlineWidth])(getComputedStyle(document.activeElement))""")
+    style = b.js(
+        """(s => [s.outlineStyle, s.outlineColor, s.outlineWidth])(getComputedStyle(document.activeElement))"""
+    )
     accent = b.js("""(() => { const x = document.createElement('i'); x.style.color = 'var(--accent)'; document.body.append(x);
       const c = getComputedStyle(x).color; x.remove(); return c; })()""")
     assert style == ["solid", accent, "2px"], (style, accent)
@@ -302,7 +309,9 @@ def test_calendar_scrolled_to_today_when_opened_from_library(server):
         cal = "document.getElementById('cal')"
         assert b.js(f"{cal}.scrollWidth > {cal}.clientWidth + 50")  # 日历确实比窗口宽
         b.wait_for(f"{cal}.scrollLeft + {cal}.clientWidth >= {cal}.scrollWidth - 1", timeout=3)
-        assert b.js("(r => r.left >= 0 && r.right <= innerWidth)(document.querySelector('#cal .cell.today').getBoundingClientRect())")
+        assert b.js(
+            "(r => r.left >= 0 && r.right <= innerWidth)(document.querySelector('#cal .cell.today').getBoundingClientRect())"
+        )
         assert not b.errors, b.errors
 
 
@@ -312,7 +321,9 @@ def test_other_tab_changes_refresh_plan_and_library(server, browser):
     b = browser
     badge = f"document.querySelector('.song-row[data-id=\"{gp}\"] .plan-badge')"
     plan_row = f"document.querySelector('#plan .plan-row[data-id=\"{gp}\"]')"
-    announce = "new BroadcastChannel('tt-study').postMessage('changed'); true"  # 同一页面里另一个频道对象收得到
+    announce = (
+        "new BroadcastChannel('tt-study').postMessage('changed'); true"  # 同一页面里另一个频道对象收得到
+    )
     try:
         b.open(server["base"] + "/#library")
         b.wait_for(f"!!document.querySelector('.song-row[data-id=\"{gp}\"]')")
@@ -346,7 +357,7 @@ def test_moving_last_folded_plan_row_down_unfolds(server, browser):
         b.wait_for("!!document.querySelector('#plan [data-fold]')")
         assert b.js(f"{rows}.length") == 6
         sixth = b.js(f"{rows}[5].dataset.id")
-        btn = f"document.querySelector('#plan .plan-row[data-id=\"{sixth}\"] [data-mv=\"1\"]')"
+        btn = f'document.querySelector(\'#plan .plan-row[data-id="{sixth}"] [data-mv="1"]\')'
         b.js(f"{btn}.focus(); {btn}.click(); true")
         b.wait_for(f"{rows}.length > 6")  # 展开了
         assert b.js(f"{rows}[6].dataset.id") == sixth
@@ -371,7 +382,9 @@ def test_day_rollover_refreshes_today_and_log_limit(server, browser):
         clock.set_now(lambda: dt.datetime.now() + dt.timedelta(days=1))  # 服务端过了一天
         tomorrow = _api(server, "/api/study/today")["day"]
         # 换日检查：本机时间也过了一天
-        b.js("window.__now = Date.now; Date.now = () => __now() + 864e5; tt.checkDay(); Date.now = __now; true")
+        b.js(
+            "window.__now = Date.now; Date.now = () => __now() + 864e5; tt.checkDay(); Date.now = __now; true"
+        )
         b.wait_for(f"document.getElementById('studyDate').textContent !== {old!r}", timeout=5)
         assert tomorrow in b.js("document.getElementById('cal').querySelector('.cell.today').dataset.day")
         # 补记框：页面上的“今日”还是昨天（重新打开页面后服务端才过一天），打开时重新取

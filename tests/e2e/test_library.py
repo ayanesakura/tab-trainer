@@ -889,7 +889,10 @@ def test_bundle_import_report_per_bundle(server, browser):
     b.wait_for("!!document.querySelector('.song-row')")
     b.js(IMPORT_FAKE % (json.dumps(report), 200))
     b.wait_for("document.getElementById('importDlg').open")
-    assert b.js("document.getElementById('importTitle').textContent") == "已导入 1 首 · 1 首已有 · 1 个包无法导入"
+    assert (
+        b.js("document.getElementById('importTitle').textContent")
+        == "已导入 1 首 · 1 首已有 · 1 个包无法导入"
+    )
     sections = b.js(
         "[...document.querySelectorAll('#importList .ib')].map(x => x.textContent.replace(/\\s+/g, ' ').trim())"
     )
@@ -937,7 +940,9 @@ def test_ai_actions_without_key(server, browser):
     b = browser
     _fake_key(b, False)
     b.open(server["base"] + "/")
-    b.wait_for(f"!!document.querySelector('[data-more=\"{img}\"]') && !document.getElementById('keyNotice').hidden")
+    b.wait_for(
+        f"!!document.querySelector('[data-more=\"{img}\"]') && !document.getElementById('keyNotice').hidden"
+    )
     b.js("""window.__posts = []; const of = window.fetch; window.fetch = (u, init = {}) => {
       if ((init.method || 'GET') !== 'GET') { __posts.push(String(u));
         if (String(u).endsWith('/api/songs')) return Promise.resolve(new Response('{"id": "x"}', { status: 200, headers: { 'Content-Type': 'application/json' } })); }
@@ -1034,12 +1039,16 @@ def test_menu_tab_select_all_label_and_empty_library(server, browser):
     assert b.js("UI.hasLayer()") is False
     assert b.js(f"{more}.getAttribute('aria-expanded')") == "false"
     assert b.js("document.activeElement !== document.body")
-    assert b.js(f"!!({more}.compareDocumentPosition(document.activeElement) & Node.DOCUMENT_POSITION_FOLLOWING)")
+    assert b.js(
+        f"!!({more}.compareDocumentPosition(document.activeElement) & Node.DOCUMENT_POSITION_FOLLOWING)"
+    )
     # Shift+Tab 同样关掉，焦点往前走
     b.js(f"{more}.focus(); {more}.click(); true")
     b.key("Tab", vk=9, modifiers=8)
     assert b.js("!document.querySelector('.menu')")
-    assert b.js(f"!!({more}.compareDocumentPosition(document.activeElement) & Node.DOCUMENT_POSITION_PRECEDING)")
+    assert b.js(
+        f"!!({more}.compareDocumentPosition(document.activeElement) & Node.DOCUMENT_POSITION_PRECEDING)"
+    )
     # “全选”复选框读出来是“全选当前列表”，不是“已选 N 首”
     b.js("document.getElementById('selectBtn').click(); true")
     assert b.js("document.getElementById('selectAll').getAttribute('aria-label')") == "全选当前列表"
@@ -1059,26 +1068,40 @@ def test_narrow_screen_layout(server):
     from tests.e2e.cdp import Browser
 
     img = server["image"]
-    _put_json(server, f"/api/songs/{img}/tags", {"tags": ["指弹", "练习中", "民谣", "古典", "很长很长的标签名字"]})
+    _put_json(
+        server, f"/api/songs/{img}/tags", {"tags": ["指弹", "练习中", "民谣", "古典", "很长很长的标签名字"]}
+    )
     no_hscroll = "document.documentElement.scrollWidth <= innerWidth"
     inside = "(r => r.left >= {m} - 0.5 && r.right <= innerWidth - {m} + 0.5 && r.width > 0)({el}.getBoundingClientRect())"
     try:
         with Browser(width=600, height=844) as b:  # 无界面 Chrome 的窗口最窄 500：用设备尺寸模拟
-            b._run(b._send("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=1, mobile=False))
+            b._run(
+                b._send(
+                    "Emulation.setDeviceMetricsOverride",
+                    width=390,
+                    height=844,
+                    deviceScaleFactor=1,
+                    mobile=False,
+                )
+            )
             b.open(server["base"] + "/#library")
             row = f"document.querySelector('.song-row[data-id=\"{img}\"]')"
             b.wait_for(f"!!{row}?.querySelector('.tag')")
             assert b.js("innerWidth") == 390
             assert b.js(no_hscroll)
             assert b.js(f"{row}.querySelector('.title').getBoundingClientRect().width") > 40
-            assert b.js(f"{row}.querySelector('.who').getBoundingClientRect().top < {row}.querySelector('.src-ic').getBoundingClientRect().bottom")
+            assert b.js(
+                f"{row}.querySelector('.who').getBoundingClientRect().top < {row}.querySelector('.src-ic').getBoundingClientRect().bottom"
+            )
             # 设置：Base URL 输入框不撑出横向滚动；“?”的说明在屏幕里
             b.js("location.hash = 'settings'; true")
             b.wait_for("!document.getElementById('view-settings').hidden")
             assert b.js(no_hscroll)
             b.js("document.querySelector('[aria-describedby=\"doubleHelp\"]').focus(); true")
             assert b.js(inside.format(m=0, el="document.getElementById('doubleHelp')"))
-            assert b.js("(p => p.top >= document.querySelector('[aria-describedby=\"doubleHelp\"]').getBoundingClientRect().bottom)(document.getElementById('doubleHelp').getBoundingClientRect())")
+            assert b.js(
+                "(p => p.top >= document.querySelector('[aria-describedby=\"doubleHelp\"]').getBoundingClientRect().bottom)(document.getElementById('doubleHelp').getBoundingClientRect())"
+            )
             # 确认框：两边各留 16px
             b.js("UI.confirm('测试'); true")
             b.wait_for("!!document.querySelector('.dlg-msg[open]')")
@@ -1096,3 +1119,34 @@ def test_narrow_screen_layout(server):
             assert not b.errors, b.errors
     finally:
         _put_json(server, f"/api/songs/{img}/tags", {"tags": []})
+
+
+def test_pages_save_without_key_says_so_before_asking_to_delete(server, browser):
+    # 没有 key、新加了页又删了有小节的旧页：先说明要填 key，不先弹“删除 N 页原谱？”（确认了也保存不了）
+    img = server["image"]
+    b = browser
+    _fake_key(b, False)
+    b.open(server["base"] + "/")
+    b.wait_for(
+        f"!!document.querySelector('[data-more=\"{img}\"]') && !document.getElementById('keyNotice').hidden"
+    )
+    b.js(f"tt.openPages('{img}').then(() => true)")
+    b.wait_for("document.querySelectorAll('.page-card').length === 1")
+    b.js("""(() => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'more.png', { type: 'image/png' }));
+      const input = document.getElementById('pagesFile'); input.files = dt.files; input.dispatchEvent(new Event('change')); })(); true""")
+    b.wait_for("document.querySelectorAll('.page-card').length === 2")
+    b.js("document.querySelector('.page-card[data-i=\"0\"] [data-rm]').click(); true")
+    b.wait_for(
+        "document.querySelectorAll('.page-card').length === 1 && !document.getElementById('pagesSave').disabled"
+    )
+    b.js(
+        "window.__posts = []; const of = window.fetch; window.fetch = (u, init = {}) => { if ((init.method || 'GET') !== 'GET') __posts.push(String(u)); return of(u, init); }; true"
+    )
+    b.js("document.getElementById('pagesSave').click(); true")
+    b.wait_for(
+        "[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('API key'))", timeout=5
+    )
+    assert b.js("!!document.querySelector('.dlg-msg')") is False  # 没弹删除确认
+    assert b.js("__posts") == []
+    assert b.js("document.getElementById('pagesDlg').open") is True  # 对话框还开着，调整没丢
+    assert not b.errors, b.errors

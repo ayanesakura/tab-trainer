@@ -532,9 +532,10 @@ $('pagesFile').onchange = e => {
 $('pagesClose').onclick = closePages;
 $('pagesCancel').onclick = closePages;
 $('pagesSave').onclick = async () => {
+  // 先查 key 再问删不删：不然确认了删除之后才说保存不了
+  if (pg.items.some(it => it.kind === 'new') && !keyOk()) { toast(`新加的页要用 AI 识别：${NO_KEY}`, 'err', 4000); return; }
   const removed = removedPages();
   if (removed.bars && !await UI.confirm(`删除的页上有 ${removed.bars} 个小节，它们的提示、问答和练习记录会一起删掉。`, { title: `删除 ${removed.pages} 页原谱？`, ok: '删除并保存', danger: true })) return;
-  if (pg.items.some(it => it.kind === 'new') && !keyOk()) { toast(`新加的页要用 AI 识别：${NO_KEY}`, 'err', 4000); return; }
   const files = [];
   const order = pg.items.map(it => (it.kind === 'old' ? it.file : `new:${files.push(pg.files[it.k]) - 1}`));
   await api.withBusy($('pagesSave'), async () => {
