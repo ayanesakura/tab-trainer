@@ -71,13 +71,18 @@ export async function conflict(e) {
   UI.toast(e.message, 'err', 5000);
   await refresh();
 }
-/** 423：曲子有任务在跑 / 这个小节锁着（不是冲突，内容没在别处改过）：只把服务给的说明告诉用户，等一会再试 */
+/** 423：曲子有任务在跑 / 这个小节锁着（不是冲突，内容没在别处改过）：把服务给的说明告诉用户，等一会再试 */
 export const isLocked = e => !!e && e.status === 423;
 export const lockedToast = e => UI.toast(e.message, 'info', 5000);
-/** 写接口出错的统一处理：409 → conflict（提示并刷新）；423 → 只提示；其他 → prefix + 说明 */
+/** 423 的统一处理：提示，并重新取一次曲子——任务多半是在别处（曲库页）开始的，这里还不知道：刷新后显示进度、接上轮询 */
+export async function locked(e) {
+  lockedToast(e);
+  await refresh();
+}
+/** 写接口出错的统一处理：409 → conflict（提示并刷新）；423 → locked（提示并刷新）；其他 → prefix + 说明 */
 export async function writeFailed(e, prefix = '') {
   if (e.status === 409) await conflict(e);
-  else if (isLocked(e)) lockedToast(e);
+  else if (isLocked(e)) await locked(e);
   else UI.toast(prefix + e.message, 'err', 5000);
 }
 /** 第一次加载并开始轮询：识别 / 讲解进行中每 2.5 秒取一次，出错时退避重试（不会停） */
@@ -426,4 +431,8 @@ export function initSong() {
   $('titleEditBtn').onclick = openMetaDlg;
   const title = $('songTitle');
   title.addEventListener('click', () => { if (get('song')) openMetaDlg(); });
+  // 没有任务在跑时不轮询，可任务也可能在别处开始（曲库页的精修整首、重试失败的行、补页、改页序），曲名也可能在别处改了：
+  // 切回这个标签页、从往返缓存恢复（按“后退”回来）时重新取一次，又在忙就接上轮询（曲库页也是这样）
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && SONG_ID) refresh(); });
+  addEventListener('pageshow', e => { if (e.persisted && SONG_ID) refresh(); });
 }

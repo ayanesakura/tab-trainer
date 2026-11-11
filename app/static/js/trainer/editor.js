@@ -9,7 +9,7 @@ import { TECH_NAME, STRINGS, INSTRUMENT } from '../vocab.js';
 import { stop, holdBarWhile, barBox } from './player.js';
 import { provide } from './hooks.js';
 import { addShortcuts } from './keys.js';
-import { refresh, applySong, conflict, isLocked, lockedToast } from './song.js';
+import { refresh, applySong, conflict, isLocked, locked } from './song.js';
 
 // ---------------------------------------------------------------------
 // 修改小节（JSON）、重新识别这一行
@@ -70,7 +70,7 @@ async function putBar(barId, events, rev, msg, isUndo = false) {
       await conflict(e);
       return 'conflict';
     }
-    if (isLocked(e)) { lockedToast(e); return 'locked'; } // 不是冲突：撤销记录都留着，等一会再试
+    if (isLocked(e)) { await locked(e); return 'locked'; } // 不是冲突：撤销记录都留着，等一会再试（刷新后显示在忙什么）
     if (e.status === 404) {
       // 小节不在了（比如这一行重新识别过，小节换了新的 id）：它的撤销记录都撤销不了，作废（不然一直挡在撤销栈顶上）
       for (let i = undoStack.length - 1; i >= 0; i--) if (undoStack[i].barId === barId) undoStack.splice(i, 1);
@@ -137,8 +137,8 @@ const barEvents = bi => { const b = get('song').bars[bi]; return b.events && b.e
 export function openNotePop(beat, note) {
   const bi = beat.voice.bar.index, s = get('song');
   if (bi >= s.bars.length) return;
-  const locked = barLocked(bi);
-  if (locked) { UI.toast(locked, 'info'); return; }
+  const why = barLocked(bi);
+  if (why) { UI.toast(why, 'info'); return; }
   if (beat.graceType) { UI.toast('倚音请在小节卡片的“纠错 → 改数据”里改', 'info'); return; }
   if (barBusy(s.bars[bi].id)) return; // 上一次修改还没存好：这时的内容是旧的
   const ei = eventIndexAt(get('view').beatMap[bi] || [0], beat.playbackStart);
@@ -249,8 +249,8 @@ async function deleteNotePop() {
 function editThisBar() {
   const bi = get('ui.bar');
   if (bi < 0) return;
-  const locked = barLocked(bi);
-  if (locked) { UI.toast(locked, 'info'); return; }
+  const why = barLocked(bi);
+  if (why) { UI.toast(why, 'info'); return; }
   if (get('ui.editMode')) { setEditMode(false); return; }
   setEditMode(true);
   if (get('ui.drawer')) set('ui.drawer', false); // 窄屏：抽屉挡着谱面
@@ -274,8 +274,8 @@ export function initEditor() {
   $('editBtn').onclick = () => {
     const bar = curBar();
     if (!bar) return;
-    const locked = barLocked(get('ui.bar'));
-    if (locked) { UI.toast(locked, 'info'); return; }
+    const why = barLocked(get('ui.bar'));
+    if (why) { UI.toast(why, 'info'); return; }
     fillEditor(bar);
     $('editor').hidden = false;
     $('edText').focus();

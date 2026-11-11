@@ -1579,3 +1579,68 @@ def test_mouse_ask_while_playing_goes_to_the_bar_it_was_typed_for(trainer):
     assert b.js("__refines[0]") == {"bars": ["bar1"], "hint": "第 3 拍是 2 弦 4 品"}
     b.js("tt.stop(); true")
     assert not b.errors, b.errors
+
+
+def _put_meta(server, sid, body):
+    req = urllib.request.Request(
+        f"{server['base']}/api/songs/{sid}/meta",
+        data=json.dumps(body).encode(),
+        method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    return json.load(urllib.request.urlopen(req))
+
+
+def test_background_job_started_elsewhere_shows_up(server, trainer, image_song_restore):
+    """没有任务时练习页不轮询：任务在别处（曲库页）开始后，切回这个标签页就刷新、显示在忙并接上轮询；
+    改小节拿到 423 时也刷新（以前只提示，精修 / 重新识别按钮还能点，也看不到进度）。"""
+    from app.jobs import jobs
+
+    sid, store = server["image"], server["store"]
+    b = trainer()
+    b.wait_for("!tt.song.busy && !document.getElementById('refineBtn').disabled")
+    try:
+        assert jobs.claim(sid)  # 相当于在曲库页点了精修整首
+        time.sleep(3)  # 没在轮询：页面不知道
+        assert b.js("tt.song.busy") is False
+        b.js("document.dispatchEvent(new Event('visibilitychange')); true")  # 切回这个标签页
+        b.wait_for("tt.song.busy && document.getElementById('refineBtn').disabled", timeout=5)
+        jobs.release(sid)
+        b.wait_for(
+            "!tt.song.busy && !document.getElementById('refineBtn').disabled", timeout=10
+        )  # 轮询接上了
+        # 第一行在别处开始重新识别；页面不知道，打开小节编辑器保存：423 → 提示并刷新
+        store.update(sid, lambda s: s["systems"][0].update(status="parsing"))
+        assert jobs.claim(sid)
+        time.sleep(3)
+        assert b.js("tt.song.busy") is False
+        b.js("tt.set('ui.bar', 0); document.getElementById('editBtn').click(); true")
+        b.wait_for("!document.getElementById('editor').hidden")
+        b.js("document.getElementById('edSave').click(); true")
+        b.wait_for(
+            "[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('正在重新识别'))"
+        )
+        b.wait_for("tt.song.busy && tt.song.systems[0].status === 'parsing'", timeout=5)
+        assert b.js("document.getElementById('reparseBtn').disabled")
+        assert not b.errors, b.errors
+    finally:
+        jobs.release(sid)
+        store.update(sid, lambda s: s["systems"][0].update(status="done"))
+
+
+def test_practice_page_restored_by_back_shows_fresh_data(server, trainer):
+    """从往返缓存恢复的练习页（去了曲库页再按“后退”）：重新取一次曲子，标题不是旧的。"""
+    sid = server["image"]
+    old = _song(server, sid)["title"]
+    b = trainer()
+    try:
+        b.js("window.__same = 1; location.href = '/'; true")
+        b.wait_for("location.pathname === '/' && document.readyState === 'complete'")
+        _put_meta(server, sid, {"title": "E2E 后退回来的新名字"})
+        b.js("history.back(); true")
+        b.wait_for("location.pathname === '/trainer' && document.readyState === 'complete'")
+        assert b.js("window.__same") == 1  # 确实是从往返缓存恢复的（不是重新加载）
+        b.wait_for("document.getElementById('songTitle').textContent === 'E2E 后退回来的新名字'", timeout=5)
+        assert not b.errors, b.errors
+    finally:
+        _put_meta(server, sid, {"title": old})
