@@ -40,6 +40,8 @@ from app.staleness import (
     invalidate_plan,
     invalidate_tips_for_setting,
     note_user_tip,
+    orig_plan_change,
+    plan_has_bar,
     reconcile_bars,
     restore_bar,
     restore_plan_bar,
@@ -391,10 +393,13 @@ def edit_bar(sid: str, bar_id: str, events, tip: str | None, rev: int | None = N
         new = cleaned or rest_bar(s["meta"], bar)
         changed = not same_events(new, bar["events"])
         if "_orig" in bar and same_events(new, bar["_orig"]["events"]):
+            keep = orig_plan_change(bar)  # 手改之前就记在练习建议里的（精修改过之类）：改回原样也还是变过
             restore_bar(bar)  # 识别时留下的提示（OCR 不一致等）也恢复
-            restore_plan_bar(s, bar_id)
+            if not keep:
+                restore_plan_bar(s, bar_id)
         elif changed:
-            invalidate_bar(bar)  # 识别时留下的提示说的是原来的音：清掉（记在 _orig 里，撤销时恢复）
+            # 识别时留下的提示说的是原来的音：清掉（记在 _orig 里，撤销时恢复）
+            invalidate_bar(bar, plan_has_bar(s, bar_id))
             invalidate_plan(s, bar_id)
         if changed:  # 原样保存（JSON 编辑器没改就保存）不动占位标记和提示，小节照样“待核对”
             bar.pop("placeholder", None)  # 用户自己写的内容，不再是识别失败的占位休止

@@ -24,18 +24,29 @@ from app.music import DERIVED_WARNS, bar_length, canonical_events, same_events
 SETTING_KEYS = ("tuning_midi", "capo", "time_signature")
 
 
-def invalidate_bar(bar: dict) -> None:
+def invalidate_bar(bar: dict, plan_changed_before: bool = True) -> None:
     """这个小节的音变了：提示和不确定说明是按旧音写的，清掉；问答保留但标成“改谱之前的”。
-    第一次改动前的内容记在 _orig 里：之后又改回原样（比如撤销），就把它们恢复。"""
+    第一次改动前的内容记在 _orig 里：之后又改回原样（比如撤销），就把它们恢复。
+    plan_changed_before：第一次改之前它是不是已经记在练习建议的 changed_bars 里（改回原样时据此决定移不移，见 orig_plan_change）。"""
     first = "_orig" not in bar
     bar["edited"] = True
     bar.pop("refine", None)  # 手改以后撤销精修不再适用（会盖掉用户的改动）
     if first:
-        bar["_orig"] = _snapshot(bar)
+        bar["_orig"] = {**_snapshot(bar), "plan_changed_before": plan_changed_before}
     bar["tip"] = ""
     bar["uncertain"] = ""
     bar["warn"] = []  # 识别时留下的提示（OCR 不一致等）说的是原来的音；按内容算的读取时重算
     _stale_qa(bar, "stale_by_edit" if first else None)
+
+
+def plan_has_bar(s: dict, bar_id: str) -> bool:
+    """练习建议的 changed_bars 里有没有这个小节（没有练习建议算没有）。"""
+    return bar_id in ((s.get("plan") or {}).get("changed_bars") or [])
+
+
+def orig_plan_change(bar: dict) -> bool:
+    """改回原样之前调：第一次手改之前它是不是已经记在 changed_bars 里（早先的 _orig 没记：按是）。"""
+    return (bar.get("_orig") or {}).get("plan_changed_before", True)
 
 
 def _snapshot(bar: dict) -> dict:

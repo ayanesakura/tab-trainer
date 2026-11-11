@@ -368,3 +368,37 @@ def test_lyrics_are_cleaned_per_verse():
     assert music.clean_lyrics(["", ""]) == [] and music.clean_lyrics("天真") == []
     ev = music.clean_events([{"dur": "1", "notes": [], "lyrics": ["我", None]}])
     assert ev == [{"dur": "1", "notes": [], "lyrics": ["我"]}]
+
+
+def test_editing_a_bar_back_keeps_a_plan_change_that_predates_the_edit(data_dir):
+    """手改一个小节又改回原样：只撤掉这次手改让练习建议记下的改动；改之前它就记在 changed_bars 里
+    （比如精修改过、生成建议期间变过），改回原样后还在。早先的 _orig 没记这一项：保守地不移除。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    bar = store.load(sid)["bars"][1]
+    orig, other = bar["events"], [{"dur": "1", "notes": []}]
+
+    def with_plan(changed):
+        store.update(sid, lambda s: s.update(plan={"overview": "ok", "steps": [], "changed_bars": changed}))
+
+    # 改之前不在：改回原样后移掉
+    with_plan([])
+    songs.edit_bar(sid, bar["id"], other, None)
+    assert store.load(sid)["plan"]["changed_bars"] == [bar["id"]]
+    song = songs.edit_bar(sid, bar["id"], orig, None)
+    assert song["plan"]["changed_bars"] == [] and not song["plan"]["stale"]
+
+    # 改之前就在：改回原样后还在
+    with_plan([bar["id"]])
+    songs.edit_bar(sid, bar["id"], other, None)
+    song = songs.edit_bar(sid, bar["id"], orig, None)
+    assert song["plan"]["changed_bars"] == [bar["id"]] and song["plan"]["stale"]
+
+    # 早先的 _orig（没有 plan_changed_before）：不知道改之前在不在，不移除
+    with_plan([])
+    songs.edit_bar(sid, bar["id"], other, None)
+    store.update(
+        sid, lambda s: next(b for b in s["bars"] if b["id"] == bar["id"])["_orig"].pop("plan_changed_before")
+    )
+    song = songs.edit_bar(sid, bar["id"], orig, None)
+    assert song["plan"]["changed_bars"] == [bar["id"]]

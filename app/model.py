@@ -260,6 +260,9 @@ class Orig(_M):
     tip: str = ""
     uncertain: str = ""
     warn: list[Warn] | None = None  # 识别时留下的警告（OCR 不一致等），撤销时恢复；早先的没记
+    # 第一次手改之前这个小节已经记在练习建议的 changed_bars 里（精修、生成期间变过…）：改回原样时不移掉。
+    # 早先的没记：按 True 算（不知道就不移除）
+    plan_changed_before: bool = True
 
 
 class RefinePrev(_M):
