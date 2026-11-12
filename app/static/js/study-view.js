@@ -300,10 +300,12 @@ export function calendarHTML(model, selected = '', focus = '') {
 
 // ---------------- 某一天的明细 ----------------
 const hhmm = at => String(at || '').slice(11, 16);
-/** 一条计时 / 补记（GET /api/study/day 的 sessions 里一项）→ {label, sub}（纯文本） */
+/** 一条计时 / 补记 / 练习页的时间（GET /api/study/day 的 sessions 里一项）→ {label, sub}（纯文本） */
 export function sessionText(s) {
   if (s.kind === 'manual') return { label: '补记', sub: s.note || '' };
   const segs = (s.segments || []).filter(x => x && x[0]);
   const a = segs.length ? hhmm(segs[0][0]) : '', b = segs.length ? hhmm(segs[segs.length - 1][1]) : '';
+  // 练习页开着的时间（不开播放也算）：sub 写哪首曲子（曲子删了就不写）
+  if (s.kind === 'page') return { label: a && b ? `练习页 ${a}–${b}` : '练习页', sub: [s.title, s.edited && '改过分钟数'].filter(Boolean).join(' · ') };
   return { label: a && b ? `计时 ${a}–${b}` : '计时', sub: [segs.length > 1 && `暂停 ${segs.length - 1} 次`, s.note].filter(Boolean).join(' · ') };
 }

@@ -179,6 +179,15 @@ class StudyTimerIn(_Strict):
     )  # 只有 stop 用：忘了停时改成实际练的分钟数
 
 
+class StudyPageIn(_Strict):
+    song: str | None = Field(None, max_length=64)  # 在哪首曲子的练习页
+    end: bool = False  # 页面切走 / 关掉时的最后一次心跳
+
+
+class StudyPageMinutesIn(_Strict):
+    minutes: float = Field(ge=1, le=MAX_SESSION_MINUTES)
+
+
 class StudySessionIn(_Strict):
     day: str = Field(pattern=DAY)
     minutes: float = Field(ge=1, le=MAX_SESSION_MINUTES)

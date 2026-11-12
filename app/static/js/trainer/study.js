@@ -4,9 +4,13 @@
 // 每次打分记下：1–4 分、勾的问题、卡住的小节（stuck_bars）、备注、当时的速度（play.bpm）；同一天再打一次是改分（后端按天取最后一次）。
 //
 // 提醒打分（FSRS 靠它排下次什么时候练，但没人提醒就常常忘了点）：这首在计划里、今天还没打分时，点顶栏的“返回”或
-// 计时器的“结束”先弹出打分（多一个“跳过”）。从今日清单进来（?from=today）的总是提醒；别的入口要在这次打开里练过
-// 至少 1 分钟（只是打开看一眼不打扰）、计划没暂停。一次打开最多提醒一次，跳过 / 关掉以后不再拦。
+// 计时器的“结束”先弹出打分（多一个“跳过”）。从今日清单进来（?from=today）的总是提醒；别的入口要在这次打开里播放 / 敲节奏
+// 至少 1 分钟，或者点“返回”时这页开了 ASK_MINUTES 分钟以上（不开播放、看着谱子练的；只是打开看一眼不打扰），计划没暂停。一次打开最多提醒一次，跳过 / 关掉以后不再拦。
 // 卡住的小节：默认勾上现在循环的这几个小节（循环全曲或太长时不勾），今天打过分的带出上次勾的。
+//
+// 练琴时间：这页开着（在前台）的时间自动记进今天的练琴时间（lib/page-time.js），不开播放、只看着谱子练也算。
+// 点“返回”时这次在这页待了 2 分钟以上、秒表没在走（走着的话以秒表为准），确认一下记多少分钟：要提醒打分时放在打分弹层里，
+// 否则单独问一句（取消 = 留在这页）。直接关页面、浏览器后退不问，按记下的算。
 
 import { get, on } from './store.js';
 import { setLocal } from './song.js';
@@ -17,6 +21,7 @@ import { mountTimer, announce } from '../lib/study-timer.js';
 import { KINDS, RATING_CLS, ratingName, gapText, dueText } from '../study-view.js';
 import { STUDY_RATINGS, STUDY_ISSUES } from '../vocab.js';
 import { markBack } from '../lib/lib-return.js';
+import { trackPageTime } from '../lib/page-time.js';
 
 const RATE_TIPS = { 1: '弹不下来，要停', 2: '能弹完，有几处出错', 3: '基本没错', 4: '很轻松，可以隔久一点' };
 const fromToday = new URLSearchParams(location.search).get('from') === 'today';
@@ -29,6 +34,8 @@ let then = null; // 提醒打分时：打完分 / 跳过以后接着做的事（
 let prompted = false; // 这次打开已经提醒过
 let practiced = 0, since = 0; // 这次打开练了多少秒（播放 / 敲节奏）
 const STUCK_MAX = 12; // 循环范围超过这么多小节就不默认勾
+const ASK_MINUTES = 2; // 这页开了这么多分钟以上，离开时才确认记多少
+let pageTime = null;
 
 function paintButton(st) {
   const btn = $('rateBtn');
@@ -84,6 +91,9 @@ function openPop(prompt = null) {
   then = prompt ? prompt.done : null;
   $('rateTitle').textContent = prompt ? prompt.title : '今天弹得怎么样？';
   $('rateFoot').hidden = !prompt;
+  const mins = prompt && prompt.minutes != null ? prompt.minutes : null; // 离开时顺便确认练琴时间
+  $('rateTimeRow').hidden = mins == null;
+  $('rateMinutes').value = mins == null ? '' : String(mins);
   $('rateSkip').textContent = prompt ? prompt.skip : '跳过';
   // 今天打过分：带出上次勾的问题和备注，改分时不用重来
   picked.clear();
@@ -103,20 +113,52 @@ function openPop(prompt = null) {
   });
 }
 
-/** 这时候要不要提醒打分（见文件开头） */
-function shouldPrompt() {
+/** 这时候要不要提醒打分（见文件开头）。pageMinutes：这页开了几分钟（点“返回”时才知道，别处是 null） */
+function shouldPrompt(pageMinutes = null) {
   const st = study();
   if (!st || st.rated_today || prompted) return false;
   if (fromToday) return true;
   const now = since ? practiced + (performance.now() - since) / 1000 : practiced;
-  return !st.paused && now >= 60;
+  return !st.paused && (now >= 60 || (pageMinutes ?? 0) >= ASK_MINUTES);
 }
-/** 提醒打分；不用提醒时返回 false（调用方照常继续） */
-function promptRating(done, title, skip) {
-  if (!shouldPrompt()) return false;
+/** 提醒打分；不用提醒时返回 false（调用方照常继续）。minutes：同时确认这次记多少分钟练琴时间（null = 不问） */
+function promptRating(done, title, skip, minutes = null) {
+  if (!shouldPrompt(minutes)) return false;
   prompted = true;
-  openPop({ done, title, skip });
+  openPop({ done, title, skip, minutes });
   return true;
+}
+
+/** 离开前要确认的练琴时间（分钟，取整）；不用问（不到 ASK_MINUTES、秒表在走、没记下）是 null */
+async function minutesToConfirm() {
+  const [p, t] = await Promise.all([pageTime.now(), api.get('/api/study/timer').catch(() => null)]);
+  if (!p || (t && t.timer && t.timer.running)) return null;
+  const m = Math.round(p.minutes);
+  return m >= ASK_MINUTES ? m : null;
+}
+/** 按确认的分钟数记下（0 = 这次不算）；数字不对返回 false（留在这页） */
+async function saveMinutes(v) {
+  const m = Number(String(v).trim());
+  if (!(Number.isFinite(m) && m >= 0 && m <= 600)) { UI.toast('分钟数要在 0–600 之间', 'err'); return false; }
+  try {
+    if (Math.round(m) === 0) await pageTime.drop(); else await pageTime.keep(Math.round(m));
+    announce();
+  } catch (e) {
+    UI.toast(e.message, 'err', 4000); // 改不了就按自动记下的算，照常离开
+  }
+  return true;
+}
+/** 点了“返回”：确认练琴时间（和打分一起或者单独问），再走 */
+async function leave(href) {
+  const go = () => { markBack(SONG_ID, href); location.href = href; };
+  const mins = await minutesToConfirm();
+  const done = async () => { if (mins == null || await saveMinutes($('rateMinutes').value)) go(); };
+  if (promptRating(done, '走之前给今天打个分？', '跳过，直接返回', mins)) return;
+  if (mins != null) {
+    const v = await UI.prompt('按这页开着的时间算，切走的不算；填 0 这次不算。', String(mins), { title: `这次练了 ${mins} 分钟`, ok: '记下并返回' });
+    if (v === null || !await saveMinutes(v)) return; // 取消：留在这页
+  }
+  go();
 }
 /** 打完分 / 跳过：接着做被拦下的事 */
 function proceed() {
@@ -147,6 +189,7 @@ async function rate(r) {
 }
 
 export function initStudy() {
+  pageTime = trackPageTime({ song: SONG_ID });
   mountTimer($('timer'));
   if (fromToday) { const b = $('backBtn'); b.href = '/#study'; b.title = '返回练琴'; b.setAttribute('aria-label', '返回练琴'); }
   $('rateBtn').onclick = () => openPop();
@@ -166,11 +209,11 @@ export function initStudy() {
   });
   // 点“返回”：先提醒打分，打完 / 跳过再走。真要走了才告诉曲库是从这里回去的（恢复点进来之前的样子，lib-return.js）；
   // 打分弹层关掉、留在这页的不算
+  // 练琴时间：先确认记多少分钟（见文件开头），再走
   $('backBtn').addEventListener('click', e => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // 新标签页打开：不拦
-    const href = $('backBtn').href;
-    if (promptRating(() => { markBack(SONG_ID, href); location.href = href; }, '走之前给今天打个分？', '跳过，直接返回')) e.preventDefault();
-    else markBack(SONG_ID, href);
+    e.preventDefault();
+    leave($('backBtn').href);
   });
   // 计时器的“结束”：先提醒打分，打完 / 跳过再结束计时（再点一次结束按钮，这次不拦）
   $('timer').addEventListener('click', e => {

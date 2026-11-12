@@ -441,6 +441,8 @@ body.song-gone main > .view, body.song-gone #nav, body.song-gone .fb-dock, body.
 .rp-row { display: flex; align-items: center; gap: 10px; }
 .rp-lbl { color: var(--fg-2); flex: none; }
 .rp-row .chips { min-width: 0; }
+.rp-time .unit-input { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-2); }
+.rp-time[hidden] { display: none; }
 .rp-foot { display: flex; justify-content: flex-end; margin-top: -4px; }
 .rp-foot[hidden] { display: none; }
 .rp-btns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }

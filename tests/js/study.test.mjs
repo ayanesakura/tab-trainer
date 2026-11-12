@@ -196,5 +196,9 @@ test('某一天的记录：计时 / 补记的文案', () => {
   assert.deepEqual(sessionText({ kind: 'manual', minutes: 30, note: '爬格子' }), { label: '补记', sub: '爬格子' });
   assert.deepEqual(sessionText({ kind: 'timer', segments: [['2026-11-09 20:10:00', '2026-11-09 20:30:00'], ['2026-11-09 20:40:00', '2026-11-09 20:55:12']], minutes: 35, note: '' }),
     { label: '计时 20:10–20:55', sub: '暂停 1 次' });
+  // 练习页开着的时间：写曲名（曲子删了就不写）、改过分钟数的标出来
+  const page = { kind: 'page', segments: [['2026-11-09 20:00:00', '2026-11-09 20:20:00'], ['2026-11-09 20:30:00', '2026-11-09 20:41:00']], minutes: 31, note: '', song: 's1', title: '晴天' };
+  assert.deepEqual(sessionText(page), { label: '练习页 20:00–20:41', sub: '晴天' });
+  assert.deepEqual(sessionText({ ...page, title: null, edited: true }), { label: '练习页 20:00–20:41', sub: '改过分钟数' });
   assert.equal(ratingTip({ rating: 4, issues: ['rhythm', 'phrasing', 'bogus'], note: '很顺', bpm: 0 }), '轻松 · 节奏、呼吸 · 很顺');
 });

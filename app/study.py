@@ -34,6 +34,9 @@ DAY_START_HOUR = 4  # 练琴日从凌晨 4 点开始：半夜 1 点练的还算�
 TIME_FMT = clock.STAMP_FMT
 NOT_IN_PLAN = "这首曲子不在练琴计划里"
 MIN_TIMER_SECONDS = 60  # 秒表停下时不到 1 分钟的不记（点错了），除非手填了分钟数
+PAGE_GAP_SECONDS = (
+    90  # 练习页的心跳隔了这么久没来（页面切走、电脑睡了、断了）：前一段到上一次心跳为止，再来的另起一段
+)
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +310,7 @@ def clean_data(raw: object) -> dict:
     sessions = []
     for s in raw.get("sessions") if isinstance(raw.get("sessions"), list) else []:
         try:
-            rec = StudySession.model_validate(s).model_dump()
+            rec = StudySession.model_validate(s).model_dump(exclude_none=True)  # 没有 song 的不写 null
         except ValidationError:
             log.warning("study.json 里有一条练琴记录格式不对，跳过：%r", s)
             continue
@@ -469,6 +472,88 @@ def add_session(day: str, minutes: float, note: str = "", now: dt.datetime | Non
     return out
 
 
+def page_intervals(session: dict) -> list[Interval]:
+    """练习页开着的时间段：离开时改过分钟数的按改的截（同秒表，见 session_intervals），没改过的就是记下的各段。"""
+    if session.get("edited"):
+        return session_intervals(session)
+    return _segments(session.get("segments") or [], dt.datetime.min)
+
+
+def page_counts(session: dict) -> bool:
+    """练习页的时间不到 1 分钟的不算（打开看一眼不算练琴，也不续上连续天数）。"""
+    return seconds_of(page_intervals(session)) >= MIN_TIMER_SECONDS
+
+
+def page_view(session: dict | None) -> dict | None:
+    """接口里的练习页时间：{id, minutes（记下的分钟数，改过的按改的）, counted（够 1 分钟、算进练琴时间了）}。"""
+    if session is None:
+        return None
+    return {"id": session["id"], "minutes": session["minutes"], "counted": page_counts(session)}
+
+
+def page_beat(
+    session_id: str, song: str | None = None, end: bool = False, now: dt.datetime | None = None
+) -> dict:
+    """POST /api/study/page/{id}：练习页开着、在前台时每 30 秒来一次心跳，记下这段时间（用服务端的时钟）。
+    第一次心跳新建一条 kind=page 的练琴记录（id 由页面生成，同一次打开一直用它）；离上一次心跳不到 PAGE_GAP_SECONDS
+    就把最后一段延长到现在，否则另起一段（切走、睡眠的时间不算）。end：页面切走 / 关掉时的最后一次，只延长、不另起一段，
+    记录不存在也不新建。分钟数按各段加起来算（改过分钟数的不再动：见 set_page_minutes）。返回 {page: page_view}。"""
+    t = current(now)
+    stamp = fmt(t)
+    out: dict = {}
+
+    def fn(data: dict) -> None:
+        s = next((x for x in data["sessions"] if x["id"] == session_id), None)
+        if s is not None and s["kind"] != "page":
+            raise Conflict("这个记录号已经被别的练琴记录用了")
+        if s is None:
+            if end:
+                return
+            s = {
+                "id": session_id,
+                "kind": "page",
+                "day": practice_day(t),
+                "segments": [[stamp, stamp]],
+                "minutes": 0.0,
+                "note": "",
+            }
+            if song:
+                s["song"] = song
+            data["sessions"].append(s)
+        else:
+            last = parse_time(s["segments"][-1][1]) if s["segments"] else None
+            if last is not None and dt.timedelta(0) <= t - last <= dt.timedelta(seconds=PAGE_GAP_SECONDS):
+                s["segments"][-1][1] = stamp
+            elif not end and (last is None or t > last):
+                s["segments"].append([stamp, stamp])
+            else:
+                out["page"] = page_view(s)
+                return
+        if not s.get("edited"):
+            s["minutes"] = round(min(seconds_of(_segments(s["segments"], t)) / 60, MAX_SESSION_MINUTES), 2)
+        out["page"] = page_view(s)
+
+    _update(fn)
+    return {"page": out.get("page")}
+
+
+def set_page_minutes(session_id: str, minutes: float) -> dict:
+    """PUT /api/study/page/{id}：离开练习页时确认 / 改这次记多少分钟（1–600，schemas.StudyPageMinutesIn 检查过）。
+    改过的不再跟着心跳变。不算这次：DELETE /api/study/sessions/{id}。返回 {page: page_view}。"""
+    out: dict = {}
+
+    def fn(data: dict) -> None:
+        s = next((x for x in data["sessions"] if x["id"] == session_id and x["kind"] == "page"), None)
+        if s is None:
+            raise NotFound("这次练习页的时间没有记下")
+        s["minutes"] = round(float(minutes), 2)
+        s["edited"] = True
+        out["page"] = page_view(s)
+
+    _update(fn)
+    return out
+
+
 def delete_session(session_id: str) -> None:
     def fn(data: dict) -> None:
         keep = [s for s in data["sessions"] if s["id"] != session_id]
@@ -525,6 +610,8 @@ class _Library:
         for s in data["sessions"]:
             if s["kind"] == "timer":
                 out += session_intervals(s)
+            elif s["kind"] == "page" and page_counts(s):
+                out += page_intervals(s)
         if data["timer"]:
             out += _segments(data["timer"]["segments"], now)
         return out
@@ -670,7 +757,14 @@ def day_detail(day: str, now: dt.datetime | None = None) -> dict:
     return {
         "day": day,
         "minutes": _minutes(act, day, data["settings"]["goal_minutes"]),
-        "sessions": [s for s in data["sessions"] if s["day"] == day],
+        # 练习页开着不到 1 分钟的（打开看一眼）不算，也不列；算的带上曲名（title，曲子删了是 null）
+        "sessions": [
+            {**s, "title": (lib.songs.get(s["song"]) or {}).get("title")}
+            if s["kind"] == "page" and s.get("song")
+            else s
+            for s in data["sessions"]
+            if s["day"] == day and (s["kind"] != "page" or page_counts(s))
+        ],
         "songs": songs,
         "intervals": [[fmt(a), fmt(b)] for a, b in merged],
     }

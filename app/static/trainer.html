@@ -37,6 +37,7 @@
   <div class="rp-row"><span class="rp-lbl" id="rateIssuesLbl">问题</span><div class="chips multi sm" id="rateIssues" role="group" aria-labelledby="rateIssuesLbl"></div></div>
   <div class="rp-row" id="rateStuckRow"><span class="rp-lbl" id="rateStuckLbl" title="卡在哪几个小节：下次从今天的练琴清单打开时，循环范围先放在这里">卡住</span><div class="chips multi sm" id="rateStuck" role="group" aria-labelledby="rateStuckLbl"></div></div>
   <input class="input" id="rateNote" maxlength="500" placeholder="备注（可不填）" aria-label="备注">
+  <div class="rp-row rp-time" id="rateTimeRow" hidden title="按这页开着的时间算（切到别处的不算），可以改；填 0 这次不算"><label class="rp-lbl" for="rateMinutes">练琴时间</label><span class="unit-input"><input class="input num" type="number" id="rateMinutes" min="0" max="600" step="1">分钟</span></div>
   <div class="rp-btns" id="rateBtns" role="group" aria-label="打分"></div>
   <div class="rp-foot" id="rateFoot" hidden><button class="btn sm ghost" id="rateSkip">跳过</button></div>
 </div>

@@ -180,7 +180,7 @@ function renderDay(d) {
     return `<div class="day-item"><span class="lbl" title="${esc([x.label, x.sub].filter(Boolean).join(' · '))}">${esc(x.label)}${x.sub ? `<span class="hint">${esc(x.sub)}</span>` : ''}</span>
       <span class="num">${esc(fmtMin(s.minutes))}</span>
       <button class="icon-btn sm" data-del="${esc(s.id)}" title="删除这条记录" aria-label="删除这条记录">${icon('trash', 14)}</button></div>`;
-  }).join('') : '<div class="none">没有计时或补记</div>';
+  }).join('') : '<div class="none">没有计时、补记或练习页的时间</div>';
   setHTML($('dayCard'), `<div class="card-h"><span class="card-title">${esc(dayLabel(d.day, { today: todayKey() }))}<span class="total">${total > 0 ? ` · ${esc(fmtMin(total))}` : ' · 没练'}</span></span>
       <button class="icon-btn sm" data-close title="关闭" aria-label="关闭">${icon('x')}</button></div>
     <div class="day-body"><div class="day-col"><h3>曲子</h3>${songItems}</div><div class="day-col"><h3>计时和补记</h3>${logItems}</div></div>`);

@@ -249,6 +249,14 @@ def add_study_session(day: str, minutes: float, note: str) -> dict:
     return study.add_session(day, minutes, note)
 
 
+def study_page_beat(session_id: str, song: str | None, end: bool) -> dict:
+    return study.page_beat(session_id, song, end)
+
+
+def study_page_minutes(session_id: str, minutes: float) -> dict:
+    return study.set_page_minutes(session_id, minutes)
+
+
 def delete_study_session(session_id: str) -> None:
     study.delete_session(session_id)
 

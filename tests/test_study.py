@@ -887,3 +887,97 @@ def test_rhythm_drill_and_clean_passes(client):
     assert client.post(f"/api/songs/{a}/practice", json=bad).status_code == 400
     lines = (store.song_dir(a) / "practice.jsonl").read_text().splitlines()
     assert "kind" not in json.loads(lines[0]) and "clean" not in json.loads(lines[0])  # 默认值不写
+
+
+# ---------------------------------------------------------------------------
+# 练习页开着的时间（kind=page）
+# ---------------------------------------------------------------------------
+def _beats(pid: str, day: str, times: list[str], song: str | None = None, end_at: str | None = None) -> dict:
+    out = {}
+    for hm in times:
+        out = study.page_beat(pid, song, now=at(day, hm))
+    if end_at:
+        out = study.page_beat(pid, song, end=True, now=at(day, end_at))
+    return out["page"]
+
+
+def test_page_time_beats_extend_split_and_merge(data_dir):
+    """心跳隔不到 90 秒就延长最后一段，隔久了（切走、电脑睡了）另起一段；end 只延长、不另起、不新建。
+    练习页的时间和练习页里的播放、秒表合在一起去重，算进今天、日历、连续天数。"""
+    sid = _song("甲")
+    times = [f"20:{m:02d}:{s:02d}" for m in range(10) for s in (0, 30)]  # 20:00:00 … 20:09:30
+    p = _beats("0000abcd", "2026-11-09", times, song=sid, end_at="20:09:50")
+    assert p == {"id": "0000abcd", "minutes": pytest.approx(9.83, abs=0.01), "counted": True}
+    # 切走 20 分钟后回来：另起一段，中间不算
+    p = _beats("0000abcd", "2026-11-09", ["20:30", "20:30:30", "20:31"])
+    s = next(x for x in study.load()["sessions"] if x["id"] == "0000abcd")
+    assert s["kind"] == "page" and s["song"] == sid and s["day"] == "2026-11-09"
+    assert s["segments"] == [
+        ["2026-11-09 20:00:00", "2026-11-09 20:09:50"],
+        ["2026-11-09 20:30:00", "2026-11-09 20:31:00"],
+    ]
+    assert p["minutes"] == pytest.approx(10.83, abs=0.01)
+    assert (
+        study.page_beat("0000abcd", end=True, now=at("2026-11-09", "21:00"))["page"]["minutes"]
+        == p["minutes"]
+    )
+    assert study.page_beat("0000ffff", end=True, now=T0) == {"page": None}  # 没有就不新建
+    # 和练习页的播放（20:05–20:15）去重：20:00–20:15 + 20:30–20:31 = 16 分钟
+    _app_practice(sid, "2026-11-09 20:15", 600)
+    now = at("2026-11-09", "22:00")
+    assert study.today(now=now)["minutes"]["total"] == 16.0
+    d = study.day_detail("2026-11-09", now=now)
+    assert [(x["kind"], x["title"]) for x in d["sessions"]] == [("page", "甲")]
+    assert d["intervals"] == [
+        ["2026-11-09 20:00:00", "2026-11-09 20:15:00"],
+        ["2026-11-09 20:30:00", "2026-11-09 20:31:00"],
+    ]
+
+
+def test_page_time_under_a_minute_does_not_count(data_dir):
+    """打开看一眼（不到 1 分钟）不算练琴，也不续上连续天数。"""
+    p = _beats("0000beef", "2026-11-09", ["20:00", "20:00:30"])
+    assert p["counted"] is False
+    now = at("2026-11-09", "22:00")
+    t = study.today(now=now)
+    assert t["minutes"]["total"] == 0 and t["streak"] == 0
+    assert study.calendar(now=now)["days"] == []
+
+
+def test_page_time_minutes_can_be_corrected_or_dropped(data_dir):
+    """离开时改分钟数：按改的算（之后的心跳不再改它）；不算：删掉这条练琴记录。id 被别的记录占了 409。"""
+    _beats("0000aaaa", "2026-11-09", [f"20:{m:02d}" for m in range(31)])  # 30 分钟
+    assert study.set_page_minutes("0000aaaa", 12)["page"]["minutes"] == 12
+    assert study.page_beat("0000aaaa", now=at("2026-11-09", "20:31"))["page"]["minutes"] == 12
+    now = at("2026-11-09", "22:00")
+    assert study.today(now=now)["minutes"]["total"] == 12.0
+    study.delete_session("0000aaaa")
+    assert study.today(now=now)["minutes"]["total"] == 0
+    with pytest.raises(NotFound):
+        study.set_page_minutes("0000aaaa", 5)
+    sess = study.add_session("2026-11-09", 10, now=T0)
+    with pytest.raises(Conflict):
+        study.page_beat(sess["id"], now=T0)
+
+
+def test_http_page_time(client):
+    from app import clock
+
+    clock.set_now(at("2026-11-09", "20:00"))
+    r = client.post("/api/study/page/12345678", json={"song": "x"})
+    assert r.status_code == 200 and r.json()["page"]["minutes"] == 0
+    clock.set_now(at("2026-11-09", "20:02"))
+    assert (
+        client.post("/api/study/page/12345678", json={}).json()["page"]["counted"] is False
+    )  # 隔太久：另起一段
+    assert client.post("/api/study/page/NOTHEX!!", json={}).status_code in (400, 404)
+    assert client.put("/api/study/page/12345678", json={"minutes": 0}).status_code == 400
+    assert client.put("/api/study/page/12345678", json={"minutes": 25}).json()["page"] == {
+        "id": "12345678",
+        "minutes": 25,
+        "counted": True,
+    }
+    day = client.get("/api/study/day/2026-11-09").json()
+    assert [(s["kind"], s["minutes"], s.get("song")) for s in day["sessions"]] == [("page", 25, "x")]
+    assert day["sessions"][0]["title"] is None  # 曲子不存在
+    assert day["minutes"]["total"] == 25.0

@@ -16,7 +16,7 @@ import threading
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, Path, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -463,6 +463,20 @@ def study_timer_action(body: schemas.StudyTimerIn):
 @app.post("/api/study/sessions")
 def add_study_session(body: schemas.StudySessionIn):
     return service.add_study_session(body.day, body.minutes, body.note)
+
+
+@app.post("/api/study/page/{session_id}")
+def study_page_beat(session_id: Annotated[str, Path(pattern=r"^[0-9a-f]{8}$")], body: schemas.StudyPageIn):
+    """练习页开着、在前台时的心跳（每 30 秒；切走 / 关掉时带 end）：记下在练习页的时间，算进练琴时间。返回 {page}。"""
+    return service.study_page_beat(session_id, body.song, body.end)
+
+
+@app.put("/api/study/page/{session_id}")
+def study_page_minutes(
+    session_id: Annotated[str, Path(pattern=r"^[0-9a-f]{8}$")], body: schemas.StudyPageMinutesIn
+):
+    """离开练习页时确认 / 改这次记多少分钟。不算这次：DELETE /api/study/sessions/{id}。返回 {page}。"""
+    return service.study_page_minutes(session_id, body.minutes)
 
 
 @app.delete("/api/study/sessions/{session_id}")

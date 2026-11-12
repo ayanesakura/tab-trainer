@@ -603,12 +603,14 @@ class StudyTimer(_Rec):
 
 
 class StudySession(_Rec):
-    """记下的一次练琴：秒表停下时（timer）或手动补记（manual）。"""
+    """记下的一次练琴：秒表停下时（timer）、手动补记（manual），或练习页开着的时间（page，见 study.page_beat）。"""
 
     id: str = Field(pattern=r"^[0-9a-f]{8}$")
-    kind: Literal["timer", "manual"]
+    kind: Literal["timer", "manual", "page"]
     day: Day
-    segments: Segments = Field(default_factory=list)  # 只有 timer 有，都已结束
+    segments: Segments = Field(default_factory=list)  # timer / page 有，都已结束
+    song: str | None = None  # page：在哪首曲子的练习页（只是记一下；不在的时候是 None，存盘时不写）
+    edited: bool | None = None  # page：离开时改过分钟数（之后不再按心跳重算）；没改过不写
     # 一次最多 MAX_SESSION_MINUTES（和接口的上限一样）：秒表忘了停记下的更长的旧记录读的时候按上限算，不丢
     minutes: float = Field(ge=0, le=MAX_SESSION_MINUTES)
     note: str = Field("", max_length=500)
