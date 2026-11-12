@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/static/ui.css">
 <link rel="stylesheet" href="/static/css/index.css">
 <link rel="stylesheet" href="/static/css/study.css">
+<link rel="stylesheet" href="/static/css/chat.css">
 <script type="module" src="/static/js/index.js"></script>
 </head>
 <body>
@@ -20,7 +21,28 @@
       <button data-v="settings" data-ic="settings" id="tab-settings" aria-controls="view-settings">设置</button>
     </div>
   </div>
+  <div class="actions">
+    <button class="btn sm ghost chat-btn" id="chatBtn" data-ic="sparkle" aria-expanded="false" aria-controls="chat" aria-label="问 AI" title="和 AI 聊练习：先练哪首、怎么安排（只给建议，不改数据）"><span class="label">问 AI</span></button>
+  </div>
 </header>
+
+<!-- ============ 问 AI：右侧的对话抽屉（窄屏从底部出来），不是模态，开着时照样能看、能点页面 ============ -->
+<aside class="chat" id="chat" aria-labelledby="chatTitle">
+  <div class="chat-h">
+    <span class="card-title" id="chatTitle">问 AI</span>
+    <span class="grow"></span>
+    <button class="btn ghost sm" id="chatNew" data-ic="plus" disabled>新对话</button>
+    <button class="icon-btn sm" id="chatClose" data-ic="x" title="收起（Esc）" aria-label="收起"></button>
+  </div>
+  <div class="chat-body" id="chatBody">
+    <div class="chat-empty" id="chatEmpty"><p>看着你的曲库、计划和练琴记录回答；只给建议，不改数据。</p></div>
+    <div class="qa-list chat-list" id="chatList"></div>
+  </div>
+  <form class="chat-f" id="chatForm">
+    <textarea class="input" id="chatInput" rows="2" maxlength="500" placeholder="今天先练哪首？" aria-label="问 AI 的问题（回车发送，Shift+回车换行）" title="回车发送，Shift+回车换行"></textarea>
+    <button class="btn primary sm" id="chatSend" type="submit">发送</button>
+  </form>
+</aside>
 
 <main class="wrap">
   <!-- ============ 练琴：今日、计时、日历、计划 ============ -->

@@ -63,6 +63,12 @@
   - 练习页里打分时可以勾上卡住的小节，今日和计划里的曲名后面写着“卡在 12–14 小节”（悬停看全部），从今日点开就从那里练；
   - 练了多久只有一个算法：练习页的每段练习合并重叠后相加，再加早期没记日期的时间。曲库的“累计”、今日每首的“累计”、日历右上角的累计是同一个数（悬停提示里写着其中多少是早期未记日期的）；
   - 练习页里每弹完一遍可以按 Enter 标“这遍干净”，小节详情里记着干净的遍数和速度；循环每一遍开始前都有预备拍，状态栏倒数“预备 3 → 2 → 1”。
+- **问 AI（首页）**：练琴、曲库页顶栏右边的“问 AI”打开右侧的对话抽屉（宽屏贴边、页面往左让出位置；中等宽度盖在右边；窄屏从底部出来），不针对某首曲子，问练习安排：“今天先练哪首？”“帮我排一下这周的练习顺序”“哪些曲子该复习了？”“我最近练得怎么样？”（空对话时可以直接点这几条）。
+  - AI 看到的是服务端整理的纯文字：曲库里每首曲子的概况（曲名、艺人、标签、小节数 / 原速、是否归档、现在能不能练、累计时长、最近一次练习、最快完整循环的速度、计划里的状态和下次该练的日子、上次自评和卡住的小节）、今日队列和计划的设置、今天 / 最近 7 天 / 最近 28 个练琴日的时长和每日目标。口径和页面上显示的一样。曲子多时按“计划里的 → 没归档的 → 归档的”列，放不下的只列曲名或只说还有几首，并告诉 AI 列表不全。要求它只按这些数据说话，没有的不编；
+  - 回答边生成边显示；提到曲库里的曲子时换成链接，点了打开那首的练习页（编的、删掉的、还不能练的只显示曲名）；
+  - 多轮：后面的问题带上前面 6 轮问答；对话存在服务器（`data/coach.json`），收起、刷新、从练习页回来都还在，只留最近 30 轮；“新对话”清空重来；
+  - 回车发送、Shift+回车换行，回答中不能再发；Esc 或 × 收起；不是模态，开着时照常能看、能点今日 / 计划 / 曲库；
+  - 第一版只给建议，不会改计划、队列或任何数据（要改的话它会告诉你去哪里改）。没填 API key 时和别的 AI 操作一样先说明去设置填。
 - **曲子包（导出 / 导入）**：曲库里点“选择”勾选几首（或全选）再点“导出”，或在某首的“…”菜单里单独导出，得到一个 `.zip`。里面有识别结果和手工修改、每小节的提示、练习建议、问答、练习记录，以及原图页面或 GP / MusicXML 原文件；不含模型设置和 API key。在另一台电脑（或删掉后在本机）点“导入”，或把 `.zip` 拖进上传框就能恢复，可以一次选多个包。曲库里已经有的曲子（同一个 id）会跳过，不会重复；想用包里的版本替换，先删掉曲库里的那首。有跳过或失败的时候弹出导入结果，按包列出导入了哪几首、哪些已有、哪些失败和原因（整个包读不出来的算“N 个包无法导入”，不算成一首失败）；练习记录、自评记录里断电留下的半截行不带进包里；包太大（413）或文件格式不对（400）时提示服务端给的说明。
 
 ## 界面
@@ -136,6 +142,7 @@ key 只保存在本机 `data/config.json`（权限 600）。也可以不在页�
 
   （弦号标注 + OCR 校对之后的结果。）这 6 次运行里弦号和品位一处没错，剩下的错误都是节奏（十六分音符怎么分组、三连音）。
   对比：同样的谱子，GPT-6 Astra / GPT-6.1 Sol 只有 42%–90%，而且慢 6–10 倍。
+- **问 AI（首页）**：每问一次 1 次纯文字调用（精细度 medium），带上整个曲库的概况（上限约 1.5 万字，大约 1 万多 token 的输入）。没有曲子可记，用量和费用累计在 `data/coach.json` 的 `usage` 里（“新对话”不清零），悬停对话抽屉的标题“问 AI”能看到累计花了多少。
 - **用量记录**：每首曲子的 token 用量和按价格表（`app/llm.py` 的 `PRICES`）算出的费用保存在 `song.json` 的 `usage` 字段里，在曲库里那首曲子说明行的悬停提示里能看到。服务端兜底（`fallbacks: "default"`）时每次尝试按各自模型的价格计（`usage.iterations`；没输出就被拒的只有官方列的几类收费）。价格表里没有的模型（自定义模型，或兜底换成的、官方没公布价格对应关系的模型）只记 token，悬停提示里写明“另有 N token 未计价（模型 …）”。
 
 ## 工作原理
@@ -230,6 +237,7 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/systems.py`、`app/ocrcheck.py`、`app/review.py` | 谱行（版面 → 裁剪范围 / 小节位置、标弦号、要不要切半）；本机 OCR 和 AI 结果的比对；第一遍之后按变拍号 / 和弦图多数读法挑要重做的行 |
 | `app/pages.py` | 图片 / PDF 曲子的页面管理：补页、删页、调整页序（新页上的行交给 `recognize.recognize_rows_job`） |
 | `app/coach.py` | AI 讲解（补写小节提示、重新生成练习建议）和小节问答 |
+| `app/chat.py` | 首页的 AI 对话：用曲库列表项（`views.library_item`）、`practice.aggregate`、`study.today` / `study.calendar` 组装给模型的纯文字上下文（按字数上限截断），多轮问答，存 `data/coach.json`（只留最近 `chat_keep` 轮，用量累计在这个文件上）。只读曲库和练琴数据，不改 |
 | `app/practice.py` | 练习记录：`practice.jsonl` 追加写（`kind` 跟谱练 / 敲节奏、`clean` 干净的一遍），读取时按小节 id 聚合（`store.read_records` 按文件签名缓存；格式不对的行跳过），练习历史；一首曲子练了多久的唯一算法 `time_of`（有日期的合并重叠 + 没日期的） |
 | `app/study.py` | 练琴计划（像背单词一样按曲子排每天练什么）：加入 / 移出 / 暂停 / 排序、自评（`study.jsonl` 追加写）、每次读取按自评记录重放 FSRS 算出新 / 学习中 / 复习和下次日期、今天的队列、秒表和手动补记（`data/study.json`）、每天的练琴时长（秒表 + 练习页的练习去掉重叠，再加手动补记）、日历和某一天的明细。练琴日凌晨 4 点换日；和时钟有关的函数都带 `now` 参数，不给时取 `app/clock.py` |
 | `app/clock.py`、`app/timeline.py` | 唯一的时钟（测试用 `clock.set_now` 固定）；时间段的合并 / 裁剪 / 求和 |
@@ -249,7 +257,7 @@ uv run python -m app.evaluate eval-xxx --yes
 | `app/layout.py`、`app/ocr.py` | 版面检测、本机数字识别 |
 | `app/schemas.py` | 接口请求体的类型、长度和数值范围（只在这里检查），格式不对返回 400 和中文说明 |
 | `app/bundles.py` | 曲子包：多首曲子（含练习记录、练琴计划的自评记录）打包成 zip 导出、导入（只按清单和 song.json 取文件，检查大小 / 图片 / 原文件 / 数据形状（时值、拍号、练习记录按 `model` 检查），先解到临时目录再改名；单首有问题只跳过那一首） |
-| `app/store.py` | `data/` 下的文件读写：页面 / 原文件的路径（`page_path` / `source_path`，只在这里拼）、按曲子加锁的读-改-写（顺带维护 `rev` 和按对象的 `bar.rev` / `meta_rev`）、只读的缓存（`read`、`read_records`）、`.bak` 备份、坏文件回退、更新版本存的曲子不读（`NewerSchema`）、锁内删除、`practice.jsonl` / `study.jsonl` 追加、`study.json` / `config.json` 的读-改-写、单实例锁（`main` 和 `lifespan` 都锁） |
+| `app/store.py` | `data/` 下的文件读写：页面 / 原文件的路径（`page_path` / `source_path`，只在这里拼）、按曲子加锁的读-改-写（顺带维护 `rev` 和按对象的 `bar.rev` / `meta_rev`）、只读的缓存（`read`、`read_records`）、`.bak` 备份、坏文件回退、更新版本存的曲子不读（`NewerSchema`）、锁内删除、`practice.jsonl` / `study.jsonl` 追加、`study.json` / `config.json` / `coach.json` 的读-改-写、单实例锁（`main` 和 `lifespan` 都锁） |
 | `app/evaluate.py` | 识别准确率评测 |
 
 ### 并发模型
@@ -260,14 +268,14 @@ uv run python -m app.evaluate eval-xxx --yes
 |---|---|---|
 | 任务登记 `jobs.claim` / `jobs.start` | 进程内，每首曲子一个 | 同一首曲子同时跑两个任务（连点两次、识别时又点讲解）。登记后在 `store.update` 里标上 `activity` 才算开始，标失败就释放 |
 | `activity` + `systems[i].status == "parsing"` | 存盘，`state.py` 解释 | 告诉前端忙不忙、哪些小节不能改（`state.bar_locked`）；服务重启后由 `state.recover` 标成中断 |
-| 每首曲子一把锁（`store.song_lock`）+ `store.update`；`study.json`、`config.json` 各一把 | 文件读写 | 读-改-写不互相覆盖，改一首曲子不挡别的曲子。规则：**挑选要改的东西和标上锁必须在同一次 `update` 里**（例如按变拍号重做哪些行：`review.lock_redo`），否则中间用户的改动会被覆盖；拿着锁时不扫曲库、不调用模型（练琴计划的新序号用 `study.json` 里的计数器取）。只读的 `store.read` 不拿锁、按文件签名缓存 |
+| 每首曲子一把锁（`store.song_lock`）+ `store.update`；`study.json`、`config.json`、`coach.json` 各一把 | 文件读写 | 读-改-写不互相覆盖，改一首曲子不挡别的曲子。规则：**挑选要改的东西和标上锁必须在同一次 `update` 里**（例如按变拍号重做哪些行：`review.lock_redo`），否则中间用户的改动会被覆盖；拿着锁时不扫曲库、不调用模型（练琴计划的新序号用 `study.json` 里的计数器取）。只读的 `store.read` 不拿锁、按文件签名缓存 |
 | `bar.rev` / `meta_rev` | 存盘，`model.bump_revs` 维护 | 用户的两次编辑互相覆盖（乐观锁，409）。后台写回不会让它们过期 |
 | 写回前比较快照（`seen`） | `coach._explain_chunks`、`staleness.store_plan` | 后台按旧内容写的提示 / 练习建议，不能写到等待期间已经被改过的小节上 |
 | 全局名额 `jobs.slots`（`jobs.run_queued`） | 进程内 | 所有曲子加起来同时进行的模型调用（识别一行、精修的一遍核对；连续上传多首时不会成倍地发请求、跑 OCR）。上限每次按 `settings.max_rows_global` 读，先来先得 |
 
 删除曲子也登记成任务（有任务时 423，删的时候别的任务进不来），在锁里先把目录改名，之后后台任务的写回一律得到 `NotFound`（`jobs.spawn` 只记一笔），不会把目录重新建出来。模型用量由 `jobs.UsageMeter` 随结果一起写回，失败 / 取消时在 `finally` 里补记。
 
-数据文件：`data/songs/<id>/song.json`（只存一份事实：小节编号、时值等按内容算的警告、`meta.title`、`meta.tuning_midi`、`plan.stale` 都是读取时算的；在练琴计划里的曲子有 `study: {order, added, paused}`，归档的有 `archived: true`）、`practice.jsonl`（一段练习一行）、`study.jsonl`（练琴计划的自评，一次一行）、`pages/` 或 `source.gp5` 等原文件；`data/config.json` 存模型设置；`data/study.json` 存练琴计划的设置、秒表和练琴记录（写回时只改动过的部分，不认识的键、字段和超出上限的旧值原样留着）。`practice.jsonl` / `study.jsonl` 按字节分行、每行单独解码，断电留下的半行（哪怕断在一个汉字中间）只跳过那一行。
+数据文件：`data/songs/<id>/song.json`（只存一份事实：小节编号、时值等按内容算的警告、`meta.title`、`meta.tuning_midi`、`plan.stale` 都是读取时算的；在练琴计划里的曲子有 `study: {order, added, paused}`，归档的有 `archived: true`）、`practice.jsonl`（一段练习一行）、`study.jsonl`（练琴计划的自评，一次一行）、`pages/` 或 `source.gp5` 等原文件；`data/config.json` 存模型设置；`data/study.json` 存练琴计划的设置、秒表和练琴记录（写回时只改动过的部分，不认识的键、字段和超出上限的旧值原样留着）；`data/coach.json` 存首页的 AI 对话 `{id, turns: [{q, a, at}], usage}`（坏了时改名成 `coach.corrupt-时间.json` 留着，从空对话开始）。`practice.jsonl` / `study.jsonl` 按字节分行、每行单独解码，断电留下的半行（哪怕断在一个汉字中间）只跳过那一行。
 
 ### 接口约定（前端只显示，不自己推断）
 
@@ -294,8 +302,9 @@ uv run python -m app.evaluate eval-xxx --yes
   - `POST /api/study/sessions`（`{day, minutes: 1–600, note}`）手动补记（不能是今天以后、2000 年以前）；`DELETE /api/study/sessions/{id}`（不存在 404）。`PUT /api/study/settings`（`{goal_minutes: 5–600, max_learning: 1–10, max_reviews: 0–50}`，只改给了的）返回全部设置。
   - `GET /api/study/calendar?days=371`（1–800）→ `{days: [{day, minutes, ratings（评了几首）}]（只有有动静的日子，早的在前）, goal, today, total_minutes（有记录以来的总时长：秒表 + 练习页合并去重、手动补记、早期没日期的）, undated_minutes（其中没日期的，日历上放不进哪一天）}`；`GET /api/study/day/{day}` → `{day, minutes, sessions, songs: [{id, title, seconds, rating: {rating, issues, note, bpm} | null}], intervals: [[开始, 结束]]（合并、裁剪后的）}`，日期格式不对 400。
 - 问 AI：`POST /api/songs/{id}/bars/{bar_id}/ask/stream`（`{question}`）回答边生成边发，响应是 NDJSON（一行一个事件）：`{"type": "delta", "text"}` 是回答的一段，`{"type": "reset"}` 表示前面的作废、从头再来（模型服务重试或换了兜底模型），最后一行是 `{"type": "done", "answer", "qa"}`（已经存进这个小节，`qa` 是它最新的问答列表）或 `{"type": "error", "detail"}`。问题不合格、曲子 / 小节不存在、没配 key 在开始之前照常返回 400 / 404。回答在服务端的单独线程里生成，浏览器中途断开也会写完、存下、记上费用；只存完整的回答。`POST .../ask` 是等回答写完才返回 `{answer, qa}` 的旧接口。
+- 首页问 AI：`GET /api/coach` → `{id, turns: [{q, a, at}], cost}`（`cost` 是累计花费，形状同曲库列表项的 `cost_usd` / `cost_estimated` / `unpriced_tokens` / `unpriced_models` / `tokens`）；`DELETE /api/coach` 新对话（清空 `turns`、换 `id`，`cost` 留着），返回同 GET；`POST /api/coach/ask/stream`（`{question}`，最多 500 字）的 NDJSON 事件和小节问答一样，`done` 是 `{"type": "done", "answer", "id", "turns", "cost"}`（已经存进对话）。没配 key、问题不合格在开始之前返回 400。回答期间点了“新对话”的，回答写完不并进新对话（费用照记）。回答里提到曲子写成 `[[曲子 id|曲名]]`，前端（`js/home-coach-view.js` 的 `answerHTML`）只把曲库里能练的换成 `/trainer?id=…` 链接，其余显示曲名，全部转义。
 
-前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。曲库页是 `js/index.js`（事件和 DOM）+ `js/library-view.js`（纯函数：一行曲子的 HTML、状态 / 练习 / 花费说明、哪一首用主色“接着练”、筛选（含归档）排序、导入结果的明细，`tests/js/library.test.mjs` 直接测）。曲库页的“练琴”视图是 `js/study.js`（今日进度、今日、日历和某一天的明细、计划排序 / 暂停 / 移出 / 取消归档、补记、设置页的“练琴”三项）+ `js/study-view.js`（纯函数：时长 / 日期文案、累计时长的说明 `timeTip`（曲库也用）、卡住的小节 `stuckText`、今日和计划的一行、曲库行的计划徽章、进度环、日历网格和它的键盘移动 `calTabDay` / `calMove`、练琴日 `studyDay`，`tests/js/study.test.mjs` 直接测）；地址里没写视图时打开上次看的练琴或曲库（`localStorage` 的 `tt.home`）。计时器两页共用 `js/lib/study-timer.js`（计时在服务端，页面只显示；别的标签页改了用 `BroadcastChannel('tt-study')` 通知）。练习页的 `js/trainer/study.js` 管顶栏的计时器和“打分”弹层（只有在计划里的曲子才显示；打分状态就是 `song.study`，只订阅这一项，打完分用 `setLocal` 写回，谱面不会因此重新派生），从今日进来（`?from=today`）时返回按钮回到练琴页。
+前端没有构建步骤：`app/static/trainer.html` 和 `index.html` 只放页面结构，样式在 `css/`，脚本在 `js/`，全部是 ES 模块。曲库页是 `js/index.js`（事件和 DOM）+ `js/library-view.js`（纯函数：一行曲子的 HTML、状态 / 练习 / 花费说明、哪一首用主色“接着练”、筛选（含归档）排序、导入结果的明细，`tests/js/library.test.mjs` 直接测）。曲库页的“练琴”视图是 `js/study.js`（今日进度、今日、日历和某一天的明细、计划排序 / 暂停 / 移出 / 取消归档、补记、设置页的“练琴”三项）+ `js/study-view.js`（纯函数：时长 / 日期文案、累计时长的说明 `timeTip`（曲库也用）、卡住的小节 `stuckText`、今日和计划的一行、曲库行的计划徽章、进度环、日历网格和它的键盘移动 `calTabDay` / `calMove`、练琴日 `studyDay`，`tests/js/study.test.mjs` 直接测）；地址里没写视图时打开上次看的练琴或曲库（`localStorage` 的 `tt.home`）。顶栏的“问 AI”是 `js/home-coach.js`（对话抽屉：`UI.layer` 非模态、点外面不收，开着时记在 `sessionStorage` 的 `tt.chat.open`，从练习页回来还开着）+ `js/home-coach-view.js`（纯函数：曲子标记换成链接 `answerHTML`、流式时先不显示半截标记 `settled`、花费说明，`tests/js/home-coach.test.mjs` 直接测），样式在 `css/chat.css`。计时器两页共用 `js/lib/study-timer.js`（计时在服务端，页面只显示；别的标签页改了用 `BroadcastChannel('tt-study')` 通知）。练习页的 `js/trainer/study.js` 管顶栏的计时器和“打分”弹层（只有在计划里的曲子才显示；打分状态就是 `song.study`，只订阅这一项，打完分用 `setLocal` 写回，谱面不会因此重新派生），从今日进来（`?from=today`）时返回按钮回到练琴页。
 
 练习页从 `js/trainer/main.js` 进入，按功能拆成模块。模块之间的规矩：**`song.js` 和 `player.js` 是可以直接调用的服务模块，其余模块之间只通过 store 通信**（订阅 `ui.bar`、`play.*` 等路径），不互相 import 对方的函数。具体：
 - `store.js`：一个小 store（`song` 后端数据、`view` 派生结构、`play` 播放状态和设置、`ui` 界面状态、`rhythm` 敲节奏），按路径 `set` / `get` / `on`，值没变不通知（`Set` 按内容比较）；订阅父路径（如 `on('song')`）时任何子路径变了都会收到，所以各模块只订阅真正用到的子路径（`song.bars`、`song.meta`、`song.study`……），也不把 `song` 里的东西抄一份到别处（抄的那份会过期）；`dom.js`：`$` / `UI` / `songUrl` / `setButton` / `svgEl` 这些 DOM 小工具；`keys.js`：唯一的键盘监听，各模块用 `addShortcuts` 登记自己的一组快捷键（播放、敲节奏、改音的 ⌘Z、原谱弹窗的 ←→），输入框、控件焦点、浮层、当前页面、`defaultPrevented` 这些判断统一在这里做（分段开关不算“方向键归控件”，点过它方向键照样换段、调速）；`page-images.js`：原谱页面图片的共用缓存（加载好发 `tt-images` 事件）。

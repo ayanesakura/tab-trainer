@@ -34,6 +34,7 @@ class Settings:
     # AI 讲解 / 问答
     explain_chunk: int = 16  # 一次请求讲解几个小节
     qa_keep: int = 20  # 每个小节保留最近几条问答
+    chat_keep: int = 30  # 首页的 AI 对话保留最近几轮（app/chat.py）
 
 
 settings = Settings()

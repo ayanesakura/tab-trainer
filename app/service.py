@@ -1,5 +1,5 @@
 """接口背后的用例：main.py 只做 HTTP（路由、参数、文件、响应），每个路由调这里的一个函数，再由这里分给 songs / recognize /
-pages / coach / bundles / study / practice / config。业务规则（上传的上限和读文件、新建后要不要识别、页面 / 原文件能不能给、
+pages / coach / chat / bundles / study / practice / config。业务规则（上传的上限和读文件、新建后要不要识别、页面 / 原文件能不能给、
 返回什么形状的视图）都在这一层或更下层，main 不直接调下层模块。不少函数只是一行转发：留着让 main 只依赖这一个模块。
 
 错误一律抛 app.errors 里的 AppError（main 统一转成 {"detail": 中文说明} 和对应的状态码）。
@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import BinaryIO
 
-from app import bundles, coach, config, pages, practice, recognize, refine, songs, store, study, views
+from app import bundles, chat, coach, config, pages, practice, recognize, refine, songs, store, study, views
 from app.errors import Busy, Conflict, Invalid, NotFound
 from app.jobs import jobs
 from app.model import is_score
@@ -198,6 +198,22 @@ def record_practice(
     clean: bool | None = None,
 ) -> dict:
     return practice.record(sid, bar_ids, loops, bpm, seconds, kind, clean)
+
+
+# ---------------------------------------------------------------------------
+# 首页的 AI 对话（app/chat.py）
+# ---------------------------------------------------------------------------
+def chat_view() -> dict:
+    return chat.conversation()
+
+
+def chat_new() -> dict:
+    return chat.new_conversation()
+
+
+def prepare_chat(question: str):
+    """流式提问：先检查（没配 key 400 在这里抛），返回 run(on_delta) → {"answer", "id", "turns", "cost"}（见 chat.prepare_ask）。"""
+    return chat.prepare_ask(question)
 
 
 # ---------------------------------------------------------------------------

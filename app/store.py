@@ -1,5 +1,5 @@
 """本地存储：data/ 目录下一首曲子一个文件夹（song.json、practice.jsonl、study.jsonl、页面图片 / 原文件），
-另有 config.json 存模型设置、study.json 存练琴计划的设置 / 秒表 / 练琴时长记录。
+另有 config.json 存模型设置、study.json 存练琴计划的设置 / 秒表 / 练琴时长记录、coach.json 存首页的 AI 对话。
 
 只管文件：路径、加锁的读-改-写、备份、删除。数据格式的升级在 app/migrate.py，派生字段在 app/model.py。
 
@@ -7,7 +7,7 @@
 读取时正式文件坏了（截断、不是合法 JSON）就用 .bak。两份都坏的曲子抛 CorruptSong（曲库里显示成“数据损坏”，可以删除）。
 每次保存 rev +1（保存计数）；update 顺便维护按对象的版本号 bar.rev / meta_rev（见 model.bump_revs，接口用它们做乐观锁）。删除在锁里先把目录改名（之后的写入一律 NotFound，不会把目录重新建出来）。
 
-锁：每首曲子一把（song_lock，可重入），study.json 和 config.json 各一把（study_lock / config_lock）。读-改-写只锁它改的那个文件，
+锁：每首曲子一把（song_lock，可重入），study.json、config.json、coach.json 各一把（study_lock / config_lock / coach_lock）。读-改-写只锁它改的那个文件，
 改一首曲子不会挡住别的曲子、练琴计划和设置；拿着锁时不要扫整个曲库、调用模型。
 
 读缓存：read(id) 返回读好、升级、补完派生字段的曲子，按 song.json 的 (mtime, 大小, inode) 缓存，多个调用方共用同一个 dict，
@@ -55,6 +55,7 @@ _guard = threading.Lock()  # 只保护下面这几个字典本身
 _song_locks: dict[str, threading.RLock] = {}
 _study_lock = threading.RLock()
 _config_lock = threading.RLock()
+_coach_lock = threading.RLock()
 
 
 def _lock_of(song_id: str) -> threading.RLock:
@@ -86,6 +87,13 @@ def study_lock() -> Iterator[None]:
 def config_lock() -> Iterator[None]:
     """data/config.json 的锁（可重入），update_config 在它里面。"""
     with _config_lock:
+        yield
+
+
+@contextmanager
+def coach_lock() -> Iterator[None]:
+    """data/coach.json 的锁（可重入），update_coach 在它里面。"""
+    with _coach_lock:
         yield
 
 
@@ -532,6 +540,40 @@ def update_study(fn: Callable[[dict], None]) -> dict:
         data = load_study()
         fn(data)
         write_json(study_file(), data)
+        return data
+
+
+# ---------------------------------------------------------------------------
+# coach.json（首页的 AI 对话和它的用量，内容由 app/coach.py 解释）
+# ---------------------------------------------------------------------------
+def coach_file() -> Path:
+    return DATA / "coach.json"  # 调用时才拼：测试会替换 DATA
+
+
+def load_coach() -> dict:
+    """首页 AI 对话的数据（原样）。没有文件是 {}；文件和备份都坏了时把坏文件改名留着，按 {} 处理（和 study.json 一样）。"""
+    path = coach_file()
+    with coach_lock():
+        if not path.exists() and not _bak(path).exists():
+            return {}
+        try:
+            return _read_json(path)
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as e:
+            keep = path.with_name(f"coach.corrupt-{time.strftime('%Y%m%d-%H%M%S')}.json")
+            log.error("AI 对话文件损坏（%s），已改名为 %s", e, keep.name)
+            if path.exists():
+                os.replace(path, keep)
+            return {}
+
+
+def update_coach(fn: Callable[[dict], None]) -> dict:
+    """加锁读-改-写 coach.json（fn 原地修改），返回改完的内容。fn 里不要读曲子、不要调用模型。"""
+    with coach_lock():
+        data = load_coach()
+        fn(data)
+        write_json(coach_file(), data)
         return data
 
 

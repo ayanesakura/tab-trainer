@@ -1,0 +1,50 @@
+/* 首页的“问 AI”对话抽屉（js/home-coach.js）。颜色、字号、间距都用 /static/ui.css 的变量。
+   宽屏（≥1200px）：贴在右边，整个页面（顶栏和内容）往左让出抽屉的宽度，对话时今日 / 计划 / 曲库都看得到；
+   中等宽度：从右边滑出，盖在内容上（不遮罩、不是模态）；窄屏（≤760px）：从底部出来的抽屉。 */
+:root { --chat-w: 380px; }
+@media (min-width: 1440px) { :root { --chat-w: 420px; } }
+
+.chat-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+
+.chat { position: fixed; z-index: 35; top: calc(52px + var(--sp-2)); right: var(--sp-2); bottom: var(--sp-2); width: min(var(--chat-w), calc(100vw - 32px));
+  display: flex; flex-direction: column; background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow);
+  transform: translateX(calc(100% + 24px)); visibility: hidden; transition: transform .2s var(--ease), visibility 0s .2s; }
+body.chat-open .chat { transform: none; visibility: visible; transition: transform .2s var(--ease); }
+@media (prefers-reduced-motion: reduce) { .chat { transition: none !important; } }
+
+.chat-h { display: flex; align-items: center; gap: var(--sp-1); height: 52px; flex: none; padding: 0 var(--sp-2) 0 var(--sp-4); border-bottom: 1px solid var(--line-2); }
+.chat-h .card-title { cursor: default; }
+.chat-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-4); }
+.chat-empty { color: var(--muted); font-size: var(--fs-2); }
+.chat-examples { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+.chat-examples .chip { height: auto; min-height: 26px; padding: 3px 10px; white-space: normal; text-align: left; font-size: var(--fs-2); }
+
+.chat-list { display: flex; flex-direction: column; gap: var(--sp-4); }
+.chat .qa { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-2); }
+.chat .qa .q { font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
+.chat .qa .q .ic { color: var(--accent); flex: none; align-self: center; }
+.chat .qa .q > span:not(.t):not(.ic) { white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat .qa .q .t { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
+.chat .qa .a { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; color: var(--fg-2); }
+.chat .qa.pending .a .spinner { display: inline-block; vertical-align: -2px; margin-right: 6px; }
+.chat .song-link { font-weight: 500; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 2px; }
+.chat .song-link:hover { text-decoration-color: currentColor; }
+.chat .song-ref { font-weight: 500; color: var(--fg); }
+
+.chat-f { display: flex; gap: var(--sp-2); align-items: flex-end; flex: none; padding: var(--sp-3); border-top: 1px solid var(--line-2); }
+.chat-f textarea.input { flex: 1; font: var(--fs-2)/1.5 var(--font); resize: none; max-height: 30vh; }
+.chat-f .btn { height: 32px; }
+
+/* 宽屏：贴边、整页让出位置（不盖住内容） */
+@media (min-width: 1200px) {
+  body.chat-open { padding-right: var(--chat-w); }
+  .chat { top: 0; right: 0; bottom: 0; width: var(--chat-w); border-radius: 0; box-shadow: none; border-left: 1px solid var(--line-2); transform: translateX(100%); }
+}
+
+/* 窄屏：底部抽屉；顶栏的按钮只留图标 */
+@media (max-width: 760px) {
+  .chat-btn .label { display: none; }
+  .chat-btn { padding: 0 6px; }
+  .chat { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: min(78vh, calc(100dvh - 60px)); border-radius: var(--r-lg) var(--r-lg) 0 0;
+    transform: translateY(calc(100% + 24px)); }
+}

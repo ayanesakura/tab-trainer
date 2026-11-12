@@ -124,7 +124,8 @@ def test_search_tags_menu_and_theme(server, browser):
         b.js("localStorage.setItem('tt-theme', 'system'); true")
         b.open(server["base"] + "/#settings")
         assert b.js("document.getElementById('themeBtn')") is None
-        assert b.js("document.querySelector('.topbar .actions')") is None
+        actions = b.js("[...document.querySelectorAll('.topbar .actions > *')].map(x => x.id)")
+        assert actions == ["chatBtn"]  # 顶栏右边只有“问 AI”
         assert b.js("document.documentElement.dataset.theme") in ("light", "dark")
         seen = []
         for v in ("light", "dark", "system"):

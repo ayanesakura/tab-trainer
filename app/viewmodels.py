@@ -207,3 +207,27 @@ class LibraryItem(_M):
     refine_estimate: RefineEstimate | None = None
     study: StudyView | None = None
     archived: bool = False
+
+
+class ChatTurn(_M):
+    q: str
+    a: str
+    at: str = ""
+
+
+class ChatCost(_M):
+    """首页 AI 对话的累计花费（views.cost_summary，和曲库列表项的费用字段同一个形状）。"""
+
+    cost_usd: float = 0
+    cost_estimated: bool = False
+    unpriced_tokens: int = 0
+    unpriced_models: list[str] = Field(default_factory=list)
+    tokens: int = 0
+
+
+class ChatView(_M):
+    """GET / DELETE /api/coach 的返回（app/chat.py）；流式提问最后的 done 事件再多一个 answer。"""
+
+    id: str = ""  # 这一段对话的 id（“新对话”换一个）；还没问过是空串
+    turns: list[ChatTurn] = Field(default_factory=list)  # 最近 settings.chat_keep 轮，早的在前
+    cost: ChatCost = Field(default_factory=ChatCost)

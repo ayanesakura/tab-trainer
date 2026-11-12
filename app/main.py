@@ -394,10 +394,10 @@ async def _ask_events(run):
         except AppError as e:
             put({"type": "error", "detail": str(e)})
         except Exception as e:  # 存盘失败之类：也给前端一句话，不让它一直等
-            log.exception("song ask stream failed")
+            log.exception("ask stream failed")
             put({"type": "error", "detail": f"提问失败：{type(e).__name__}: {e}"})
 
-    threading.Thread(target=work, name="ask-stream", daemon=True).start()
+    threading.Thread(target=work, name="ask-stream", daemon=True).start()  # 小节问答和首页的 AI 对话共用
     while True:
         ev = await events.get()
         yield (json.dumps(ev, ensure_ascii=False) + "\n").encode()
@@ -484,6 +484,33 @@ def study_calendar(days: Annotated[int, Query(ge=1, le=800)] = 371):
 @app.get("/api/study/day/{day}")
 def study_day(day: str):
     return service.study_day(day)
+
+
+# ---------------------------------------------------------------------------
+# 首页的 AI 对话（不针对某首曲子；只给建议，不改数据）
+# ---------------------------------------------------------------------------
+@app.get("/api/coach")
+def coach_view():
+    """现在这段对话：{id, turns: [{q, a, at}], cost}（cost：累计花费，形状同曲库列表项的费用字段）。"""
+    return service.chat_view()
+
+
+@app.delete("/api/coach")
+def coach_new():
+    """新对话：清空问答（累计花费留着），返回同 GET。"""
+    return service.chat_new()
+
+
+@app.post("/api/coach/ask/stream")
+async def coach_ask_stream(body: schemas.AskIn):
+    """问 AI（练琴 / 曲库页的对话抽屉）：NDJSON 流，事件同 ask_bar_stream；最后一行 {"type": "done", "answer", "id",
+    "turns", "cost"}（已经存进对话）。问题不合格、没配 key 在开始之前按 400 返回。"""
+    run = await run_in_threadpool(service.prepare_chat, body.question)  # 读整个曲库组装上下文
+    return StreamingResponse(
+        _ask_events(run),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

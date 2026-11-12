@@ -5,7 +5,7 @@
 - transcribe：识别一行（或整页）谱子里的所有小节
 - verify_bar：精修，放大一个小节对照当前读法逐拍核对（app/refine.py）
 - explain_bars / practice_plan：给小节写练习提示、根据识别结果写分段练习建议
-小节问答（coach_stream / coach）要的是纯文字：边生成边给出片段，练习页上的回答一点点出来。
+小节问答（coach_stream / coach）和首页的 AI 对话（chat_stream）要的是纯文字：边生成边给出片段，回答一点点出来。
 """
 
 from __future__ import annotations
@@ -299,6 +299,10 @@ class LLM(Protocol):
 
     def practice_plan(self, meta: dict, bars: list[dict]) -> dict: ...
 
+    def chat_stream(
+        self, question: str, context: str, history: list[dict], today: str
+    ) -> Iterator[str | None]: ...
+
 
 def join_text(chunks: Iterable[str | None]) -> str:
     """把 coach_stream 给出的片段拼成完整的回答（None：前面的作废，从头再拼）。"""
@@ -388,15 +392,22 @@ class Claude(LLM):
             "unpriced_models": [],  # 没计价的那部分 token 是哪些模型的
         }
 
-    def _kwargs(self, content: list, schema: dict | None, effort: str | None, max_tokens: int) -> dict:
-        """请求参数。schema 为 None 时不要求 JSON，模型直接写文字（流式问答）。"""
+    def _kwargs(
+        self,
+        content: list,
+        schema: dict | None,
+        effort: str | None,
+        max_tokens: int,
+        system: str | None = None,
+    ) -> dict:
+        """请求参数。schema 为 None 时不要求 JSON，模型直接写文字（流式问答）。system 不给时用识别谱子的 SYSTEM。"""
         output_config: dict = {"effort": effort or self.cfg.effort}
         if schema is not None:
             output_config["format"] = {"type": "json_schema", "schema": schema}
         return {
             "model": self.cfg.model or DEFAULT_MODEL,
             "max_tokens": max_tokens,
-            "system": SYSTEM,
+            "system": system or SYSTEM,
             "messages": [{"role": "user", "content": content}],
             "output_config": output_config,
         }
@@ -457,12 +468,12 @@ class Claude(LLM):
             raise LLMError(f"模型返回的不是合法 JSON（request_id={rid}）：{e}", rid) from e
 
     def _stream_call(
-        self, content: list, effort: str | None = None, max_tokens: int = 32000
+        self, content: list, effort: str | None = None, max_tokens: int = 32000, system: str | None = None
     ) -> Iterator[str | None]:
         """纯文字输出的流式请求，边收边给出文字片段；None 表示前面给出的都作废、从头再来（回复到一半的临时错误
         重试了，或者服务端换了兜底模型重新回答）。兜底参数、重试、用量和费用、拒绝 / 截断的处理和 _call 一样；
         拼起来是空的也算失败。片段都给完、检查也通过，生成器才正常结束。"""
-        kwargs = self._kwargs(content, None, effort, max_tokens)
+        kwargs = self._kwargs(content, None, effort, max_tokens, system)
         used_fallbacks = self.use_fallbacks
         parts: list[str] = []
         try:
@@ -675,6 +686,15 @@ class Claude(LLM):
         text = prompts.coach_text(meta, bar, neighbours, question, history, practice, image is not None)
         content.append({"type": "text", "text": text})
         return self._stream_call(content, effort="medium", max_tokens=8000)
+
+    def chat_stream(
+        self, question: str, context: str, history: list[dict], today: str
+    ) -> Iterator[str | None]:
+        """首页的 AI 对话：context 是曲库 / 练琴数据（app/chat.py 组装的纯文字），history 是前面几轮 {q, a}。
+        模型直接写文字，边生成边给出片段（None 的意思见 _stream_call）。"""
+        text = prompts.chat_text(context, question, history, today)
+        content = [{"type": "text", "text": text}]
+        return self._stream_call(content, effort="medium", max_tokens=8000, system=prompts.CHAT_SYSTEM)
 
     def practice_plan(self, meta: dict, bars: list[dict]) -> dict:
         text = prompts.plan_text(meta, bars)

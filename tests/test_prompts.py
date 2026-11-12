@@ -16,20 +16,22 @@ FIXTURE = Path(__file__).parent / "fixtures" / "prompts.json"
 def _capture(monkeypatch) -> list[dict]:
     calls = []
 
-    def fake_call(self, content, schema, effort=None, max_tokens=32000):
+    def fake_call(self, content, schema, effort=None, max_tokens=32000, system=None):
         calls.append(
             {
                 "content": [b["text"] if b["type"] == "text" else f"<{b['type']}>" for b in content],
                 "schema": schema,
-                "system": prompts.SYSTEM,
+                "system": system or prompts.SYSTEM,
                 "effort": effort,
                 "max_tokens": max_tokens,
             }
         )
         return {"bars": [], "answer": "好", "title": "ok"}
 
-    def fake_stream(self, content, effort=None, max_tokens=32000):  # 纯文字输出（问答）：schema 记成 None
-        fake_call(self, content, None, effort, max_tokens)
+    def fake_stream(
+        self, content, effort=None, max_tokens=32000, system=None
+    ):  # 纯文字输出（问答）：schema 记成 None
+        fake_call(self, content, None, effort, max_tokens, system)
         yield "好"
 
     monkeypatch.setattr(Claude, "_call", fake_call)
@@ -107,6 +109,14 @@ def _all_prompts(monkeypatch) -> dict:
             meta, bars[0], [bars[1]], "怎么弹", [{"q": "前一个问题", "a": "回答"}], "练了 3 遍", img
         ),
         "practice_plan": lambda: c.practice_plan(meta, bars),
+        "chat": lambda: list(
+            c.chat_stream(
+                "今天先练哪首？",
+                "【今天】\n今日队列：\n- [[s1|T]] 新曲",
+                [{"q": "前一个问题", "a": "回答"}],
+                "2026-11-12（星期四）",
+            )
+        ),
     }.items():
         calls.clear()
         run()

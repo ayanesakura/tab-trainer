@@ -115,23 +115,28 @@ class FakeClaude(LLM):
                 "image": image.size if image else None,
             }
         )
-        answer = f"回答：{question}"
+        return self._chunks(f"回答：{question}")
 
-        def chunks():
-            for k in range(0, len(answer), 3):
-                if FakeClaude.stream_delay:
-                    time.sleep(FakeClaude.stream_delay)
-                yield answer[k : k + 3]
-            with _lock:  # 一次回答记一笔用量（测费用记到曲子上）
-                u = dict(self.usage)
-                u["output_tokens"] += 100
-                u["cost_usd"] = round(u.get("cost_usd", 0) + 0.01, 4)
-                self.usage = u
-
-        return chunks()
+    def _chunks(self, answer):
+        for k in range(0, len(answer), 3):
+            if FakeClaude.stream_delay:
+                time.sleep(FakeClaude.stream_delay)
+            yield answer[k : k + 3]
+        with _lock:  # 一次回答记一笔用量（测费用记到曲子 / 对话上）
+            u = dict(self.usage)
+            u["output_tokens"] += 100
+            u["cost_usd"] = round(u.get("cost_usd", 0) + 0.01, 4)
+            self.usage = u
 
     def practice_plan(self, meta, bars):
         return {"overview": "ok", "steps": [{"bars": "1-6", "title": "全曲", "advice": "慢练"}]}
+
+    # 首页 AI 对话的替身：回答是 chat_answer（默认“回答：<问题>”），分段和用量同 coach_stream
+    chat_answer: ClassVar[str | None] = None
+
+    def chat_stream(self, question, context, history, today):
+        FakeClaude.calls.append({"chat": question, "context": context, "history": history, "today": today})
+        return self._chunks(FakeClaude.chat_answer or f"回答：{question}")
 
 
 def score_png() -> bytes:

@@ -7,6 +7,7 @@ import { SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
 import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML, latestPracticed, importReport } from '/static/js/library-view.js';
 import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
 import { initStudy, renderPlan, refresh as refreshStudy, setVisible as setStudyVisible, setStudy, addMany, checkDay } from '/static/js/study.js';
+import { initHomeCoach, refresh as refreshChat } from '/static/js/home-coach.js';
 
 // ---------------- 导航 ----------------
 // 练琴 / 曲库 / 设置。地址里没写时打开上次看的那个（练琴或曲库，记在本机），第一次是曲库
@@ -41,8 +42,8 @@ document.addEventListener('themechange', e => { setThemeSeg(e.detail); setPalett
 let hasKey = null;
 const NO_KEY = '先在设置里填 API key';
 const keyOk = () => hasKey !== false;
-async function askForKey() {
-  if (!await UI.confirm('识别原谱、精修、重新识别要调用 AI，先在设置里填 Anthropic API key。（导入 Guitar Pro / MusicXML 不需要。）', { title: '还没有 API key', ok: '去设置' })) return;
+async function askForKey(why = '识别原谱、精修、重新识别要调用 AI，先在设置里填 Anthropic API key。（导入 Guitar Pro / MusicXML 不需要。）') {
+  if (!await UI.confirm(why, { title: '还没有 API key', ok: '去设置' })) return;
   location.hash = 'settings';
   route(); // 不等 hashchange：马上切过去，焦点放到 key 的输入框
   $('apiKey').focus();
@@ -325,6 +326,7 @@ async function loadSongs() {
   }
   renderSongs();
   renderPlan(lastSongs);
+  refreshChat();
   return lastSongs;
 }
 // 有曲子在后台忙（识别、讲解）就每 2.5 秒刷新；做完操作后 songsPoll.now() 立刻刷新
@@ -636,6 +638,7 @@ $('testBtn').onclick = () => api.withBusy($('testBtn'), async () => {
 });
 
 initStudy({ onSongs: () => songsPoll.now() });
+initHomeCoach({ songs: () => lastSongs, keyOk, askForKey });
 route();
 api.get('/api/settings').then(showSettings).catch(() => {});
 // key 可能在别的标签页（另一个曲库页）填好或清掉了：回到这页时重新查一次
