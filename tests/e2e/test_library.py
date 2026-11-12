@@ -1151,3 +1151,201 @@ def test_pages_save_without_key_says_so_before_asking_to_delete(server, browser)
     assert b.js("__posts") == []
     assert b.js("document.getElementById('pagesDlg').open") is True  # 对话框还开着，调整没丢
     assert not b.errors, b.errors
+
+
+# ---------------- 从曲库点进练习页再回来：恢复离开前的样子 ----------------
+# 页码、标签、归档筛选、搜索词（搜索框里也显示）、滚动位置；只在“从曲库点开、再回来”这条路上恢复
+_RET_STATE = """({
+  hash: location.hash,
+  page: (document.querySelector('#pager [aria-current]') || {}).textContent || '',
+  tag: (document.querySelector('#tagFilter [aria-pressed="true"]') || {dataset: {}}).dataset.tag ?? null,
+  arch: document.getElementById('archFilter').getAttribute('aria-pressed'),
+  q: document.getElementById('search').value,
+  rows: [...document.querySelectorAll('#songs .song-row')].map(r => r.dataset.id),
+  y: Math.round(scrollY),
+})"""
+_RET_ROWS = "document.querySelectorAll('#songs .song-row').length"
+_TRAINER_READY = (
+    "location.pathname === '/trainer' && document.readyState === 'complete' && window.tt && !!tt.song"
+)
+
+
+@pytest.fixture
+def ret_songs(server):
+    """30 首带标签 e2e-ret、都归档了的 GP 曲子（只看归档 + 标签 + 搜索时正好两页：20 + 10）。"""
+    from app import songs
+    from tests.e2e.conftest import _gp_bytes
+
+    gp = _gp_bytes()
+    ids = [songs.create_song([("p.gp", gp)], title=f"E2E 返回 {i:02d}") for i in range(1, 31)]
+    for sid in ids:
+        _put_json(server, f"/api/songs/{sid}/tags", {"tags": ["e2e-ret"]})
+        _post(server, f"/api/songs/{sid}/archive", {"archived": True})
+    yield ids
+    for sid in ids:
+        with contextlib.suppress(urllib.error.HTTPError):  # 测试里删掉的：404
+            _api(server, f"/api/songs/{sid}", "DELETE")
+
+
+def _ret_setup(b, server):
+    """曲库：按曲名排、只看归档、标签 e2e-ret、搜索“E2E 返回”、翻到第 2 页、滚到底 → 这时的状态"""
+    b.open(server["base"] + "/#library")
+    b.wait_for("!document.getElementById('archFilter').hidden")
+    b.js("document.querySelector('#sortSeg [data-v=\"title\"]').click(); true")
+    b.js(
+        "{ const a = document.getElementById('archFilter'); if (a.getAttribute('aria-pressed') !== 'true') a.click(); } true"
+    )
+    b.wait_for("!!document.querySelector('#tagFilter [data-tag=\"e2e-ret\"]')")
+    b.js("document.querySelector('#tagFilter [data-tag=\"e2e-ret\"]').click(); true")
+    b.js(
+        "{ const s = document.getElementById('search'); s.value = 'E2E 返回'; s.dispatchEvent(new Event('input')); } true"
+    )
+    b.js("document.querySelector('#pager [data-page=\"2\"]').click(); true")
+    b.js("scrollTo(0, document.documentElement.scrollHeight); true")
+    st = b.js(_RET_STATE)
+    assert st["page"] == "2" and st["tag"] == "e2e-ret" and st["arch"] == "true" and len(st["rows"]) == 10
+    assert st["y"] > 100, st  # 窗口够矮，第 2 页真的能往下滚
+    return st
+
+
+def _ret_back_to(b, want):
+    """等曲库列表画出来，状态和离开前一样（滚动位置差 1 像素以内）。列表一出现就已经在离开时的位置（不先停在顶上再跳）"""
+    first = b.wait_for(
+        f"location.pathname === '/' && document.readyState === 'complete' && {_RET_ROWS} > 0 && {{y: scrollY}}"
+    )
+    assert abs(first["y"] - want["y"]) <= 1, first
+    st = b.js(_RET_STATE)
+    assert {**st, "y": 0} == {**want, "hash": "#library", "y": 0}, st
+    assert b.js("!(history.state && history.state.ret)")  # 用过了：之后刷新不会再滚过去
+    assert b.js("history.scrollRestoration") == "auto"
+    return st
+
+
+def test_back_button_and_rating_restore_library(server, ret_songs):
+    from tests.e2e.cdp import Browser
+
+    with Browser(height=700) as b:
+        # 1) 点标题进练习页，点左上角“返回”
+        want = _ret_setup(b, server)
+        sid = want["rows"][0]
+        b.js(f"document.querySelector('.song-row[data-id=\"{sid}\"] a.title').click(); true")
+        b.wait_for(_TRAINER_READY, timeout=40)
+        b.js("document.getElementById('backBtn').click(); true")
+        _ret_back_to(b, want)
+        assert b.js("sessionStorage.getItem('tt.libReturn')") is None  # 只用一次
+
+        # 2) 在练习页地址栏里输 /（新开）：默认的曲库，不恢复
+        b.js(f'document.querySelector(\'.song-row[data-id="{sid}"] a[data-k="play"]\').click(); true')
+        b.wait_for(_TRAINER_READY, timeout=40)
+        b.open(server["base"] + "/")
+        b.wait_for(f"{_RET_ROWS} > 0")
+        st = b.js(_RET_STATE)
+        assert (
+            st["q"] == ""
+            and st["arch"] == "false"
+            and st["tag"] is None
+            and st["page"] in ("", "1")
+            and st["y"] == 0
+        )
+        assert sid not in st["rows"]  # 归档的不显示
+
+        # 3) 在计划里、练过 1 分钟：点“返回”先提醒打分；关掉留在这页的不算，跳过以后回到原来的样子
+        plan = want["rows"][3]
+        _put_json(server, f"/api/songs/{plan}/study", {"in_plan": True})
+        want = _ret_setup(b, server)
+        b.js(f"document.querySelector('.song-row[data-id=\"{plan}\"]').click(); true")  # 点整行
+        b.wait_for(_TRAINER_READY, timeout=40)
+        b.wait_for("!document.getElementById('rateBtn').hidden", timeout=10)
+        b.js("tt.set('play.playing', true); true")
+        b.js(
+            "performance.now = (n => () => n() + 120000)(performance.now.bind(performance)); tt.set('play.playing', false); true"
+        )
+        b.js("document.getElementById('backBtn').click(); true")
+        b.wait_for("!document.getElementById('ratePop').hidden")
+        assert b.js("JSON.parse(sessionStorage.getItem('tt.libReturn')).back") is False  # 还没走
+        b.js("document.getElementById('rateSkip').click(); true")
+        _ret_back_to(b, want)
+        assert not b.errors, b.errors
+
+
+def test_browser_back_and_gone_song_restore_library(server, ret_songs):
+    # 没用上往返缓存（重新加载）的“后退”；离开期间曲子被删了：练习页的“返回曲库”回来，退到还能到的位置
+    from tests.e2e.cdp import Browser
+
+    with Browser(height=700, args=("--disable-features=BackForwardCache",)) as b:
+        want = _ret_setup(b, server)
+        b.js(
+            f'document.querySelector(\'.song-row[data-id="{want["rows"][1]}"] a[data-k="play"]\').click(); true'
+        )
+        b.wait_for(_TRAINER_READY, timeout=40)
+        b.js("window.__same = 1; history.back(); true")
+        _ret_back_to(b, want)
+        assert b.js("window.__same") is None  # 确实是重新加载
+        # 刷新：页码、标签、归档还在（和以前一样），不再滚到离开时的位置
+        b.js("scrollTo(0, 0); location.reload(); true")
+        b.wait_for(f"document.readyState === 'complete' && {_RET_ROWS} > 0")
+        assert b.js("document.querySelector('#pager [aria-current]').textContent") == "2"
+        assert b.js("scrollY") == 0
+
+        # 第 2 页的曲子在练习页期间都删了（包括点开的这首）
+        want = _ret_setup(b, server)
+        gone = want["rows"][0]
+        b.js(f"document.querySelector('.song-row[data-id=\"{gone}\"] a.title').click(); true")
+        b.wait_for(_TRAINER_READY, timeout=40)
+        for sid in want["rows"]:
+            _api(server, f"/api/songs/{sid}", "DELETE")
+        b.js("location.reload(); true")
+        b.wait_for("!!document.querySelector('#songGone a[href=\"/\"]')", timeout=20)
+        b.js("document.querySelector('#songGone a[href=\"/\"]').click(); true")
+        b.wait_for(f"location.pathname === '/' && document.readyState === 'complete' && {_RET_ROWS} === 20")
+        b.wait_for("!(history.state && history.state.ret)", timeout=5)
+        st = b.js(_RET_STATE)
+        assert (
+            st["hash"] == "#library"
+            and st["q"] == "E2E 返回"
+            and st["tag"] == "e2e-ret"
+            and st["arch"] == "true"
+        )
+        assert b.js("document.getElementById('pager').hidden")  # 只剩一页
+        assert st["y"] <= b.js("document.documentElement.scrollHeight - innerHeight")
+        assert not b.errors, b.errors
+
+
+def test_browser_back_with_bfcache_keeps_library(server, ret_songs):
+    # 往返缓存原样恢复：状态都在，离开时的记录清掉（之后刷新不再滚过去）
+    from tests.e2e.cdp import Browser
+
+    with Browser(height=700) as b:
+        want = _ret_setup(b, server)
+        b.js("window.__same = 1; true")
+        b.js(f"document.querySelector('.song-row[data-id=\"{want['rows'][2]}\"] a.title').click(); true")
+        b.wait_for(_TRAINER_READY, timeout=40)
+        b.js("history.back(); true")
+        _ret_back_to(b, want)
+        assert b.js("window.__same") == 1  # 确实是往返缓存
+        assert not b.errors, b.errors
+
+
+def test_return_to_library_when_session_storage_is_blocked(server, ret_songs):
+    # sessionStorage 读写抛错：点“返回”回来是默认的曲库（不报错）；浏览器“后退”照样靠 history.state 恢复
+    from tests.e2e.cdp import Browser
+
+    with Browser(height=700, args=("--disable-features=BackForwardCache",)) as b:
+        b._run(
+            b._send(
+                "Page.addScriptToEvaluateOnNewDocument",
+                source="Object.defineProperty(window, 'sessionStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } });",
+            )
+        )
+        want = _ret_setup(b, server)
+        sid = want["rows"][0]
+        b.js(f"document.querySelector('.song-row[data-id=\"{sid}\"] a.title').click(); true")
+        b.wait_for(_TRAINER_READY, timeout=40)
+        b.js("history.back(); true")
+        _ret_back_to(b, want)
+        b.js(f"document.querySelector('.song-row[data-id=\"{sid}\"] a.title').click(); true")
+        b.wait_for(_TRAINER_READY, timeout=40)
+        b.js("document.getElementById('backBtn').click(); true")
+        b.wait_for(f"location.pathname === '/' && document.readyState === 'complete' && {_RET_ROWS} > 0")
+        assert b.js("document.getElementById('search').value") == ""
+        assert not b.errors, b.errors

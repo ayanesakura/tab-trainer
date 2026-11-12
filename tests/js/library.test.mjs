@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ago, duration, rangeText, practiceText, practiceTip, latestPracticed, importReport, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay, paginate, pageNumbers, pagerHTML, PAGE_SIZE } from '../../app/static/js/library-view.js';
+import { saveReturn, markBack, takeReturn, cleanReturn } from '../../app/static/js/lib/lib-return.js';
 
 const NOW = new Date(2026, 10, 7, 20, 0); // 2026-11-07 20:00（本地时间）
 const song = (o = {}) => ({ id: 's1', title: '曲子', source_type: 'image', is_score: false, status: 'ready', bars: 8, created: '2026-11-01 10:00', ...o });
@@ -205,4 +206,46 @@ test('pagerHTML：只有一页时不显示；当前页、首尾页的按钮状�
   assert.match(h, /41–45 \/ 45 首/);
   assert.match(h, /data-page="next"[^>]*disabled/);
   assert.equal((h.match(/aria-current/g) || []).length, 1);
+});
+
+// 假的 sessionStorage；blocked：网站存储被禁用，读写都抛错
+function fakeStorage(blocked = false) {
+  const m = new Map(), no = () => { throw new Error('SecurityError'); };
+  return blocked ? { getItem: no, setItem: no, removeItem: no } : { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k), m };
+}
+
+test('lib-return：从曲库点开、练习页“返回”回来时恢复离开前的状态，只用一次', () => {
+  const s = fakeStorage();
+  saveReturn('a b', { page: 3, tag: '指弹', archived: true, q: ' Wonder ', y: 812.5 }, s);
+  assert.equal(takeReturn(s), null); // 没打“回去”的标记（输网址、点品牌链接回来）：不恢复，记录删掉
+  assert.equal(s.m.size, 0);
+  saveReturn('a b', { page: 3, tag: '指弹', archived: true, q: ' Wonder ', y: 812.5 }, s);
+  assert.equal(markBack('other', '/', s), false); // 不是这一首
+  assert.equal(markBack('a b', '/#study', s), false); // 从今日进来的回练琴页
+  assert.equal(markBack('a b', 'http://127.0.0.1:8765/?x=1', s), false);
+  assert.equal(markBack('a b', 'http://127.0.0.1:8765/', s), true);
+  assert.deepEqual(takeReturn(s), { page: 3, tag: '指弹', archived: true, q: ' Wonder ', y: 812.5 });
+  assert.equal(takeReturn(s), null); // 只用一次
+  assert.equal(markBack('a b', '/', s), false); // 记录已经用掉了
+  saveReturn('c', {}, s);
+  assert.equal(markBack('c', '/#library', s), true);
+  assert.deepEqual(takeReturn(s), { page: 1, tag: '', archived: false, q: '', y: 0 });
+});
+
+test('lib-return：记录坏了、类型不对、存储被禁用时静默退化', () => {
+  assert.deepEqual(cleanReturn({ page: '0', tag: 5, archived: 'true', q: null, y: -3 }), { page: 1, tag: '', archived: false, q: '', y: 0 });
+  assert.deepEqual(cleanReturn(null), { page: 1, tag: '', archived: false, q: '', y: 0 });
+  assert.equal(cleanReturn({ page: 2.7 }).page, 2);
+  const s = fakeStorage();
+  s.setItem('tt.libReturn', '{oops');
+  assert.equal(markBack('a', '/', s), false);
+  assert.equal(takeReturn(s), null);
+  const blocked = fakeStorage(true);
+  assert.doesNotThrow(() => saveReturn('a', { page: 2 }, blocked));
+  assert.equal(markBack('a', '/', blocked), false);
+  assert.equal(takeReturn(blocked), null);
+  // Node 里没有 sessionStorage：用默认参数也不抛错
+  assert.doesNotThrow(() => saveReturn('a', {}));
+  assert.equal(markBack('a', '/'), false);
+  assert.equal(takeReturn(), null);
 });

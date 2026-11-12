@@ -10,12 +10,13 @@
 
 import { get, on } from './store.js';
 import { setLocal } from './song.js';
-import { $, UI, esc, songUrl } from './dom.js';
+import { $, UI, esc, songUrl, SONG_ID } from './dom.js';
 import * as api from '../lib/api.js';
 import { icon } from '../lib/html.js';
 import { mountTimer, announce } from '../lib/study-timer.js';
 import { KINDS, RATING_CLS, ratingName, gapText, dueText } from '../study-view.js';
 import { STUDY_RATINGS, STUDY_ISSUES } from '../vocab.js';
+import { markBack } from '../lib/lib-return.js';
 
 const RATE_TIPS = { 1: '弹不下来，要停', 2: '能弹完，有几处出错', 3: '基本没错', 4: '很轻松，可以隔久一点' };
 const fromToday = new URLSearchParams(location.search).get('from') === 'today';
@@ -163,11 +164,13 @@ export function initStudy() {
     if (busy && !since) since = performance.now();
     else if (!busy && since) { practiced += (performance.now() - since) / 1000; since = 0; }
   });
-  // 点“返回”：先提醒打分，打完 / 跳过再走
+  // 点“返回”：先提醒打分，打完 / 跳过再走。真要走了才告诉曲库是从这里回去的（恢复点进来之前的样子，lib-return.js）；
+  // 打分弹层关掉、留在这页的不算
   $('backBtn').addEventListener('click', e => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // 新标签页打开：不拦
     const href = $('backBtn').href;
-    if (promptRating(() => { location.href = href; }, '走之前给今天打个分？', '跳过，直接返回')) e.preventDefault();
+    if (promptRating(() => { markBack(SONG_ID, href); location.href = href; }, '走之前给今天打个分？', '跳过，直接返回')) e.preventDefault();
+    else markBack(SONG_ID, href);
   });
   // 计时器的“结束”：先提醒打分，打完 / 跳过再结束计时（再点一次结束按钮，这次不拦）
   $('timer').addEventListener('click', e => {

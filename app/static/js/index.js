@@ -8,6 +8,7 @@ import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, 
 import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
 import { initStudy, renderPlan, refresh as refreshStudy, setVisible as setStudyVisible, setStudy, addMany, checkDay } from '/static/js/study.js';
 import { initHomeCoach, refresh as refreshChat } from '/static/js/home-coach.js';
+import { saveReturn, takeReturn, cleanReturn } from '/static/js/lib/lib-return.js';
 
 // ---------------- 导航 ----------------
 // 练琴 / 曲库 / 设置。地址里没写时打开上次看的那个（练琴或曲库，记在本机），第一次是曲库
@@ -248,10 +249,34 @@ function renderList(box, songs, primaryId) {
 const SORT_KEY = 'tt.libSort';
 let savedSort = null;
 try { savedSort = localStorage.getItem(SORT_KEY); } catch { /* 读不了就用默认排序 */ }
-// 翻到第几页、按哪个标签筛选记在这条浏览记录里（history.state）：从练习页按“后退”回来还在原来那一页
-const saved = (history.state && history.state.lib) || {};
+// 从曲库点开一首、再回到曲库（lib-return.js）：离开前的页码、标签、归档筛选、搜索词、滚动位置。
+// 浏览器“后退”回来（没用上往返缓存、重新加载了）：在这条浏览记录的 history.state.ret 里；
+// 点练习页的“返回”、打分后返回、“返回曲库”回来（新的浏览记录，history.state 是空的）：在 sessionStorage 里。
+// 别的新开（输网址、点品牌链接）takeReturn 是 null，照旧
+const back = history.state ? (history.state.ret ? cleanReturn(history.state.ret) : null) : takeReturn();
+if (back && location.hash !== '#library') { try { history.replaceState(history.state, '', '#library'); } catch { /* 改不了地址就按地址里的视图 */ } }
+// 翻到第几页、按哪个标签筛选记在这条浏览记录里（history.state）：从练习页按“后退”回来、刷新还在原来那一页
+const saved = back || (history.state && history.state.lib) || {};
 // archived：只看归档的曲子（平时归档的不显示），和页码、标签一样记在这条浏览记录里
-const lib = { q: '', tag: typeof saved.tag === 'string' ? saved.tag : '', sort: SORTS.includes(savedSort) ? savedSort : 'practiced', page: Number(saved.page) || 1, archived: saved.archived === true };
+const lib = { q: back ? back.q.trim().toLowerCase() : '', tag: typeof saved.tag === 'string' ? saved.tag : '', sort: SORTS.includes(savedSort) ? savedSort : 'practiced', page: Number(saved.page) || 1, archived: saved.archived === true };
+if (back) $('search').value = back.q;
+// 点开一首去练习页：记下离开前的状态（见上）。这条记录的滚动位置由回来时自己恢复（列表是异步加载的，浏览器自己恢复会先停在顶上），
+// 恢复完再交还给浏览器
+function leaveFor(id) {
+  const ret = { page: lib.page, tag: lib.tag, archived: lib.archived, q: $('search').value, y: scrollY };
+  saveReturn(id, ret);
+  try { history.replaceState({ ...(history.state || {}), ret }, ''); history.scrollRestoration = 'manual'; } catch { /* 记不下就算了 */ }
+}
+function dropReturn() {
+  try {
+    history.scrollRestoration = 'auto';
+    if (history.state && history.state.ret) { const { ret, ...rest } = history.state; history.replaceState(rest, ''); }
+  } catch { /* 记不下就算了 */ }
+}
+// 回来时：等列表第一次画出来再滚到离开时的位置（同一个任务里，不会先画一帧顶上的）；曲子变少了就停在能到的最低处。
+// 列表上面的 API key 提示晚到时，浏览器的滚动锚定会让看到的内容不动
+let songsShown;
+const firstRender = new Promise(r => { songsShown = r; });
 function remember() {
   try { history.replaceState({ ...(history.state || {}), lib: { page: lib.page, tag: lib.tag, archived: lib.archived } }, ''); } catch { /* 记不下就算了 */ }
 }
@@ -327,13 +352,20 @@ async function loadSongs() {
   renderSongs();
   renderPlan(lastSongs);
   refreshChat();
+  songsShown();
   return lastSongs;
 }
 // 有曲子在后台忙（识别、讲解）就每 2.5 秒刷新；做完操作后 songsPoll.now() 立刻刷新
 const songsPoll = api.poll(loadSongs, { interval: 2500, while: songs => songs.some(s => s.busy) });
 // 没有曲子在忙时轮询就停了：从练习页按“后退”回来（Chrome 从往返缓存原样恢复页面）、
 // 在别的标签页练过再切回来，都立刻刷新一次（接着练的位置、在练习页改的曲名）
-addEventListener('pageshow', e => { if (e.persisted) songsPoll.now(); });
+// 往返缓存原样恢复的页面：搜索词、滚动位置都还在，离开时的记录不再需要（之后刷新不该再滚过去）
+addEventListener('pageshow', e => {
+  if (!e.persisted) return;
+  songsPoll.now();
+  const ret = history.state && history.state.ret;
+  if (ret) { scrollTo(0, cleanReturn(ret).y); dropReturn(); }
+});
 document.addEventListener('visibilitychange', () => { if (!document.hidden) songsPoll.now(); });
 
 $('songs').addEventListener('click', e => {
@@ -356,9 +388,15 @@ $('songs').addEventListener('click', e => {
   if (retry) { const s = lastSongs.find(x => x.id === retry.dataset.retry); if (s) needKey(reparse)(s); return; }
   const rf = e.target.closest('[data-retry-failed]');
   if (rf) { const s = lastSongs.find(x => x.id === rf.dataset.retryFailed); if (s) needKey(retryFailed)(s); return; }
+  // 点开一首去练习页（标题、“练习”、“接着练”，键盘回车也是 click）：记下曲库现在的样子，回来时恢复。新标签页打开的不记
+  const open = e.target.closest('a[href^="/trainer"]');
+  if (open) {
+    if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) leaveFor(open.closest('.song-row').dataset.id);
+    return;
+  }
   if (e.target.closest('a,button')) return;
   const row = e.target.closest('.row[data-play="1"]');
-  if (row) location.href = row.querySelector('a.title').href;
+  if (row) { leaveFor(row.dataset.id); location.href = row.querySelector('a.title').href; }
 });
 function openMore(btn) {
   const id = btn.dataset.more, s = lastSongs.find(x => x.id === id);
@@ -641,6 +679,7 @@ initStudy({ onSongs: () => songsPoll.now() });
 initHomeCoach({ songs: () => lastSongs, keyOk, askForKey });
 route();
 api.get('/api/settings').then(showSettings).catch(() => {});
+if (back) firstRender.then(() => { scrollTo(0, back.y); dropReturn(); });
 // key 可能在别的标签页（另一个曲库页）填好或清掉了：回到这页时重新查一次
 document.addEventListener('visibilitychange', () => { if (!document.hidden) api.get('/api/settings').then(paintKey).catch(() => {}); });
 

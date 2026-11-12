@@ -16,6 +16,7 @@ import { stored, remember } from './prefs.js';
 import { refineConfirm, NO_REFINE, refineScopeLabel } from '../lib/refine.js';
 import { setTitleBase } from '../lib/doc-title.js';
 import { createFresh } from './fresh.js';
+import { markBack } from '../lib/lib-return.js';
 
 
 // ---------------------------------------------------------------------
@@ -54,6 +55,8 @@ export function songGone(head, msg = '', retry = false) {
   if (!box) { box = document.createElement('div'); box.id = 'songGone'; box.className = 'empty-state gone-box'; document.querySelector('main').prepend(box); }
   box.innerHTML = `<b>${esc(head)}</b>${msg ? `<p>${esc(msg)}</p>` : ''}<div class="gone-btns">${retry ? `<button class="btn sm" id="goneRetry">${UI.icon('refresh')}重试</button>` : ''}<a class="btn sm primary" href="/">返回曲库</a></div>`;
   if (retry) $('goneRetry').onclick = e => withBusy(e.currentTarget, refresh);
+  // 和顶栏的“返回”一样：从曲库点进来的，回去恢复曲库原来的样子（新标签页打开的不算）
+  box.querySelector('a[href="/"]').onclick = e => { if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) markBack(SONG_ID, e.currentTarget.href); };
   stop(); // 曲子被删了还在放的话停下（播放键已经看不见了）
   if (get('ui.view') !== 'practice') location.hash = '#practice'; // 调弦页的麦克风也关掉
 }
