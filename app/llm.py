@@ -11,10 +11,12 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import json
 import logging
 import os
+import socket
 import threading
 import time
 from collections.abc import Iterable, Iterator
@@ -78,6 +80,10 @@ class Truncated(LLMError):
     """输出超出长度上限被截断（stop_reason = max_tokens）。"""
 
 
+class Interrupted(LLMError):
+    """请求被取消打断了（见 interruptible）。"""
+
+
 class MissingKey(LLMError, Invalid):
     """还没有设置 API key：用户自己能解决，400。"""
 
@@ -95,6 +101,66 @@ def request_id_of(e: BaseException | None) -> str:
 
 STREAM_RETRIES = 2
 STREAM_RETRY_WAIT = 3.0  # 秒，第 n 次重试前等 n 倍
+
+
+# -- 取消时中断正在进行的请求 ------------------------------------------------------
+# 精修最高精细度的一遍核对能跑好几分钟，回复开始之前流里可能一个字节都没有：不打断的话，点了取消要等它跑完
+# （或者等到读超时）才收尾。任务线程用 interruptible(cancel) 包住模型调用，流开着的时候有个小线程盯着 cancel，
+# 一置位就把这条连接的 socket 关掉（shutdown：阻塞在读上的线程马上醒过来，抛传输错误），不再重试。
+_interrupt = threading.local()
+INTERRUPT_POLL = 0.1  # 秒：流结束后盯着的线程最多再留这么久
+
+
+@contextlib.contextmanager
+def interruptible(cancel: threading.Event | None):
+    """这个线程里在 with 块中发出的流式请求可以被 cancel 中断：cancel 置位时正在读的流马上断开，
+    调用抛出传输错误（已经收到的部分照样记用量），也不再重试。调用方看到错误时自己查 cancel 是不是置位了。"""
+    prev = getattr(_interrupt, "cancel", None)
+    _interrupt.cancel = cancel
+    try:
+        yield
+    finally:
+        _interrupt.cancel = prev
+
+
+def _interrupted() -> bool:
+    cancel = getattr(_interrupt, "cancel", None)
+    return cancel is not None and cancel.is_set()
+
+
+def _abort(stream) -> None:
+    """从别的线程打断一条正在读的流：shutdown 它的 socket（光 close 叫不醒阻塞在 recv 上的线程）。
+    拿不到 socket（换了传输层、测试里的假传输）时退回去关响应。出什么错都不往外抛：最坏也就是等它自己读完。"""
+    resp = getattr(stream, "response", None)
+    try:
+        sock = resp.extensions["network_stream"].get_extra_info("socket")
+        sock.shutdown(socket.SHUT_RDWR)
+    except Exception:  # noqa: BLE001
+        with contextlib.suppress(Exception):
+            resp.close()
+
+
+@contextlib.contextmanager
+def _watch(stream):
+    """流开着的这段时间里盯着这个线程的 cancel（见 interruptible）；没有绑定 cancel 时什么都不做。"""
+    cancel = getattr(_interrupt, "cancel", None)
+    if cancel is None:
+        yield
+        return
+    done = threading.Event()
+
+    def run():
+        while not done.is_set():
+            if cancel.wait(INTERRUPT_POLL):
+                if not done.is_set():
+                    _abort(stream)
+                return
+
+    threading.Thread(target=run, daemon=True, name="llm-interrupt").start()
+    try:
+        yield
+    finally:
+        done.set()
 
 
 def _dropped_mid_stream(e: Exception) -> bool:
@@ -518,7 +584,7 @@ class Claude(LLM):
     def _text_once(self, kwargs: dict, fallbacks: bool):
         """一次流式请求，边收边给出文字片段，返回最后的完整消息。用量在这里记：正常结束按最后的消息；
         中途出错、调用方不再往下读（生成器被关掉）时按已经收到的部分——服务端照样算钱。"""
-        with self._open(kwargs, fallbacks) as s:
+        with self._open(kwargs, fallbacks) as s, _watch(s):
             msg = None
             try:
                 for ev in s:
@@ -526,6 +592,8 @@ class Claude(LLM):
                         yield None  # 前一个模型拒绝了，兜底模型从头回答：前面写的不算
                     elif ev.type == "content_block_delta" and ev.delta.type == "text_delta":
                         yield ev.delta.text
+                if _interrupted():  # 见 _stream_once
+                    raise Interrupted("请求被取消打断了")
                 msg = s.get_final_message()
             finally:
                 if msg is None:
@@ -552,17 +620,22 @@ class Claude(LLM):
         给出文字片段、返回最后的完整消息。SDK 自带的重试只管建立连接；回复传到一半出错（网关断线、服务过载，
         流里收到的 error 事件，状态码是 200）不会重试，整行识别就失败了。这类临时错误这里再试两次，重试前给出 None
         （已经给出的片段作废）；建立连接时的错误 SDK 已经重试过，不再重来（见 _dropped_mid_stream）。
-        生成器，返回值是最后的完整消息。"""
+        被取消打断的（interruptible）不重试，等着重试的时候点了取消也不再发。生成器，返回值是最后的完整消息。"""
         for attempt in range(STREAM_RETRIES + 1):
             try:
                 return (yield from once())
             except (anthropic.APIStatusError, anthropic.APIConnectionError, _http.TransportError) as e:
-                if attempt == STREAM_RETRIES or not _dropped_mid_stream(e):
+                # 取消打断的（见 interruptible）不是临时错误：不重试
+                if attempt == STREAM_RETRIES or not _dropped_mid_stream(e) or _interrupted():
                     raise
                 log.warning(
                     "request_id=%s transient error mid-stream, retry %d: %s", request_id_of(e), attempt + 1, e
                 )
-                time.sleep(STREAM_RETRY_WAIT * (attempt + 1))
+                cancel = getattr(_interrupt, "cancel", None)
+                if cancel is None:
+                    time.sleep(STREAM_RETRY_WAIT * (attempt + 1))
+                elif cancel.wait(STREAM_RETRY_WAIT * (attempt + 1)):
+                    raise  # 等着重试的时候点了取消
                 yield None
         raise AssertionError("unreachable")
 
@@ -582,9 +655,13 @@ class Claude(LLM):
 
     def _stream_once(self, kwargs: dict, fallbacks: bool | None = None):
         """一次流式请求，返回最后的完整消息（用量由 _call 记）。中途出错时按已经收到的部分记上用量再抛出。"""
-        with self._open(kwargs, self.use_fallbacks if fallbacks is None else fallbacks) as s:
+        with self._open(kwargs, self.use_fallbacks if fallbacks is None else fallbacks) as s, _watch(s):
             try:
-                return s.get_final_message()
+                msg = s.get_final_message()
+                # 响应靠断开连接表示结束（没有分块、没有长度）时，被打断的流看起来像正常读完了：只有半截的消息不能用
+                if _interrupted():
+                    raise Interrupted("请求被取消打断了")
+                return msg
             except BaseException:
                 self._record_partial(s, kwargs["model"])
                 raise

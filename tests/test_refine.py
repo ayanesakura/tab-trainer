@@ -1,5 +1,7 @@
 """精修（app/refine.py）：挑哪些小节、写回时的 rev 检查、取消、费用、自动精修、设置、撤销精修。只用替身模型。"""
 
+import threading
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -908,3 +910,140 @@ def test_verify_options_can_be_given_without_touching_module_switches(data_dir):
     calls.clear()
     r = refine.verify(Claude(), *args, opts=refine.VerifyOptions(max_reads=2))
     assert r["status"] == "rejected" and len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# 疑似切错的行不核对；取消马上打断正在进行的请求
+# ---------------------------------------------------------------------------
+def _clef_bar(sid: str, row: int = 1) -> dict:
+    """把一行改成“扫弦箭头被当成小节线”的样子：第一个小节是行首只有谱号的一小段、读成一个休止。返回这个小节。"""
+
+    def apply(s):
+        x = s["systems"][row]
+        a = x["spans"][0][0]
+        x["spans"][0] = [a, a + 70]  # 5 个线距（线距 14）
+        b = next(b for b in s["bars"] if b["system"] == row)
+        b["events"] = [{"dur": "4", "notes": []}]
+        b["region"] = [a - 8, a + 78, *b["region"][2:]]
+        b["uncertain"] = "图中这个小节范围内看不到任何音符"
+
+    s = store.update(sid, apply)
+    return next(b for b in s["bars"] if b["system"] == row)
+
+
+def test_clef_only_first_bar_marks_its_row_as_miscut(data_dir):
+    sid = _song()
+    assert refine.miscut_rows(store.load(sid)) == set()
+    bar = _clef_bar(sid)
+    s = store.load(sid)
+    assert refine.miscut_rows(s) == {1}
+    assert refine.refinable(s, bar)  # 小节数和区间数对得上：光看这个拦不住
+
+    def widen(x):  # 行首真的是一个休止小节（和别的小节差不多宽）：不算
+        a = x["systems"][1]["spans"][0][0]
+        x["systems"][1]["spans"][0] = [a, a + 140]
+
+    assert refine.miscut_rows(store.update(sid, widen)) == set()
+
+    def narrow_with_notes(x):  # 窄，但里面有音（一个全音符和弦）：是真小节
+        a = x["systems"][1]["spans"][0][0]
+        x["systems"][1]["spans"][0] = [a, a + 70]
+        b = next(b for b in x["bars"] if b["system"] == 1)
+        b["events"] = [{"dur": "1", "notes": [{"string": 1, "fret": 3}]}]
+
+    assert refine.miscut_rows(store.update(sid, narrow_with_notes)) == set()
+
+
+def test_refining_a_miscut_bar_or_row_sends_nothing_and_says_to_reparse(client, sync_jobs):
+    sid = _song()
+    bar = _clef_bar(sid)
+    other = store.load(sid)["bars"][4]  # 同一行的另一个小节：这一行的小节都对不上图
+    for body in ({"bars": [bar["id"]]}, {"bars": [other["id"]]}, {"system": 1}):
+        r = client.post(f"/api/songs/{sid}/refine", json=body)
+        assert r.status_code == 400
+        assert r.json()["detail"] == "第 2 行的小节线可能切错了，核对不了：请重新识别这一行"
+    assert _verifies() == []
+    s = store.load(sid)
+    assert s["activity"] is None and not jobs.jobs.running(sid)
+    # 别的行照常
+    assert client.post(f"/api/songs/{sid}/refine", json={"system": 0}).status_code == 200
+    assert len(_verifies()) == 3
+
+
+def test_whole_song_refine_skips_miscut_rows_and_says_so(client, sync_jobs):
+    sid = _song()
+    _clef_bar(sid)
+    assert client.post(f"/api/songs/{sid}/refine").status_code == 200
+    assert len(_verifies()) == 3  # 只核对了第 1 行
+    v = client.get(f"/api/songs/{sid}").json()
+    assert v["notice"]["kind"] == "warn"
+    assert v["notice"]["msg"] == (
+        "精修完成：检查了 3 个小节，改了 0 个。第 2 行的小节线可能切错了，没有核对：请重新识别。"
+    )
+    # 每一行都切错了：不开始
+    _clef_bar(sid, row=0)
+    FakeClaude.calls.clear()
+    r = client.post(f"/api/songs/{sid}/refine")
+    assert r.status_code == 400 and "第 1、2 行的小节线可能切错了" in r.json()["detail"]
+    assert _verifies() == [] and not jobs.jobs.running(sid)
+
+
+def test_auto_refine_skips_miscut_rows(data_dir, sync_jobs):
+    sid = _song()
+    _clef_bar(sid)
+    refine.refine_after(sid, threading.Event())
+    assert len(_verifies()) == 3
+    assert "第 2 行的小节线可能切错了" in store.load(sid)["notice"]["msg"]
+
+
+def test_rows_whose_stored_bar_count_no_longer_matches_detection_are_not_refined(
+    client, sync_jobs, monkeypatch
+):
+    """小节线检测改进之前识别的曲子：存下的区间数（当时把箭头当成了小节线）和现在检测的不一样。"""
+    sid = _song()
+    s = store.load(sid)
+    assert refine.stale_rows(sid, s) == set()  # 存的就是现在检测的
+    real = refine.systems.plan_page_systems
+
+    def fewer_bars_in_row_2(sid_, page, pi):
+        rows = real(sid_, page, pi)
+        a, b, c = rows[1]["spans"]
+        rows[1]["spans"] = [[a[0], b[1]], c]  # 现在检测：第 2 行只有 2 个小节
+        return rows
+
+    monkeypatch.setattr(refine.systems, "plan_page_systems", fewer_bars_in_row_2)
+    assert refine.stale_rows(sid, s) == {1}
+    assert refine.stale_rows(sid, s, {0}) == set()
+    r = client.post(f"/api/songs/{sid}/refine", json={"bars": [s["bars"][5]["id"]]})
+    assert r.status_code == 400 and "第 2 行的小节线可能切错了" in r.json()["detail"]
+    assert client.post(f"/api/songs/{sid}/refine", json={"bars": [s["bars"][0]["id"]]}).status_code == 200
+    assert len(_verifies()) == 1
+
+    def broken(*a):
+        raise OSError("page image missing")
+
+    monkeypatch.setattr(refine.systems, "plan_page_systems", broken)  # 原图读不出来：查不了，不拦
+    assert refine.stale_rows(sid, s) == set()
+
+
+def test_cancel_interrupts_the_request_in_flight(client, sync_jobs, monkeypatch):
+    """点了取消：正在进行的那一遍请求马上断开（llm.interruptible 绑的就是这个任务的取消信号），
+    断开抛出的连接错误算取消，不算这个小节没核对成。"""
+    from app import llm
+
+    sid = _song()
+    seen = []
+
+    def interrupted(img, meta, span, events, previous, ts):
+        seen.append(llm._interrupted())  # 还没点取消
+        jobs.jobs.cancel(sid)
+        seen.append(llm._interrupted())  # 这个线程里的流会被打断
+        raise llm._http.ReadError("[Errno 32] Broken pipe")
+
+    monkeypatch.setattr(FakeClaude, "verify_result", interrupted)
+    assert client.post(f"/api/songs/{sid}/refine", json={"bars": [store.load(sid)["bars"][0]["id"]]}).json()
+    assert seen == [False, True]
+    s = store.load(sid)
+    assert s["notice"]["msg"].startswith("精修已取消：检查了 0 个小节")
+    assert s["activity"] is None and len(_verifies()) == 1
+    assert not llm._interrupted()  # 出了 with 块就解除

@@ -10,13 +10,17 @@
   （没检测到小节线，裁不出一个小节）、识别出的小节数和小节线对不上的行（不知道哪个小节在哪，见 refinable）。整首（pick）：再跳过用户手改过的、确认过没问题的；核对过、
   音没再变的（refine_key）不再核对，用户点“精修整首”时全都核对过了就整首重来（自动精修不重来）。
   点了某个小节 / 某一行（pick_scope）：范围里的都核对，手改过、确认过、核对过的也核对（用户明确要求的，改了能撤销）。
+- 疑似切错的行不核对（suspect_rows）：小节线检测把扫弦箭头当成小节线时，“小节”和图上的区间对不上（行首只有谱号的
+  一段被读成一个休止小节），模型对着一张没有音符的图想几分钟也核对不出结果。点了这样的小节 / 行：不发请求，400 提示
+  重新识别这一行；整首、自动精修：跳过这些行，结束提示里说明。
 - 确认（CONFIRM_CHANGES）：模型提出改动时再独立核对，最多 MAX_READS 遍里有两遍提出一模一样的改动才改，否则不改、标成待核对（见 verify）。
 - 写回：每个小节核对完马上写回，但只在这个小节还在、rev 没变（期间用户没改过）、仍然该核对时才写，否则悄悄跳过。
   改了的小节：提示 / 问答 / 练习建议按“音变了”处理（staleness.refine_bar），改之前的内容记在 bar["refine"]，可以撤销（undo）。
 - 任务：activity kind = refine（scope = song / bars / row，row = 行号，bars = 范围里的小节 id，pending = 还没核对完的），
   每首曲子同一时间只有一个任务（再点：423，说清楚正在做什么，见 busy_text）；期间照常能练、能改小节和曲名，
   调弦 / 变调夹 / 拍号不能改（核对是按它们做的，见 state.settings_lock_reason）；进度 {stage: 精修, done, total}；
-  全局名额和识别共用（jobs.run_queued，每一遍核对单独排队，不会一个小节连着几遍占住名额），能取消；
+  全局名额和识别共用（jobs.run_queued，每一遍核对单独排队，不会一个小节连着几遍占住名额），能取消
+  （正在进行的那一遍请求马上断开，见 llm.interruptible；已经花掉的照样记费用）；
   费用记到曲子上（jobs.UsageMeter）。
   整首精修完成时记下 song["refined"] = {at, checked, changed}（只精修了一部分不动它）；结束提示见 _end_notice。
 - 自动精修（设置里 refine = auto，见 config.refine_mode）：识别结束后在同一个任务里接着精修（refine_after）。
@@ -33,12 +37,12 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-from app import config, jobs, staleness, state, store
+from app import config, jobs, staleness, state, store, systems
 from app.config import settings
 from app.confirmed import reviewed
 from app.errors import Busy, Invalid
 from app.jobs import Cancelled
-from app.llm import LLM, friendly, request_id_of
+from app.llm import LLM, friendly, interruptible, request_id_of
 from app.model import is_score, notes_key, now
 from app.music import clean_events, same_events
 from app.songs import check_rev, find_bar
@@ -53,6 +57,9 @@ CONFIRM_CHANGES = True
 # 一个小节最多核对几遍（含第一遍）。探查（每个小节核对 5 遍）：模型提出的改动每次都一模一样、而且都对，
 # 分歧只在“提出改动”和“说没问题”之间（如 改 / 没问题 / 没问题 / 改 / 改）：只核对三遍会把对的改动放弃掉
 MAX_READS = 5
+# 行首第一个“小节”不到这么多个线距宽、读出来又一个音都没有：多半是谱号到第一拍扫弦箭头之间的那一段（见 miscut_rows）。
+# 真的窄小节（一个全音符和弦约 5 个线距）里有音；曲库里行首的全休止小节没有比它窄的
+CLEF_BAR_WIDTH = 7
 
 
 @dataclass(frozen=True)
@@ -107,14 +114,81 @@ def eligible(s: dict, bar: dict, explicit: bool = False, slots: dict | None = No
     return explicit or not (bar.get("edited") or reviewed(bar))
 
 
-def pick(s: dict, only: set[str] | None = None, recheck: bool = False) -> list[str]:
+def miscut_rows(s: dict) -> set[int]:
+    """只看已有数据就能认出的切错的行（行号）：行首第一个小节很窄（不到 CLEF_BAR_WIDTH 个线距）、读出来一个音都没有。
+    那一段是 TAB 谱号到第一拍扫弦箭头之间的空白（箭头被当成了小节线），这一行后面的小节也都跟着错位。"""
+    out: set[int] = set()
+    seen: set[int] = set()
+    rows = s.get("systems") or []
+    for b in s.get("bars") or []:
+        si = b.get("system")
+        if not isinstance(si, int) or si in seen or not 0 <= si < len(rows):
+            continue
+        seen.add(si)  # 只看每行的第一个小节
+        spans, lines = rows[si].get("spans"), rows[si].get("lines")
+        if not spans or len(spans) < 2 or not lines or len(lines) < 2 or b.get("placeholder"):
+            continue
+        sp = (lines[-1] - lines[0]) / (len(lines) - 1)
+        empty = not any(e.get("notes") for e in b.get("events") or [])
+        if empty and spans[0][1] - spans[0][0] < sp * CLEF_BAR_WIDTH:
+            out.add(si)
+    return out
+
+
+def stale_rows(sid: str, s: dict, rows: set[int] | None = None) -> set[int]:
+    """识别时存下的小节区间数和现在的版面检测对不上的行（行号）：小节线检测改进之前识别的曲子，那一行当时多切 / 少切了
+    小节，要重新识别才对得上。对这些行所在的页重新检测一遍（只看图，每页几十毫秒），按弦线的位置找到同一行。
+    rows：只查这些行。原图读不出来、现在找不到这一行的不算（宁可照常核对）。"""
+    out: set[int] = set()
+    by_page: dict[int, list[int]] = {}
+    for si, x in enumerate(s.get("systems") or []):
+        if (rows is None or si in rows) and x.get("spans") and x.get("lines"):
+            by_page.setdefault(x["page"], []).append(si)
+    for pi, sis in by_page.items():
+        try:
+            now_rows = systems.plan_page_systems(sid, s["pages"][pi], pi)
+        except Exception as e:  # noqa: BLE001 - 原图丢了、坏了：查不了，不拦
+            log.warning("song=%s page %s: could not re-detect bar lines: %s", sid, pi, e)
+            continue
+        for si in sis:
+            x = s["systems"][si]
+            same = [
+                r
+                for r in now_rows
+                if r.get("spans")
+                and abs(r["lines"][0] - x["lines"][0]) <= 3
+                and r["crop"][0] < x["crop"][1]
+                and x["crop"][0] < r["crop"][1]
+            ]
+            if same and len(same[0]["spans"]) != len(x["spans"]):
+                out.add(si)
+    return out
+
+
+def suspect_rows(sid: str, s: dict, rows: set[int] | None = None) -> set[int]:
+    """疑似切错、不该拿去核对的行（见模块说明）：miscut_rows 和 stale_rows 合起来。rows：只查这些行。"""
+    found = miscut_rows(s) | stale_rows(sid, s, rows)
+    return found if rows is None else found & rows
+
+
+def rows_text(rows: set[int]) -> str:
+    """“第 4、5 行”。"""
+    return "第 " + "、".join(str(si + 1) for si in sorted(rows)) + " 行"
+
+
+def pick(
+    s: dict, only: set[str] | None = None, recheck: bool = False, skip_rows: set[int] | None = None
+) -> list[str]:
     """整首要核对的小节 id（按顺序）：能精修、还没核对过（或核对之后音又变了）的。only：只在这些小节里挑。
-    recheck（用户点了“精修整首”）：全都核对过了的话就整首重新核对一遍；自动精修不重来。"""
+    recheck（用户点了“精修整首”）：全都核对过了的话就整首重新核对一遍；自动精修不重来。
+    skip_rows：这些行不核对（疑似切错的行，见 suspect_rows）。"""
     slots = row_slots(s)
     ok = [
         b
         for b in s.get("bars") or []
-        if (only is None or b.get("id") in only) and eligible(s, b, slots=slots)
+        if (only is None or b.get("id") in only)
+        and b.get("system") not in (skip_rows or ())
+        and eligible(s, b, slots=slots)
     ]
     fresh = [b for b in ok if b.get("refine_key") != notes_key(b)]
     return [b["id"] for b in (ok if recheck and not fresh else fresh)]
@@ -326,13 +400,20 @@ def start_refine(sid: str, bars: list[str] | None = None, system: int | None = N
     scope = scope_ids(s, bars, system)
     config.check_llm_ready()
     kind = "song" if scope is None else "row" if system is not None else "bars"
+    # 疑似切错的行：点的小节 / 行在里面就不发请求，说清楚要重新识别；整首时跳过它们
+    wanted = None if scope is None else {b["system"] for b in s["bars"] if b["id"] in set(scope)}
+    suspect = suspect_rows(sid, s, wanted)
+    if scope is not None and suspect:
+        raise Invalid(f"{rows_text(suspect)}的小节线可能切错了，核对不了：请重新识别这一行")
     ids: list[str] = []
 
     def begin(x):
         if x.get("activity"):
             raise Busy(busy_text(x))
         if scope is None:
-            ids[:] = pick(x, recheck=True)
+            ids[:] = pick(x, recheck=True, skip_rows=suspect)
+            if not ids and suspect:
+                raise Invalid(f"{rows_text(suspect)}的小节线可能切错了，核对不了：请重新识别这几行")
             if not ids:
                 raise Invalid("没有可以精修的小节（手改过、确认过没问题的小节不再核对）")
         else:
@@ -348,7 +429,13 @@ def start_refine(sid: str, bars: list[str] | None = None, system: int | None = N
         busy_text(s),
         begin,
         lambda cancel: _run(
-            sid, ids, cancel, whole=scope is None, explicit=scope is not None, hint=hint.strip()
+            sid,
+            ids,
+            cancel,
+            whole=scope is None,
+            explicit=scope is not None,
+            hint=hint.strip(),
+            skipped=suspect,
         ),
     )
 
@@ -356,18 +443,21 @@ def start_refine(sid: str, bars: list[str] | None = None, system: int | None = N
 def refine_after(sid: str, cancel: threading.Event, only: set[str] | None = None) -> None:
     """自动精修：识别任务结束后在同一个任务（同一个取消信号）里接着做。only：只核对这些小节（刚识别出的）；
     None = 整首（核对过、音没变的不再核对，全都核对过也不重来）。没有要核对的就什么都不做。"""
-    if cancel.is_set() or not pick(store.load(sid), only):
+    # 刚识别完：存的区间就是现在检测的，只用看读出来的结果像不像切错（miscut_rows）
+    s = store.load(sid)
+    skip = miscut_rows(s)
+    if cancel.is_set() or not pick(s, only, skip_rows=skip):
         return
     ids: list[str] = []
 
     def begin(x):
-        ids[:] = pick(x, only)
+        ids[:] = pick(x, only, skip_rows=skip)
         if ids:
             _begin(x, ids, "song" if only is None else "bars")
 
     store.update(sid, begin)
     if ids:
-        _run(sid, ids, cancel, whole=only is None)
+        _run(sid, ids, cancel, whole=only is None, skipped=skip)
 
 
 def _begin(s: dict, ids: list[str], scope: str, row: int | None = None) -> None:
@@ -376,11 +466,18 @@ def _begin(s: dict, ids: list[str], scope: str, row: int | None = None) -> None:
 
 
 def _run(
-    sid: str, ids: list[str], cancel: threading.Event, whole: bool, explicit: bool = False, hint: str = ""
+    sid: str,
+    ids: list[str],
+    cancel: threading.Event,
+    whole: bool,
+    explicit: bool = False,
+    hint: str = "",
+    skipped: set[int] | None = None,
 ) -> None:
     """跑完一次精修并收尾（结束提示、整首的结果、费用）。错误都在这里处理，不往外抛。
     whole：整首（做完记下 song["refined"]；某个小节、某一行、自动精修刚识别出的几行不动它）；
-    explicit：用户点的小节 / 行（手改过、确认过的也写回）；hint：用户写的“哪里不对”。"""
+    explicit：用户点的小节 / 行（手改过、确认过的也写回）；hint：用户写的“哪里不对”；
+    skipped：疑似切错、这次没核对的行（结束提示里说明）。"""
     meter = jobs.UsageMeter(None)
     tally = {"checked": 0, "changed": 0, "doubtful": 0, "failed": 0, "error": ""}
     done = cancelled = False
@@ -400,7 +497,11 @@ def _run(
         if done and whole:
             s["refined"] = {"at": now(), "checked": tally["checked"], "changed": tally["changed"]}
         # 总要告诉用户精修的结果；识别留下的提示（有行失败等）也不盖掉：叠在它上面（见 state.set_notice）
-        state.finish(s, notice=_end_notice(s, tally, cancelled, error), source="refine")
+        kind, msg = _end_notice(s, tally, cancelled, error)
+        if skipped and not error and not cancelled:
+            kind = "warn"
+            msg += f"{rows_text(skipped)}的小节线可能切错了，没有核对：请重新识别。"
+        state.finish(s, notice=(kind, msg), source="refine")
         meter.charge(s)
 
     try:
@@ -460,7 +561,7 @@ def refine_bars(
 ) -> None:
     """并行核对 ids 里的小节（每首最多 row_concurrency 个，所有曲子共用识别的全局名额），每个核对完就写回
     （并从 activity.pending 里去掉）。tally 累计 checked / changed / doubtful（几遍核对对不上、标成待核对的）/ failed / error
-    （取消时调用方照样能拿到已完成的部分）。explicit、hint 见 _run。取消：Cancelled。"""
+    （取消时调用方照样能拿到已完成的部分）。explicit、hint 见 _run。取消：Cancelled（正在进行的请求马上断开）。"""
     song = store.load(sid)
     opts = options()  # 这次精修的选项：定好一次，每个小节都按它
     bars = song["bars"]
@@ -479,7 +580,13 @@ def refine_bars(
         def go():
             if cancel.is_set():
                 raise Cancelled()
-            return ask()
+            try:
+                with interruptible(cancel):  # 点了取消：正在进行的这一遍马上断开，不等它跑完
+                    return ask()
+            except Exception:
+                if cancel.is_set():  # 被取消打断的请求抛的是连接中断：算取消，不算这个小节失败
+                    raise Cancelled() from None
+                raise
 
         return jobs.run_queued(go, cancel)
 
@@ -564,7 +671,7 @@ def refine_bars(
             write(bar, result)
             if cancel.is_set():
                 for f in futs:
-                    f.cancel()  # 还没开始的不再发请求；正在进行的请求会跑完
+                    f.cancel()  # 还没开始的不再发请求；正在进行的请求已经被打断（见 queued）
     except BaseException:
         cancel.set()  # 写回出错（曲子被删之类）：还没开始的不再发请求
         raise
