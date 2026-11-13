@@ -245,7 +245,9 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
     沿着竖线逐行量它向左、向右各伸出多远（避开谱线本身那几行）：连续 3 行以上两边都比竖线本身宽出 m 像素就是箭头。
     小节线（包括加粗的终止线）从头到尾一样宽；连线、弧线横穿过去只占一两行。
     - 两边都要宽出去：箭头是对称的三角形；反复记号的两个点贴在细线一侧，不是箭头；
-    - m 按线距算（至少 1 像素）：放大 2 倍（最近邻）的截图里，竖线一侧的灰边会变成 2 像素宽，按固定像素算会被当成箭头。"""
+    - m 按线距算（至少 1 像素）：放大 2 倍（最近邻）的截图里，竖线一侧的灰边会变成 2 像素宽，按固定像素算会被当成箭头。
+    - 空心的箭头（∧ 形，两条斜边和竖线之间隔着白缝；燕无歇第 4、5 行）：顺着连着的墨迹量不到斜边，另外按
+      _open_arrowhead 找竖线两侧对称、越往外越张开的不相连墨迹。"""
     c = (a + b) // 2
     w = dark.shape[1]
     lines = [round(y) for y in tab]
@@ -257,6 +259,10 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
     while y1 < min(dark.shape[0] - 1, tab[-1] + sp * 0.8) and col[y1 + 1]:
         y1 += 1
     edges = []  # 每行（竖线所在的那段墨迹）向左、向右伸到哪；这一行竖线断开时为 None
+    # 每行竖线两侧 reach 像素以内的墨迹伸到哪（可以隔着不超过 gap 像素的白缝）、有没有隔着白缝；竖线断开、
+    # 或者墨迹一直连到 reach 以外时为 None
+    outer: list[tuple[int, int, bool] | None] = []
+    reach, gap = max(3, round(sp * 0.6)), max(1, round(sp * 0.15))
     near_line = max(1, round(sp * 0.12))  # 谱线本身（放大过的截图里谱线有三四行粗，和竖线交叉处的灰边也更宽）
     for y in range(y0, y1 + 1):
         if any(abs(y - ly) <= near_line for ly in lines):
@@ -264,6 +270,7 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
         row = dark[y]
         if not row[c]:
             edges.append(None)
+            outer.append(None)
             continue
         lo = hi = c
         while lo > 0 and row[lo - 1] and c - lo < sp:
@@ -271,6 +278,21 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
         while hi < w - 1 and row[hi + 1] and hi - c < sp:
             hi += 1
         edges.append((lo, hi))
+        # 从竖线往两边找，允许跨过一小段白缝（斜边和竖线之间的缝）；再远的零星墨迹（水印、旁边的记号）不算
+        olo, ohi = lo, hi
+        for x in range(lo - 1, max(-1, c - reach - 1), -1):
+            if row[x]:
+                olo = x
+            elif olo - x > gap:
+                break
+        for x in range(hi + 1, min(w, c + reach + 1)):
+            if row[x]:
+                ohi = x
+            elif x - ohi > gap:
+                break
+        # 一直连到 reach 以外的是横穿过去的连线、横梁，不是箭头的斜边
+        crossing = olo <= c - reach or ohi >= c + reach
+        outer.append(None if crossing else (olo, ohi, olo < lo or ohi > hi))
     found = [e for e in edges if e]
     if not found:
         return False
@@ -282,7 +304,43 @@ def _arrowhead(dark: np.ndarray, a: int, b: int, tab: list[float], sp: float) ->
         run = run + 1 if wide else 0
         if run >= 3:
             return True
-    return False
+    return _open_arrowhead(outer, float(stem_lo), float(stem_hi), m)
+
+
+def _open_arrowhead(
+    outer: list[tuple[int, int, bool] | None], stem_lo: float, stem_hi: float, m: int
+) -> bool:
+    """空心的扫弦箭头（∧ / ∨ 形）：两条斜边和竖线不相连，隔着一两个像素的白缝。outer：每行竖线两侧的墨迹伸到哪、
+    有没有隔着白缝（见 _arrowhead）。一段连续的行里有 3 行以上两侧都有离开竖线 2 像素以上的墨迹、左右对称（离竖线的
+    距离差不超过 m），其中至少 2 行隔着白缝，而且这一段从一头到另一头是张开的（一头最窄，另一头和最宽处差不到
+    1 像素）：小节线两侧恰好都贴着数字时，数字的边不会对称地一行行张开；横穿小节线的连线、横梁在 _arrowhead 里
+    已经去掉。中间可以夹一行不对称的（斜边旁边一个水印的浅灰像素会让那一行一边多出两三个像素）。"""
+
+    def arms(e: tuple[int, int, bool] | None) -> bool:
+        if e is None:
+            return False
+        left, right = stem_lo - e[0], e[1] - stem_hi
+        return left >= 2 and right >= 2 and abs(left - right) <= m
+
+    good = [arms(e) for e in outer]
+    best: list[tuple[int, int, bool]] = []
+    cur: list[tuple[int, int, bool]] = []
+    skipped = False
+    for k, e in enumerate(outer):
+        if good[k]:
+            cur.append(e)
+            continue
+        # 夹在两行合格的中间、竖线没有断开的一行：跳过它接着数（一段里只跳一次）
+        if cur and not skipped and e is not None and k + 1 < len(outer) and good[k + 1]:
+            skipped = True
+            continue
+        best, cur, skipped = max(best, cur, key=len), [], False
+    best = max(best, cur, key=len)
+    if len(best) < 3 or sum(detached for _, _, detached in best) < 2:
+        return False
+    widths = [hi - lo for lo, hi, _ in best]
+    tip, base = sorted((widths[0], widths[-1]))
+    return tip == min(widths) and base >= max(widths) - 1 and base > tip
 
 
 def _stray_outer_line(lines_dark: np.ndarray, ys: list[int], x0: int, x1: int) -> bool:

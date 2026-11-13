@@ -703,3 +703,57 @@ def test_tab_row_whose_string_one_is_mostly_hidden_is_not_taken_for_a_staff():
     r = detect_page(img)
     assert [len(s["bars"]) for s in r["systems"]] == [2, 2, 2]
     assert r["systems"][1]["lines"][0] == 380
+
+
+def _open_arrow(d, x, y0, y1, noise=False):
+    """空心的扫弦箭头（燕无歇的写法）：2 像素宽的竖线从 1 弦贯穿到 6 弦、两头各伸出 1–3 像素，顶上一个 ∧，
+    两条斜边往下越张越开、和竖线之间隔着白缝。noise：斜边旁边一个水印的浅灰像素。"""
+    d.line([(x, y0 - 1), (x, y1 + 3)], fill=0)
+    d.line([(x + 1, y0 - 1), (x + 1, y1 + 3)], fill=150)
+    d.rectangle([x - 1, y0 + 2, x + 2, y0 + 3], fill=0)  # 箭头尖：和竖线连着
+    d.rectangle([x - 2, y0 + 4, x + 3, y0 + 4], fill=0)
+    for dy, k in ((5, 2), (6, 3), (7, 3), (8, 3)):  # 斜边：离开竖线 k 像素，中间是白的
+        d.point([(x - k, y0 + dy), (x + 1 + k, y0 + dy)], fill=0)
+    if noise:
+        d.point([(x + 6, y0 + 6)], fill=180)
+
+
+def _strum_row(arrows, noise=False):
+    """一行六线谱：行首 TAB 谱号，两个小节（小节线在 60、600、1140），arrows 处各一个空心的扫弦箭头。"""
+    img = Image.new("L", (1200, 400), 255)
+    d = ImageDraw.Draw(img)
+    _draw_tab(d, 150, 60, 1140, (60, 600, 1140))
+    d.text((70, 170), "TAB", fill=0)
+    for x in arrows:
+        _open_arrow(d, x, 150, 220, noise)
+    return img
+
+
+@pytest.mark.parametrize("noise", [False, True])
+def test_open_strum_arrows_are_not_barlines(noise):
+    """空心箭头（∧ 的两条斜边和竖线不相连）的扫弦：竖线贯穿六线谱、几乎不伸出去，以前被当成小节线。
+    谱号后面第一拍的箭头把“谱号那一段”切成了一个小节，一拍一扫的小节被切成三个（燕无歇第 4 行：4 个小节检测成 7 个）；
+    水印的浅灰像素贴着斜边时也要认得出来（第 3 行）。"""
+    r = detect_page(_strum_row((130, 250, 370, 700, 780, 860), noise))
+    assert [s["bars"] for s in r["systems"]] == [[[60, 600], [600, 1140]]]
+
+
+def test_open_arrow_check_keeps_barlines_crossed_by_a_slanted_line():
+    """斜着横穿小节线的连线 / 滑音线（连着三四行、两边都伸出去很远）不是箭头的斜边：还是小节线（朝光感）。"""
+    img = _strum_row(())
+    d = ImageDraw.Draw(img)
+    for dy in range(4):  # 从左下到右上横穿 600 处的小节线，每行两边都有墨迹
+        d.line([(560 + dy * 6, 181 - dy), (640 + dy * 6, 181 - dy)], fill=0)
+    r = detect_page(img)
+    assert [s["bars"] for s in r["systems"]] == [[[60, 600], [600, 1140]]]
+
+
+def test_open_arrow_check_keeps_barlines_with_digits_on_both_sides():
+    """小节线两侧都紧贴着品格数字（上一小节最后一个音、下一小节第一个音）：数字的边不是对称张开的斜边，还是小节线。"""
+    img = _strum_row(())
+    d = ImageDraw.Draw(img)
+    for y in (164, 192):
+        _digit(d, 592, y, "0")
+        _digit(d, 610, y, "0")
+    r = detect_page(img)
+    assert [s["bars"] for s in r["systems"]] == [[[60, 600], [600, 1140]]]
