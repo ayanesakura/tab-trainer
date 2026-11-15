@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePrefs, serializePrefs, PREF_DEFAULTS, clampPref } from '../../app/static/js/trainer/prefs.js';
+import { parsePrefs, serializePrefs, serializeSongPrefs, songPrefsKey, PREF_DEFAULTS, clampPref } from '../../app/static/js/trainer/prefs.js';
 
 test('parsePrefs: missing / broken / old values fall back to defaults per field', () => {
   assert.deepEqual(parsePrefs(null), PREF_DEFAULTS);
   assert.deepEqual(parsePrefs('not json'), PREF_DEFAULTS);
   assert.deepEqual(parsePrefs('[1,2]'), PREF_DEFAULTS);
   assert.deepEqual(parsePrefs('"x"'), PREF_DEFAULTS);
-  const p = parsePrefs(JSON.stringify({ metro: false, gtVol: 33, metroVol: 2.5, follow: 0, extra: 1, auto: true, autoStep: 4 }));
+  const p = parsePrefs(JSON.stringify({ gtVol: 33, metroVol: 2.5, follow: 0, extra: 1, auto: true, autoStep: 4 }), JSON.stringify({ metro: false, demo: 0 }));
   assert.equal(p.metro, false);
+  assert.equal(p.demo, true); // 不是布尔
   assert.equal(p.gtVol, 33);
   assert.equal(p.metroVol, PREF_DEFAULTS.metroVol); // 不是整数
   assert.equal('auto' in p || 'autoStep' in p, false); // 旧版本存的自动提速设置读的时候丢掉
@@ -20,7 +21,20 @@ test('parsePrefs: missing / broken / old values fall back to defaults per field'
 
 test('serializePrefs keeps only pref fields and replaces invalid ones', () => {
   const play = { ...PREF_DEFAULTS, bpm: 90, a: 3, gtVol: 12, metroVol: -1, follow: false };
-  assert.deepEqual(JSON.parse(serializePrefs(play)), { ...PREF_DEFAULTS, gtVol: 12, follow: false });
+  assert.deepEqual(JSON.parse(serializePrefs(play)), { metroVol: PREF_DEFAULTS.metroVol, gtVol: 12, follow: false });
+});
+
+test('metronome / count-in / demo switches are per song, volumes and follow are shared', () => {
+  // 共用那份里旧版本留下的开关不读：没记过的曲子用默认值
+  const old = JSON.stringify({ metro: false, countIn: false, demo: false, gtVol: 40, follow: false });
+  assert.deepEqual(parsePrefs(old), { ...PREF_DEFAULTS, gtVol: 40, follow: false });
+  assert.deepEqual(parsePrefs(old, 'not json'), { ...PREF_DEFAULTS, gtVol: 40, follow: false });
+  // 曲子那份只管三个开关，里面的音量不读
+  const song = JSON.stringify({ metro: false, countIn: true, demo: false, gtVol: 5, follow: true });
+  assert.deepEqual(parsePrefs(old, song), { ...PREF_DEFAULTS, metro: false, demo: false, gtVol: 40, follow: false });
+  assert.deepEqual(JSON.parse(serializeSongPrefs({ ...PREF_DEFAULTS, bpm: 90, metro: false, countIn: 'x', gtVol: 12 })), { metro: false, countIn: true, demo: true });
+  assert.notEqual(songPrefsKey('a'), songPrefsKey('b'));
+  assert.equal(parsePrefs(serializePrefs({ ...PREF_DEFAULTS, metro: false })).metro, true); // 开关不会写进共用那份
 });
 
 test('typed numbers are rounded and clamped', () => {

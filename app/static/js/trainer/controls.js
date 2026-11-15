@@ -2,14 +2,14 @@
 // “回到播放位置”按钮，以及记在本机的播放设置（prefs.js）。播放本身都交给 player.js。
 
 import { get, set, on } from './store.js';
-import { $, UI } from './dom.js';
+import { $, UI, SONG_ID } from './dom.js';
 import { parseBarInput, planRange } from './view.js';
-import { PREFS_KEY, PREF_DEFAULTS, parsePrefs, serializePrefs, clampPref, stored, remember } from './prefs.js';
+import { PREFS_KEY, PREF_DEFAULTS, SONG_PREF_KEYS, songPrefsKey, parsePrefs, serializePrefs, serializeSongPrefs, clampPref, stored, remember } from './prefs.js';
 import { play, stop, setLoop, setTempo, stepSection, revealLoop, cursorOutOfView, scrollToCursor, TIMBRES } from './player.js';
 import { exportGp } from './gp-export.js';
 import { invoke } from './hooks.js';
 
-// 跟着曲子走的默认值（加载谱子后按原速调整）；其余播放设置记在本机，见 prefs.js
+// 跟着曲子走的默认值（加载谱子后按原速调整）；其余播放设置记在本机（三个开关按曲子记，其余共用），见 prefs.js
 const SONG_DEFAULTS = { bpmMax: 140 };
 const CHORD_NOTATION_KEY = 'tt.notation.chordSheet';
 const hasChords = song => !!song && (song.bars || []).some(b => (b.events || []).some(e => e.chord));
@@ -134,9 +134,11 @@ function bindLoopInput(id, isStart) {
 function updateFollowBtn() { $('followBtn').hidden = !(get('play.playing') && cursorOutOfView()); }
 
 export function initControls() {
-  // 记在本机的播放设置：读的时候逐项检查（prefs.js），改了就存
-  set('play', { ...get('play'), ...SONG_DEFAULTS, ...parsePrefs(stored(PREFS_KEY)), timbre: TIMBRES[stored('tt.timbre')] ? stored('tt.timbre') : 'steel' });
-  on(Object.keys(PREF_DEFAULTS).map(k => 'play.' + k), () => remember(PREFS_KEY, serializePrefs(get('play'))));
+  // 记在本机的播放设置：读的时候逐项检查（prefs.js），改了就存。节拍器、预备拍、示范音三个开关每首曲子各记各的，音量和自动跟随共用
+  const songKey = SONG_ID ? songPrefsKey(SONG_ID) : null;
+  set('play', { ...get('play'), ...SONG_DEFAULTS, ...parsePrefs(stored(PREFS_KEY), songKey && stored(songKey)), timbre: TIMBRES[stored('tt.timbre')] ? stored('tt.timbre') : 'steel' });
+  on(Object.keys(PREF_DEFAULTS).filter(k => !SONG_PREF_KEYS.includes(k)).map(k => 'play.' + k), () => remember(PREFS_KEY, serializePrefs(get('play'))));
+  if (songKey) on(SONG_PREF_KEYS.map(k => 'play.' + k), () => remember(songKey, serializeSongPrefs(get('play'))));
   on('play.timbre', v => remember('tt.timbre', v));
   bindInputs();
   // 速度：数字后面是原速的百分比（“72 · 80%”，悬停看原速），滑块上原速那里有一道刻度；不知道原速就写 BPM

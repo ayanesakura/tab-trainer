@@ -952,46 +952,71 @@ def test_follow_keeps_the_next_row_in_view(trainer):
     assert not b.errors, b.errors
 
 
-def test_play_settings_survive_reload(trainer):
-    """节拍器、预备拍、音量、自动跟随记在本机，换一首 / 重新打开还在；存坏了的值用默认值。"""
+def test_play_settings_survive_reload(trainer, server):
+    """播放设置记在本机，重新打开还在：节拍器、预备拍、示范音开关每首曲子各记各的，音量、自动跟随所有曲子共用；存坏了的值用默认值。"""
     b = trainer()
+    song_key = f"tt.playPrefs.{server['image']}"
     b.js("""(() => { const ch = (id, v) => { const el = document.getElementById(id);
         if (el.type === 'checkbox') { el.checked = v; el.dispatchEvent(new Event('change')); }
         else { el.value = v; el.dispatchEvent(new Event('input')); } };
       ch('metro', false); ch('countIn', false); ch('gtVol', 33); ch('metroVol', 12);
       ch('follow', false); return true; })()""")
+    pick = "(({metro, countIn, demo, gtVol, metroVol, follow}) => ({metro, countIn, demo, gtVol, metroVol, follow}))(tt.state)"
     b = trainer()
-    got = b.js(
-        "(({metro, countIn, gtVol, metroVol, follow}) => ({metro, countIn, gtVol, metroVol, follow}))(tt.state)"
-    )
-    assert got == {
+    assert b.js(pick) == {
         "metro": False,
         "countIn": False,
+        "demo": True,
         "gtVol": 33,
         "metroVol": 12,
         "follow": False,
     }
     assert (
         not b.js("document.getElementById('follow').checked")
+        and not b.js("document.getElementById('metro').checked")
         and b.js("document.getElementById('gtVol').value") == "33"
     )
-    b.js(
-        """localStorage.setItem('tt.playPrefs', '{"gtVol": "x", "metro": 1, "metroVol": 999, "follow": false}'); true"""
-    )
+    # 换一首：三个开关是那首自己的（没记过就都开），音量和自动跟随跟过来；只是打开不会给它记一份
+    b = trainer(server["gp"])
+    assert b.js(pick) == {
+        "metro": True,
+        "countIn": True,
+        "demo": True,
+        "gtVol": 33,
+        "metroVol": 12,
+        "follow": False,
+    }
+    assert b.js(f"localStorage.getItem('tt.playPrefs.{server['gp']}')") is None
+    b.js("tt.set('play.demo', false); true")
     b = trainer()
-    assert b.js("[tt.state.gtVol, tt.state.metro, tt.state.metroVol, tt.state.follow]") == [
+    assert b.js("[tt.state.metro, tt.state.countIn, tt.state.demo]") == [False, False, True]
+    b = trainer(server["gp"])
+    assert b.js("[tt.state.metro, tt.state.countIn, tt.state.demo]") == [True, True, False]
+    b.js(f"localStorage.removeItem('tt.playPrefs.{server['gp']}'); true")
+    b.js(
+        """localStorage.setItem('tt.playPrefs', '{"gtVol": "x", "metro": false, "metroVol": 999, "follow": false}'); true"""
+    )
+    b.js(f"""localStorage.setItem('{song_key}', '{{"metro": 1, "countIn": false}}'); true""")
+    b = trainer()
+    assert b.js("[tt.state.gtVol, tt.state.metro, tt.state.countIn, tt.state.metroVol, tt.state.follow]") == [
         80,
         True,
+        False,
         70,
         False,
     ]
-    b.js("localStorage.setItem('tt.playPrefs', 'not json'); true")
+    b.js(
+        f"localStorage.setItem('tt.playPrefs', 'not json'); localStorage.setItem('{song_key}', 'not json'); true"
+    )
     b = trainer()
-    assert b.js("tt.state.follow") is True and b.js("tt.state.gtVol") == 80
+    assert (
+        b.js("tt.state.follow") is True and b.js("tt.state.gtVol") == 80 and b.js("tt.state.countIn") is True
+    )
+    b.js(f"localStorage.removeItem('{song_key}'); true")
     assert not b.errors, b.errors
 
 
-def test_metronome_only_without_the_demo_guitar(trainer):
+def test_metronome_only_without_the_demo_guitar(trainer, server):
     """关掉示范音只剩节拍器：吉他音轨音量 0，节拍器照常响（以前示范音量用的是总音量，节拍器跟着一起没了）。"""
     b = trainer()
     b.js("""(() => { window.__vols = [];
@@ -1002,7 +1027,7 @@ def test_metronome_only_without_the_demo_guitar(trainer):
     assert b.js("tt.api.masterVolume") == 1 and b.js("tt.api.metronomeVolume") > 0
     b.js("tt.set('play.demo', true)")
     assert b.js("window.__vols[window.__vols.length - 1]") > 0
-    assert b.js("JSON.parse(localStorage.getItem('tt.playPrefs')).demo") is True
+    assert b.js(f"JSON.parse(localStorage.getItem('tt.playPrefs.{server['image']}')).demo") is True
     assert not b.errors, b.errors
 
 
