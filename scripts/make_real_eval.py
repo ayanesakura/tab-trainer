@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from app import store, views
 from app.model import now
+from scripts import evalsongs
 
 
 def verified(bar: dict, include_clean: bool) -> bool:
@@ -33,12 +34,13 @@ def verified(bar: dict, include_clean: bool) -> bool:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("song_id")
-    ap.add_argument("eval_id", help="评测曲的 id，建议 eval-real-xxx（已存在会覆盖）")
+    ap.add_argument("eval_id", help="评测曲的 id，要以 eval- 开头，建议 eval-real-xxx（已存在会覆盖）")
     ap.add_argument("--all", action="store_true", help="整首都核对过了，每个小节都算标准答案")
     ap.add_argument(
         "--include-clean", action="store_true", help="没有警告、也没标不确定的小节也算（没人看过）"
     )
     a = ap.parse_args()
+    evalsongs.check_target(a.eval_id, src_id=a.song_id)
 
     song = store.load(a.song_id)
     if song.get("source_type") not in ("image", "pdf"):
@@ -49,9 +51,7 @@ def main() -> None:
         raise SystemExit(
             "这首曲子还没有核对过的小节：在练习页点“确认没问题”或改正几个小节，或者加 --all / --include-clean"
         )
-    src, dst = store.song_dir(a.song_id), store.SONGS / a.eval_id
-    if dst.exists():
-        shutil.rmtree(dst)
+    src, dst = store.song_dir(a.song_id), evalsongs.clear_target(a.eval_id, src_id=a.song_id)
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns("*.bak", "practice.jsonl"))
     data = json.loads((dst / "song.json").read_text())
     data.update(

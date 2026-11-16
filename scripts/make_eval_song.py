@@ -38,6 +38,7 @@ sys.path.insert(0, str(ROOT))
 
 from app import music, recognize, songs, store
 from app.layout import detect_page
+from scripts import evalsongs
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
@@ -254,7 +255,7 @@ def render(
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("file", type=Path)
-    ap.add_argument("song_id", help="曲库里的 id，如 eval-romance（已存在会覆盖）")
+    ap.add_argument("song_id", help="曲库里的 id，要以 eval- 开头，如 eval-romance（已存在会覆盖）")
     ap.add_argument("--title", default="")
     ap.add_argument("--track", type=int, default=-1, help="音轨序号，默认第一条六弦音轨")
     ap.add_argument("--per-page", type=int, default=4, help="每页几行谱")
@@ -271,6 +272,7 @@ def main() -> None:
     )
     ap.add_argument("--save-full", type=Path, help="另存一份未切页的整张渲染图（排查版面检测用）")
     a = ap.parse_args()
+    evalsongs.check_target(a.song_id)
 
     truth = derive(a.file, a.track)
     full, rows = render(
@@ -293,7 +295,7 @@ def main() -> None:
     planned = recognize.plan_systems(sid, song)
     counts = [len(s["spans"] or []) for s in planned]
     if sum(counts) != len(truth["bars"]):
-        shutil.rmtree(store.SONGS / sid)
+        evalsongs.discard_created(sid)
         raise SystemExit(
             f"版面检测找到 {sum(counts)} 个小节（每行 {counts}），文件里有 {len(truth['bars'])} 个"
             f"（alphaTab 实际每行 {rows}）"
@@ -329,9 +331,7 @@ def main() -> None:
         x.update(meta=meta, systems=planned, bars=bars, status="ready", error="", progress={})
 
     store.update(sid, apply)
-    dst = store.SONGS / a.song_id
-    if dst.exists():
-        shutil.rmtree(dst)
+    dst = evalsongs.clear_target(a.song_id)
     (store.SONGS / sid).rename(dst)
     data = json.loads((dst / "song.json").read_text())
     data["id"] = a.song_id

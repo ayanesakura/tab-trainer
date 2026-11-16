@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import copy
 import io
-import shutil
 import sys
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from make_chord_eval import degrade
 from PIL import Image
 
 from app import store
+from scripts import evalsongs
 
 
 def _scale(v, k):
@@ -37,13 +37,10 @@ def main() -> None:
     a = ap.parse_args()
 
     # 只覆盖这个脚本自己生成的评测曲：目标写错（比如和原曲同名）时不能把别的曲子删掉
-    if a.dst == a.src or not a.dst.startswith("eval-d-"):
-        raise SystemExit(f"目标 id 要以 eval-d- 开头、且和原曲不同：{a.dst}")
+    evalsongs.check_target(a.dst, src_id=a.src, prefix="eval-d-")
     song = store.load(a.src)
     out = copy.deepcopy(song)
-    dst = store.SONGS / a.dst
-    if dst.exists():
-        shutil.rmtree(dst)
+    dst = evalsongs.clear_target(a.dst, src_id=a.src, prefix="eval-d-")
     (dst / "pages").mkdir(parents=True)
     factors = []
     for i, page in enumerate(song["pages"]):

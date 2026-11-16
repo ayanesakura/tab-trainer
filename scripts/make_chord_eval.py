@@ -19,7 +19,6 @@ import http.server
 import io
 import json
 import random
-import shutil
 import sys
 import tempfile
 import threading
@@ -34,6 +33,7 @@ from make_eval_song import _screenshot, _start_chrome
 
 from app import music, recognize, songs, store
 from app.layout import detect_page
+from scripts import evalsongs
 
 # 和弦指法：1–6 弦的品位（-1 = 不弹）。有几个高把位的（谱上会标“Nfr.”）
 SHAPES = {
@@ -356,7 +356,7 @@ def generate(seed: int, style: str, n_bars: int) -> tuple[dict, list[dict], list
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("song_id")
+    ap.add_argument("song_id", help="曲库里的 id，要以 eval- 开头（已存在会覆盖）")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--style", choices=["arp", "strum", "mixed"], default="mixed")
     ap.add_argument("--bars", type=int, default=16)
@@ -368,6 +368,7 @@ def main() -> None:
     ap.add_argument("--degrade", action="store_true", help="模拟真实截图：缩小、模糊、JPEG 压缩、水印")
     ap.add_argument("--save-full", type=Path, help="另存整张渲染图（排查版面检测用）")
     a = ap.parse_args()
+    evalsongs.check_target(a.song_id)
 
     meta, truth_bars, melodies, key = generate(a.seed, a.style, a.bars)
     tex = to_tex(meta, truth_bars, melodies, key)
@@ -395,7 +396,7 @@ def main() -> None:
     planned = recognize.plan_systems(sid, song)
     counts = [len(s["spans"] or []) for s in planned]
     if sum(counts) != len(truth_bars):
-        shutil.rmtree(store.SONGS / sid)
+        evalsongs.discard_created(sid)
         raise SystemExit(
             f"版面检测找到 {sum(counts)} 个小节（每行 {counts}），应有 {len(truth_bars)}（alphaTab 每行 {rows}）"
         )
@@ -422,9 +423,7 @@ def main() -> None:
             )
             k += 1
     store.update(sid, lambda x: x.update(meta=nmeta, systems=planned, bars=bars, status="ready", progress={}))
-    dst = store.SONGS / a.song_id
-    if dst.exists():
-        shutil.rmtree(dst)
+    dst = evalsongs.clear_target(a.song_id)
     (store.SONGS / sid).rename(dst)
     data = json.loads((dst / "song.json").read_text())
     data["id"] = a.song_id
