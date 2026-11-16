@@ -73,7 +73,9 @@ def _explain_chunks(sid: str, chunks: list[list[str]], cancel, claude, charge) -
         if not chunk:
             continue
         seen = {b["id"]: b["events"] for b in chunk}  # 写回时小节已经被改过的，就不写旧内容的提示
-        tips = {t["number"]: t["tip"] for t in claude.explain_bars(cur["meta"], chunk).get("bars", [])}
+        by_n = {t["number"]: t["tip"] for t in claude.explain_bars(cur["meta"], chunk).get("bars", [])}
+        # 模型按小节号回答；写回按 id：等它的时候小节数可能变了（GP 重新转换），小节号对应的已经不是同一个小节
+        tips = {b["id"]: by_n[b["n"]] for b in chunk if b["n"] in by_n}
 
         def apply(s, tips=tips, k=k, seen=seen, meta=cur["meta"]):
             same_meta = not staleness.setting_changed(meta or {}, s["meta"] or {})  # 改曲名、艺人不影响提示
@@ -81,10 +83,10 @@ def _explain_chunks(sid: str, chunks: list[list[str]], cancel, claude, charge) -
                 if (
                     same_meta
                     and same_events(seen.get(b.get("id")), b["events"])
-                    and b["n"] in tips
+                    and b.get("id") in tips
                     and not (b.get("tip") or "").strip()
                 ):
-                    b["tip"] = tips[b["n"]]  # 按现在的音新写的（改过的小节撤销时仍恢复识别时的提示）
+                    b["tip"] = tips[b["id"]]  # 按现在的音新写的（改过的小节撤销时仍恢复识别时的提示）
             s["progress"] = {"stage": "生成讲解", "done": k + 1, "total": len(chunks)}
             charge(s)
 

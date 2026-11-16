@@ -422,6 +422,9 @@ class _Restage:
             # 精修改过的小节：这个小节识别得和精修之前一样就保留精修的改正，否则不保留（见 reconcile_bars）
             dropped = staleness.reconcile_bars(s, s["bars"], work["bars"], staleness.RESTAGE, changed, metas)
             s.update(meta=work["meta"], systems=work["systems"], bars=work["bars"])
+            # 落盘：这之后中断（服务重启）不能再说“原来的结果保留不变”（见 state.recover）
+            if s.get("activity"):
+                s["activity"]["committed"] = True
             if dropped.refines:  # 上次精修整首的结果（改了几个）不再是现在的样子
                 s.pop("refined", None)
             return dropped

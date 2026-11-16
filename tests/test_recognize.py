@@ -1768,3 +1768,35 @@ def test_ts_redo_that_cannot_keep_a_hand_edit_leaves_the_row_and_says_so(data_di
     assert [b["id"] for b in after] == row2 and [b["events"] for b in after] == [b["events"] for b in before]
     assert s["systems"][1]["status"] == "done" and s["activity"] is None
     assert "第 2 行有手改过的小节" in s["notice"]["msg"] and "3/4" in s["notice"]["msg"]
+
+
+def _crash_while_planning(data_dir, monkeypatch, sid):
+    """整首识别跑到“生成练习建议”时服务被杀掉：把那一刻盘上的 song.json 放回去，再走启动恢复。"""
+    f = data_dir / "songs" / sid / "song.json"
+    at_crash = []
+    real = FakeClaude.practice_plan
+    monkeypatch.setattr(
+        FakeClaude, "practice_plan", lambda self, m, b: (at_crash.append(f.read_bytes()), real(self, m, b))[1]
+    )
+    recognize.run_parse(sid)
+    assert at_crash, "这次识别应该走到生成练习建议"
+    f.write_bytes(at_crash[-1])
+    songs.recover_interrupted()
+    return store.load(sid)
+
+
+def test_restart_while_writing_the_plan_of_a_first_parse_is_not_a_failed_parse(data_dir, monkeypatch):
+    """每一行都识别完了、只差练习建议时重启：曲子可以练，不叫用户再整首识别一次。"""
+    sid = songs.create_song([("p1.png", score_png())])
+    after = _crash_while_planning(data_dir, monkeypatch, sid)
+    assert after["status"] == "ready" and after["activity"] is None and after["bars"]
+    assert after["notice"]["kind"] == "warn" and "结果已保存" in after["notice"]["msg"]
+    assert all(x["status"] == "done" for x in after["systems"])
+
+
+def test_restart_after_a_reparse_swapped_in_does_not_claim_the_old_result_was_kept(data_dir, monkeypatch):
+    sid = songs.create_song([("p1.png", score_png())])
+    recognize.run_parse(sid)
+    after = _crash_while_planning(data_dir, monkeypatch, sid)
+    assert after["status"] == "ready" and after["activity"] is None
+    assert "原来的结果保留不变" not in after["notice"]["msg"] and "结果已保存" in after["notice"]["msg"]

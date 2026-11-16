@@ -186,7 +186,7 @@ def test_cancel_stops_the_remaining_bars(client, sync_jobs, monkeypatch):
     assert len(_verifies()) == 1  # 后面的不再发请求
     assert s["bars"][0]["refine_key"] == notes_key(s["bars"][0])  # 已经核对完的照常写回
     assert s["activity"] is None and s["progress"] is None
-    assert s["notice"]["msg"] == "精修已取消：检查了 1 个小节，改了 0 个，改好的会保留。"
+    assert s["notice"] is None  # 自己点的取消、什么都没改：不留提示
     assert "refined" not in s  # 没做完整首
     assert round(s["usage"]["cost_usd"] - cost, 4) == 0.05  # 发出去的请求照样记账
     assert jobs.jobs.running(sid) is False
@@ -1044,6 +1044,6 @@ def test_cancel_interrupts_the_request_in_flight(client, sync_jobs, monkeypatch)
     assert client.post(f"/api/songs/{sid}/refine", json={"bars": [store.load(sid)["bars"][0]["id"]]}).json()
     assert seen == [False, True]
     s = store.load(sid)
-    assert s["notice"]["msg"].startswith("精修已取消：检查了 0 个小节")
+    assert s["notice"] is None  # 取消且什么都没改：不留一条“改了 0 个”的提示
     assert s["activity"] is None and len(_verifies()) == 1
     assert not llm._interrupted()  # 出了 with 块就解除

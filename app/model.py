@@ -357,6 +357,7 @@ class Plan(_M):
 class Activity(_M):
     kind: ActivityKind
     restaging: bool = False  # 整首重新识别（原来的结果在新结果全部成功前不动）
+    committed: bool = False  # 重新识别的新结果已经换上，只剩收尾（练习建议）；重启恢复时据此说话
     systems: list[int] = Field(default_factory=list)  # 正在识别的行
     # 精修（kind = refine）的范围：song = 整首；bars = 这几个小节；row = 第 row 行（从 0 数）
     scope: Literal["song", "bars", "row"] | None = None

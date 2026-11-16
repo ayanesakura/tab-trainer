@@ -496,12 +496,11 @@ def _run(
     def end(s):
         if done and whole:
             s["refined"] = {"at": now(), "checked": tally["checked"], "changed": tally["changed"]}
-        # 总要告诉用户精修的结果；识别留下的提示（有行失败等）也不盖掉：叠在它上面（见 state.set_notice）
-        kind, msg = _end_notice(s, tally, cancelled, error)
-        if skipped and not error and not cancelled:
-            kind = "warn"
-            msg += f"{rows_text(skipped)}的小节线可能切错了，没有核对：请重新识别。"
-        state.finish(s, notice=(kind, msg), source="refine")
+        # 告诉用户精修的结果（取消且什么都没改时不留提示）；识别留下的提示（有行失败等）也不盖掉：叠在它上面（见 state.set_notice）
+        note = _end_notice(s, tally, cancelled, error)
+        if note and skipped and not error and not cancelled:
+            note = ("warn", note[1] + f"{rows_text(skipped)}的小节线可能切错了，没有核对：请重新识别。")
+        state.finish(s, notice=note, source="refine")
         meter.charge(s)
 
     try:
@@ -510,14 +509,15 @@ def _run(
         log.warning("song=%s refine not finished: %s", sid, e)
 
 
-def _end_notice(s: dict, tally: dict, cancelled: bool, error: str) -> tuple[str, str]:
+def _end_notice(s: dict, tally: dict, cancelled: bool, error: str) -> tuple[str, str] | None:
     """结束提示（在 state.finish 之前调用，要用 activity 里的范围）。整首：检查了几个、改了几个……；
     一个小节 / 一行：短一点（“第 12 小节精修完：改了”“第 3 行精修完：4 个小节都没问题”）。"""
     if error:
         return "error", "精修失败：" + error
     checked, changed, doubtful, failed = (tally[k] for k in ("checked", "changed", "doubtful", "failed"))
     if cancelled:
-        return "warn", f"精修已取消：检查了 {checked} 个小节，改了 {changed} 个，改好的会保留。"
+        # 取消是用户自己点的，不用再提醒一遍；只有已经改了东西才说一声（一条留着不走的“改了 0 个”没有用）
+        return ("info", f"精修已取消，已经改好的 {changed} 个小节保留。") if changed else None
     a = s.get("activity") or {}
     scope, label = a.get("scope"), scope_label(s, a)
     why = f"（{tally['error']}）" if tally["error"] else ""

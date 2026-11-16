@@ -172,6 +172,13 @@ def public_notice(s: dict) -> dict | None:
     return {"kind": kind, "msg": msg}
 
 
+def _rows_all_done(s: dict) -> bool:
+    systems = s.get("systems") or []
+    return bool(s.get("meta") and s.get("bars") and systems) and all(
+        x.get("status") == "done" for x in systems
+    )
+
+
 def recover(s: dict) -> bool:
     """服务重启（或导入曲子包）时：上次没跑完的任务标成中断，否则曲子会一直卡在“识别中”。返回有没有改动。"""
     changed = False
@@ -188,6 +195,12 @@ def recover(s: dict) -> bool:
         finish(
             s, notice=("warn", "服务重启，讲解生成中断，已完成的部分会保留，可以重新生成。"), source="explain"
         )
+        changed = True
+    elif kind == "parse" and (a.get("committed") or (not a.get("restaging") and _rows_all_done(s))):
+        # 每一行都识别完、写好了（重新识别的新结果也已经换上），断在收尾（生成练习建议）：不算识别失败，
+        # 和运行时的 recognize._end_parse 一样是“可以练 + 提醒”。说成失败的话用户会再花一次钱整首重新识别
+        msg = "服务重启时识别已经完成、结果已保存，只有练习建议没来得及生成，可以在“分段”页重新生成。"
+        finish(s, status="ready", notice=("warn", msg), source="parse")
         changed = True
     elif kind == "parse" and a.get("restaging"):
         # 重新识别时原来的结果没动过，只是新结果丢了：状态也照旧（不给 status，交给 settle；和 recognize._end_restage 一样），

@@ -278,3 +278,25 @@ def test_failed_question_still_records_its_cost(data_dir, monkeypatch, answer):
     with pytest.raises(errors.Upstream):
         coach.ask_bar(sid, song["bars"][0]["id"], "怎么弹")
     assert store.load(sid)["usage"]["input_tokens"] == before + 1010  # 替身一开始就带 10
+
+
+def test_tips_follow_the_bar_not_its_number_when_the_score_is_reconverted(data_dir, sync_jobs, monkeypatch):
+    """等模型写提示的时候练习页重新转换了 GP、前面多出一个小节：提示按小节 id 写回，不按当时的小节号。"""
+    sid = songs.create_song([("x.gp5", b"\x18FICHIER GUITAR PRO v5.10")])
+    meta = {"tuning": ["E4", "B3", "G3", "D3", "A2", "E2"], "time_signature": [4, 4]}
+    bars = derived_bars(6)
+    before = {b["id"]: b["n"] for b in songs.set_derived(sid, meta, bars)["bars"]}
+    real = FakeClaude.explain_bars
+    extra = {"events": [{"dur": "1", "notes": [{"string": 6, "fret": 11}]}]}
+
+    def reconvert_while_explaining(self, meta_, chunk):
+        songs.set_derived(sid, meta, [extra, *bars])
+        return real(self, meta_, chunk)
+
+    monkeypatch.setattr(FakeClaude, "explain_bars", reconvert_while_explaining)
+    coach.start_explain(sid)
+    after = store.load(sid)["bars"]
+    kept = [b for b in after if b["id"] in before and b["n"] != before[b["id"]]]
+    assert kept, "重新转换后应该有保留了 id、但小节号变了的小节"
+    for b in kept:
+        assert b.get("tip", "") in ("", f"讲解 {before[b['id']]}"), (b["n"], b.get("tip"))
