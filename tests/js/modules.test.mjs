@@ -24,7 +24,7 @@ const ALLOWED = {
   'audio.js': '示范音的 WebAudio 合成：调弦页、记号说明、敲节奏共用（不订阅状态）',
   // 纯函数（Node 测试直接用）
   'view.js': '纯函数', 'prefs.js': '纯函数', 'play-machine.js': '纯函数', 'practice-pass.js': '纯函数',
-  'fresh.js': '纯函数', 'chords.js': '纯函数', 'click.js': '纯函数',
+  'fresh.js': '纯函数', 'chords.js': '纯函数', 'click.js': '纯函数', 'follow-plan.js': '纯函数',
 };
 // 入口：按顺序初始化各部分，什么都可以 import
 const ENTRY = 'main.js';

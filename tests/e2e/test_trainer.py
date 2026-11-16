@@ -1,5 +1,6 @@
 """练习页的冒烟测试：加载、播放和练习记录、改音和撤销、方向键换段、调弦和记号示范音、GP 导入（成功 / 失败）、曲库页、敲节奏。"""
 
+import itertools
 import json
 import shutil
 import sys
@@ -1900,3 +1901,50 @@ def test_score_gets_the_room_the_top_bar_scrolls_away_and_the_score_header_overl
     b.wait_for("document.body.dataset.view === 'glossary'")
     assert b.js("getComputedStyle(document.querySelector('.topbar')).position") == "sticky"
     assert not b.errors, b.errors
+
+
+def test_follow_moves_one_row_at_a_time_and_not_abruptly(server, trainer):
+    """自动跟随：每换一行只滚一行的距离（新的一行顶到控制条下面），不会等到下一行露不出来才一下跨几行；
+    滚得比浏览器自带的平滑滚动慢（一行半秒以上），眼睛跟得上。"""
+    from tests.e2e.conftest import _seed
+
+    store = server["store"]
+    sid = _seed()
+    # 24 个小节：这个宽度下一行 5 个，共 5 行
+    store.update(
+        sid,
+        lambda s: s.update(
+            bars=[{**x, "id": f"f{i}", "n": i + 1, "system": i // 12} for i, x in enumerate(s["bars"] * 4)]
+        ),
+    )
+    try:
+        b = trainer(sid)
+        _viewport(b, 1400, 900)
+        b.js("document.body.style.paddingBottom = '2000px'; true")
+        time.sleep(1)
+        b.wait_for("tt.song.bars.length === 24 && tt.player.rowOfBar(23) >= 3")
+        pitch = b.js("tt.player.scoreRow(2).y - tt.player.scoreRow(1).y")
+        b.js("""window.__tr = []; (function tick() { const v = tt.view.all[tt.state.note], row = v ? tt.player.rowOfBar(v.bar) : -1;
+          __tr.push([performance.now(), scrollY, row]); requestAnimationFrame(tick); })();
+          scrollTo(0, 0); tt.set('play.countIn', false); tt.setTempo(240); tt.play(); true""")
+        b.wait_for("tt.state.playing")
+        b.wait_for("__tr.length && __tr[__tr.length - 1][2] >= 3", timeout=30)
+        time.sleep(1.2)  # 最后这一次滚完
+        tr = b.js("tt.stop(); __tr")
+        # 一段连续的滚动 = 相邻两帧位置不同、间隔不到 150 ms
+        moves, cur = [], None
+        for (t, y, _), (t2, y2, row2) in itertools.pairwise(tr):
+            if abs(y2 - y) < 0.5:
+                continue
+            if cur is None or t - cur["t1"] > 150:
+                cur = {"t0": t, "y0": y, "row": row2}
+                moves.append(cur)
+            cur["t1"], cur["y1"] = t2, y2
+        steps = [m for m in moves if m["row"] >= 1]
+        assert len(steps) >= 2, moves  # 第 2、3 行各滚了一次（到第 4 行时剩下的两行都露着，不用再滚）
+        for m in steps:
+            assert abs((m["y1"] - m["y0"]) - pitch) <= 30, (m, pitch)  # 正好一行，不跨行
+            assert 400 <= m["t1"] - m["t0"] <= 1100, m  # 不是一闪而过
+        assert not b.errors, b.errors
+    finally:
+        store.delete(sid)

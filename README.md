@@ -28,7 +28,7 @@
   - 预备拍时状态栏倒数“预备 4 → 3 → 2 → 1”，下面一排拍点逐个点亮（重拍大一点），数完才显示第几小节第几拍；谱面和指板不闪，播放光标停在起始拍、数完才往前走；敲节奏的预备拍也一样；
   - 速度旁边写着是原速的百分之几（“72 · 80%”，悬停看原速），滑块上有原速的刻度；
   - **这遍干净**：弹着的时候按 <kbd>Enter</kbd>（或控制条的“干净”）标记这一遍没出错，弹完时记成干净的一遍；用过以后没标的遍记成不干净（“连续干净几遍”会清零），从没用过就不记；一遍刚弹完的一小会儿（1.5 秒，不超过半遍）里按也算刚弹完的那一遍；按 Home、重选这一段从段首重新开始时，标记作废；全曲弹完停下以后的那一小会儿里按也算刚弹完的这一遍；不会自动加速；
-  - 自动跟随：播放时光标走到看不见的行，谱面自己滚过去（手动滚动后停几秒，不和你抢；可以在控制条右边的“播放设置”里关掉）；
+  - 自动跟随：播放到新的一行，谱面往上走一行，把这一行顶到控制条下面（一次只走一行，约 0.6 秒、慢起慢停，下面几行露着好提前看；剩下的行都看得见、或者循环的这一段整段放得下时不动；手动滚动后停几秒，不和你抢；可以在控制条右边的“播放设置”里关掉；系统设了“减少动态效果”时直接跳过去）；
   - 播放设置记在本机：节拍器、预备拍、示范音三个开关每首曲子各记各的（没记过的曲子都开着），音量、自动跟随所有曲子共用；
   - 键盘：空格 播放 / 停止，← → 上一段 / 下一段，↑ ↓ 快 / 慢 4 BPM，Home 回到段首（播放中就从段首重新开始），M 开关节拍器，Enter 这遍干净；焦点在速度滑块、顶栏标签页这些控件上时方向键归控件。谱面标题栏的“?”里列着全部快捷键；
   - 说明文字都收在悬停提示和“?”里，界面上只留短标签；
@@ -294,7 +294,7 @@ uv run python -m app.evaluate eval-xxx --yes
 - `store.js`：一个小 store（`song` 后端数据、`view` 派生结构、`play` 播放状态和设置、`ui` 界面状态、`rhythm` 敲节奏），按路径 `set` / `get` / `on`，值没变不通知（`Set` 按内容比较）；订阅父路径（如 `on('song')`）时任何子路径变了都会收到，所以各模块只订阅真正用到的子路径（`song.bars`、`song.meta`、`song.study`……），也不把 `song` 里的东西抄一份到别处（抄的那份会过期）；`dom.js`：`$` / `UI` / `songUrl` / `setButton` / `svgEl` 这些 DOM 小工具；`keys.js`：唯一的键盘监听，各模块用 `addShortcuts` 登记自己的一组快捷键（播放、敲节奏、改音的 ⌘Z、原谱弹窗的 ←→），输入框、控件焦点、浮层、当前页面、`defaultPrevented` 这些判断统一在这里做（分段开关不算“方向键归控件”，点过它方向键照样换段、调速）；`page-images.js`：原谱页面图片的共用缓存（加载好发 `tt-images` 事件）。
 - 服务模块：`player.js`（alphaTab 谱面和播放，对外 `play` / `stop` / `setLoop` / `toLoopStart` / `setTempo` / `setStatus` / `barBox`；播放状态全在 `play-machine.js` 的状态机里——停着 / 预备拍 / 在放 / 两遍之间重新开始 / 全曲弹完 / 重新生成 MIDI / 谱子重新加载，一个纯函数 `step(状态, 事件) → {新状态, 要做的事}`，`tests/js/play-machine.test.mjs` 直接测，store 的 `play.phase` 是现在的阶段；曲子、改谱、敲节奏通过 `hooks.js` 的钩子（`provide` / `invoke`，重复注册会警告）把各自的处理挂进来，`holdBarWhile` 让侧栏在编辑器开着或正在输入问题时不跟着播放切小节，播放模块不反过来依赖它们；功能模块之间要发命令也走钩子（`practice.markClean`、`ai.askForKey`），`tests/js/modules.test.mjs` 检查 import 不越界；从段首重新开始时 `play.restarts` +1；alphaTab 的内部结构只在 `at-adapter.js` 里碰，`test_player.py` 的 `test_at_adapter_smoke` 对着真实谱子逐个调一遍；控制条在 `controls.js`，歌词、待核对框、导出 GP 分别在 `lyrics.js` / `review-marks.js` / `gp-export.js`）、`song.js`（取曲子、轮询、通知、练习建议、曲子信息；对外 `refresh` / `applySong` / `conflict` / `locked`；页面切回来、从往返缓存恢复、写入遇到 423 时都重新取曲子，别处开始的后台任务能看到）。
 - 纯函数（Node 测试直接用）：`view.js`（`deriveView(song)`、段落、换段、练习记录文案等）、`prefs.js`（本机记住的播放设置：节拍器 / 预备拍 / 示范音开关按曲子记，音量和自动跟随共用；读的时候逐项检查，坏值用默认值）、`practice-pass.js`（一遍的计时、干净标记和弹完后的宽限）、`fresh.js`（晚到的旧读取不盖掉本地刚写的）。
-- 功能模块：`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅状态）、`follow.js`（自动跟随：光标所在行看不见时自己滚过去，用户手动滚动后停几秒）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）、`rhythm-drill.js`（敲节奏：节奏条、WebAudio 排程的节拍器和示范音、敲击打分；状态在 store 的 `rhythm` 切片，播放键 / 空格 / 换段通过 `hooks.js` 的钩子交给它）。
+- 功能模块：`bar-card.js` / `orig.js` / `coach.js` / `practice-log.js` / `editor.js` / `fretboard.js`（各自订阅状态）、`follow.js`（自动跟随：每换一行把这一行顶到控制条下面，自己一帧一帧地滚；滚多少、滚多久的规则在纯函数 `follow-plan.js`，`tests/js/follow.test.mjs` 直接测；用户手动滚动后停几秒）、`tuner.js` / `glossary.js` / `audio.js`（调弦页、记号说明和示范音）、`rhythm-drill.js`（敲节奏：节奏条、WebAudio 排程的节拍器和示范音、敲击打分；状态在 store 的 `rhythm` 切片，播放键 / 空格 / 换段通过 `hooks.js` 的钩子交给它）。
 
 页面上 `window.tt` 是给端到端测试和调试用的句柄。`js/score.js` 是曲谱数据 ⇄ alphaTab 的转换（改 `deriveSong` 要同时加 `DERIVE_VERSION`），也负责认出中文 GP3–5 文件的 GBK 乱码（练习页和 `scripts/make_eval_song.py` 遇到时按 GBK 重新读）。`js/rhythm.js` 是敲节奏的打分逻辑（要敲的点和口令、配对、打分、诊断；不碰 DOM 和音频，`tests/js/rhythm.test.mjs` 直接测）。
 
