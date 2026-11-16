@@ -1823,3 +1823,22 @@ def test_cancel_interrupts_the_row_being_read(data_dir, monkeypatch):
         recognize.run_parse(sid, cancel)
     assert seen == [False, True]
     assert not llm._interrupted()  # 出了 with 块就解除
+
+
+def test_artist_edited_while_the_header_is_read_survives_a_first_parse(data_dir, monkeypatch):
+    """第一次识别读谱头的那几秒里用户改了艺人：写谱头时以用户的为准（重新识别一直是这样，第一次识别以前整个盖掉了）。"""
+    from app import music
+
+    sid = songs.create_song([("p1.png", score_png())])
+    # 上一次识别读出了谱头、没读出小节（失败 / 取消）：有谱头才能改艺人
+    head = music.normalize_meta({"tuning": music.STANDARD, "time_signature": [4, 4]}, "曲子")
+    store.update(sid, lambda s: s.update(meta=head))
+    real = FakeClaude.read_meta
+
+    def rename_meanwhile(self, img):
+        songs.edit_meta(sid, {"artist": "用户改的艺人"})
+        return real(self, img)
+
+    monkeypatch.setattr(FakeClaude, "read_meta", rename_meanwhile)
+    recognize.run_parse(sid)
+    assert store.load(sid)["meta"]["artist"] == "用户改的艺人"

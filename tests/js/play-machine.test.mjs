@@ -145,6 +145,19 @@ test('谱子重新加载：期间的位置事件不算一遍；好了放回原�
   assert.equal(isPlaying(s), true);
   ({ s, fx } = run(s, { type: 'midiLoaded', range: { start: 3840, end: 7680 } }));
   assert.deepEqual(fx, [['seek', 4500], ['play']]);
+  // 开着预备拍、正放着（已经数完）时重新加载：直接接着放，不从小节中间再数一遍；这一遍弹到段尾以后的下一遍照常数
+  ({ s, fx } = run(initial(true), { type: 'play', rangeStart: 0 }, { type: 'state', playing: true }, { type: 'position', tick: 2000, rangeStart: 0 },
+    { type: 'reloadScore' }, { type: 'state', playing: false }, { type: 'midiLoaded', range: { start: 0, end: 7680 } }));
+  assert.deepEqual(fx.slice(-2), [['seek', 2000], ['play', 'quiet']]);
+  assert.equal(s.phase, 'playing');
+  assert.equal(s.countIn, true);
+  ({ s, fx } = run(s, { type: 'state', playing: true }, { type: 'position', tick: 2500, rangeStart: 0 }, { type: 'finished', whole: false, rangeStart: 0 }, { type: 'state', playing: false }));
+  assert.deepEqual(fx, [['loop'], ['seek', 0], ['play']]);
+  assert.equal(s.phase, 'countIn');
+  // 还在数预备拍时重新加载：好了照常从头数
+  ({ s, fx } = run(initial(true), { type: 'play', rangeStart: 0 }, { type: 'state', playing: true }, { type: 'reloadScore' }, { type: 'midiLoaded', range: { start: 0, end: 7680 } }));
+  assert.deepEqual(fx.slice(-2), [['seek', 0], ['play']]);
+  assert.equal(s.phase, 'countIn');
   ({ s, fx } = run(initial(false), { type: 'seek', tick: 9000 }, { type: 'reloadScore' }, { type: 'midiLoaded', range: { start: 3840, end: 7680 } }));
   assert.deepEqual(fx.slice(-1), [['seek', 3840]]);
   assert.equal(s.phase, 'idle');

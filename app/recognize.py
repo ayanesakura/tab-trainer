@@ -334,7 +334,11 @@ class _FirstParse:
         self.sid = sid
 
     def header(self, meta: dict) -> None:
-        store.patch(self.sid, meta=meta)
+        # meta 是读谱头之前的快照拼的：等模型的几秒里用户改的谱头（艺人）在这里重新盖上去，不能整个覆盖掉
+        def apply(s):
+            s["meta"] = normalize_meta({**meta, **(s.get("meta_user") or {})}, s.get("title", ""))
+
+        store.update(self.sid, apply)
 
     def layout(self, systems: list[dict]) -> None:
         store.patch(self.sid, systems=systems, bars=[])

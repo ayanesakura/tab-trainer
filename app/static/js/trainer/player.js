@@ -41,6 +41,9 @@ export const getApi = () => api;
 // 播放状态机
 // ---------------------------------------------------------------------
 let M = machineInitial(true);
+// 这一次播放不数预备拍（谱子重新加载后接着放，见 play-machine.js 的 resume.quiet）：开始前把预备拍音量临时设成 0，
+// 播放器报“在放”以后按开关设回去（状态机里的 countIn 不跟着变：下一遍照常数）
+let quietPlay = false;
 /** 唯一改播放状态的地方：事件 → 状态机 → 按 fx 操作 alphaTab → 写回 store */
 function dispatch(ev) {
   const was = M.phase, { state, fx } = machineStep(M, ev);
@@ -52,7 +55,7 @@ function dispatch(ev) {
     else if (k === 'showBar') set('ui.bar', v);
     else if (!api) continue;
     else if (k === 'seek') api.tickPosition = v;
-    else if (k === 'play') { applyAudio(); api.play(); } // 试听时可能临时打开了示范音的音量（见 audition）：开始前按开关设回去
+    else if (k === 'play') { applyAudio(); if (v === 'quiet') { quietPlay = true; api.countInVolume = 0; } api.play(); } // 试听时可能临时打开了示范音的音量（见 audition）：开始前按开关设回去
     else if (k === 'pause') api.pause();
     else if (k === 'stop') api.stop();
     else if (k === 'reloadMidi') api.loadMidiForScore();
@@ -121,7 +124,10 @@ function ensureApi() {
     if (soundFontsLoaded < 2) return; // 等木吉他音色也加载完
     setReady();
   });
-  api.playerStateChanged.on(e => dispatch({ type: 'state', playing: e.state === 1 }));
+  api.playerStateChanged.on(e => {
+    if (quietPlay && e.state === 1) { quietPlay = false; api.countInVolume = countInGain(get('play')); }
+    dispatch({ type: 'state', playing: e.state === 1 });
+  });
   // 弹到段尾 / 曲末（不是 alphaTab 自己循环时）：alphaTab 先发 finished，再停下并把位置放回段首（全曲是开头）
   api.playerFinished.on(() => {
     if (!api || api.isLooping) return; // alphaTab 自己循环：跳回段首时由位置事件计遍数

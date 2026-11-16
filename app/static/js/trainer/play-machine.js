@@ -13,7 +13,9 @@
 //                   stop() 又会被当成预备拍数完转入播放，只有重新生成 MIDI 能清干净）或者换了音色。
 //                   生成好了（midiLoaded）放回 resume.tick（不在循环范围里就放到段首），resume.play 就接着放
 //   reloadingScore  谱子重新加载（改音、撤销、识别出新的一行……）：alphaTab 会停下、把位置放回 0，期间还会发几个往回跳的
-//                   位置事件（不能当成弹完一遍）。同样等 midiLoaded 放回 resume.tick
+//                   位置事件（不能当成弹完一遍）。同样等 midiLoaded 放回 resume.tick。正放着（预备拍已经数完）时被打断的，
+//                   好了直接接着放、不再数一遍预备拍（resume.quiet）：边练边识别 / 精修时每来一行都会重新加载，
+//                   不是用户自己开始的播放，从小节中间再数一小节只会打断练习
 //
 // 位置：pos 是最后确认的位置——alphaTab 的位置事件给的，或者我们自己设的（seek）。不在 stop() / 设位置之后马上读
 // api.tickPosition：播放器在 worker 里，那时还没处理完，读到的是旧位置（以前播放中换到前面的段，预备拍的起点记成了旧位置，
@@ -24,7 +26,7 @@
 // started：开始播放以后 alphaTab 已经报了“在放”（state 事件）。在这之前的位置事件可能是停下 / 重新开始时的抖动
 // （停在 1，又报一个 11，再回到 1）：不拿它们判断预备拍数完、弹完一遍。
 //
-// fx（按顺序做）：['seek', tick] 设位置；['play'] 开始播放；['pause']；['stop']；['reloadMidi'] 重新生成 MIDI；
+// fx（按顺序做）：['seek', tick] 设位置；['play'] 开始播放（['play', 'quiet']：这一次不数预备拍）；['pause']；['stop']；['reloadMidi'] 重新生成 MIDI；
 //   ['loop'] 弹完了一遍（遍数 +1）；['partial'] 弹到了段尾，但这一遍不是从段首开始的（不算一遍）；['resetLoops'] 遍数清零；['showBar', i] 侧栏切到第 i 小节
 
 import { TICKS } from '../score.js';
@@ -139,7 +141,7 @@ export function step(s0, ev) {
       if (s.phase === 'reloadingScore') break;
       const play = isPlaying(s);
       const tick = s.phase === 'countIn' ? s.from : s.resume ? s.resume.tick : s.atEnd ?? s.pos;
-      Object.assign(s, { phase: 'reloadingScore', resume: { tick, play }, from: null, end: null, last: -1 });
+      Object.assign(s, { phase: 'reloadingScore', resume: { tick, play, quiet: s.phase === 'playing' }, from: null, end: null, last: -1 });
       break;
     }
 
@@ -160,7 +162,10 @@ export function step(s0, ev) {
         s.resume = null;
         if (!r) { s.phase = 'idle'; break; }
         const tick = back.tick >= r.start && back.tick < r.end ? back.tick : r.start;
-        if (back.play) start(tick);
+        if (back.play && back.quiet && s.countIn) { // 接着放被重新加载打断的这一遍：不数预备拍
+          fx.push(['seek', tick], ['play', 'quiet']);
+          Object.assign(s, { pos: tick, last: -1, atEnd: null, end: null, started: false, phase: 'playing', from: null });
+        } else if (back.play) start(tick);
         else { fx.push(['seek', tick]); Object.assign(s, { phase: 'idle', pos: tick }); }
       } else if (ev.cursorPending && r && s.phase === 'idle') { fx.push(['seek', r.start]); s.pos = r.start; }
       break;

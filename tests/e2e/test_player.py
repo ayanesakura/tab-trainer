@@ -73,6 +73,25 @@ def test_background_update_while_playing_is_not_a_finished_loop(server, trainer,
     b.wait_for("!tt.state.playing")
     time.sleep(0.8)
     assert _loops(server, sid, ids) == before
+    # 开着预备拍时也一样：数完预备拍、正放着的时候来了新内容，重新加载完直接接着放，不从小节中间再数一遍
+    b.js("tt.set('play.countIn', true); tt.setLoop(2, 4); tt.setTempo(100); tt.play(); true")
+    b.wait_for(
+        "tt.state.phase === 'playing' && tt.api.tickPosition > tt.api.playbackRange.startTick + 400",
+        timeout=15,
+    )
+    b.js("window.__phases = []; tt.store.on('play.phase', p => __phases.push(p)); true")
+    t2 = b.js("tt.api.tickPosition")
+    store.update(sid, lambda s: s["bars"][0]["events"][0]["notes"][0].update(fret=7))
+    b.js("tt.refresh(); true")
+    b.wait_for("tt.view.source.tex.includes('7.')")
+    b.wait_for(
+        f"tt.state.phase === 'playing' && __phases.includes('reloadingScore') && tt.api.tickPosition > {t2} + 200",
+        timeout=15,
+    )
+    assert "countIn" not in b.js("__phases"), b.js("__phases")
+    assert b.js("tt.api.countInVolume") > 0  # 临时关掉的预备拍音量放回去了：下一遍照常数
+    b.js("tt.stop(); true")
+    b.wait_for("!tt.state.playing")
     assert not b.errors, b.errors
 
 

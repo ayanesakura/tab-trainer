@@ -25,12 +25,26 @@ export function barLocked(bi) {
 function fillEditor(bar) {
   $('edText').value = '[\n' + bar.events.map(e => '  ' + JSON.stringify(e)).join(',\n') + '\n]';
   editorBarId = bar.id; editorRev = bar.rev;
+  // 上次改到一半被切走的（见 closeEditor）：这个小节没再变过就接着改
+  filled = $('edText').value;
+  const d = drafts.get(bar.id);
+  if (d && d.rev === bar.rev) $('edText').value = d.text; else drafts.delete(bar.id);
 }
-function closeEditor() { $('editor').hidden = true; $('edMsg').textContent = ''; editorBarId = null; editorRev = undefined; }
+// 没保存就被切到别的小节（点了谱面、选了段）：改到一半的文字按小节留着，回来点“改数据”还在；这个小节的内容变了（rev）就作废
+const drafts = new Map();
+let filled = '';
+function closeEditor(keep = false) {
+  if (editorBarId !== null) {
+    const text = $('edText').value;
+    if (keep && text !== filled) { drafts.set(editorBarId, { rev: editorRev, text }); UI.toast('没保存的修改先留着：回到这个小节点“改数据”接着改', 'info', 3500); }
+    else drafts.delete(editorBarId);
+  }
+  $('editor').hidden = true; $('edMsg').textContent = ''; editorBarId = null; editorRev = undefined;
+}
 function updateBarTools() {
   const s = get('song'), bar = curBar();
   if (!bar) return;
-  if (bar.id !== editorBarId) closeEditor();
+  if (bar.id !== editorBarId) closeEditor(true);
   const sys = s.systems[bar.system], parsing = sys && sys.status === 'parsing';
   $('reparseBtn').disabled = !sys || parsing || s.busy;
   setButton($('reparseBtn'), parsing ? '<span class="spinner"></span>正在重新识别…' : UI.icon('refresh') + '重新识别整行');
@@ -270,7 +284,7 @@ export const editorState = { get saving() { return saving; }, get undo() { retur
 
 export function initEditor() {
   provide('score.editClick', queueEditClick);
-  holdBarWhile(() => editorBarId !== null); // 编辑器开着时侧栏一切小节，编辑器就关了，没保存的内容会丢
+  holdBarWhile(() => editorBarId !== null); // 编辑器开着时播放不带着侧栏换小节（用户自己切走时编辑器关掉，没保存的留成草稿）
   $('editBtn').onclick = () => {
     const bar = curBar();
     if (!bar) return;
@@ -280,7 +294,7 @@ export function initEditor() {
     $('editor').hidden = false;
     $('edText').focus();
   };
-  $('edCancel').onclick = closeEditor;
+  $('edCancel').onclick = () => closeEditor();
   $('edSave').onclick = () => withBusy($('edSave'), async () => {
     let events;
     try { events = JSON.parse($('edText').value); } catch (e) { UI.toast('JSON 格式不对：' + e.message, 'err', 4000); return; }

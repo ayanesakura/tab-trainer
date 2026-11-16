@@ -256,3 +256,26 @@ def test_note_popup_sets_a_tapped_harmonic_with_its_tapped_fret(server, trainer,
     note = _song(server, sid)["bars"][1]["events"][0]["notes"][0]
     assert note["tech"] == ["ah"] and "harm" not in note
     assert not b.errors, b.errors
+
+
+def test_unsaved_json_edit_is_kept_as_a_draft_when_the_bar_changes(trainer):
+    """“改数据”改到一半，点了别的小节（编辑器关掉）：没保存的文字留着，回到这个小节再点“改数据”还在；
+    点“取消”就不留。"""
+    b = trainer()
+    ed = "document.getElementById('edText')"
+    b.js("tt.set('ui.bar', 1); document.getElementById('editBtn').click(); true")
+    b.wait_for("!document.getElementById('editor').hidden")
+    original = b.js(f"{ed}.value")
+    b.js(f"{ed}.value = {ed}.value.replace('[', '[ '); true")
+    draft = b.js(f"{ed}.value")
+    b.js("tt.set('ui.bar', 2); true")
+    b.wait_for("document.getElementById('editor').hidden")
+    assert "先留着" in b.js("(document.querySelector('.toast') || {}).textContent || ''")
+    b.js("tt.set('ui.bar', 1); document.getElementById('editBtn').click(); true")
+    b.wait_for("!document.getElementById('editor').hidden")
+    assert b.js(f"{ed}.value") == draft != original
+    b.js("document.getElementById('edCancel').click(); document.getElementById('editBtn').click(); true")
+    b.wait_for("!document.getElementById('editor').hidden")
+    assert b.js(f"{ed}.value") == original
+    b.js("document.getElementById('edCancel').click(); true")
+    assert not b.errors, b.errors
