@@ -1047,3 +1047,27 @@ def test_cancel_interrupts_the_request_in_flight(client, sync_jobs, monkeypatch)
     assert s["notice"] is None  # 取消且什么都没改：不留一条“改了 0 个”的提示
     assert s["activity"] is None and len(_verifies()) == 1
     assert not llm._interrupted()  # 出了 with 块就解除
+
+
+def test_library_list_counts_bars_to_refine_once_per_saved_version(client, monkeypatch):
+    """列曲库时“精修整首会核对几个小节”按曲子记着：文件没变不重算（有任务时页面每 2.5 秒取一次列表），
+    曲子存过一次就按新的算；删掉的曲子不留着。"""
+    sid = _song()
+    counted = []
+    real = refine.pending
+    monkeypatch.setattr(refine, "pending", lambda s: (counted.append(s["id"]), real(s))[1])
+
+    def bars():
+        return next(x for x in client.get("/api/songs").json() if x["id"] == sid)["refine_estimate"]["bars"]
+
+    assert bars() == 6 and bars() == 6
+    assert counted.count(sid) == 1
+    first = store.load(sid)["bars"][0]
+    store.update(sid, lambda s: s["bars"][0].update(refine_key=notes_key(first)))  # 核对过第一个小节
+    assert bars() == 5 and counted.count(sid) == 2
+    assert (
+        client.get(f"/api/songs/{sid}").json()["refine_estimate"]["bars"] == 5
+    )  # 曲子详情不走这份缓存，数一样
+    assert client.delete(f"/api/songs/{sid}").status_code == 200
+    client.get("/api/songs")
+    assert sid not in views._pending

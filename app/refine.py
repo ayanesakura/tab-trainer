@@ -240,7 +240,17 @@ def estimate(s: dict) -> dict | None:
     """现在点“精修整首”的范围和预估：{bars, cost_usd, minutes, seconds}。GP / MusicXML 曲子是 None。"""
     if is_score(s):
         return None
-    return _estimate(len(pick(s, recheck=True)))
+    return _estimate(pending(s))
+
+
+def pending(s: dict) -> int:
+    """现在点“精修整首”会核对几个小节。要给每个小节算一遍音符指纹：列曲库时按曲子缓存（见 views.library_item）。"""
+    return len(pick(s, recheck=True))
+
+
+def estimate_of(s: dict, n: int) -> dict | None:
+    """estimate，小节数用调用方已经算好的 n（预估里的时间跟着并发数设置变，所以缓存的是小节数，不是整个预估）。"""
+    return None if is_score(s) else _estimate(n)
 
 
 def scope_estimates(s: dict) -> dict | None:

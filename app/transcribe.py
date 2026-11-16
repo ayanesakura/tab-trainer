@@ -16,7 +16,7 @@ from PIL import Image
 
 from app import ocr, ocrcheck, prompts, store
 from app.jobs import Cancelled
-from app.llm import LLM, LLMError, request_id_of
+from app.llm import LLM, LLMError, interruptible, request_id_of
 from app.music import (
     PLACEHOLDER_MSG,
     bar_length,
@@ -257,18 +257,25 @@ class RowReader:
         if self.cancel is not None and self.cancel.is_set():
             raise Cancelled()
         t = self.task
-        raw = self.claude.transcribe(
-            self.row.img,
-            self.meta,
-            t.first_bar,
-            self.row.spans,
-            hint=t.hint,
-            previous=previous,
-            problems=problems,
-            labeled_strings=self.row.labeled,
-            start_ts=t.start_ts,
-            **({"context": t.context} if t.context else {}),
-        )
+        try:
+            # 点了取消：正在读的这一行马上断开（和精修一样），不占着全局名额等它读完——连接卡住时最坏要等几十分钟
+            with interruptible(self.cancel):
+                raw = self.claude.transcribe(
+                    self.row.img,
+                    self.meta,
+                    t.first_bar,
+                    self.row.spans,
+                    hint=t.hint,
+                    previous=previous,
+                    problems=problems,
+                    labeled_strings=self.row.labeled,
+                    start_ts=t.start_ts,
+                    **({"context": t.context} if t.context else {}),
+                )
+        except Exception:
+            if self.cancel is not None and self.cancel.is_set():  # 被取消打断的请求抛的是连接中断：算取消
+                raise Cancelled() from None
+            raise
         return check_reading(raw, self.meta, t, self.row)
 
     def _try(self, what: str, **kw) -> Reading | None:

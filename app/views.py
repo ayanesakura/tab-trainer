@@ -83,6 +83,19 @@ def refine_estimate(s: dict) -> dict | None:
     return refine.estimate(s)
 
 
+# 曲库列表里每首曲子“精修整首会核对几个小节”：要给全曲每个小节算音符指纹，占了列曲库九成的时间，
+# 而有任务在跑时页面每 2.5 秒取一次列表。store.read 在文件没变时给的是同一个对象，按这个对象记住结果
+# （只用在 store.read 给的只读对象上：别人拿去改的副本不走这里）
+_pending: dict[str, tuple[dict, int]] = {}
+
+
+def _library_refine_estimate(s: dict) -> dict | None:
+    hit = _pending.get(s["id"])
+    if hit is None or hit[0] is not s:
+        hit = _pending[s["id"]] = (s, refine.pending(s))
+    return refine.estimate_of(s, hit[1])
+
+
 def failed_rows(s: dict) -> int:
     """识别失败的行数（“重试失败的行”只重新识别这些）。"""
     return sum(1 for x in s.get("systems") or [] if isinstance(x, dict) and x.get("status") == "error")
@@ -114,7 +127,7 @@ def library_item(s: dict) -> dict:
         "is_score": is_score(s),
         "failed_rows": failed_rows(s),
         "refined": s.get("refined"),
-        "refine_estimate": refine_estimate(s),
+        "refine_estimate": _library_refine_estimate(s),
         "tags": [t for t in s.get("tags") or [] if isinstance(t, str)],
         "archived": bool(s.get("archived")),
         "practice": p,
@@ -157,6 +170,9 @@ def list_library() -> list[dict]:
         except Exception as e:  # 内容不对（手改坏的文件之类）算到这一首上，曲库照常能打开
             log.exception("song=%s 无法列进曲库", sid)
             out.append(corrupt_item(sid, f"曲子数据格式不对，无法显示（{type(e).__name__}: {e}）"[:300]))
+    listed = {x["id"] for x in out}
+    for gone in [k for k in _pending if k not in listed]:  # 删掉的曲子不留着
+        _pending.pop(gone, None)
     return out
 
 

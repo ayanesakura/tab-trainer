@@ -1800,3 +1800,26 @@ def test_restart_after_a_reparse_swapped_in_does_not_claim_the_old_result_was_ke
     after = _crash_while_planning(data_dir, monkeypatch, sid)
     assert after["status"] == "ready" and after["activity"] is None
     assert "原来的结果保留不变" not in after["notice"]["msg"] and "结果已保存" in after["notice"]["msg"]
+
+
+def test_cancel_interrupts_the_row_being_read(data_dir, monkeypatch):
+    """点了取消：正在读的这一行的请求马上断开（llm.interruptible 绑着这个任务的取消信号），
+    断开抛出的连接错误算取消，不当成这一行识别失败、也不再返修。"""
+    from app import llm
+
+    sid = songs.create_song([("p1.png", score_png())])
+    cancel = threading.Event()
+    seen = []
+
+    def interrupted(self, *a, **kw):
+        seen.append(llm._interrupted())  # 还没点取消
+        cancel.set()
+        seen.append(llm._interrupted())  # 这个线程里的流会被打断
+        raise llm._http.ReadError("[Errno 32] Broken pipe")
+
+    monkeypatch.setattr(FakeClaude, "transcribe", interrupted)
+    monkeypatch.setattr(config.settings, "row_concurrency", 1)
+    with pytest.raises(jobs.Cancelled):
+        recognize.run_parse(sid, cancel)
+    assert seen == [False, True]
+    assert not llm._interrupted()  # 出了 with 块就解除
