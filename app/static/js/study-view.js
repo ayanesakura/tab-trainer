@@ -1,7 +1,7 @@
 // 练琴页（index.html 的“练琴”视图）和练习页打分卡共用的纯函数：时长 / 日期文案、“今日”和“计划”里的一行、
 // 进度环、练琴日历的网格。不碰 DOM，有 node 测试（tests/js/study.test.mjs）。
 // 后端来的字段（包括数字）拼进 HTML 时一律 esc：曲子包里的 song.json、study.jsonl 可能被改过。
-// 数据的形状见 README 接口约定（GET /api/study/today、/api/study/calendar、/api/study/day/{day}）。
+// 数据的形状见 docs/API.md（GET /api/study/today、/api/study/calendar、/api/study/day/{day}）。
 
 import { esc, icon } from './lib/html.js';
 import { STUDY_RATINGS, STUDY_ISSUES } from './vocab.js';

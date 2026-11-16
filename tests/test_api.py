@@ -324,7 +324,7 @@ def test_settings_endpoints(client, monkeypatch):
 
 
 def test_song_view_contract(client):
-    """GET /api/songs/{id} 和 /api/songs 给前端的字段（见 README 的接口约定）。"""
+    """GET /api/songs/{id} 和 /api/songs 给前端的字段（见 docs/API.md）。"""
     from app import model, viewmodels
 
     assert model.SongView is viewmodels.SongView  # 旧的写法照样能用

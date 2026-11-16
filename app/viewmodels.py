@@ -1,6 +1,6 @@
 """接口返回的形状（Pydantic，只用来写清楚、在测试里校验 app/views.py 组装出来的结果；不存盘）。
 存盘的结构（Song / Bar …）在 app/model.py，这里的模型在它们上面加派生字段（BarView）或者另起（LibraryItem）。
-字段说明另见 README 的接口约定。
+字段说明另见 docs/API.md。
 """
 
 from __future__ import annotations
