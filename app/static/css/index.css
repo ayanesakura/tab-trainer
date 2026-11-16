@@ -5,23 +5,24 @@
 .ok-text { color: var(--green); }
 
 /* 上传框：可以点、拖文件进来，也可以 Tab 到它按 Enter / 空格 */
-.drop { display: flex; align-items: center; gap: 14px; padding: var(--sp-4) 18px; border: 1.5px dashed var(--line); border-radius: var(--r-lg); background: var(--card); cursor: pointer; transition: border-color .15s, background .15s; }
+.drop { display: flex; align-items: center; gap: var(--sp-3h); padding: var(--sp-4) 18px; border: 1.5px dashed var(--line); border-radius: var(--r-lg); background: var(--card); cursor: pointer; transition: border-color .15s, background .15s; }
 .drop:hover, .drop.over, .drop:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
 .drop:focus-visible { outline: none; border-style: solid; }
+.drop:hover .hint, .drop.over .hint, .drop:focus-visible .hint { color: var(--fg-2); } /* 淡强调色底上 --muted 不到 4.5:1 */
 .drop .big { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex: none; }
 .drop .big .ic { width: 20px; height: 20px; }
 .drop .t { font-weight: 500; font-size: var(--fs-3); }
-.picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.upload-bar { display: flex; gap: var(--sp-2); margin-top: 10px; align-items: center; }
+.picked { display: flex; flex-wrap: wrap; gap: var(--sp-1h); margin-top: var(--sp-2h); }
+.upload-bar { display: flex; gap: var(--sp-2); margin-top: var(--sp-2h); align-items: center; }
 .upload-bar .input { flex: 1; }
 
 /* 曲子行 */
 .song-row .src-ic { width: 34px; height: 34px; border-radius: 9px; flex: none; display: grid; place-items: center; background: var(--pill); color: var(--ctl-fg); }
-.song-row .name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.song-row .name { display: flex; align-items: center; gap: var(--sp-1h); min-width: 0; }
 .song-row .title { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .song-row a.title:hover { color: var(--accent); }
 .song-row .ctl .act { min-width: 76px; } /* 接着练 / 练习 / 重新识别 右边对齐 */
-.song-row .state { display: flex; align-items: center; gap: 6px; font-size: var(--fs-1); color: var(--muted); margin-top: 3px; min-width: 0; }
+.song-row .state { display: flex; align-items: center; gap: var(--sp-1h); font-size: var(--fs-1); color: var(--muted); margin-top: 3px; min-width: 0; }
 .song-row .state .progress { width: 140px; flex: none; }
 .song-row .notice-badge { max-width: 360px; overflow: hidden; text-overflow: ellipsis; display: inline-block; line-height: 20px; }
 /* 标签、徽章多了先让它们收窄（被裁掉），不把曲名挤没：flex-shrink 比曲名大得多。
@@ -29,13 +30,14 @@
 .song-row .tags { display: inline-flex; gap: var(--sp-1); flex: 0 100 auto; min-width: 0; overflow: hidden; padding: 3px; margin: -3px; }
 .song-row .badges { display: inline-flex; gap: var(--sp-1); flex: 0 100 auto; min-width: 0; overflow: hidden; margin-left: 2px; }
 .song-row .who .sub { margin-top: 2px; }
-.song-row .tag { background: var(--accent-soft); color: var(--accent); cursor: pointer; height: 18px; padding: 0 6px; }
+.song-row .tag { background: var(--accent-soft); color: var(--accent); cursor: pointer; height: 18px; padding: 0 var(--sp-1h); }
 .song-row .tag:hover { background: color-mix(in srgb, var(--accent) 22%, var(--card)); }
 .song-row .pick { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex: none; margin-right: 2px; }
 .song-row.on { background: var(--accent-soft); }
 .song-row.on .sub, .song-row.on .state { color: var(--fg-2); } /* 淡强调色底上 --muted 不到 4.5:1 */
 /* 归档的曲子：曲名、图标淡下去（文字仍是 --muted，对比度够） */
 .song-row.archived .title { color: var(--muted); }
+.song-row.archived.on .title { color: var(--fg-2); } /* 勾选时底是淡强调色，同上 */
 .song-row.archived .src-ic { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--faint); }
 
 /* 曲库工具条：搜索、标签筛选、排序 */
@@ -52,7 +54,7 @@
 /* 翻页条（曲库列表下面，超过一页才显示） */
 .pager { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
 .pager .range { margin-left: var(--sp-1); font-variant-numeric: tabular-nums; }
-.pager .pg { min-width: 26px; height: 26px; padding: 0 6px; border-radius: 7px; color: var(--fg-2); font-size: var(--fs-1); font-variant-numeric: tabular-nums; transition: background .15s, color .15s; }
+.pager .pg { min-width: 26px; height: 26px; padding: 0 var(--sp-1h); border-radius: 7px; color: var(--fg-2); font-size: var(--fs-1); font-variant-numeric: tabular-nums; transition: background .15s, color .15s; }
 .pager .pg:hover { background: var(--pill); color: var(--fg); }
 .pager .pg[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .pager .gap { min-width: 18px; text-align: center; color: var(--muted); font-size: var(--fs-1); }
@@ -62,17 +64,17 @@
 
 /* 设置 */
 .list.set { overflow: visible; } /* “?”的说明弹层不能被列表的圆角裁掉（设置行没有底色，不需要裁） */
-.keyline { display: flex; gap: 6px; align-items: center; }
+.keyline { display: flex; gap: var(--sp-1h); align-items: center; }
 .keyline .input { width: 280px; }
 .keyline .input[aria-busy="true"] { border-color: var(--accent); }
-#keyState { display: flex; align-items: center; gap: 6px; }
+#keyState { display: flex; align-items: center; gap: var(--sp-1h); }
 #keyState .dot { width: 6px; height: 6px; }
 .set .who-help { display: flex; align-items: center; gap: 2px; }
 .set .who-help .name { flex: none; }
 .w-model { width: 170px; }
 .w-url { width: 400px; max-width: 100%; }
-.test-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-1); }
-.head-actions { display: flex; gap: 6px; }
+.test-state { display: inline-flex; align-items: center; gap: var(--sp-1h); font-size: var(--fs-1); }
+.head-actions { display: flex; gap: var(--sp-1h); }
 
 @media (max-width: 760px) {
   .set .row .ctl { max-width: 100%; min-width: 0; } /* Base URL 输入框跟着收窄，不撑出横向滚动条 */
@@ -82,26 +84,26 @@
 
 /* 导入曲子包的结果（有跳过或失败时才弹出）：按包列出导入 / 已有 / 失败的曲子 */
 .import-dlg { width: 460px; }
-.import-dlg .dlg-b { padding: 18px 20px 4px; display: flex; flex-direction: column; gap: 10px; }
+.import-dlg .dlg-b { padding: 18px 20px var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-2h); }
 .import-dlg .dlg-t { font-size: var(--fs-3); font-weight: 600; }
 .import-list { max-height: min(60vh, 480px); overflow: auto; display: flex; flex-direction: column; gap: var(--sp-3); }
 .ib-h { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; margin-bottom: var(--sp-1); }
 .ib-h b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ib-h .hint { margin-left: auto; flex: none; }
 .ib ul { list-style: none; border: 1px solid var(--line-2); border-radius: var(--r-md); }
-.ib li { display: flex; align-items: center; gap: var(--sp-2); padding: 5px 10px; font-size: var(--fs-2); }
+.ib li { display: flex; align-items: center; gap: var(--sp-2); padding: 5px var(--sp-2h); font-size: var(--fs-2); }
 .ib li + li { border-top: 1px solid var(--line-2); }
 .ib-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ib li .badge { height: 18px; padding: 0 6px; flex: none; }
+.ib li .badge { height: 18px; padding: 0 var(--sp-1h); flex: none; }
 .ib-why { font-size: var(--fs-1); margin-top: var(--sp-1); line-height: 1.5; }
 
 /* 管理原谱页面（<dialog class="dlg pages-dlg">） */
 .pages-dlg { width: min(1000px, 94vw); max-height: 90vh; }
 .pages-dlg[open] { display: flex; flex-direction: column; }
-.pd-h, .pd-f { display: flex; align-items: center; gap: var(--sp-2); padding: 10px 14px; }
+.pd-h, .pd-f { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2h) var(--sp-3h); }
 .pd-h { border-bottom: 1px solid var(--line-2); }
 .pd-f { border-top: 1px solid var(--line-2); }
-.pd-body { padding: 14px; overflow: auto; }
+.pd-body { padding: var(--sp-3h); overflow: auto; }
 .page-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--sp-3); }
 .page-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--card); cursor: grab; }
 .page-card.new { border-color: var(--accent); }
@@ -111,14 +113,14 @@
 .page-card .thumb img { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; }
 :root[data-theme="dark"] .page-card .thumb img { filter: invert(.88) hue-rotate(180deg); }
 .page-card .thumb .ic { width: 28px; height: 28px; color: var(--muted); }
-.page-card .pc-f { display: flex; align-items: center; gap: var(--sp-1); padding: 6px 6px 6px 10px; font-size: var(--fs-1); border-top: 1px solid var(--line-2); }
+.page-card .pc-f { display: flex; align-items: center; gap: var(--sp-1); padding: var(--sp-1h) var(--sp-1h) var(--sp-1h) var(--sp-2h); font-size: var(--fs-1); border-top: 1px solid var(--line-2); }
 .page-card .pc-f .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 设置 · 配色：每个选项前一个色点 */
 .palette-seg .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: 0; box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .2); }
 
 /* 计划的徽章（曲名后面：在学 / 3 天后复习 / 待学 / 暂停） */
-.song-row .plan-badge { height: 18px; padding: 0 6px 0 5px; flex: none; gap: 4px; background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--fg-2); font-weight: 400; }
+.song-row .plan-badge { height: 18px; padding: 0 var(--sp-1h) 0 5px; flex: none; gap: var(--sp-1); background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--fg-2); font-weight: 400; }
 .song-row .plan-badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
 .song-row .plan-badge.learn i { background: var(--accent); }
 .song-row .plan-badge.due i { background: var(--green); }

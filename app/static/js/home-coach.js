@@ -35,6 +35,7 @@ function render({ toBottom = false } = {}) {
       : ''));
   }, toBottom);
   $('chatSend').disabled = !!pending;
+  $('chatSend').setAttribute('aria-busy', String(!!pending)); // “回答中…”是状态，不按禁用的样子淡到看不清（chat.css）
   setHTML($('chatSend'), pending ? '<span class="spinner"></span>回答中…' : '发送');
   $('chatNew').disabled = !!pending || !conv.turns.length;
   $('chatNew').title = pending ? '等这个问题回答完' : '清空这段对话，重新开始';

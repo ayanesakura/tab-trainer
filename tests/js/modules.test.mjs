@@ -51,3 +51,16 @@ test('import 扫描能认出各种写法', () => {
   const src = `import { a } from './a.js';\nimport * as b from "./b.js";\nimport './c.js';\nconst d = await import('./d.js');\nexport { e } from './e.js';\nimport x from '../lib/x.js';`;
   assert.deepEqual(importsOf(src), ['a.js', 'b.js', 'c.js', 'd.js', 'e.js']);
 });
+
+// 页面入口（index.js、trainer/main.js……）要 DOM，Node 测试不导入它们：语法错、和 import 重名的声明要到端到端测试才看得见。
+// 这里至少让每个脚本过一遍解析（node --check）。
+test('前端的每个脚本都能解析（没有语法错、没有和 import 重名的声明）', async () => {
+  const { readdirSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const root = new URL('../../app/static/', import.meta.url);
+  const files = ['ui.js', ...['js/', 'js/lib/', 'js/trainer/'].flatMap(d => readdirSync(new URL(d, root)).filter(f => f.endsWith('.js')).map(f => d + f))];
+  assert.ok(files.length > 40);
+  for (const f of files) {
+    try { execFileSync(process.execPath, ['--check', new URL(f, root).pathname], { stdio: 'pipe' }); } catch (e) { assert.fail(`${f}：${String(e.stderr).split('\n').slice(0, 4).join(' ')}`); }
+  }
+});

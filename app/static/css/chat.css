@@ -17,16 +17,16 @@ body.chat-open .chat { transform: none; visibility: visible; transition: transfo
 .chat-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-4); }
 .chat-empty { color: var(--muted); font-size: var(--fs-2); }
 .chat-examples { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
-.chat-examples .chip { height: auto; min-height: 26px; padding: 3px 10px; white-space: normal; text-align: left; font-size: var(--fs-2); }
+.chat-examples .chip { height: auto; min-height: 26px; padding: 3px var(--sp-2h); white-space: normal; text-align: left; font-size: var(--fs-2); }
 
 .chat-list { display: flex; flex-direction: column; gap: var(--sp-4); }
 .chat .qa { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-2); }
-.chat .qa .q { font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
+.chat .qa .q { font-weight: 600; display: flex; gap: var(--sp-1h); align-items: baseline; }
 .chat .qa .q .ic { color: var(--accent); flex: none; align-self: center; }
 .chat .qa .q > span:not(.t):not(.ic) { white-space: pre-wrap; overflow-wrap: anywhere; }
-.chat .qa .q .t { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
+.chat .qa .q .t { font-weight: 400; color: var(--muted); font-size: var(--fs-0); margin-left: auto; white-space: nowrap; }
 .chat .qa .a { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; color: var(--fg-2); }
-.chat .qa.pending .a .spinner { display: inline-block; vertical-align: -2px; margin-right: 6px; }
+.chat .qa.pending .a .spinner { display: inline-block; vertical-align: -2px; margin-right: var(--sp-1h); }
 .chat .song-link { font-weight: 500; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 2px; }
 .chat .song-link:hover { text-decoration-color: currentColor; }
 .chat .song-ref { font-weight: 500; color: var(--fg); }
@@ -44,7 +44,10 @@ body.chat-open .chat { transform: none; visibility: visible; transition: transfo
 /* 窄屏：底部抽屉；顶栏的按钮只留图标 */
 @media (max-width: 760px) {
   .chat-btn .label { display: none; }
-  .chat-btn { padding: 0 6px; }
+  .chat-btn { padding: 0 var(--sp-1h); }
   .chat { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: min(78vh, calc(100dvh - 60px)); border-radius: var(--r-lg) var(--r-lg) 0 0;
     transform: translateY(calc(100% + 24px)); }
 }
+#chatSend[aria-busy="true"]:disabled { opacity: .7; } /* 回答中：按钮上的字是状态信息，.45 的禁用透明度下对比度不到 2:1 */
+.chat .qa .a .li { display: block; position: relative; padding-left: 1.1em; }
+.chat .qa .a .li::before { content: "•"; position: absolute; left: .2em; color: var(--muted); }

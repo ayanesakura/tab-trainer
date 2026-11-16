@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ago, duration, rangeText, practiceText, practiceTip, latestPracticed, importReport, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay, paginate, pageNumbers, pagerHTML, PAGE_SIZE, batchToast } from '../../app/static/js/library-view.js';
-import { saveReturn, markBack, takeReturn, cleanReturn } from '../../app/static/js/lib/lib-return.js';
+import { saveReturn, markBack, takeReturn, cleanReturn, forgetReturn } from '../../app/static/js/lib/lib-return.js';
 
 const NOW = new Date(2026, 10, 7, 20, 0); // 2026-11-07 20:00（本地时间）
 const song = (o = {}) => ({ id: 's1', title: '曲子', source_type: 'image', is_score: false, status: 'ready', bars: 8, created: '2026-11-01 10:00', ...o });
@@ -255,4 +255,14 @@ test('batchToast：一批操作中途出错时，错误和已经做成的写在�
   assert.deepEqual(batchToast('已归档 2 首', 2, '曲子正在识别'), { msg: '已归档 2 首；后面的没有做：曲子正在识别', kind: 'err' });
   assert.deepEqual(batchToast('已归档 0 首', 0, '曲子正在识别'), { msg: '曲子正在识别', kind: 'err' });
   assert.equal(batchToast('已加入计划 0 首', 0, ''), null);
+});
+
+test('forgetReturn：刷新 / 浏览器后退回到曲库时，留着的记录作废，之后从别的入口进同一首再返回不会恢复成旧的样子', () => {
+  const m = new Map();
+  const store = { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); } };
+  saveReturn('s1', { page: 3, tag: '练习曲', archived: false, q: 'op', y: 400 }, store);
+  forgetReturn(store); // 浏览器后退回来（用的是 history.state.ret）
+  assert.equal(markBack('s1', '/', store), false); // 从对话里的链接进了同一首，点返回
+  assert.equal(takeReturn(store), null);
+  forgetReturn(null); // 存储被禁用：什么都不做
 });

@@ -4,6 +4,7 @@
 import { toAlphaTex, durToTicks, tapOffset, TICKS } from '../score.js';
 import { STRINGS, STANDARD, TECH_NAME, WARN_CODES, parseDur } from '../vocab.js';
 import { fmtMin } from '../study-view.js';
+import { ago } from '../library-view.js';
 
 export const NN = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 export const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
@@ -154,7 +155,7 @@ export const durationText = mins;
  * 小节卡片“本小节”的几行：循环几遍 · 最快；干净几遍 · 最快（用过“这遍干净”才有）；播放了多久 · 上次。
  * 时间是播放 / 敲节奏的时间（停着看谱不算），所以写“播放”。→ {lines: [文字], title: 悬停提示}
  */
-export function practiceLines(p) {
+export function practiceLines(p, now = new Date()) {
   if (!p) return { lines: ['还没练过'], title: '' };
   const lines = [], tips = [];
   if (p.loops) lines.push(`循环 ${p.loops} 遍${p.best_bpm ? ` · 最快 ${p.best_bpm} BPM` : ''}`);
@@ -162,7 +163,8 @@ export function practiceLines(p) {
     lines.push(`干净 ${p.clean} 遍${p.clean_bpm ? ` · 最快 ${p.clean_bpm} BPM` : ''}`);
     if (p.clean_streak) tips.push(`最近连续干净 ${p.clean_streak} 遍（${p.clean_streak_bpm} BPM）`);
   }
-  lines.push(`播放 ${mins(p.seconds || 0)}${p.loops ? '' : '（还没弹完一遍）'}${p.last ? ` · 上次 ${p.last}` : ''}`);
+  lines.push(`播放 ${mins(p.seconds || 0)}${p.loops ? '' : '（还没弹完一遍）'}${p.last ? ` · 上次 ${ago(p.last, now)}` : ''}`); // 和曲库一样说“3 天前”，具体时刻在悬停提示里
+  if (p.last) tips.push(`上次：${p.last}`);
   tips.push('时间按播放和敲节奏算，停着看谱不算');
   return { lines, title: tips.join('\n') };
 }

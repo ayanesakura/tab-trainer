@@ -323,8 +323,10 @@ let seenDay = '';
 export function checkDay() {
   const d = studyDay();
   if (d === seenDay) return;
+  const first = !seenDay;
   seenDay = d;
   if (S.visible && S.today && d !== S.today.day) refresh();
+  if (!first) S.onSongs(); // 计划里的“明天继续 / 今天复习过了”和曲库行的徽章来自曲子列表：换日了也要重新取
 }
 
 // ---------------- 入口 ----------------

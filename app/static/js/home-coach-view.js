@@ -30,7 +30,15 @@ export function answerHTML(text, songs = []) {
       : `<span class="song-ref">${esc(name)}</span>`;
     last = m.index + m[0].length;
   }
-  return out + esc(src.slice(last));
+  return lists(out + esc(src.slice(last)));
+}
+
+/** 模型爱用的两种 Markdown：行首的 “- ” / “* ” 画成带圆点、缩进对齐的一项，**粗体**画成粗体。
+ * 在已经转义过的文字上做（标签只有这里加的和上面的曲子链接），别的记号原样显示 */
+function lists(html) {
+  return html
+    .replace(/^[ \t]*[-*] +(.+)(?:\n|$)/gm, '<span class="li">$1</span>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
 }
 
 /** 标题上的悬停说明：累计花费（cost：views.cost_summary 的形状） */

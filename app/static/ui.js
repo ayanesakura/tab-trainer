@@ -1,6 +1,6 @@
 // tab-trainer 共用的界面工具（ES 模块）：$ / esc、线条图标、主题、轻提示、浮层栈（菜单、确认框、输入框）、通知条、分段开关、滑块填充。
 // 用法：import { UI, $, esc } from '/static/ui.js'（也有逐个的具名导出）。
-// 暂时还挂一份 window.UI 给没改成模块的老脚本用，练习页改完后删掉。
+// window.UI 是给端到端测试和调试用的句柄（和练习页的 window.tt 一样），页面自己的脚本都用 import。
 
 import { esc, icon } from './js/lib/html.js'; // 纯函数（Node 测试也能用），这里原样再导出
 
@@ -66,27 +66,7 @@ addEventListener('storage', e => {
   applyTheme(); applyPalette(); themeChanged();
 });
 
-// 外观只在设置页（设置 › 外观 › 明暗）改，顶栏不再有切换按钮。下面的 themeButton / initShell 只是兼容：
-// 页面上还有 #themeBtn（比如没更新的练习页）时把它接上（跟随系统 → 浅色 → 深色 → 跟随系统），没有就什么都不做。
-const THEME_NEXT = { system: 'light', light: 'dark', dark: 'system' };
-const THEME_NAME = { system: '跟随系统', light: '浅色', dark: '深色' };
-export function themeButton(btn) {
-  const paint = () => {
-    const t = getTheme();
-    btn.innerHTML = icon({ system: 'monitor', light: 'sun', dark: 'moon' }[t]);
-    btn.title = `外观：${THEME_NAME[t]}（点击切换为${THEME_NAME[THEME_NEXT[t]]}）`;
-    btn.setAttribute('aria-label', btn.title);
-  };
-  btn.onclick = () => setTheme(THEME_NEXT[getTheme()]);
-  document.addEventListener('themechange', paint);
-  paint();
-}
-
-// 两个页面共同的顶栏（现在没有需要初始化的东西；有旧的外观按钮就接上）
-export function initShell() {
-  const btn = $('themeBtn');
-  if (btn) themeButton(btn);
-}
+// 外观只在设置页（设置 › 外观 › 明暗）改，顶栏没有切换按钮。
 
 // ---------------------------------------------------------------------
 // 轻提示
@@ -263,9 +243,10 @@ function dialog({ title, text, input, ok = '确定', cancel = '取消', danger =
     const d = document.createElement('dialog'), tid = 'dlgT' + ++dlgN;
     d.className = 'dlg dlg-msg';
     d.setAttribute('aria-labelledby', tid);
+    if (title && text) d.setAttribute('aria-describedby', tid + 'd'); // 有标题时正文是说明（“不能恢复”这类后果要读出来）
     d.innerHTML = `<form method="dialog">
       <div class="dlg-b">${title ? `<div class="dlg-t" id="${tid}">${esc(title)}</div>` : ''}
-        ${text ? `<div class="dlg-text"${title ? '' : ` id="${tid}"`}>${esc(text)}</div>` : ''}
+        ${text ? `<div class="dlg-text" id="${title ? tid + 'd' : tid}">${esc(text)}</div>` : ''}
         ${input ? `<input class="input" name="v" autocomplete="off" aria-label="${esc(input.label || title || text)}" placeholder="${esc(input.placeholder || '')}">${input.hint ? `<div class="hint">${esc(input.hint)}</div>` : ''}` : ''}
       </div>
       <div class="dlg-f"><button type="button" class="btn ghost" data-cancel>${esc(cancel)}</button><button class="btn primary${danger ? ' danger' : ''}" data-ok>${esc(ok)}</button></div>
@@ -358,9 +339,9 @@ const ready = () => { hydrate(); fillAll(); };
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready); else ready();
 
 export const UI = {
-  $, esc, icon, hydrate, getTheme, setTheme, isDark, themeButton, initShell, toast,
+  $, esc, icon, hydrate, getTheme, setTheme, isDark, toast,
   PALETTES, getPalette, setPalette,
   layer, hasLayer, topLayer, menu, closeMenu, confirm, prompt, notice, seg, tabs, fillRange, fillAll,
 };
 export default UI;
-window.UI = UI; // 兼容：练习页改成模块后删掉
+window.UI = UI; // 端到端测试和调试用

@@ -44,6 +44,12 @@ export function markBack(id, href, s = session()) {
   return write(s, { ...v, back: true });
 }
 
+/** 曲库：这次不是“新开一条浏览记录”回来的（刷新、浏览器后退）：留着的记录作废。不删的话，之后从别的入口
+ *  （比如对话里的链接）进同一首再点返回，会恢复成更早那次离开时的页码和搜索词 */
+export function forgetReturn(s = session()) {
+  if (s) { try { s.removeItem(KEY); } catch { /* 删不掉：下次 saveReturn 会覆盖 */ } }
+}
+
 /** 曲库：新开一条浏览记录时调用（history.state 是空的）。练习页打过“回去”标记的 → 离开前的状态，否则 null；记录都删掉（只用一次） */
 export function takeReturn(s = session()) {
   if (!s) return null;

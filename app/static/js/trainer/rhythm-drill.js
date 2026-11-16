@@ -81,8 +81,11 @@ function rebuild() {
 // 打开时循环范围太长（比如全曲 86 小节、七百多个音）：先缩到正在看的那一小节所在的原谱那一行，
 // GP 曲子（没有原谱的行）缩到它附近的 4 个小节，并说一声
 const DRILL_MAX = 8;
+// 打开时替用户缩过范围：{from: 原来的 [a, b], to: 缩成的 [a, b]}。关掉时范围还是缩成的那样（用户没自己再选段）就放回原来的
+let shrunk = null;
 function shrinkForDrill(v) {
   const { a, b } = get('play'), n = v.bars.length;
+  shrunk = null;
   if (b - a + 1 <= DRILL_MAX) return;
   const shown = get('ui.bar'), bi = shown >= a && shown <= b ? shown : a;
   const row = isScore(get('song')) ? null : v.sections.find(g => g.a <= bi && bi <= g.z);
@@ -90,6 +93,7 @@ function shrinkForDrill(v) {
   if (row && row.z - row.a + 1 <= DRILL_MAX) [na, nb] = [row.a, row.z];
   else { na = Math.max(0, Math.min(bi - 1, n - 4)); nb = Math.min(n - 1, na + 3); }
   setLoop(na, nb);
+  shrunk = { from: [a, b], to: [na, nb] };
   revealLoop();
   UI.toast(`段太长，敲节奏先练${loopLabel(na, nb, n)}`, 'info', 3500);
 }
@@ -102,6 +106,11 @@ function toggle(want) {
   if (want && get('play.playing')) stopPlayback(); // alphaTab 在放就先停下
   if (want) shrinkForDrill(v);
   set('rhythm.on', want); // 小节卡片、指板停靠条、播放键各自订阅
+  if (!want && shrunk) { // 范围是打开时替用户缩的：关掉就放回去，不留一个没人选过的“第 1–4 小节”
+    const { from, to } = shrunk, { a, b } = get('play');
+    shrunk = null;
+    if (a === to[0] && b === to[1] && from[1] < v.bars.length) setLoop(from[0], from[1]);
+  }
 }
 function paintOn(v) {
   $('rhythmCard').hidden = !v;

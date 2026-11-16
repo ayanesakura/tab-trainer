@@ -109,6 +109,10 @@ test('practice line, resume and labels', () => {
   assert.deepEqual(practiceLines(null).lines, ['还没练过']);
   assert.deepEqual(practiceLines({ loops: 3, seconds: 150, best_bpm: 72, last: '昨天' }).lines, ['循环 3 遍 · 最快 72 BPM', '播放 3 分钟 · 上次 昨天']);
   assert.deepEqual(practiceLines({ loops: 0, seconds: 20, last: '今天' }).lines, ['播放 不到 1 分钟（还没弹完一遍） · 上次 今天']);
+  // 上次的时刻说成“3 天前”（和曲库一样），具体到秒的放在悬停提示里
+  const dated = practiceLines({ loops: 1, seconds: 60, last: '2026-11-13 18:57:51' }, new Date(2026, 10, 16, 14, 0));
+  assert.equal(dated.lines.at(-1), '播放 1 分钟 · 上次 3 天前');
+  assert.ok(dated.title.includes('上次：2026-11-13 18:57:51'));
   const clean = practiceLines({ loops: 5, seconds: 4000, best_bpm: 80, clean: 2, clean_bpm: 76, clean_streak: 2, clean_streak_bpm: 76, last: '今天' });
   assert.deepEqual(clean.lines, ['循环 5 遍 · 最快 80 BPM', '干净 2 遍 · 最快 76 BPM', '播放 1 小时 7 分钟 · 上次 今天']);
   assert.match(clean.title, /最近连续干净 2 遍（76 BPM）/);
@@ -365,4 +369,16 @@ test('fresh：晚到的旧读取作废；applySong / setLocal 之前发出的读
   st.set('song', { practice: { n: 2 }, title: 'd' });
   before({ practice: { n: 1 }, title: 'c' });
   assert.equal(st.get('song.title'), 'd');
+});
+
+test('store：一个订阅者出错不连累后面的订阅者，也不让 set() 抛出去', () => {
+  const st = createStore({ play: { loops: 0 } });
+  const got = [], errors = [], orig = console.error;
+  st.on('play.loops', () => { throw new Error('侧栏渲染坏了'); });
+  st.on('play.loops', v => got.push(v));
+  console.error = (...a) => errors.push(a);
+  try { st.set('play.loops', 1); } finally { console.error = orig; }
+  assert.deepEqual(got, [1]);
+  assert.equal(st.get('play.loops'), 1);
+  assert.equal(errors.length, 1);
 });

@@ -50,7 +50,11 @@ export function createStore(initial = {}) {
     // 订阅的路径和改动的路径有包含关系、并且那一部分前后确实不同，才通知
     const hit = subs.filter(s => s.paths.some(sp => touched.some(tk =>
       (isPrefix(sp, tk) || isPrefix(tk, sp)) && !equal(at(old, sp), at(root, sp)))));
-    for (const s of hit) if (subs.includes(s)) s.fn(get(s.paths[0].join('.')), at(old, s.paths[0]));
+    // 一个订阅者出错不连累别人：否则排在它后面的都收不到这次变化，set() 的调用方（比如播放状态机正执行到一半）也跟着中断
+    for (const s of hit) {
+      if (!subs.includes(s)) continue;
+      try { s.fn(get(s.paths[0].join('.')), at(old, s.paths[0])); } catch (e) { console.error('store 订阅者出错', s.paths.map(p => p.join('.')), e); }
+    }
   }
 
   /** on('ui.bar', fn) 或 on(['ui.bar', 'song.bars'], fn)；fn(第一个路径的新值, 旧值)。返回取消订阅的函数。 */
@@ -83,7 +87,7 @@ export const store = createStore({
   song: null,
   view: null,
   play: { ready: false, playing: false, phase: 'idle', bpm: 50, origBpm: 0, a: 0, b: 0, loops: 0, restarts: 0, note: -1, next: -1, clean: false },
-  ui: { bar: -1, view: 'practice', editMode: false, orig: -1, np: false, more: false, drawer: false, fb: true },
+  ui: { bar: -1, view: 'practice', editMode: false, orig: -1, drawer: false, fb: true },
   rhythm: { on: false, running: false, calib: false },
 });
 export const { get, set, on } = store;

@@ -144,6 +144,13 @@ def test_rhythm_drill_shrinks_a_long_loop(server, trainer):
         assert [b.js("tt.state.a"), b.js("tt.state.b")] == [6, 11]
         assert "第 7–12 小节" in b.js("document.querySelector('.toast').textContent")
         b.js("tt.rhythm.toggle(false); true")
+        # 关掉：范围是打开时替用户缩的，放回原来的全曲
+        assert [b.js("tt.state.a"), b.js("tt.state.b")] == [0, 11]
+        # 敲节奏开着时自己又选了一段：关掉不动它
+        b.js(
+            "tt.setLoop(0, 11); document.getElementById('rhythmBtn').click(); tt.setLoop(2, 3); tt.rhythm.toggle(false); true"
+        )
+        assert [b.js("tt.state.a"), b.js("tt.state.b")] == [2, 3]
         # 不超过 8 小节：不动
         b.js("tt.setLoop(0, 5); document.getElementById('rhythmBtn').click(); true")
         assert [b.js("tt.state.a"), b.js("tt.state.b")] == [0, 5]
@@ -153,6 +160,7 @@ def test_rhythm_drill_shrinks_a_long_loop(server, trainer):
         b.js("document.getElementById('rhythmBtn').click(); true")
         assert [b.js("tt.state.a"), b.js("tt.state.b")] == [6, 9]
         b.js("tt.rhythm.toggle(false); true")
+        assert [b.js("tt.state.a"), b.js("tt.state.b")] == [0, 11]
         assert not b.errors, b.errors
     finally:
         store.delete(sid)

@@ -157,7 +157,6 @@ function initDrawer() {
 function initViews() {
   setNav = UI.tabs($('nav'), 'practice', v => showView(v));
   addEventListener('hashchange', () => showView(location.hash.slice(1)));
-  UI.initShell();
   document.addEventListener('themechange', () => setTimeout(refreshScoreTheme, 50));
 }
 

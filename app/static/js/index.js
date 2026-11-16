@@ -8,7 +8,7 @@ import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, 
 import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
 import { initStudy, renderPlan, refresh as refreshStudy, setVisible as setStudyVisible, setStudy, addMany, checkDay } from '/static/js/study.js';
 import { initHomeCoach, refresh as refreshChat } from '/static/js/home-coach.js';
-import { saveReturn, takeReturn, cleanReturn } from '/static/js/lib/lib-return.js';
+import { saveReturn, takeReturn, forgetReturn, cleanReturn } from '/static/js/lib/lib-return.js';
 
 // ---------------- 导航 ----------------
 // 练琴 / 曲库 / 设置。地址里没写时打开上次看的那个（练琴或曲库，记在本机），第一次是曲库
@@ -92,9 +92,10 @@ $('uploadBtn').onclick = () => {
 };
 const doUpload = () => api.withBusy($('uploadBtn'), async () => {
   try {
-    await api.upload('/api/songs', picked, { title: $('title').value });
-    toast(picked.some(f => !isScoreFile(f.name)) ? '已上传，开始识别' : '已导入');
-    setFiles([]); $('title').value = ''; $('file').value = '';
+    const files = picked; // 上传期间又拖进来别的文件：那是下一批，不跟着这一批清掉
+    await api.upload('/api/songs', files, { title: $('title').value });
+    toast(files.some(f => !isScoreFile(f.name)) ? '已上传，开始识别' : '已导入');
+    if (picked === files) { setFiles([]); $('title').value = ''; $('file').value = ''; }
     setPage(1);
     songsPoll.now();
   } catch (e) {
@@ -258,6 +259,7 @@ try { savedSort = localStorage.getItem(SORT_KEY); } catch { /* 读不了就用�
 // 点练习页的“返回”、打分后返回、“返回曲库”回来（新的浏览记录，history.state 是空的）：在 sessionStorage 里。
 // 别的新开（输网址、点品牌链接）takeReturn 是 null，照旧
 const back = history.state ? (history.state.ret ? cleanReturn(history.state.ret) : null) : takeReturn();
+if (history.state) forgetReturn();
 if (back && location.hash !== '#library') { try { history.replaceState(history.state, '', '#library'); } catch { /* 改不了地址就按地址里的视图 */ } }
 // 翻到第几页、按哪个标签筛选记在这条浏览记录里（history.state）：从练习页按“后退”回来、刷新还在原来那一页
 const saved = back || (history.state && history.state.lib) || {};

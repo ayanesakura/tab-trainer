@@ -42,3 +42,9 @@ test('costTip / EXAMPLES', () => {
   assert.match(costTip({ tokens: 10, cost_usd: 0, unpriced_tokens: 10 }), /10 token.*未计价/);
   assert.equal(EXAMPLES.length, 4);
 });
+
+test('answerHTML：行首的 “- ” 画成列表项、**粗体** 画成粗体，仍然全文转义', () => {
+  const html = answerHTML('建议：\n- 先练 [[song-1|甲]]\n- **慢** 练 <b>\n结尾 2 - 1', [{ id: 'song-1', title: '甲', status: 'ready', bars: 4 }]);
+  assert.match(html, /^建议：\n<span class="li">先练 <a class="song-link"[^>]*>甲<\/a><\/span><span class="li"><b>慢<\/b> 练 &lt;b&gt;<\/span>结尾 2 - 1$/);
+  assert.equal(answerHTML('**没闭合\n-不是列表'), '**没闭合\n-不是列表');
+});
