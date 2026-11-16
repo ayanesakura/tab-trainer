@@ -18,8 +18,18 @@ def _client(monkeypatch, token, host="192.168.1.20"):
 
 
 def test_no_token_needed_when_bound_to_localhost(monkeypatch):
-    c = _client(monkeypatch, None)
+    c = _client(monkeypatch, None, host="127.0.0.1")
     assert c.get("/api/songs").status_code == 200
+    assert _client(monkeypatch, None, host="::1").get("/api/songs").status_code == 200
+
+
+def test_other_machines_are_refused_when_no_token_was_generated(monkeypatch):
+    """不经过 main.main 的启动（uvicorn app.main:app --host 0.0.0.0）没有令牌：别的机器不能因此畅通无阻。"""
+    c = _client(monkeypatch, None)
+    assert c.get("/api/songs").status_code == 403
+    assert c.get("/api/settings").status_code == 403
+    assert c.put("/api/settings", json={"base_url": "http://192.168.1.20:9999"}).status_code == 403
+    assert c.get("/").status_code == 403
 
 
 def test_lan_requests_need_the_token(monkeypatch):

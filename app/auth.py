@@ -8,6 +8,8 @@
   不带 Origin 的（curl 等非浏览器客户端）放行。
 - 局域网访问令牌：服务绑定到非本机地址时 app.state.token 才会被设置（见 main.main）：
   本机访问不需要令牌；其他设备要用带 ?token= 的地址打开一次，校验通过后令牌写进 Cookie。
+  没有令牌时别的机器一律拒绝：不经过 main.main 的启动（`uvicorn app.main:app --host 0.0.0.0`）不会生成令牌，
+  放行的话局域网里谁都能改模型地址、拿走 API key。
 """
 
 from __future__ import annotations
@@ -22,6 +24,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"}
 TOKEN_COOKIE = "tt_token"
+NO_TOKEN = (
+    "没有开放局域网访问。要让其他设备访问，请用 python -m app.main --host 0.0.0.0 启动（会生成访问令牌）"
+)
 DENIED_PAGE = """<!doctype html><meta charset="utf-8"><title>tab-trainer</title>
 <body style="font-family:system-ui;max-width:520px;margin:80px auto;line-height:1.7;color:#333">
 <h2>需要访问令牌</h2><p>tab-trainer 开放了局域网访问，其他设备需要用带令牌的地址打开一次。</p>
@@ -56,6 +61,16 @@ def _host_ok(host: str, loopback: bool = False) -> bool:
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 
 
+def _remote(client: str) -> bool:
+    """请求是不是从别的机器来的。认不出是 IP 的（unix socket、测试客户端）不算：真实的网络连接这里总是 IP。"""
+    if client in LOOPBACK:
+        return False
+    try:
+        return not ipaddress.ip_address(client).is_loopback
+    except ValueError:
+        return False
+
+
 def install(app: FastAPI) -> None:
     app.state.token = None
 
@@ -63,8 +78,10 @@ def install(app: FastAPI) -> None:
     async def require_token(request: Request, call_next):
         token = app.state.token
         client = request.client.host if request.client else ""
-        if not token or client in LOOPBACK:
+        if not _remote(client):
             return await call_next(request)
+        if not token:
+            return JSONResponse({"detail": NO_TOKEN}, status_code=403)
         given = request.query_params.get("token")
         if given is not None and _same(given, token):
             url = request.url.remove_query_params("token")
