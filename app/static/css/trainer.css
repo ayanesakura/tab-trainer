@@ -47,6 +47,14 @@
 .n-fold:focus-visible { outline-offset: -2px; }
 .n-fold > b { margin-right: var(--sp-2); color: var(--muted); font-weight: 600; }
 
+/* 练习时谱面要占大头：往下滚以后顶栏（曲名、标签页、计时）跟着页面滚走，吸顶的只有控制条——少挡 60px 的谱面。
+   回到页面顶上就看得到顶栏；别的视图（调弦、分段、记号说明）顶栏照旧吸顶。窄屏（≤760px）控制条本来就不吸顶，不改 */
+@media (min-width: 761px) {
+  body[data-view="practice"] .topbar { position: static; }
+  body[data-view="practice"] .transport { top: var(--sp-2); }
+}
+@media (min-width: 1000px) { body[data-view="practice"] .side { top: var(--sp-2); } } /* 更窄时侧栏是固定位置的抽屉，不动 */
+
 /* ---- 控制条（吸顶，一行）+ 分段 chips ---- */
 .transport { container-type: inline-size; position: sticky; top: calc(var(--top-h) + var(--sp-2)); z-index: 20; padding: var(--sp-2) var(--sp-3) var(--sp-1h); display: flex; flex-direction: column; gap: var(--sp-1h); box-shadow: var(--shadow-sm); }
 /* 一行不换行：窄了先缩速度滑块和状态文字，再按控制条自己的宽度（容器查询，见文件末尾）把按钮收成图标、去掉次要的部分 */
@@ -114,7 +122,9 @@
 
 /* ---- 谱面（alphaTab） ---- */
 .score-card { position: relative; }
-.score-card .card-h { flex-wrap: wrap; }
+/* 谱面标题栏不单占一行：alphaTab 在谱面顶上本来就留着三十多像素的空白，标题栏叠在这块空白上（往上收 34px、不画底色和分隔线）。
+   标题栏换成两行（窄屏、改音中多了“完成”）时它自己变高，谱面跟着往下让，不会盖住第一行谱 */
+.score-card .card-h { flex-wrap: wrap; position: relative; z-index: 1; margin-bottom: -34px; border-bottom: 0; }
 /* 谱面标题栏的“?”（.help-wrap，样式在 ui.css）：悬停或键盘聚焦时弹出平时的操作说明 */
 .legend kbd { margin-right: 3px; }
 .legend i.review-key { display: inline-block; margin-right: var(--sp-1); width: 18px; height: 11px; border-radius: 3px; vertical-align: -1px; background: color-mix(in srgb, var(--amber) 8%, transparent); box-shadow: inset 0 3px 0 color-mix(in srgb, var(--amber) 75%, transparent); }

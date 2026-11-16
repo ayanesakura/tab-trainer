@@ -1071,3 +1071,20 @@ def test_library_list_counts_bars_to_refine_once_per_saved_version(client, monke
     assert client.delete(f"/api/songs/{sid}").status_code == 200
     client.get("/api/songs")
     assert sid not in views._pending
+
+
+def test_startup_drops_the_old_cancelled_with_nothing_changed_notice(client):
+    """旧版本取消精修、一个小节都没改也留了一条提示，要到下次精修才清：启动恢复时收掉；改了东西的那种留着。"""
+    sid = _song()
+    stale = {
+        "kind": "warn",
+        "msg": "精修已取消：检查了 3 个小节，改了 0 个，改好的会保留。",
+        "source": "refine",
+    }
+    store.update(sid, lambda s: s.update(notice=dict(stale)))
+    songs.recover_interrupted()
+    assert store.load(sid)["notice"] is None
+    kept = {**stale, "msg": "精修已取消：检查了 3 个小节，改了 2 个，改好的会保留。"}
+    store.update(sid, lambda s: s.update(notice=dict(kept)))
+    songs.recover_interrupted()
+    assert store.load(sid)["notice"]["msg"] == kept["msg"]

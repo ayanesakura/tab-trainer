@@ -258,13 +258,19 @@ function renderResume(s) {
     UI.toast(`从上次卡住的第 ${stuckAt.a + 1}${stuckAt.z > stuckAt.a ? `–${stuckAt.z + 1}` : ''} 小节开始`, 'info', 4000);
     return;
   }
-  if (!resumeChanges(r, get('play'))) return; // 没练过，或者上次的范围、速度就是现在这样：没什么可接的
-  notice('resume', {
-    kind: 'info', html: `<span title="${esc(r.at)}">上次练到 <b>${r.label}</b> · ${r.bpm} BPM</span>`,
-    actions: [{ label: '接着练', primary: true, onClick: go }], onDismiss: () => {},
-  });
-  // 开始播放了（练别的或已经接着练了）就收起这条提示，让出谱面的地方
-  const off = on('play.playing', v => { if (v) { notice('resume', null); off(); } });
+  if (!r) return;
+  const show = () => {
+    if (!resumeChanges(r, get('play'))) return; // 上次的范围、速度就是现在这样：没什么可接的
+    notice('resume', {
+      kind: 'info', html: `<span title="${esc(r.at)}">上次练到 <b>${r.label}</b> · ${r.bpm} BPM</span>`,
+      actions: [{ label: '接着练', primary: true, onClick: go }], onDismiss: () => {},
+    });
+    // 开始播放了（练别的或已经接着练了）就收起这条提示，让出谱面的地方
+    const off = on('play.playing', v => { if (v) { notice('resume', null); off(); } });
+  };
+  // “现在这样”要等谱子加载好才知道（那之前 play.b、play.bpm 还是初始值，和什么都不一样）
+  if (get('play.ready')) show();
+  else { const off = on('play.ready', v => { if (v) { off(); show(); } }); }
 }
 
 // ---------------------------------------------------------------------

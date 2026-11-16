@@ -1876,3 +1876,27 @@ def test_narrow_topbar_keeps_title_and_rate_button(server, plan_song):
         b.open(f"{server['base']}/trainer?id={plan_song}")
         b.wait_for("window.tt && tt.state.ready", timeout=40)
         assert b.js("document.querySelector('.topbar').getBoundingClientRect().height") == 52
+
+
+def test_score_gets_the_room_the_top_bar_scrolls_away_and_the_score_header_overlays(trainer):
+    """练习页谱面占大头：谱面标题栏叠在谱面顶上的空白里（不单占一行、不盖住第一行谱）；
+    往下滚以后顶栏跟着滚走，吸顶的只有控制条。别的视图顶栏照旧吸顶。"""
+    b = trainer()
+    rect = "(s => { const r = document.querySelector(s).getBoundingClientRect(); return [r.top, r.bottom]; })"
+    head, score = b.js(f"{rect}('#scoreCard .card-h')"), b.js(f"{rect}('#score')")
+    assert score[0] < head[1] - 20, (head, score)  # 谱面从标题栏下沿上面开始：标题栏叠在它上面
+    # 第一行谱（播放光标所在小节的高亮框就是这一行的范围）在标题栏下面，没被盖住
+    b.wait_for(
+        "!!document.querySelector('#score .at-cursor-bar') && document.querySelector('#score .at-cursor-bar').offsetHeight > 0"
+    )
+    row = b.js(f"{rect}('#score .at-cursor-bar')")
+    assert row[0] >= head[1] - 1, (row, head)
+    assert b.js("getComputedStyle(document.querySelector('.topbar')).position") == "static"
+    b.js("document.querySelector('.main-col').style.minHeight = '4000px'; scrollTo(0, 600); true")
+    b.wait_for("scrollY >= 590")
+    assert b.js(f"{rect}('.topbar')")[1] <= 0
+    assert abs(b.js(f"{rect}('#transport')")[0] - 8) <= 1
+    b.js("scrollTo(0, 0); location.hash = '#glossary'; true")
+    b.wait_for("document.body.dataset.view === 'glossary'")
+    assert b.js("getComputedStyle(document.querySelector('.topbar')).position") == "sticky"
+    assert not b.errors, b.errors

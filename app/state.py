@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.model import EDITABLE_META, is_score
 
 RECOGNIZE_KINDS = ("parse", "reparse_row")
@@ -172,6 +174,9 @@ def public_notice(s: dict) -> dict | None:
     return {"kind": kind, "msg": msg}
 
 
+_STALE_CANCEL = re.compile(r"^精修已取消：检查了 \d+ 个小节，改了 0 个")
+
+
 def _rows_all_done(s: dict) -> bool:
     systems = s.get("systems") or []
     return bool(s.get("meta") and s.get("bars") and systems) and all(
@@ -216,6 +221,11 @@ def recover(s: dict) -> bool:
     if s.get("status") in ("parsing", "queued"):  # 第一次识别（或还没开始就停了）
         msg = "服务重启，识别中断。可以在曲库的“…”菜单里重新识别。"
         finish(s, status="error", notice=("error", msg), source="parse")
+        changed = True
+    # 以前取消精修、一个小节都没改也留一条“精修已取消：检查了 N 个小节，改了 0 个……”，要到下次精修才清：启动时收掉
+    n = s.get("notice")
+    if n and n.get("source") == "refine" and _STALE_CANCEL.match(n.get("msg") or ""):
+        drop_notice(s, "refine")
         changed = True
     for x in s.get("systems") or []:
         if x.get("status") in ("parsing", "pending"):
