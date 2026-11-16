@@ -105,6 +105,15 @@ function placeToast(el = document.querySelector('.toast')) {
   if (el.parentNode !== host) host.appendChild(el); // 挪动会把已显示的 popover 收起，下面重新显示
   if (el.showPopover && !el.matches(':popover-open')) { try { el.showPopover(); } catch { /* 不支持 popover 时退回普通 fixed 定位 */ } }
 }
+/** 内容没变就不动 DOM：轮询反复渲染时，选中的文字、焦点、悬停提示不会每次被换掉。
+ *  别处直接改了 el 里面的东西，要把 el._html 清掉（记的那一份已经不是现在的样子） */
+export function setHTML(el, html) { if (el._html !== html) { el.innerHTML = html; el._html = html; } }
+/** 这次滚动会不会让菜单和它的按钮对不上：滚的是文档，或者是包着按钮的容器（菜单自己里面的滚动不算） */
+export function menuScrolledAway(target, anchor, menuEl) {
+  if (!target || target.nodeType === 9) return true;
+  if (menuEl && menuEl.contains(target)) return false;
+  return !!target.contains && target.contains(anchor);
+}
 export function toast(msg, kind = 'ok', ms = 2200) {
   document.querySelectorAll('.toast').forEach(t => t.remove());
   const el = document.createElement('div');
@@ -168,6 +177,7 @@ document.addEventListener('keydown', e => {
   const top = topLayer();
   if (!top) return;
   if (e.key === 'Escape') {
+    if (e.isComposing) return; // 输入法组字时的 Esc 是取消组字，不是关浮层
     if (top.el.tagName === 'DIALOG' && top.modal) return; // 走 cancel 事件
     e.preventDefault(); e.stopPropagation();
     top.close('esc');
@@ -227,7 +237,8 @@ export function menu(anchor, items) {
   m.style.top = Math.max(8, Math.min(innerHeight - m.offsetHeight - 8, r.bottom + 4)) + 'px';
   m.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.right - w)) + 'px';
   anchor.setAttribute('aria-expanded', 'true');
-  const onScroll = e => { if (!m.contains(e.target)) closeMenu(); };
+  // 锚点跟着滚走了才关（菜单是 fixed 定位，不跟着走）；别处的滚动不相干，比如旁边对话抽屉里正在变长的回答
+  const onScroll = e => { if (menuScrolledAway(e.target, anchor, m)) closeMenu(); };
   const state = { anchor };
   state.layer = layer(m, {
     ignore: [anchor],

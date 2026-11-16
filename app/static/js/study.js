@@ -3,7 +3,7 @@
 // 用词：“今日” = 今天要练的那几首，“计划” = 排好顺序的全部曲子，“日历” = 每天练了多久。
 // 计划里有哪些曲子、各自的状态来自曲库列表（GET /api/songs 每项的 study），index.js 每次拿到新列表就调 renderPlan。
 
-import { UI, $, esc, icon, toast } from '/static/ui.js';
+import { UI, $, esc, icon, toast, setHTML } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
 import { mountTimer, announce, onAnnounce } from '/static/js/lib/study-timer.js';
 import {
@@ -14,9 +14,6 @@ import {
 // day：点开明细的那天；focus：日历里能 Tab 到的那一格（键盘走到 / 点过的那天，见 calTabDay）
 const S = { today: null, cal: null, day: '', focus: '', songs: [], planOpen: false, onSongs: () => {}, visible: false, timer: null };
 const PLAN_FOLD = 6; // 计划超过这么多首时先收起来
-
-// 只在内容变了的时候改 DOM（每次刷新都重画，不能把焦点、悬停冲掉）
-function setHTML(el, html) { if (el._html !== html) { el.innerHTML = html; el._html = html; } }
 
 // ---------------- 取数据 ----------------
 let loading = null;
@@ -262,15 +259,16 @@ export async function setStudy(s, body, msg) {
   try { await api.put(`/api/songs/${encodeURIComponent(s.id)}/study`, body); if (msg) toast(msg); } catch (e) { toast(e.message, 'err', 4000); }
   changed();
 }
-/** 多选加入计划：按给的顺序一首首加（排在计划最后），已经在计划里的跳过 → 加了几首 */
+/** 多选加入计划：按给的顺序一首首加（排在计划最后），已经在计划里的跳过 → {n: 加了几首, error: 停在哪个错上}。
+ *  不在这里提示：提示只有一个位置，出错的说明要和“加了几首”合成一条（见 library-view.js 的 batchToast） */
 export async function addMany(list) {
-  let n = 0;
+  let n = 0, error = '';
   for (const s of list) {
     if (s.study) continue;
-    try { await api.put(`/api/songs/${encodeURIComponent(s.id)}/study`, { in_plan: true }); n++; } catch (e) { toast(e.message, 'err', 4000); break; }
+    try { await api.put(`/api/songs/${encodeURIComponent(s.id)}/study`, { in_plan: true }); n++; } catch (e) { error = e.message; break; }
   }
   changed();
-  return n;
+  return { n, error };
 }
 function changed() { announce(); S.onSongs(); refresh({ calendar: false }); }
 

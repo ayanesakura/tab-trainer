@@ -149,3 +149,31 @@ def test_chat_without_key_explains_instead_of_asking(server, browser, fake_model
     assert len(fake_model.calls) == calls
     assert b.js("document.getElementById('chatInput').value") == "先练哪首"
     assert not b.errors, b.errors
+
+
+def test_chat_does_not_disturb_the_page_beside_it(server, browser, fake_model, monkeypatch):
+    """抽屉开着照常用曲库：回答一段段变长（抽屉自己在滚）时，曲库某行的“…”菜单不被关掉；
+    曲库刷新（有曲子在识别时每 2.5 秒一次）不重建已有的问答，选中的文字、焦点留得住。"""
+    b = browser
+    monkeypatch.setattr(fake_model, "stream_delay", 0.25)
+    monkeypatch.setattr(fake_model, "chat_answer", "很长的回答。" * 60)
+    _open_chat(b, server)
+    b.js("document.querySelector('#chatEmpty .chat-examples button').click(); true")
+    pending = "((document.querySelector('#chatList .qa.pending .a') || {}).textContent || '')"
+    b.wait_for(f"{pending}.length > 6")
+    b.js("document.querySelector('.song-row [aria-haspopup]').click(); true")
+    b.wait_for("!!document.querySelector('[role=menu]')")
+    seen = b.js(f"{pending}.length")
+    b.wait_for(f"{pending}.length > {seen} + 12")  # 又来了几段，抽屉跟着滚到底
+    assert b.js("!!document.querySelector('[role=menu]')") is True
+    b.key("Escape")
+
+    b.wait_for(
+        "!document.querySelector('#chatList .qa.pending') && document.querySelectorAll('#chatList .qa').length === 1",
+        timeout=40,
+    )
+    b.js(
+        "window._qa = document.querySelector('#chatList .qa'); window._send = document.getElementById('chatSend').firstChild; true"
+    )
+    b.js("tt.reload()")
+    assert b.js("window._qa.isConnected && window._send.isConnected") is True

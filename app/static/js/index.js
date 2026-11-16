@@ -1,10 +1,10 @@
 // 曲库页：练琴（今日、计时、日历、计划，见 study.js）、上传原谱 / GP 文件、曲子列表（识别进度、练习记录、接着练、归档）、
 // 曲子包导出 / 导入、管理原谱页面、设置（API key、模型、识别后复核、练琴、外观）。
 // 词表：曲子 = 曲库里的一条；谱面 = 渲染出来的谱；原谱 = 上传的图片 / PDF。
-import { UI, $, esc, icon, toast } from '/static/ui.js';
+import { UI, $, esc, icon, toast, setHTML } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
 import { SCORE_EXT, isScoreFile } from '/static/js/vocab.js';
-import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML, latestPracticed, importReport } from '/static/js/library-view.js';
+import { isScore, selectable, rowHTML, sortSongs, filterSongs, SORTS, paginate, pagerHTML, latestPracticed, importReport, batchToast } from '/static/js/library-view.js';
 import { refineConfirm, NO_REFINE } from '/static/js/lib/refine.js';
 import { initStudy, renderPlan, refresh as refreshStudy, setVisible as setStudyVisible, setStudy, addMany, checkDay } from '/static/js/study.js';
 import { initHomeCoach, refresh as refreshChat } from '/static/js/home-coach.js';
@@ -185,8 +185,9 @@ $('exportBtn').onclick = () => api.withBusy($('exportBtn'), async () => {
 });
 $('planAddBtn').onclick = () => api.withBusy($('planAddBtn'), async () => {
   const list = sortSongs(lastSongs.filter(s => selected.has(s.id) && s.status !== 'corrupt'), lib.sort);
-  const n = await addMany(list);
-  if (n) { toast(`已加入计划 ${n} 首`); setSelecting(false); }
+  const { n, error } = await addMany(list);
+  showBatch(`已加入计划 ${n} 首`, n, error);
+  if (n && !error) setSelecting(false); // 有没加成的：留在选择里，看得见是哪几首
 });
 $('archiveBtn').onclick = () => api.withBusy($('archiveBtn'), async () => {
   const un = lib.archived, list = lastSongs.filter(s => selected.has(s.id) && selectable(s) && !!s.archived === un);
@@ -194,13 +195,20 @@ $('archiveBtn').onclick = () => api.withBusy($('archiveBtn'), async () => {
 });
 addEventListener('keydown', e => { if (e.key === 'Escape' && selecting && !UI.hasLayer()) setSelecting(false); });
 
+// 一批操作的结果只提示一条（提示只有一个位置，后一条会顶掉前一条）：中途出错时“做成了几首”和错误说明写在一起
+function showBatch(okMsg, n, error) {
+  const t = batchToast(okMsg, n, error);
+  if (t) toast(t.msg, t.kind, t.kind === 'err' ? 6000 : undefined);
+}
+
 // 归档 / 取消归档（一首或多首）：归档的曲子默认不在列表里，也不排进今日；数据、计划位置、练习记录都留着。→ 是否全部成功
 async function setArchived(list, archived) {
-  let n = 0;
+  let n = 0, error = '';
   for (const s of list) {
-    try { await api.post(`/api/songs/${encodeURIComponent(s.id)}/archive`, { archived }); n++; } catch (e) { toast(e.message, 'err', 4000); break; }
+    try { await api.post(`/api/songs/${encodeURIComponent(s.id)}/archive`, { archived }); n++; } catch (e) { error = e.message; break; }
   }
-  if (n) toast(archived ? `已归档 ${n === 1 && list.length === 1 ? `“${list[0].title}”` : `${n} 首`}，在“已归档”里能找到` : `已取消归档 ${n === 1 && list.length === 1 ? `“${list[0].title}”` : `${n} 首`}`);
+  const what = n === 1 && list.length === 1 ? `“${list[0].title}”` : `${n} 首`;
+  showBatch(archived ? `已归档 ${what}，在“已归档”里能找到` : `已取消归档 ${what}`, n, error);
   songsPoll.now();
   refreshStudy({ calendar: false });
   return n === list.length;
@@ -208,11 +216,7 @@ async function setArchived(list, archived) {
 
 // ---------------- 曲库列表（一行的 HTML、状态说明、排序等纯函数在 library-view.js） ----------------
 
-
-
-
 // 只在内容变了的时候改 DOM（轮询每 2.5 秒刷新一次，不能把正在用的按钮、焦点冲掉）
-function setHTML(el, html) { if (el._html !== html) { el.innerHTML = html; el._html = html; } }
 function renderList(box, songs, primaryId) {
   if (!songs.length) return;
   if (box._html !== undefined) { box.innerHTML = ''; box._html = undefined; } // 原来是空状态 / 加载中

@@ -2,7 +2,7 @@
 // 今日 / 计划 / 曲库列表；Esc 或关闭按钮收起（UI.layer，点外面不收）。对话存在服务器（GET / DELETE /api/coach），
 // 回答边生成边显示（POST /api/coach/ask/stream，NDJSON，同小节问答）。回答里的 [[id|曲名]] 换成练习页链接（home-coach-view.js）。
 // AI 只给建议，不改数据。
-import { UI, $, esc, icon, toast } from '/static/ui.js';
+import { UI, $, esc, icon, toast, setHTML } from '/static/ui.js';
 import * as api from '/static/js/lib/api.js';
 import { EXAMPLES, answerHTML, settled, costTip } from '/static/js/home-coach-view.js';
 
@@ -29,12 +29,13 @@ function render({ toBottom = false } = {}) {
   const empty = !conv.turns.length && !pending;
   $('chatEmpty').hidden = !empty;
   keepBottom(() => {
-    $('chatList').innerHTML = conv.turns.map(t => turnHTML(t, songs)).join('') + (pending
+    // 曲库每次刷新（有曲子在识别时每 2.5 秒）都会走到这里：内容没变就不重建，正在选中要复制的回答、链接上的焦点才留得住
+    setHTML($('chatList'), conv.turns.map(t => turnHTML(t, songs)).join('') + (pending
       ? `<div class="qa pending"><div class="q">${icon('sparkle', 13)}<span>${esc(pending.q)}</span></div><div class="a">${pendingAnswer(songs)}</div></div>`
-      : '');
+      : ''));
   }, toBottom);
   $('chatSend').disabled = !!pending;
-  $('chatSend').innerHTML = pending ? '<span class="spinner"></span>回答中…' : '发送';
+  setHTML($('chatSend'), pending ? '<span class="spinner"></span>回答中…' : '发送');
   $('chatNew').disabled = !!pending || !conv.turns.length;
   $('chatNew').title = pending ? '等这个问题回答完' : '清空这段对话，重新开始';
   $('chatTitle').title = costTip(conv.cost);
@@ -42,7 +43,7 @@ function render({ toBottom = false } = {}) {
 
 function showPending() {
   const a = $('chatList').querySelector('.qa.pending .a');
-  if (a) keepBottom(() => { a.innerHTML = pendingAnswer(deps.songs() || []); });
+  if (a) keepBottom(() => { a.innerHTML = pendingAnswer(deps.songs() || []); $('chatList')._html = null; }); // 绕过了 setHTML：它记的那份作废
 }
 
 function setConv(d) { conv = { id: d.id || '', turns: d.turns || [], cost: d.cost || null }; }

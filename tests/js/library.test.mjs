@@ -1,7 +1,7 @@
 // 曲库页的纯函数：js/library-view.js。运行：node --test tests/js/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ago, duration, rangeText, practiceText, practiceTip, latestPracticed, importReport, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay, paginate, pageNumbers, pagerHTML, PAGE_SIZE } from '../../app/static/js/library-view.js';
+import { ago, duration, rangeText, practiceText, practiceTip, latestPracticed, importReport, stateHTML, barsText, costText, fixAction, rowHTML, sortSongs, filterSongs, canPlay, paginate, pageNumbers, pagerHTML, PAGE_SIZE, batchToast } from '../../app/static/js/library-view.js';
 import { saveReturn, markBack, takeReturn, cleanReturn } from '../../app/static/js/lib/lib-return.js';
 
 const NOW = new Date(2026, 10, 7, 20, 0); // 2026-11-07 20:00（本地时间）
@@ -248,4 +248,11 @@ test('lib-return：记录坏了、类型不对、存储被禁用时静默退化'
   assert.doesNotThrow(() => saveReturn('a', {}));
   assert.equal(markBack('a', '/'), false);
   assert.equal(takeReturn(), null);
+});
+
+test('batchToast：一批操作中途出错时，错误和已经做成的写在同一条提示里', () => {
+  assert.deepEqual(batchToast('已归档 5 首', 5, ''), { msg: '已归档 5 首', kind: 'ok' });
+  assert.deepEqual(batchToast('已归档 2 首', 2, '曲子正在识别'), { msg: '已归档 2 首；后面的没有做：曲子正在识别', kind: 'err' });
+  assert.deepEqual(batchToast('已归档 0 首', 0, '曲子正在识别'), { msg: '曲子正在识别', kind: 'err' });
+  assert.equal(batchToast('已加入计划 0 首', 0, ''), null);
 });

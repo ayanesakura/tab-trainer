@@ -227,3 +227,10 @@ export function importReport(r) {
   }).join('');
   return { summary, kind, simple: !skipped.length && bundles.every(b => b.ok), html };
 }
+
+/** 一批操作（多选归档、加入计划）的一条提示：全成了 → 成功的话；中途出错 → 一条错误，写明已经做成的和错在哪；
+ *  一首都没做成也没出错（都已经在计划里）→ null，不提示 */
+export function batchToast(okMsg, n, error) {
+  if (!error) return n ? { msg: okMsg, kind: 'ok' } : null;
+  return { msg: n ? `${okMsg}；后面的没有做：${error}` : error, kind: 'err' };
+}
