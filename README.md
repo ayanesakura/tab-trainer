@@ -342,4 +342,8 @@ uv run python scripts/make_real_eval.py <曲子 id> eval-real-xxx [--all | --inc
 
 真实谱子做评测曲时，默认只把点过“确认没问题”或手改过的小节当标准答案（评测也只评这些小节）；`--all` 表示整首都核对过了。
 
+这几个脚本生成的评测曲 id 都要以 `eval-` 开头：已存在的目标会被覆盖，所以脚本拒绝覆盖别的曲子（删目录只走 `scripts/evalsongs.py`，`tests/test_guards.py` 会查）。
+
+改代码之前读 `LESSONS.md`（以前做错过什么、本来能拦住它的规则）；提交正文的写法（Run / Red by hand / Not tried）在 `CLAUDE.md`。
+
 上传的谱子、识别结果和配置都在 `data/` 下，不进版本库。每次写入 `song.json` / `config.json` 前，上一版会留成同名的 `.bak`；文件损坏时自动用备份，两份都坏的曲子在曲库里显示“数据损坏”，可以删除。同一个数据目录只能有一个 tab-trainer 在运行。
