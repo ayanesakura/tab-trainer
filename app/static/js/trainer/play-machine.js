@@ -19,18 +19,20 @@
 // api.tickPosition：播放器在 worker 里，那时还没处理完，读到的是旧位置（以前播放中换到前面的段，预备拍的起点记成了旧位置，
 // 预备拍一直“数不完”，停下后又放回旧位置）。
 // last：判断“从段尾跳回段首 = 弹完一遍”用的上一个位置；-1 表示下一个位置事件不算（刚跳过、刚开始）。
+// whole：正在弹的这一遍是不是从段首开始的。从中间开始的（停在半路再播放、点了别的小节接着放）弹到段尾不算弹完一遍：
+// 给的是 ['partial'] 而不是 ['loop']——没弹到的小节不该记上“循环了一遍、最快多少 BPM”。下一遍从段首开始，又算。
 // started：开始播放以后 alphaTab 已经报了“在放”（state 事件）。在这之前的位置事件可能是停下 / 重新开始时的抖动
 // （停在 1，又报一个 11，再回到 1）：不拿它们判断预备拍数完、弹完一遍。
 //
 // fx（按顺序做）：['seek', tick] 设位置；['play'] 开始播放；['pause']；['stop']；['reloadMidi'] 重新生成 MIDI；
-//   ['loop'] 弹完了一遍（遍数 +1）；['resetLoops'] 遍数清零；['showBar', i] 侧栏切到第 i 小节
+//   ['loop'] 弹完了一遍（遍数 +1）；['partial'] 弹到了段尾，但这一遍不是从段首开始的（不算一遍）；['resetLoops'] 遍数清零；['showBar', i] 侧栏切到第 i 小节
 
 import { TICKS } from '../score.js';
 
 export const PHASES = ['idle', 'countIn', 'playing', 'restarting', 'finishing', 'reloadingMidi', 'reloadingScore'];
 
 /** countIn：开始播放时会不会数预备拍（alphaTab 的预备拍音量 > 0） */
-export const initial = (countIn = true) => ({ phase: 'idle', pos: 0, from: null, resume: null, atEnd: null, end: null, last: -1, started: false, countIn });
+export const initial = (countIn = true) => ({ phase: 'idle', pos: 0, from: null, resume: null, atEnd: null, end: null, last: -1, started: false, whole: true, countIn });
 
 const reloading = s => s.phase === 'reloadingMidi' || s.phase === 'reloadingScore';
 
@@ -51,16 +53,23 @@ export function step(s0, ev) {
     Object.assign(s, { phase: 'reloadingMidi', resume: { tick, play }, from: null, last: -1 });
   };
 
+  // 弹到了段尾：从段首开始的才算一遍；下一遍总是从段首开始
+  const passEnd = () => { fx.push([s.whole ? 'loop' : 'partial']); s.whole = true; };
+  const atStart = (tick, rangeStart) => tick <= (rangeStart || 0) + 5;
+
   switch (ev.type) {
     case 'countIn': // 预备拍开关变了（之后开始播放时才生效）
       s.countIn = !!ev.on;
       break;
 
-    case 'play':
+    case 'play': // rangeStart：循环范围的起点（全曲是 0）
       fx.push(['resetLoops']);
-      if (s.phase === 'idle') start(s.atEnd !== null ? 0 : s.pos); // 全曲弹完停在最后：再播放从头开始
-      else if (reloading(s)) s.resume.play = true; // MIDI 还在生成：好了再开始
-      else if (s.phase === 'finishing') Object.assign(s, { phase: 'restarting', resume: { tick: 0 }, end: null });
+      if (s.phase === 'idle') { // 全曲弹完停在最后：再播放从头开始
+        const tick = s.atEnd !== null ? 0 : s.pos;
+        s.whole = atStart(tick, ev.rangeStart);
+        start(tick);
+      } else if (reloading(s)) { s.resume.play = true; s.whole = atStart(s.resume.tick, ev.rangeStart); } // MIDI 还在生成：好了再开始
+      else if (s.phase === 'finishing') Object.assign(s, { phase: 'restarting', resume: { tick: 0 }, end: null, whole: true });
       break;
 
     case 'stop':
@@ -75,6 +84,7 @@ export function step(s0, ev) {
 
     case 'restart': // 播放中换段（或重选正在循环的段、按 Home）：从 tick 重新开始，开着预备拍就重新数
       fx.push(['resetLoops']);
+      s.whole = true; // tick 就是段首
       if (s.phase === 'countIn') reloadMidi(ev.tick, true);
       else if (s.phase === 'playing') { fx.push(['stop']); Object.assign(s, { phase: 'restarting', resume: { tick: ev.tick }, last: -1 }); }
       else if (s.phase === 'restarting' || reloading(s)) s.resume.tick = ev.tick;
@@ -85,12 +95,13 @@ export function step(s0, ev) {
     case 'seek': // 点小节、停着时换段：位置跳到 tick（播放中就从那里接着放）
       fx.push(['seek', ev.tick]);
       Object.assign(s, { pos: ev.tick, last: -1, atEnd: null });
+      if (s.phase !== 'idle') s.whole = false; // 播放中跳到别处接着放：这一遍不完整了（停着时由下一次 play 按位置判断）
       if (s.phase === 'countIn') s.from = ev.tick; // 之后在预备拍里停下，放回的是这里，不是开始播放的地方
       else if (s.phase === 'restarting' || reloading(s)) s.resume.tick = ev.tick;
       break;
 
     case 'jumped': // 设了新的循环范围，alphaTab 把位置跳回了段首：下一个位置事件不算弹完一遍
-      s.last = -1;
+      s.last = -1; s.whole = true;
       break;
 
     case 'state': // alphaTab 的播放状态：playing = 在放
@@ -112,14 +123,14 @@ export function step(s0, ev) {
       if (!s.started) { s.pos = ev.tick; break; } // 还没真的开始：开始前的抖动不算
       if (s.phase === 'countIn' && ev.tick > s.from + 5) { s.phase = 'playing'; s.from = null; }
       // alphaTab 自己循环（关着预备拍的段落循环）：从段尾跳回段首才算弹完一遍
-      if (s.phase === 'playing' && s.last >= 0 && ev.tick < s.last - 10 && ev.tick <= (ev.rangeStart || 0) + TICKS) fx.push(['loop']);
+      if (s.phase === 'playing' && s.last >= 0 && ev.tick < s.last - 10 && ev.tick <= (ev.rangeStart || 0) + TICKS) passEnd();
       s.pos = ev.tick; s.last = ev.tick;
       break;
     }
 
     case 'finished': // 弹到段尾 / 曲末（alphaTab 不自己循环时）。whole：循环的是全曲；end：最后弹到的小节 {tick, bar}；rangeStart：段首
       if (s.phase !== 'playing' && s.phase !== 'countIn') break;
-      fx.push(['loop']);
+      passEnd();
       if (ev.whole) Object.assign(s, { phase: 'finishing', end: ev.end || null, from: null, last: -1 });
       else Object.assign(s, { phase: 'restarting', resume: { tick: ev.rangeStart || 0 }, from: null, last: -1 });
       break;

@@ -83,7 +83,7 @@ test('MIDI 重新生成期间换段：好了以后从新的段首开始', () => 
 });
 
 test('段落循环开着预备拍：段尾记一遍、停下后从段首带预备拍重新开始，中间一直算“在放”', () => {
-  let { s, fx } = run(initial(true), { type: 'seek', tick: 3840 }, { type: 'play' }, { type: 'state', playing: true }, { type: 'position', tick: 4000 });
+  let { s, fx } = run(initial(true), { type: 'seek', tick: 3840 }, { type: 'play', rangeStart: 3840 }, { type: 'state', playing: true }, { type: 'position', tick: 4000 });
   assert.equal(s.phase, 'playing');
   ({ s, fx } = run(s, { type: 'finished', whole: false, rangeStart: 3840 }));
   assert.deepEqual(fx, [['loop']]);
@@ -100,7 +100,7 @@ test('段落循环开着预备拍：段尾记一遍、停下后从段首带预�
 });
 
 test('关着预备拍的段落循环（alphaTab 自己循环）：从段尾跳回段首才算一遍，换段跳回不算', () => {
-  let { s, fx } = run(initial(false), { type: 'seek', tick: 3840 }, { type: 'play' }, { type: 'state', playing: true });
+  let { s, fx } = run(initial(false), { type: 'seek', tick: 3840 }, { type: 'play', rangeStart: 3840 }, { type: 'state', playing: true });
   assert.equal(s.phase, 'playing');
   ({ s, fx } = run(s, { type: 'position', tick: 5000, rangeStart: 3840 }, { type: 'position', tick: 7600, rangeStart: 3840 }, { type: 'position', tick: 3850, rangeStart: 3840 }));
   assert.deepEqual(fx, [['loop']]);
@@ -157,4 +157,27 @@ test('谱子加载好之前设过循环范围：MIDI 好了把光标放到段首
   assert.equal(s.phase, 'idle');
   assert.equal(isPlaying(s), false);
   assert.throws(() => step(initial(), { type: 'nope' }), /未知的播放事件/);
+});
+
+test('从中间开始的一遍弹到段尾不算一遍（partial），接下来从段首开始的才算', () => {
+  // 停着时点了第 3 小节（3840），循环范围从 0 开始：播放到曲末
+  let { s, fx } = run(initial(false), { type: 'seek', tick: 3840 }, { type: 'play', rangeStart: 0 }, { type: 'state', playing: true },
+    { type: 'position', tick: 5000 }, { type: 'finished', whole: true, end: { tick: 9600, bar: 5 } });
+  assert.deepEqual(fx.filter(f => f[0] === 'loop' || f[0] === 'partial'), [['partial']]);
+  // 弹完停在曲末，再播放从头开始：这一遍算
+  ({ s, fx } = run(s, { type: 'state', playing: false }, { type: 'play', rangeStart: 0 }, { type: 'state', playing: true },
+    { type: 'position', tick: 100 }, { type: 'finished', whole: true, end: { tick: 9600, bar: 5 } }));
+  assert.deepEqual(fx.filter(f => f[0] === 'loop' || f[0] === 'partial'), [['loop']]);
+  // 段落循环（alphaTab 自己循环）：播放中点了段里别的小节，这一遍不算；跳回段首后的下一遍算
+  ({ s, fx } = run(initial(false), { type: 'play', rangeStart: 0 }, { type: 'state', playing: true }, { type: 'position', tick: 500, rangeStart: 0 },
+    { type: 'seek', tick: 1920 }, { type: 'position', tick: 2000, rangeStart: 0 }, { type: 'position', tick: 3800, rangeStart: 0 }, { type: 'position', tick: 10, rangeStart: 0 },
+    { type: 'position', tick: 3800, rangeStart: 0 }, { type: 'position', tick: 10, rangeStart: 0 }));
+  assert.deepEqual(fx.filter(f => f[0] === 'loop' || f[0] === 'partial'), [['partial'], ['loop']]);
+  // 停在半路再播放：接着弹完的也不算一遍；按 Home / 重选这一段（restart）从段首重新开始的算
+  ({ s, fx } = run(initial(false), { type: 'play', rangeStart: 0 }, { type: 'state', playing: true }, { type: 'position', tick: 2000 }, { type: 'stop' }, { type: 'state', playing: false },
+    { type: 'play', rangeStart: 0 }, { type: 'state', playing: true }, { type: 'position', tick: 2500 }, { type: 'finished', whole: false, rangeStart: 0 }));
+  assert.deepEqual(fx.filter(f => f[0] === 'loop' || f[0] === 'partial'), [['partial']]);
+  ({ s, fx } = run(initial(false), { type: 'seek', tick: 1920 }, { type: 'play', rangeStart: 0 }, { type: 'state', playing: true }, { type: 'position', tick: 2000 },
+    { type: 'restart', tick: 0 }, { type: 'state', playing: false }, { type: 'state', playing: true }, { type: 'position', tick: 100 }, { type: 'finished', whole: false, rangeStart: 0 }));
+  assert.deepEqual(fx.filter(f => f[0] === 'loop' || f[0] === 'partial'), [['loop']]);
 });

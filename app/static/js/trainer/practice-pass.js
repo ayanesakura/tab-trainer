@@ -10,8 +10,9 @@
 // step(状态, 事件) → {state, send: [要发的记录], clean?: play.clean 的新值, msg?: 给用户的提示}。事件：
 //   {type: 'start', kind, ids, bpm, now}    开始练（播放 / 敲节奏开始，或上一段结束后接着练同一件事）
 //   {type: 'tempo', bpm, now}               换了速度（这一段的速度按时间加权平均）
-//   {type: 'end', loopDone, now, next}      这一段结束：loopDone 是刚弹完一遍；不是的话是停下 / 换段 / 从段首重新开始，
-//                                           只记零头时间（不到 MIN_SECONDS 的不记）。next：接着练的 {kind, ids, bpm}，没有是 null
+//   {type: 'end', loopDone, now, next, final}  这一段结束：loopDone 是刚弹完一遍；不是的话是停下 / 换段 / 从段首重新开始，
+//                                           只记零头时间（不到 MIN_SECONDS 的不记）。next：接着练的 {kind, ids, bpm}，没有是 null。
+//                                           final：页面要关了，压着的那一遍也马上发
 //   {type: 'mark', now}                     这遍干净（Enter / 按钮）
 //   {type: 'tick', now}                     看看宽限过了没有
 
@@ -52,11 +53,13 @@ export function step(state, ev) {
       if (cur) { const tempo = { ...cur.tempo }; tempoChange(tempo, ev.now, ev.bpm); cur = { ...cur, tempo }; }
       break;
     case 'end': {
-      if (!cur) { if (!ev.loopDone) release(); break; }
+      if (!cur) { if (ev.final) release(); break; }
       const rec = close(cur, ev.now, ev.loopDone);
       const hadClean = cur.clean;
       cur = null;
-      release(); // 先发上一遍（同一时间只压着一遍）
+      // 有别的记录要发、或者页面要关了，先发压着的上一遍（同一时间只压着一遍）。只是停下、没有零头要记时接着压到宽限结束：
+      // 全曲弹完时“弹完一遍”和“停了”是连着来的，这时发掉的话，弹完才按的“这遍干净”就落空了
+      if (rec || ev.final) release();
       if (rec && rec.pass) held = { rec, until: ev.now + graceMs(rec.seconds) };
       else if (rec) send.push(out(rec, cleanUsed));
       if (ev.next) cur = segment({ ...ev.next, now: ev.now });

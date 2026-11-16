@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, equal } from '../../app/static/js/trainer/store.js';
 import {
-  deriveView, sectionsOf, stepSection, practiceLines, songTimeText, resumeInfo, rangeLabel, loopLabel, parseBarInput, barTags, planRange,
+  deriveView, sectionsOf, stepSection, practiceLines, songTimeText, resumeInfo, resumeChanges, rangeLabel, loopLabel, parseBarInput, barTags, planRange,
   songSubtitle, explainState, needsReview, warnText, showNote, tuningInput, nameToMidi, noteMidi, beatNumber, eventsText,
 } from '../../app/static/js/trainer/view.js';
 import { refineConfirm, barRefineHint, rowRefineHint, refineTime, refineScopeLabel } from '../../app/static/js/lib/refine.js';
@@ -53,6 +53,10 @@ test('deriveView：只改了问答 / 练习记录时，重新派生的 view 和�
   st.on('view', () => n++);
   st.set('view', deriveView(withQa));
   assert.equal(n, 0);
+  // 改曲名、艺人：谱面上不画它们，view 不变（不整谱重排、不打断播放）
+  const renamed = { ...SONG, title: '新名字', meta: { ...SONG.meta, title: '新名字', artist: '别人' } };
+  assert.ok(equal(deriveView(renamed), v));
+  assert.ok(v.source.tex && !v.source.tex.includes('测试') && !v.source.tex.includes('某人'));
   const tech = { ...SONG, bars: SONG.bars.map((b, i) => (i === 0 ? { ...b, events: [{ ...b.events[0], notes: [N(1, 0, ['pm']), N(6, 0)] }, ...b.events.slice(1)] } : b)) };
   st.set('view', deriveView(tech)); // 技巧变了：要通知
   assert.equal(n, 1);
@@ -119,6 +123,14 @@ test('practice line, resume and labels', () => {
   assert.deepEqual(resumeInfo(s), { a: 1, z: 2, label: '第 2–3 小节', bpm: 60, at: '昨天' });
   assert.equal(resumeInfo({ ...SONG, practice: { last: { a: 'x', b: 'y', bpm: 60 } } }), null);
   assert.equal(resumeInfo({ ...SONG, practice: { last: { a: 'x', b: 'y', a_n: 4, b_n: 4, bpm: 60 } } }).label, '第 4 小节'); // id 没了用位置
+  // 上次的范围和速度就是现在的：不提示“接着练”；范围或速度有一样不同才提示；现在的状态还不知道时照常提示
+  const r = { a: 0, z: 7, bpm: 72 };
+  assert.equal(resumeChanges(r, { a: 0, b: 7, bpm: 72 }), false);
+  assert.equal(resumeChanges(r, { a: 0, b: 7, bpm: 72.4 }), false);
+  assert.equal(resumeChanges(r, { a: 0, b: 7, bpm: 80 }), true);
+  assert.equal(resumeChanges(r, { a: 0, b: 3, bpm: 72 }), true);
+  assert.equal(resumeChanges(r, undefined), true);
+  assert.equal(resumeChanges(null, { a: 0, b: 7, bpm: 72 }), false);
   assert.equal(rangeLabel(0, 3, 4), '全曲');
   assert.equal(loopLabel(0, 3, 4), '第 1–4 小节');
   assert.equal(loopLabel(2, 2, 4), '第 3 小节');

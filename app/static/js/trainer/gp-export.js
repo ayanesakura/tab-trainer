@@ -13,6 +13,10 @@ export function exportGp() {
   // 和弦名去掉为了区分大小写加的零宽空格（见 score.js 的 CHORD_PAD）：GP 文件里和弦按编号引用，不会再撞车
   const chords = scoreChords(api.score), names = chords.map(c => c.name);
   chords.forEach(c => { c.name = String(c.name || '').replaceAll(CHORD_PAD, ''); });
+  // 曲名、艺人：识别出来的曲子不写进谱面的 tex（见 view.js），导出时填上；GP / MusicXML 原文件自己带的不动
+  const s = get('song'), meta = (s && s.meta) || {}, credits = [api.score.title, api.score.artist];
+  api.score.title = credits[0] || (s && s.title) || meta.title || '';
+  api.score.artist = credits[1] || meta.artist || '';
   let bytes;
   try { bytes = new alphaTab.exporter.Gp7Exporter().export(api.score, api.settings); } catch (e) {
     // alphaTab 写不出这份谱子（某些记号它导出不了）：说清楚，不要点了没反应
@@ -22,8 +26,9 @@ export function exportGp() {
   } finally {
     applyTimbre(api.score, timbreProgram());
     chords.forEach((c, i) => { c.name = names[i]; });
+    [api.score.title, api.score.artist] = credits;
   }
-  const s = get('song'), a = document.createElement('a');
+  const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
   a.download = ((s.title || (s.meta && s.meta.title) || 'tab').replace(/[\\/:*?"<>|]/g, '_')) + '.gp';
   a.click();

@@ -124,7 +124,7 @@ function barMetaTex(bar, ts, prevTs) {
  * 我们的曲子 → alphaTex 文本。返回 { tex, beatMap }：
  * beatMap[barIndex] = 每个事件起拍的 tick（在本小节内），用来把播放到的拍对应回我们的事件。
  */
-export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 25 } = {}) {
+export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 25, credits = true } = {}) {
   const meta = song.meta || {};
   const tuning = (meta.tuning || ['E4', 'B3', 'G3', 'D3', 'A2', 'E2']).join(' ');
   const ts = meta.time_signature || [4, 4];
@@ -212,8 +212,8 @@ export function toAlphaTex(song, { tempo = 60, staves = 'score tabs', program = 
 
   const title = meta.title || song.title || '';
   const head = [
-    title && `\\title "${esc(title)}"`,
-    meta.artist && `\\artist "${esc(meta.artist)}"`,
+    credits && title && `\\title "${esc(title)}"`,
+    credits && meta.artist && `\\artist "${esc(meta.artist)}"`,
     `\\tempo ${tempo}`,
     '.',
     `\\track "Guitar" { instrument ${program} }`,

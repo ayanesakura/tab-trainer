@@ -90,13 +90,32 @@ test('practice-pass：弹完以后的宽限里按，标的是刚弹完的那一�
   assert.deepEqual(late.sent.map(x => x.clean), [false, true]);
 });
 
-test('practice-pass：停下时马上发出压着的那一遍；敲节奏只记时间不算遍数，也不能标干净', () => {
+test('practice-pass：全曲弹完（弹完一遍紧跟着就停了）以后的宽限里按，还是标刚弹完的那一遍', () => {
+  // player 先报“弹完一遍”、这时还算在放，紧接着才报停了：停下不能把压着的那一遍马上发掉
+  const done = [
+    { type: 'start', kind: 'play', ids: IDS, bpm: 60, now: 0 },
+    { type: 'end', loopDone: true, now: 4000, next: next() },
+    { type: 'end', loopDone: false, now: 4001, next: null }, // 停了
+  ];
+  const kept = run(done);
+  assert.deepEqual(kept.sent, []);
+  assert.equal(kept.s.cur, null);
+  assert.ok(kept.s.held);
+  const marked = run([...done, { type: 'mark', now: 4500 }, { type: 'tick', now: 4000 + GRACE_MS }]);
+  assert.deepEqual(marked.msgs, ['prev']);
+  assert.deepEqual(marked.sent, [{ ids: IDS, loops: 1, bpm: 60, seconds: 4, kind: 'play', clean: true }]);
+  // 没按：宽限过了照常发出去；页面要关了（final）马上发
+  assert.deepEqual(run([...done, { type: 'tick', now: 4000 + GRACE_MS }]).sent.map(x => x.loops), [1]);
+  assert.deepEqual(run([...done, { type: 'end', loopDone: false, now: 4100, next: null, final: true }]).sent.map(x => x.loops), [1]);
+});
+
+test('practice-pass：停下时有零头要记，先发出压着的那一遍；敲节奏只记时间不算遍数，也不能标干净', () => {
   const stop = run([
     { type: 'start', kind: 'play', ids: IDS, bpm: 60, now: 0 },
     { type: 'end', loopDone: true, now: 4000, next: next() },
-    { type: 'end', loopDone: false, now: 4500, next: null }, // 停了
+    { type: 'end', loopDone: false, now: 7000, next: null }, // 下一遍弹了 3 秒停了
   ]);
-  assert.deepEqual(stop.sent.map(x => x.loops), [1]);
+  assert.deepEqual(stop.sent.map(x => x.loops), [1, 0]);
   assert.equal(stop.s.cur, null);
   assert.equal(stop.s.held, null);
   const rhythm = run([

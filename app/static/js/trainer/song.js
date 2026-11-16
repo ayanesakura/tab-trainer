@@ -7,7 +7,7 @@ import { get, set, on } from './store.js';
 import { $, UI, esc, songUrl, SONG_ID } from './dom.js';
 import { get as apiGet, post, put, withBusy, poll, transient } from '../lib/api.js';
 import { SOURCES } from '../vocab.js';
-import { deriveView, isScore, STD_MIDI, songSubtitle, songTimeText, explainState, resumeInfo, planRange, showNote, tuningInput } from './view.js';
+import { deriveView, isScore, STD_MIDI, songSubtitle, songTimeText, explainState, resumeInfo, resumeChanges, planRange, showNote, tuningInput } from './view.js';
 import { DERIVE_VERSION, deriveSong } from '../score.js';
 import { alphaTab, setLoop, setTempo, revealLoop, stop } from './player.js';
 import { provide } from './hooks.js';
@@ -258,7 +258,7 @@ function renderResume(s) {
     UI.toast(`从上次卡住的第 ${stuckAt.a + 1}${stuckAt.z > stuckAt.a ? `–${stuckAt.z + 1}` : ''} 小节开始`, 'info', 4000);
     return;
   }
-  if (!r) return;
+  if (!resumeChanges(r, get('play'))) return; // 没练过，或者上次的范围、速度就是现在这样：没什么可接的
   notice('resume', {
     kind: 'info', html: `<span title="${esc(r.at)}">上次练到 <b>${r.label}</b> · ${r.bpm} BPM</span>`,
     actions: [{ label: '接着练', primary: true, onClick: go }], onDismiss: () => {},

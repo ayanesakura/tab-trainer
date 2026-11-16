@@ -216,10 +216,13 @@ def test_chords_differing_only_by_case_render_and_export_separately(server, trai
               try { tt.exportGp(); } finally { URL.createObjectURL = orig; HTMLAnchorElement.prototype.click = click; }
               const at = await import('/static/vendor/alphatab/alphaTab.min.mjs');
               const sc = at.importer.ScoreLoader.loadScoreFromBytes(new Uint8Array(await blob.arrayBuffer()), new at.Settings());
-              return sc.tracks[0].staves[0].bars.slice(0, 2).map(x => { const c = x.voices[0].beats[0].chord; return [c.name, [...c.strings]]; });
+              return [sc.tracks[0].staves[0].bars.slice(0, 2).map(x => { const c = x.voices[0].beats[0].chord; return [c.name, [...c.strings]]; }), sc.title];
             })()"""
         )
-        assert exported == [["Am7", am7], ["AM7", maj7]]
+        assert exported[0] == [["Am7", am7], ["AM7", maj7]]
+        # 曲名不在谱面的 tex 里（改曲名不用整谱重排），导出的文件里照样有；导出完谱面上的放回去
+        assert exported[1] == b.js("tt.get('song').title") and exported[1]
+        assert b.js("tt.api.score.title") == ""
         # 导出完名字放回去：谱面上还是两个不同的和弦
         assert b.js("tt.api.score.tracks[0].staves[0].bars[1].voices[0].beats[0].chord.name") == "AM7\u200b"
         assert not b.errors, b.errors

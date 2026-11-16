@@ -92,5 +92,5 @@ export function initPracticeLog() {
   on('play.bpm', bpm => { if (log.cur) dispatch({ type: 'tempo', bpm }); });
   on('play.loops', (n, old) => { if (n > old && log.cur && log.cur.kind === 'play') flush(true); });
   on(['ui.bar', 'song.practice', 'song.bars'], renderLine);
-  addEventListener('pagehide', () => dispatch({ type: 'end', loopDone: false, next: null })); // 压着的那一遍也马上发出去
+  addEventListener('pagehide', () => dispatch({ type: 'end', loopDone: false, next: null, final: true })); // 压着的那一遍也马上发出去
 }

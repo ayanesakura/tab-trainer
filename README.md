@@ -27,7 +27,7 @@
   - 1440×900 这类屏幕上谱面占大头：几条通知合成一行（“+N”展开），选段只有一行（横着滚），指板在矮屏幕上默认收成一条细栏（开关记住）；窗口 1000–1440 控制条都是一行，窄于 1000 时小节卡片变成右边滑出的抽屉（控制条上的按钮开关，Esc 收起）；
   - 预备拍时状态栏倒数“预备 4 → 3 → 2 → 1”，下面一排拍点逐个点亮（重拍大一点），数完才显示第几小节第几拍；谱面和指板不闪，播放光标停在起始拍、数完才往前走；敲节奏的预备拍也一样；
   - 速度旁边写着是原速的百分之几（“72 · 80%”，悬停看原速），滑块上有原速的刻度；
-  - **这遍干净**：弹着的时候按 <kbd>Enter</kbd>（或控制条的“干净”）标记这一遍没出错，弹完时记成干净的一遍；用过以后没标的遍记成不干净（“连续干净几遍”会清零），从没用过就不记；一遍刚弹完的一小会儿（1.5 秒，不超过半遍）里按也算刚弹完的那一遍；按 Home、重选这一段从段首重新开始时，标记作废；不会自动加速；
+  - **这遍干净**：弹着的时候按 <kbd>Enter</kbd>（或控制条的“干净”）标记这一遍没出错，弹完时记成干净的一遍；用过以后没标的遍记成不干净（“连续干净几遍”会清零），从没用过就不记；一遍刚弹完的一小会儿（1.5 秒，不超过半遍）里按也算刚弹完的那一遍；按 Home、重选这一段从段首重新开始时，标记作废；全曲弹完停下以后的那一小会儿里按也算刚弹完的这一遍；不会自动加速；
   - 自动跟随：播放时光标走到看不见的行，谱面自己滚过去（手动滚动后停几秒，不和你抢；可以在控制条右边的“播放设置”里关掉）；
   - 播放设置记在本机：节拍器、预备拍、示范音三个开关每首曲子各记各的（没记过的曲子都开着），音量、自动跟随所有曲子共用；
   - 键盘：空格 播放 / 停止，← → 上一段 / 下一段，↑ ↓ 快 / 慢 4 BPM，Home 回到段首（播放中就从段首重新开始），M 开关节拍器，Enter 这遍干净；焦点在速度滑块、顶栏标签页这些控件上时方向键归控件。谱面标题栏的“?”里列着全部快捷键；
@@ -41,7 +41,7 @@
   - **问 AI**：在小节详情里直接问这一小节的问题（“左手怎么安排指法”“这个泛音总弹不响怎么办”），AI 会结合这个小节的数据、前后小节、原谱截图和你的练习记录回答，问答会保存下来；
   - **敲节奏**：控制条里点“敲节奏”，不拿琴、只练节奏：跟着示范（或只有节拍器）用空格 / F / J 键敲出循环段里每个音的时间。每个音按早晚上色（±40 ms 内算准），每遍打分，并指出问题：整体偏早还是偏晚、快慢稳不稳、哪个位置总是错。有三种练法：跟着示范、听一遍再敲、只有节拍器。音符下面标着口令（1 e & a、1 trip let）。节拍器和示范音由页面自己用 WebAudio 排程，敲击和声音用同一个音频时钟比较（和 alphaTab 共用一个 AudioContext）；节拍器的声音是 alphaTab 合成器渲染出来的同一个咔哒，音量、预备拍规则和播放时一样（`click.js`）；用蓝牙耳机时可以先“校准”，补偿声音延迟。
   - 打开敲节奏时循环范围超过 8 小节（比如全曲），先缩到正在看的那一行（GP 曲子是附近 4 个小节），并提示一声；
-  - **练习记录**：每循环完一遍自动记下速度和用时，小节卡片的“本小节”显示循环几遍、最快多少 BPM、干净几遍（悬停看连续干净几遍）、播放了多久、上次什么时候；顶栏副标题最后是整首练了多久（同一段时间开着几个页面只算一次）；打开曲子时提示上次练到哪里，一键接着练；
+  - **练习记录**：每循环完一遍自动记下速度和用时（从段首弹到段尾才算一遍：停在半路再接着弹、点了别的小节接着弹到段尾的只记时间），小节卡片的“本小节”显示循环几遍、最快多少 BPM、干净几遍（悬停看连续干净几遍）、播放了多久、上次什么时候；顶栏副标题最后是整首练了多久（同一段时间开着几个页面只算一次）；打开曲子时提示上次练到哪里，一键接着练（上次的范围和速度就是现在这样时不提示）；
   - **练琴计划**：这首在计划里、今天还没打分时，点“返回”或结束计时器前先弹出打分（可以跳过，一次打开只提醒一次；从今日清单进来的总是提醒，别的入口要播放 / 敲节奏满 1 分钟，或者这页开了 2 分钟以上）。打分时可以勾“卡住”的小节（默认是正在循环的几个），下次从今日清单打开就从那几个小节开始循环。
 - **曲库**：
   - 按曲名、艺人、标签搜索，按标签筛选，按最近添加 / 最近练习 / 曲名排序；
@@ -125,7 +125,7 @@ key 只保存在本机 `data/config.json`（权限 600）。也可以不在页�
 
 程序**只**使用这两处的 key，不会读取 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL` 等其他工具留下的环境变量。
 
-可选参数：`--port` 改端口；`--host 0.0.0.0` 让局域网内其他设备（如平板）访问。开放局域网时会生成一个访问令牌，启动信息里会打印带令牌的地址（`http://<本机IP>:8765/?token=…`），其他设备用这个地址打开一次即可；本机访问不需要令牌。想固定令牌可以设置环境变量 `TAB_TRAINER_TOKEN`。
+可选参数：`--port` 改端口；`--host 0.0.0.0` 让局域网内其他设备（如平板）访问。开放局域网时会生成一个访问令牌，启动信息里会打印带令牌的地址（`http://<本机IP>:8765/?token=…`），其他设备用这个地址打开一次即可；本机访问不需要令牌。没有令牌时（比如不经过 `python -m app.main`、直接 `uvicorn app.main:app --host 0.0.0.0` 启动）其他设备一律拒绝（403）。想固定令牌可以设置环境变量 `TAB_TRAINER_TOKEN`。
 
 访问限制：只接受用 `127.0.0.1`、`localhost`、局域网 IP 或 `xxx.local` 打开的页面（防止恶意网页通过 DNS rebinding 读写接口、骗走 API key）；其他网站发来的写请求一律拒绝。上传上限：单个文件 50 MB、一次 200 MB、40 个文件、一首曲子 60 页、单页 6000 万像素（见 `app/songs.py` 开头）；图片只认 PNG / JPEG / WebP / GIF / BMP / TIFF。
 
@@ -270,7 +270,7 @@ uv run python -m app.evaluate eval-xxx --yes
 | 机制 | 在哪 | 防什么 |
 |---|---|---|
 | 任务登记 `jobs.claim` / `jobs.start` | 进程内，每首曲子一个 | 同一首曲子同时跑两个任务（连点两次、识别时又点讲解）。登记后在 `store.update` 里标上 `activity` 才算开始，标失败就释放 |
-| `activity` + `systems[i].status == "parsing"` | 存盘，`state.py` 解释 | 告诉前端忙不忙、哪些小节不能改（`state.bar_locked`）；服务重启后由 `state.recover` 标成中断 |
+| `activity` + `systems[i].status == "parsing"` | 存盘，`state.py` 解释 | 告诉前端忙不忙、哪些小节不能改（`state.bar_locked`）；服务重启后由 `state.recover` 标成中断（每一行都识别完、只差练习建议的不算识别失败：可以练 + 提醒，和运行时的收尾一样；重新识别的新结果换上以后 `activity.committed` 为真，不再说“原来的结果保留不变”） |
 | 每首曲子一把锁（`store.song_lock`）+ `store.update`；`study.json`、`config.json`、`coach.json` 各一把 | 文件读写 | 读-改-写不互相覆盖，改一首曲子不挡别的曲子。规则：**挑选要改的东西和标上锁必须在同一次 `update` 里**（例如按变拍号重做哪些行：`review.lock_redo`），否则中间用户的改动会被覆盖；拿着锁时不扫曲库、不调用模型（练琴计划的新序号用 `study.json` 里的计数器取）。只读的 `store.read` 不拿锁、按文件签名缓存 |
 | `bar.rev` / `meta_rev` | 存盘，`model.bump_revs` 维护 | 用户的两次编辑互相覆盖（乐观锁，409）。后台写回不会让它们过期 |
 | 写回前比较快照（`seen`） | `coach._explain_chunks`、`staleness.store_plan` | 后台按旧内容写的提示 / 练习建议，不能写到等待期间已经被改过的小节上 |
@@ -282,7 +282,7 @@ uv run python -m app.evaluate eval-xxx --yes
 
 ### 接口约定（前端只显示，不自己推断）
 
-- `GET /api/songs/{id}`：曲子本身的字段（不含 `_` 开头的内部字段），另加 `rev`（每次保存 +1，只用来判断要不要重绘，不用于 409）、`meta_rev`（谱头版本号，见下）、`busy`（有任何后台任务）、`recognizing`（整首或某几行在识别，讲解不算）、`activity`（`null` 或 `{kind: parse|reparse_row|explain|refine, restaging, systems}`）、`can_edit_bars`（GP / MusicXML 为 false）、`editable_meta`、`notice`（`null` 或 `{kind: warn|error|info, msg}`，info 是任务做完的说明；精修的结果叠在别的任务留下的提示上时两条拼成一条，kind 取更要紧的）、`practice`（`{bars: {id: {loops, seconds, best_bpm, last}}, last: {a, b, bpm, at, a_n, b_n} | null, total_seconds}`）。每个小节另有 `rev`（这个小节内容的版本号，见下）、`n`、`warn: [{code, msg}]`（code 见 `vocab.json` 的 `warn_codes`）、`needs_review`、`locked`（不能改的原因或 null）、`edited`。
+- `GET /api/songs/{id}`：曲子本身的字段（不含 `_` 开头的内部字段），另加 `rev`（每次保存 +1，只用来判断要不要重绘，不用于 409）、`meta_rev`（谱头版本号，见下）、`busy`（有任何后台任务）、`recognizing`（整首或某几行在识别，讲解不算）、`activity`（`null` 或 `{kind: parse|reparse_row|explain|refine, restaging, systems}`）、`can_edit_bars`（GP / MusicXML 为 false）、`editable_meta`、`notice`（`null` 或 `{kind: warn|error|info, msg}`，info 是任务做完的说明；自己点了取消、一个小节都没改的精修不留提示；精修的结果叠在别的任务留下的提示上时两条拼成一条，kind 取更要紧的）、`practice`（`{bars: {id: {loops, seconds, best_bpm, last}}, last: {a, b, bpm, at, a_n, b_n} | null, total_seconds}`）。每个小节另有 `rev`（这个小节内容的版本号，见下）、`n`、`warn: [{code, msg}]`（code 见 `vocab.json` 的 `warn_codes`）、`needs_review`、`locked`（不能改的原因或 null）、`edited`。
 - 两个接口都另有 `is_score`（GP / MusicXML，小节来自原文件）和 `failed_rows`（识别失败的行数）；`POST /api/songs/{id}/retry-failed` 只重新识别这些行（一个小节都还没有时整首识别），没有失败的行返回 400。
 - 精修：两个接口都另有 `refined`（`null` 或上次精修整首的 `{at, checked, changed}`）和 `refine_estimate`（图片曲子现在点“精修整首”会核对的 `{bars, cost_usd, minutes, seconds}`，GP 为 null）；曲子详情还有 `refine_scopes`（`{bar: 一个小节的预估, rows: [每行的预估，裁不出单个小节的行为 null]}`，GP 为 null），小节有 `refinable`（能单独精修：这一行识别出的小节数要和检测到的小节线一样）；精修改过的小节有 `refine: {diff, prev: {events, tip, uncertain, warn}, plan_changed_before}`（`plan_changed_before`：精修之前这个小节是否已经让练习建议过时，撤销精修时据此决定要不要把它从 `plan.changed_bars` 里拿掉；旧数据按 true）。精修进行中 `activity` 为 `{kind: "refine", scope: song|bars|row, row, bars: [范围里的小节 id], pending: [还没核对完的]}`。`POST /api/songs/{id}/refine` 开始精修：不带请求体 = 整首；`{"bars": [bar_id...]}` 或 `{"system": 行号}` = 这几个小节 / 这一行（手改过、确认过、核对过的也核对，不更新 `refined`），都可以带 `hint`（用户写的“哪里不对”，告诉 AI）。GP 400，小节 / 行不存在 400，有任务在跑 423（说明正在做什么），没有可核对的小节 400，点的小节 / 行所在的行小节线可能切错了 400（提示重新识别这一行），取消用 `POST /api/songs/{id}/cancel`（正在进行的请求马上断开）；精修期间改调弦 / 变调夹 / 拍号 423（`editable_meta` 里也没有它们）；`PUT /api/songs/{id}/bars/{bar_id}/undo-refine`（`{rev}`）撤销一个小节的精修（rev 对不上 409）。设置 `refine`: `manual | auto`。
 - `GET /api/songs`：每首另有 `busy`、`recognizing`、`activity`、`notice`、`needs_review_bars`、`archived`、`practice`（`null` 或 `{last_at, total_seconds, undated_seconds, last: {a, b, bpm, a_n, b_n}}`；`total_seconds` = 有日期的练习合并重叠 + `undated_seconds`（早期没记日期的），和练习页、练琴计划同一个算法 `practice.time_of`）。

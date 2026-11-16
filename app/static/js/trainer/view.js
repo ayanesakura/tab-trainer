@@ -72,7 +72,9 @@ export function deriveView(song) {
     source = { kind: 'score', id: song.id, track: song.track || 0 };
   } else if (song.bars.length) {
     const known = meta.tempo || 0; // 谱上没标速度时不显示速度记号（否则总是写着 ♩ = 60）
-    const r = toAlphaTex(song, { tempo: known || 60 });
+    // 曲名、艺人不写进 tex：谱面上不画它们（见 player.js 的 notation 设置），写进去的话改一下曲名就要整谱重排、
+    // 重新生成 MIDI，播放也跟着断一下。导出 GP 时再填上（gp-export.js）
+    const r = toAlphaTex(song, { tempo: known || 60, credits: false });
     beatMap = r.beatMap;
     source = { kind: 'tex', tex: r.tex, showTempo: !!known };
   }
@@ -181,6 +183,11 @@ export function resumeInfo(song) {
   if (a < 0 || z < 0) return null;
   if (a > z) [a, z] = [z, a]; // 调整过页序以后原来的首尾可能对调了
   return { a, z, label: rangeLabel(a, z, song.bars.length), bpm: last.bpm, at: last.at };
+}
+
+/** “接着练”会不会有变化：上次的范围和速度就是现在的（全曲、原速）时不用提示，白占谱面上面一行。now：{a, b, bpm} */
+export function resumeChanges(r, now) {
+  return !!r && !(now && r.a === now.a && r.z === now.b && (!r.bpm || Math.round(r.bpm) === Math.round(now.bpm)));
 }
 
 /** 小节的技巧标签（名字取词表） */

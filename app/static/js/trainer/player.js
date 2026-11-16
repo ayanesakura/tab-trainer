@@ -47,6 +47,7 @@ function dispatch(ev) {
   M = state;
   for (const [k, v] of fx) {
     if (k === 'loop') set('play.loops', get('play.loops') + 1); // 练习记录（practice-log.js）记下这一遍
+    else if (k === 'partial') restarted(); // 从中间开始的一遍弹到了段尾：不算一遍，只记练了的时间（practice-log.js），下一遍从这里重新算
     else if (k === 'resetLoops') set('play.loops', 0);
     else if (k === 'showBar') set('ui.bar', v);
     else if (!api) continue;
@@ -312,7 +313,8 @@ export const rowOfBar = bi => at.rowOfBar(api, bi);
 export function play() {
   if (get('rhythm.on') && hasHook('drill.start')) { invoke('drill.start'); return; } // 敲节奏打开时：开始的是敲节奏，不是 alphaTab
   if (!api || !get('play.ready')) { UI.toast('音色加载中', 'info'); return; }
-  dispatch({ type: 'play' });
+  const r = at.playbackRange(api);
+  dispatch({ type: 'play', rangeStart: r ? r.start : 0 });
 }
 export function stop() {
   if (get('rhythm.running')) invoke('drill.stop');

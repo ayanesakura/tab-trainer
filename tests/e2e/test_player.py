@@ -229,6 +229,10 @@ def test_whole_song_stops_on_the_last_bar(server, trainer):
     assert (
         abs(b.js("tt.api.tickPosition") - last_start) <= 2
     )  # 光标停在最后一小节开头（播放器取整差 1 tick），不是第一小节
+    # 弹完的这一遍压着等“这遍干净”的宽限（最多 1.5 秒）才发出去：等记录到，不等固定的时间
+    end = time.time() + 6
+    while _loops(server, sid, [last_id])[last_id] != before + 1 and time.time() < end:
+        time.sleep(0.1)
     assert _loops(server, sid, [last_id])[last_id] == before + 1
     # 再播放：从头开始
     b.js("tt.play(); true")
@@ -519,4 +523,34 @@ def test_count_in_holds_the_beat_cursor(trainer):
     time.sleep(0.6)
     assert b.js(x) > x0 + 5  # 数完了照常往前走
     b.js("tt.stop(); true")
+    assert not b.errors, b.errors
+
+
+def test_a_pass_must_start_at_the_loop_start_and_the_end_of_the_song_keeps_the_clean_grace(server, trainer):
+    """停在半路再播放、弹到曲末：不记成弹完一遍（没弹到的小节不该多一遍）。
+    从头弹完全曲、停下以后马上按 Enter：标的是刚弹完的这一遍（以前“停了”把压着的这一遍先发掉了，提示“播放时按”）。"""
+    sid = server["gp"]
+    b = trainer(sid)
+    b.js(_CAPTURE_POSTS)
+    n = b.js("tt.view.bars.length")
+    b.js(f"tt.set('play.countIn', false); tt.setLoop(0, {n - 1}); tt.setTempo(240); tt.play(); true")
+    b.wait_for("tt.state.phase === 'playing' && tt.get('ui.bar') >= 1")
+    b.js("tt.stop(); true")
+    b.wait_for("tt.state.phase === 'idle'")
+    b.js("tt.play(); true")
+    b.wait_for("tt.state.playing")
+    b.wait_for("!tt.state.playing && tt.state.phase === 'idle'", timeout=30)
+    time.sleep(2.2)  # 宽限（最多 1.5 秒）过了也没有“一遍”的记录
+    assert b.js("__posts.filter(p => p.loops === 1).length") == 0, b.js("JSON.stringify(__posts)")
+    assert b.js("tt.state.loops") == 0
+
+    b.js(
+        "__posts.length = 0; document.activeElement.blur(); tt.play(); true"
+    )  # 停在曲末再播放：从头开始，是完整的一遍
+    b.wait_for("tt.state.playing")
+    b.wait_for("!tt.state.playing && tt.state.phase === 'idle'", timeout=30)
+    b.key("Enter", vk=13)
+    b.wait_for("__posts.some(p => p.loops === 1)", timeout=6)
+    done = b.js("__posts.find(p => p.loops === 1)")
+    assert done["clean"] is True and len(done["bar_ids"]) == n, done
     assert not b.errors, b.errors
